@@ -65,18 +65,25 @@ from whetstone.envs.input_transform import (
     split_prompt,
 )
 from whetstone.envs.internal_eval import (
+    ExecutedComponentStep,
+    ExecutedComponentTracePayload,
+    ExecutedRowState,
     ProcessInstance,
     RolloutOutput,
     _canonical_provider_call_config_payload,
+    _llm_component_step,
+    _llm_component_values,
     _process_payload_identity,
     process_request_identity,
     remaining_phase_wall_seconds,
     start_phase_deadline,
+    validate_executed_component_trace,
 )
 from whetstone.envs.partial_resume import (
     index_partial_records,
     resolve_exact_resume,
 )
+from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
@@ -122,7 +129,7 @@ class D1EvalResult:
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
-    outputs: tuple[RolloutOutput, ...] = ()
+    outputs: tuple[RolloutOutput, ...]
 
 
 class D1RowOutcome(BaseModel):
@@ -137,8 +144,8 @@ class D1RowOutcome(BaseModel):
 
     submission_score: float | None
     output_text: str | None
-    failed: bool
-    missing: bool = False
+    row_state: ExecutedRowState
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
     failure_code: str = ""
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -161,24 +168,52 @@ class D1RowOutcome(BaseModel):
 
     @model_validator(mode="after")
     def _valid_outcome(self) -> D1RowOutcome:
-        if self.failed and self.missing:
-            raise ValueError("a row cannot be both failed and missing")
-        if (self.failed or self.missing) == (
+        validate_executed_component_trace(self.executed_component_steps)
+        if (self.row_state is ExecutedRowState.SUCCESS) != (
             self.submission_score is not None
         ):
             raise ValueError(
                 "a successful row requires a score and an absent row "
                 "forbids one"
             )
+        if self.row_state is ExecutedRowState.MISSING:
+            if self.executed_component_steps or self.output_text is not None:
+                raise ValueError(
+                    "a missing row cannot contain execution output"
+                )
+        elif self.executed_component_steps:
+            if len(self.executed_component_steps) != 1:
+                raise ValueError("a D1 row executes exactly one component")
+            step = self.executed_component_steps[0]
+            _prompt, generation = _llm_component_values(
+                step, component_id=LLM_NODE_ID
+            )
+            if generation != self.output_text:
+                raise ValueError("D1 trace generation must match output_text")
+        elif self.output_text is not None:
+            raise ValueError("D1 output_text requires its executed component")
+        if (
+            self.row_state is ExecutedRowState.SUCCESS
+            and not self.executed_component_steps
+        ):
+            raise ValueError("a successful D1 row requires its trace")
         if self.cache_hit != (self.cache_source_call_id is not None):
             raise ValueError(
                 "cache_hit and original-entry provenance must be paired"
             )
         return self
 
+    @property
+    def failed(self) -> bool:
+        return self.row_state is ExecutedRowState.FAILED
+
+    @property
+    def missing(self) -> bool:
+        return self.row_state is ExecutedRowState.MISSING
+
 
 _D1_ROW_REQUEST_SCHEMA = "whetstone.envs.d1_row_request/v2"
-_D1_ROW_RESULT_SCHEMA = "whetstone.envs.d1_row_result/v2"
+_D1_ROW_RESULT_SCHEMA = "whetstone.envs.d1_row_result/v3"
 
 
 class HumanEvalTaskPayload(BaseModel):
@@ -266,7 +301,7 @@ class D1RowResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.d1_row_result/v2"] = (
+    schema_name: Literal["whetstone.envs.d1_row_result/v3"] = (
         _D1_ROW_RESULT_SCHEMA
     )
     request_identity: str
@@ -336,7 +371,8 @@ def drive_d1_row(
         return D1RowOutcome(
             submission_score=None,
             output_text=None,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=(),
             failure_code="d1_wrapper_render_error",
         )
     execution = execute_call(
@@ -357,7 +393,8 @@ def drive_d1_row(
         return D1RowOutcome(
             submission_score=None,
             output_text=None,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=(),
             failure_code=failure_code_of(result),
             latency_s=telemetry.latency_s,
             provider_error=telemetry.provider_error,
@@ -369,12 +406,21 @@ def drive_d1_row(
             cache_source_at=marks.cache_source_at,
         )
     output_text = result.generation.text
+    executed_component_steps = (
+        _llm_component_step(
+            trace_index=0,
+            component_id=LLM_NODE_ID,
+            prompt=prompt,
+            generation=output_text,
+        ),
+    )
     code_score = scorer(raw_submission=output_text, task=score_task)
     if code_score.infrastructure_unknown:
         return D1RowOutcome(
             submission_score=None,
             output_text=output_text,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=executed_component_steps,
             failure_code="code_eval_infrastructure_unknown",
             prompt_tokens=telemetry.prompt_tokens,
             completion_tokens=telemetry.completion_tokens,
@@ -391,7 +437,8 @@ def drive_d1_row(
     return D1RowOutcome(
         submission_score=code_score.row_value,
         output_text=output_text,
-        failed=False,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=executed_component_steps,
         prompt_tokens=telemetry.prompt_tokens,
         completion_tokens=telemetry.completion_tokens,
         total_tokens=telemetry.total_tokens,
@@ -408,12 +455,18 @@ def drive_d1_row(
 
 def _d1_outcome_from_record(record: PartialCallRecord) -> D1RowOutcome:
     """Rebuild the accepted outcome stored for one exact D1 request."""
+    payload = ExecutedComponentTracePayload.from_json_value(
+        record.observation_payload
+    )
+    if record.failed != (payload.row_state is ExecutedRowState.FAILED):
+        raise ValueError("D1 partial row state conflicts with failed flag")
     return D1RowOutcome(
         submission_score=(
             None if record.score is None else float(record.score)
         ),
         output_text=record.output_text,
-        failed=record.failed,
+        row_state=payload.row_state,
+        executed_component_steps=payload.executed_component_steps,
         failure_code=record.failure_code,
         prompt_tokens=record.prompt_tokens,
         completion_tokens=record.completion_tokens,
@@ -527,6 +580,10 @@ def run_d1_eval(
                 reasoning_tokens=outcome.reasoning_tokens,
                 latency_s=None if outcome.cache_hit else outcome.latency_s,
                 output_text=outcome.output_text,
+                observation_payload=ExecutedComponentTracePayload(
+                    row_state=outcome.row_state,
+                    executed_component_steps=outcome.executed_component_steps,
+                ).model_dump(mode="json"),
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
                 cache_hit=outcome.cache_hit,
@@ -652,7 +709,8 @@ def run_d1_eval(
                 outcome = D1RowOutcome(
                     submission_score=None,
                     output_text=None,
-                    failed=True,
+                    row_state=ExecutedRowState.FAILED,
+                    executed_component_steps=(),
                     failure_code="runner_timeout",
                     redrivable=True,
                 )
@@ -668,8 +726,8 @@ def run_d1_eval(
                 out[res.key] = D1RowOutcome(
                     submission_score=None,
                     output_text=None,
-                    failed=False,
-                    missing=True,
+                    row_state=ExecutedRowState.MISSING,
+                    executed_component_steps=(),
                 )
         return out
 
@@ -713,6 +771,8 @@ def run_d1_eval(
                     candidate_id=candidate_id,
                     instance_id=task_id,
                     repeat=index,
+                    row_state=outcome.row_state,
+                    executed_component_steps=outcome.executed_component_steps,
                     output_text=outcome.output_text,
                     score=(
                         None

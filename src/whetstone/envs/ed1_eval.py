@@ -73,14 +73,20 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_blended import blend_per_task
 from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.encdec_rollout import DECODER_NODE_ID, ENCODER_NODE_ID
 from whetstone.envs.internal_eval import (
+    ExecutedComponentStep,
+    ExecutedRowState,
     ProcessInstance,
     RolloutOutput,
     _canonical_provider_call_config_payload,
+    _llm_component_step,
+    _llm_component_values,
     _process_payload_identity,
     process_request_identity,
     remaining_phase_wall_seconds,
     start_phase_deadline,
+    validate_executed_component_trace,
 )
 from whetstone.envs.partial_resume import (
     index_partial_records,
@@ -182,6 +188,7 @@ class Ed1EvalResult:
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     per_task_compression: tuple[float | None, ...]
+    outputs: tuple[RolloutOutput, ...]
     #: The raw per-task primary mean, always reported separately even when
     #: ``per_task_scores`` carries the blend.
     per_task_primary: tuple[float, ...] = ()
@@ -189,7 +196,6 @@ class Ed1EvalResult:
     #: discriminating inputs that snapped to canonical); ``None`` per task with
     #: no attractor sample; empty for ed1/QA.
     per_task_attractor: tuple[float | None, ...] = ()
-    outputs: tuple[RolloutOutput, ...] = ()
     row_diags: tuple[Ed1RowDiag, ...] = ()
 
     @property
@@ -215,6 +221,47 @@ class Ed1EvalResult:
         )
 
 
+def _validate_ed1_component_steps(
+    steps: tuple[ExecutedComponentStep, ...],
+    *,
+    encoder_text: str | None,
+    decoder_text: str | None,
+) -> None:
+    """Bind an ED1 execution prefix to its exact accepted generations."""
+    validate_executed_component_trace(steps)
+    expected_components = (ENCODER_NODE_ID, DECODER_NODE_ID)
+    actual_components = tuple(step.component_id for step in steps)
+    if actual_components != expected_components[: len(actual_components)]:
+        raise ValueError("ED1 trace must be an encode/decode execution prefix")
+    if encoder_text is None:
+        if steps:
+            raise ValueError("ED1 trace requires its encoder_text")
+    else:
+        if not steps:
+            raise ValueError("ED1 encoder_text requires its executed step")
+        _encoder_prompt, encoder_generation = _llm_component_values(
+            steps[0], component_id=ENCODER_NODE_ID
+        )
+        if encoder_generation != encoder_text:
+            raise ValueError("ED1 encoder trace must match encoder_text")
+    if decoder_text is None:
+        if len(steps) > 1:
+            raise ValueError("ED1 decoder trace requires its decoder_text")
+    else:
+        if len(steps) != 2:
+            raise ValueError("ED1 decoder_text requires its executed step")
+        decoder_step = steps[1]
+        decoder_prompt, decoder_generation = _llm_component_values(
+            decoder_step, component_id=DECODER_NODE_ID
+        )
+        if (
+            decoder_prompt
+            != DECODER_TEMPLATE.format(encoder_output=encoder_text)
+            or decoder_generation != decoder_text
+        ):
+            raise ValueError("ED1 decoder trace must match decoder execution")
+
+
 class Ed1RowOutcome(BaseModel):
     """One (task, repeat) rollout's dual result + provenance.
 
@@ -234,8 +281,8 @@ class Ed1RowOutcome(BaseModel):
     compression_value: float | None
     encoder_text: str | None
     decoder_text: str | None
-    failed: bool
-    missing: bool = False
+    row_state: ExecutedRowState
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
     failure_code: str = ""
     #: ed1m only: the reported attractor-pull for this row (``None`` for ed1).
     attractor_pull: float | None = None
@@ -280,18 +327,45 @@ class Ed1RowOutcome(BaseModel):
 
     @model_validator(mode="after")
     def _valid_outcome(self) -> Ed1RowOutcome:
-        if self.failed and self.missing:
-            raise ValueError("a row cannot be both failed and missing")
-        if (self.failed or self.missing) == (self.primary_value is not None):
+        _validate_ed1_component_steps(
+            self.executed_component_steps,
+            encoder_text=self.encoder_text,
+            decoder_text=self.decoder_text,
+        )
+        if (self.row_state is ExecutedRowState.SUCCESS) != (
+            self.primary_value is not None
+        ):
             raise ValueError(
                 "a successful row requires a primary value and an absent row "
                 "forbids one"
             )
+        if self.row_state is ExecutedRowState.MISSING:
+            if (
+                self.executed_component_steps
+                or self.encoder_text is not None
+                or self.decoder_text is not None
+            ):
+                raise ValueError(
+                    "a missing ED1 row cannot contain execution output"
+                )
+        if (
+            self.row_state is ExecutedRowState.SUCCESS
+            and len(self.executed_component_steps) != 2
+        ):
+            raise ValueError("a successful ED1 row requires encode and decode")
         if self.cache_hit != (self.cache_provenance is not None):
             raise ValueError(
                 "cache_hit and original-entry provenance must be paired"
             )
         return self
+
+    @property
+    def failed(self) -> bool:
+        return self.row_state is ExecutedRowState.FAILED
+
+    @property
+    def missing(self) -> bool:
+        return self.row_state is ExecutedRowState.MISSING
 
     @property
     def over_budget(self) -> bool | None:
@@ -322,10 +396,36 @@ class Ed1PartialPayload(BaseModel):
     attractor_pull: float | None
     max_budget: int | None
     encoder_len: int | None
+    row_state: ExecutedRowState
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
+
+    @model_validator(mode="after")
+    def _valid_trace(self) -> Ed1PartialPayload:
+        _validate_ed1_component_steps(
+            self.executed_component_steps,
+            encoder_text=self.encoder_text,
+            decoder_text=self.decoder_text,
+        )
+        if (
+            self.row_state is ExecutedRowState.MISSING
+            and self.executed_component_steps
+        ):
+            raise ValueError("a missing ED1 partial cannot contain a trace")
+        if (
+            self.row_state is ExecutedRowState.SUCCESS
+            and len(self.executed_component_steps) != 2
+        ):
+            raise ValueError("a successful ED1 partial requires both steps")
+        return self
+
+    @classmethod
+    def from_json_value(cls, payload: JsonValue | None) -> Ed1PartialPayload:
+        """Validate a decoded partial payload using strict JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
 
 
 _ED1_ROW_REQUEST_SCHEMA = "whetstone.envs.ed1_row_request/v2"
-_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.ed1_row_result/v2"
+_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.ed1_row_result/v3"
 
 
 class Ed1RowRequest(BaseModel):
@@ -402,7 +502,7 @@ class Ed1RowResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.ed1_row_result/v2"] = (
+    schema_name: Literal["whetstone.envs.ed1_row_result/v3"] = (
         _ED1_ROW_RESULT_SCHEMA
     )
     request_identity: str
@@ -513,7 +613,8 @@ def drive_ed1_row(
             compression_value=None,
             encoder_text=None,
             decoder_text=None,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=(),
             failure_code="encoder_render_error",
             max_budget=max_budget,
             encoder_len=None,
@@ -541,7 +642,8 @@ def drive_ed1_row(
             compression_value=None,
             encoder_text=None,
             decoder_text=None,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=(),
             failure_code=failure_code_of(enc),
             max_budget=max_budget,
             encoder_len=None,
@@ -550,6 +652,14 @@ def drive_ed1_row(
         )
     encoder_text = enc.generation.text
     encoder_len = len(encoder_text)
+    executed_component_steps = (
+        _llm_component_step(
+            trace_index=0,
+            component_id=ENCODER_NODE_ID,
+            prompt=encoder_prompt,
+            generation=encoder_text,
+        ),
+    )
     decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
     dec_exec = execute_call(
         request=_request(provider_call_config, decoder_prompt),
@@ -578,7 +688,8 @@ def drive_ed1_row(
             compression_value=None,
             encoder_text=encoder_text,
             decoder_text=None,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=executed_component_steps,
             failure_code=failure_code_of(dec),
             max_budget=max_budget,
             encoder_len=encoder_len,
@@ -586,6 +697,15 @@ def drive_ed1_row(
             redrivable=is_transient_transport_failure(dec),
         )
     decoder_text = dec.generation.text
+    executed_component_steps = (
+        *executed_component_steps,
+        _llm_component_step(
+            trace_index=1,
+            component_id=DECODER_NODE_ID,
+            prompt=decoder_prompt,
+            generation=decoder_text,
+        ),
+    )
     dec_tel = call_telemetry(dec)
     tel = _sum_telemetry(call_telemetry(enc), dec_tel)
 
@@ -600,7 +720,8 @@ def drive_ed1_row(
             compression_value=None,
             encoder_text=encoder_text,
             decoder_text=decoder_text,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=executed_component_steps,
             failure_code="code_eval_infrastructure_unknown",
             prompt_tokens=tel.prompt_tokens,
             completion_tokens=tel.completion_tokens,
@@ -619,7 +740,8 @@ def drive_ed1_row(
         compression_value=compression,
         encoder_text=encoder_text,
         decoder_text=decoder_text,
-        failed=False,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=executed_component_steps,
         attractor_pull=code_score.attractor_pull,
         prompt_tokens=tel.prompt_tokens,
         completion_tokens=tel.completion_tokens,
@@ -664,22 +786,27 @@ def _ed1_partial_payload(outcome: Ed1RowOutcome) -> Ed1PartialPayload:
         attractor_pull=outcome.attractor_pull,
         max_budget=outcome.max_budget,
         encoder_len=outcome.encoder_len,
+        row_state=outcome.row_state,
+        executed_component_steps=outcome.executed_component_steps,
     )
 
 
 def _ed1_outcome_from_record(record: PartialCallRecord) -> Ed1RowOutcome:
     """Rebuild the accepted outcome stored for one exact ED1 request."""
-    payload = Ed1PartialPayload.model_validate(record.observation_payload)
+    payload = Ed1PartialPayload.from_json_value(record.observation_payload)
     if record.output_text != payload.decoder_text:
         raise ValueError(
             "ED1 partial output_text does not match its observation payload"
         )
+    if record.failed != (payload.row_state is ExecutedRowState.FAILED):
+        raise ValueError("ED1 partial row state conflicts with failed flag")
     return Ed1RowOutcome(
         primary_value=None if record.score is None else float(record.score),
         compression_value=payload.compression_value,
         encoder_text=payload.encoder_text,
         decoder_text=payload.decoder_text,
-        failed=record.failed,
+        row_state=payload.row_state,
+        executed_component_steps=payload.executed_component_steps,
         failure_code=record.failure_code,
         attractor_pull=payload.attractor_pull,
         prompt_tokens=record.prompt_tokens,
@@ -967,7 +1094,8 @@ def run_ed1_eval(
                     compression_value=None,
                     encoder_text=None,
                     decoder_text=None,
-                    failed=True,
+                    row_state=ExecutedRowState.FAILED,
+                    executed_component_steps=(),
                     failure_code="runner_timeout",
                     redrivable=True,
                 )
@@ -985,8 +1113,8 @@ def run_ed1_eval(
                     compression_value=None,
                     encoder_text=None,
                     decoder_text=None,
-                    failed=False,
-                    missing=True,
+                    row_state=ExecutedRowState.MISSING,
+                    executed_component_steps=(),
                 )
         return out
 
@@ -1071,6 +1199,8 @@ def run_ed1_eval(
                     candidate_id=candidate_id,
                     instance_id=task_id,
                     repeat=index,
+                    row_state=outcome.row_state,
+                    executed_component_steps=outcome.executed_component_steps,
                     output_text=_row_output_text(outcome),
                     score=(
                         None

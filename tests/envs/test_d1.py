@@ -40,6 +40,11 @@ from whetstone.envs.input_transform import (
     rename_identifier,
     split_prompt,
 )
+from whetstone.envs.internal_eval import (
+    ExecutedRowState,
+    _llm_component_step,
+)
+from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
@@ -53,15 +58,28 @@ def _tasks(limit: int = 3):
     return synthetic_ed1_tasks(limit)
 
 
+def _successful_outcome() -> D1RowOutcome:
+    output_text = "def rebuilt():\n    return 1\n"
+    return D1RowOutcome(
+        submission_score=1.0,
+        output_text=output_text,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=LLM_NODE_ID,
+                prompt="test prompt",
+                generation=output_text,
+            ),
+        ),
+    )
+
+
 def _passing_jobs(*, served: list[str] | None = None):
     def outcome(instance, _repeat: int, _drive_ordinal: int):
         if served is not None:
             served.append(str(instance.id))
-        return D1RowOutcome(
-            submission_score=1.0,
-            output_text="def rebuilt():\n    return 1\n",
-            failed=False,
-        )
+        return _successful_outcome()
 
     return row_job_factory(outcome)
 
@@ -206,6 +224,23 @@ def test_d1_process_job_runs_real_row_driver() -> None:
 
     assert result.submission_score_aggregate.rows_failed == 0
     assert result.submission_score_aggregate.aggregation_output.value == 1.0
+    output = result.outputs[0]
+    input_arm, _ = _input_arm_text(
+        experiment, experiment.eval_configs.internal.instances[0]
+    )
+    assert output.row_state is ExecutedRowState.SUCCESS
+    assert output.executed_component_steps[0].model_dump(mode="json") == {
+        "trace_index": 0,
+        "component_id": "generate",
+        "input_field_names": ["prompt"],
+        "output_field_names": ["generation"],
+        "inputs": {
+            "prompt": render_d1_frame(
+                D1_WRAPPER_BODY_NAIVE, input_arm=input_arm
+            )
+        },
+        "outputs": {"generation": output.output_text},
+    }
 
 
 def test_d1_v2_request_hash_is_pinned() -> None:
@@ -304,6 +339,7 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
     assert (
         resumed.submission_score_aggregate == first.submission_score_aggregate
     )
+    assert resumed.outputs == first.outputs
 
 
 def test_d1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
@@ -357,7 +393,8 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
     pending = D1RowOutcome(
         submission_score=None,
         output_text=None,
-        failed=True,
+        row_state=ExecutedRowState.FAILED,
+        executed_component_steps=(),
         failure_code="transport_error",
         redrivable=True,
     )
@@ -409,11 +446,7 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
 
     def success(_instance, _repeat: int, drive_ordinal: int):
         resumed_ordinals.append(drive_ordinal)
-        return D1RowOutcome(
-            submission_score=1.0,
-            output_text="def rebuilt():\n    return 1\n",
-            failed=False,
-        )
+        return _successful_outcome()
 
     run_d1_eval(
         experiment,

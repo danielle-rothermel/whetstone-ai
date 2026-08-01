@@ -26,8 +26,9 @@ import hashlib
 import json
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
+from enum import UNIQUE, StrEnum, verify
 from typing import Literal
 
 from dr_providers import (
@@ -65,6 +66,7 @@ from whetstone.envs.partial_resume import (
 from whetstone.envs.registry import EnvSpec, env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
 from whetstone.envs.rollout_definition import (
+    LLM_NODE_ID,
     render_prompt,
     validate_candidate_prompt,
 )
@@ -91,7 +93,8 @@ from whetstone.execution.prompt_cache import (
     PromptResultCache,
     execute_call,
 )
-from whetstone.optimization.identity import IdentityHash
+from whetstone.graph.nodes import GENERATION_OUTPUT_FIELD
+from whetstone.optimization.identity import IdentityHash, ImmutableJsonObject
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import (
     Candidate,
@@ -109,21 +112,310 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 #: naive/ceiling probe renders are NOT guarded and keep their loud crash.
 RENDER_FAILURE_CODE = "render_key_error"
 
+# Executed-component traces cross worker and partial-log JSON boundaries. The
+# fixed limits keep this audit payload finite independently of provider limits.
+MAX_EXECUTED_COMPONENT_STEPS = 16
+MAX_EXECUTED_COMPONENT_FIELDS = 32
+MAX_EXECUTED_COMPONENT_JSON_BYTES = 4 * 1024 * 1024
+MAX_EXECUTED_COMPONENT_JSON_DEPTH = 32
+_COMPONENT_PROMPT_FIELD = "prompt"
+
+
+@verify(UNIQUE)
+class ExecutedRowState(StrEnum):
+    """The explicit execution state of one planned environment row."""
+
+    SUCCESS = "success"
+    FAILED = "failed"
+    MISSING = "missing"
+
+
+class _JsonByteCounter:
+    """Exact bounded UTF-8 byte counter for compact strict JSON."""
+
+    __slots__ = ("limit", "total")
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.total = 0
+
+    def add(self, count: int) -> None:
+        self.total += count
+        if self.total > self.limit:
+            raise ValueError("executed-component JSON exceeds its byte bound")
+
+
+def _add_json_string_bytes(counter: _JsonByteCounter, value: str) -> None:
+    """Count the compact ``ensure_ascii=False`` JSON spelling of a string."""
+    counter.add(2)
+    for character in value:
+        codepoint = ord(character)
+        if character in {'"', "\\"} or character in "\b\f\n\r\t":
+            counter.add(2)
+        elif codepoint < 0x20:
+            counter.add(6)
+        elif codepoint < 0x80:
+            counter.add(1)
+        elif codepoint < 0x800:
+            counter.add(2)
+        elif codepoint < 0x10000:
+            if 0xD800 <= codepoint <= 0xDFFF:
+                raise ValueError(
+                    "executed-component JSON contains an invalid surrogate"
+                )
+            counter.add(3)
+        else:
+            counter.add(4)
+
+
+def _bounded_canonical_json_size(value: object, *, max_bytes: int) -> int:
+    """Count compact strict-JSON bytes incrementally and stop at the bound."""
+    counter = _JsonByteCounter(max_bytes)
+
+    def add_value(current: object, *, depth: int) -> None:
+        if depth > MAX_EXECUTED_COMPONENT_JSON_DEPTH:
+            raise ValueError("executed-component JSON exceeds its depth bound")
+        if current is None:
+            counter.add(4)
+        elif type(current) is bool:
+            counter.add(4 if current else 5)
+        elif type(current) is int:
+            counter.add(len(str(current)))
+        elif type(current) is float:
+            if not math.isfinite(current):
+                raise ValueError(
+                    "executed-component JSON must contain finite numbers"
+                )
+            counter.add(
+                len(
+                    json.dumps(
+                        current,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                )
+            )
+        elif type(current) is str:
+            _add_json_string_bytes(counter, current)
+        elif isinstance(current, Mapping):
+            counter.add(1)
+            for index, (key, nested) in enumerate(current.items()):
+                if type(key) is not str:
+                    raise ValueError(
+                        "executed-component JSON object keys must be strings"
+                    )
+                if index:
+                    counter.add(1)
+                _add_json_string_bytes(counter, key)
+                counter.add(1)
+                add_value(nested, depth=depth + 1)
+            counter.add(1)
+        elif isinstance(current, (list, tuple)):
+            counter.add(1)
+            for index, item in enumerate(current):
+                if index:
+                    counter.add(1)
+                add_value(item, depth=depth + 1)
+            counter.add(1)
+        else:
+            raise ValueError(
+                "executed-component values must contain only strict JSON"
+            )
+
+    add_value(value, depth=0)
+    return counter.total
+
+
+def _bounded_trace_json_size(
+    step_sizes: Iterable[int],
+    *,
+    max_bytes: int = MAX_EXECUTED_COMPONENT_JSON_BYTES,
+) -> int:
+    """Add cached sizes and abort when the trace array is too big."""
+    counter = _JsonByteCounter(max_bytes)
+    counter.add(2)
+    for index, step_size in enumerate(step_sizes):
+        if index:
+            counter.add(1)
+        counter.add(step_size)
+    return counter.total
+
+
+class ExecutedComponentStep(BaseModel):
+    """One observed component execution crossing a strict JSON boundary."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    trace_index: int
+    component_id: str
+    input_field_names: tuple[str, ...]
+    output_field_names: tuple[str, ...]
+    inputs: ImmutableJsonObject
+    outputs: ImmutableJsonObject
+
+    _canonical_json_bytes: int = PrivateAttr(default=0)
+
+    @model_validator(mode="after")
+    def _valid_step(self) -> ExecutedComponentStep:
+        if self.trace_index < 0:
+            raise ValueError("trace_index must be nonnegative")
+        if (
+            not self.component_id
+            or self.component_id != self.component_id.strip()
+        ):
+            raise ValueError(
+                "component_id must be a nonempty stable identifier"
+            )
+        names = self.input_field_names + self.output_field_names
+        if len(names) > MAX_EXECUTED_COMPONENT_FIELDS:
+            raise ValueError(
+                "executed-component field count exceeds its bound"
+            )
+        if any(not name or name != name.strip() for name in names):
+            raise ValueError("executed-component field names must be nonempty")
+        if len(set(names)) != len(names):
+            raise ValueError(
+                "executed-component input and output names must be unique "
+                "and non-overlapping"
+            )
+        if frozenset(self.inputs) != frozenset(self.input_field_names):
+            raise ValueError(
+                "input field names must exactly match input object keys"
+            )
+        if frozenset(self.outputs) != frozenset(self.output_field_names):
+            raise ValueError(
+                "output field names must exactly match output object keys"
+            )
+        input_values = self.inputs.to_json()
+        output_values = self.outputs.to_json()
+        object.__setattr__(
+            self,
+            "inputs",
+            ImmutableJsonObject(
+                {name: input_values[name] for name in self.input_field_names}
+            ),
+        )
+        object.__setattr__(
+            self,
+            "outputs",
+            ImmutableJsonObject(
+                {name: output_values[name] for name in self.output_field_names}
+            ),
+        )
+        canonical_json_bytes = _bounded_canonical_json_size(
+            {
+                "trace_index": self.trace_index,
+                "component_id": self.component_id,
+                "input_field_names": self.input_field_names,
+                "output_field_names": self.output_field_names,
+                "inputs": self.inputs,
+                "outputs": self.outputs,
+            },
+            max_bytes=MAX_EXECUTED_COMPONENT_JSON_BYTES - 2,
+        )
+        object.__setattr__(self, "_canonical_json_bytes", canonical_json_bytes)
+        return self
+
+    @property
+    def canonical_json_bytes(self) -> int:
+        """The exact cached compact-JSON size of this immutable step."""
+        return self._canonical_json_bytes
+
+
+def validate_executed_component_trace(
+    steps: tuple[ExecutedComponentStep, ...],
+) -> tuple[ExecutedComponentStep, ...]:
+    """Validate one bounded, authoritatively ordered execution trace."""
+    if len(steps) > MAX_EXECUTED_COMPONENT_STEPS:
+        raise ValueError("executed-component step count exceeds its bound")
+    for expected_index, step in enumerate(steps):
+        if step.trace_index != expected_index:
+            raise ValueError(
+                "executed-component trace indexes must be contiguous from zero"
+            )
+    _bounded_trace_json_size(step.canonical_json_bytes for step in steps)
+    return steps
+
+
+class ExecutedComponentTracePayload(BaseModel):
+    """Strict row-state and trace payload persisted beside generic fields."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+
+    row_state: ExecutedRowState
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
+
+    @model_validator(mode="after")
+    def _valid_trace(self) -> ExecutedComponentTracePayload:
+        validate_executed_component_trace(self.executed_component_steps)
+        if (
+            self.row_state is ExecutedRowState.MISSING
+            and self.executed_component_steps
+        ):
+            raise ValueError(
+                "a missing row cannot contain executed components"
+            )
+        return self
+
+    @classmethod
+    def from_json_value(
+        cls, payload: JsonValue | None
+    ) -> ExecutedComponentTracePayload:
+        """Validate a decoded partial payload using strict JSON semantics."""
+        return cls.model_validate_json(json.dumps(payload))
+
+
+def _llm_component_step(
+    *,
+    trace_index: int,
+    component_id: str,
+    prompt: str,
+    generation: str,
+) -> ExecutedComponentStep:
+    """Capture the exact semantic input and accepted output of one LLM node."""
+    return ExecutedComponentStep(
+        trace_index=trace_index,
+        component_id=component_id,
+        input_field_names=(_COMPONENT_PROMPT_FIELD,),
+        output_field_names=(GENERATION_OUTPUT_FIELD,),
+        inputs=ImmutableJsonObject({_COMPONENT_PROMPT_FIELD: prompt}),
+        outputs=ImmutableJsonObject({GENERATION_OUTPUT_FIELD: generation}),
+    )
+
+
+def _llm_component_values(
+    step: ExecutedComponentStep, *, component_id: str
+) -> tuple[str, str]:
+    """Validate and return one closed LLM node's prompt and generation."""
+    if step.component_id != component_id:
+        raise ValueError(
+            f"executed component must be graph node {component_id!r}"
+        )
+    if step.input_field_names != (
+        _COMPONENT_PROMPT_FIELD,
+    ) or step.output_field_names != (GENERATION_OUTPUT_FIELD,):
+        raise ValueError("LLM trace fields must be prompt and generation")
+    prompt = step.inputs[_COMPONENT_PROMPT_FIELD]
+    generation = step.outputs[GENERATION_OUTPUT_FIELD]
+    if type(prompt) is not str or type(generation) is not str:
+        raise ValueError("LLM trace prompt and generation must be strings")
+    return prompt, generation
+
 
 @dataclass(frozen=True, slots=True)
 class RolloutOutput:
-    """One driven rollout row's FULL model output + extracted score.
+    """One rollout row's exact execution trace, display output, and score.
 
-    Captured for qualitative prompt->output analysis: the candidate that was
-    evaluated, the task instance + repeat index, the FULL untruncated model
-    output text, and the 0/1 oracle score (``None`` on a failed/missing row,
-    with the failure code). Restored (resumed) rows carry no fresh output text
-    (``output_text=None``) since they were not re-driven.
+    The row state and executed components are authoritative. ``output_text``
+    is the full untruncated sidecar/display output and ``score`` is ``None`` on
+    a failed or missing row. Exact partial resume restores the same values.
     """
 
     candidate_id: str
     instance_id: str
     repeat: int
+    row_state: ExecutedRowState
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
     output_text: str | None
     score: float | None
     failure_code: str = ""
@@ -131,8 +423,8 @@ class RolloutOutput:
     #: ``finish_reason`` is the provider stop reason of the accepted Generation
     #: (a truncated ``length`` is distinguishable from a clean ``stop``);
     #: ``provider_error`` is the FULL typed provider-failure diagnostic for a
-    #: FAILED row (not just the short ``failure_code``). Both ``None`` on a
-    #: restored (resumed) row (not re-driven).
+    #: FAILED row (not just the short ``failure_code``). Both are ``None`` when
+    #: unknown.
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
     #: ed1 enc-dec budget diagnostics on EVERY rollout row (task 26 item 6):
@@ -171,13 +463,12 @@ class InternalEvalResult:
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
+    #: Exact row state, trace, display output, and score for every planned row
+    #: in instance/repeat order, including exact partial restores.
+    outputs: tuple[RolloutOutput, ...]
     concurrency_halved: bool = False
     deadline_reached: bool = False
     guard_timeouts: int = 0
-    #: FULL model output text + score for every DRIVEN row this pass (in
-    #: instance/repeat order). Additive logging for qualitative analysis;
-    #: restored (resumed) rows are omitted (not re-driven).
-    outputs: tuple[RolloutOutput, ...] = ()
 
 
 def _per_task_score(task: TaskRows, repeat_count: int) -> float:
@@ -221,8 +512,8 @@ class InternalRowOutcome(BaseModel):
     )
 
     score: float | None
-    failed: bool = False
-    missing: bool = False
+    row_state: ExecutedRowState
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
     failure_code: str = ""
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -242,17 +533,53 @@ class InternalRowOutcome(BaseModel):
 
     @model_validator(mode="after")
     def _valid_row_state(self) -> InternalRowOutcome:
-        if self.failed and self.missing:
-            raise ValueError("a row cannot be both failed and missing")
-        if (self.failed or self.missing) == (self.score is not None):
+        validate_executed_component_trace(self.executed_component_steps)
+        if (self.row_state is ExecutedRowState.SUCCESS) != (
+            self.score is not None
+        ):
             raise ValueError(
                 "a present row requires a score and an absent row forbids one"
             )
+        if self.row_state is ExecutedRowState.MISSING:
+            if self.executed_component_steps or self.output_text is not None:
+                raise ValueError(
+                    "a missing row cannot contain execution output"
+                )
+        elif self.executed_component_steps:
+            if len(self.executed_component_steps) != 1:
+                raise ValueError(
+                    "an internal row executes exactly one component"
+                )
+            step = self.executed_component_steps[0]
+            _prompt, generation = _llm_component_values(
+                step, component_id=LLM_NODE_ID
+            )
+            if generation != self.output_text:
+                raise ValueError(
+                    "internal trace generation must match output_text"
+                )
+        elif self.output_text is not None:
+            raise ValueError(
+                "internal output_text requires its executed component"
+            )
+        if (
+            self.row_state is ExecutedRowState.SUCCESS
+            and not self.executed_component_steps
+        ):
+            raise ValueError("a successful internal row requires its trace")
         if self.cache_hit != (self.cache_source_call_id is not None):
             raise ValueError(
                 "cache_hit and original-entry provenance must be paired"
             )
         return self
+
+    @property
+    def failed(self) -> bool:
+        return self.row_state is ExecutedRowState.FAILED
+
+    @property
+    def missing(self) -> bool:
+        return self.row_state is ExecutedRowState.MISSING
 
     @property
     def row(self) -> RowValue:
@@ -265,7 +592,7 @@ class InternalRowOutcome(BaseModel):
 
 
 _INTERNAL_ROW_REQUEST_SCHEMA = "whetstone.envs.internal_row_request/v2"
-_INTERNAL_ROW_RESULT_SCHEMA = "whetstone.envs.internal_row_result/v2"
+_INTERNAL_ROW_RESULT_SCHEMA = "whetstone.envs.internal_row_result/v3"
 
 
 class ProcessInstance(BaseModel):
@@ -428,7 +755,7 @@ class InternalRowResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.internal_row_result/v2"] = (
+    schema_name: Literal["whetstone.envs.internal_row_result/v3"] = (
         _INTERNAL_ROW_RESULT_SCHEMA
     )
     request_identity: str
@@ -479,7 +806,8 @@ def drive_internal_row(
         except KeyError:
             return InternalRowOutcome(
                 score=None,
-                failed=True,
+                row_state=ExecutedRowState.FAILED,
+                executed_component_steps=(),
                 failure_code=RENDER_FAILURE_CODE,
             )
     else:
@@ -501,7 +829,8 @@ def drive_internal_row(
     if not result.succeeded or result.generation is None:
         return InternalRowOutcome(
             score=None,
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=(),
             failure_code=failure_code_of(result),
             latency_s=telemetry.latency_s,
             provider_error=telemetry.provider_error,
@@ -521,6 +850,15 @@ def drive_internal_row(
     )
     return InternalRowOutcome(
         score=float(score.value),
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=LLM_NODE_ID,
+                prompt=prompt,
+                generation=result.generation.text,
+            ),
+        ),
         prompt_tokens=telemetry.prompt_tokens,
         completion_tokens=telemetry.completion_tokens,
         total_tokens=telemetry.total_tokens,
@@ -637,6 +975,10 @@ def run_internal_eval(
                 reasoning_tokens=outcome.reasoning_tokens,
                 latency_s=None if outcome.cache_hit else outcome.latency_s,
                 output_text=outcome.output_text,
+                observation_payload=ExecutedComponentTracePayload(
+                    row_state=outcome.row_state,
+                    executed_component_steps=outcome.executed_component_steps,
+                ).model_dump(mode="json"),
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
                 cache_hit=outcome.cache_hit,
@@ -766,7 +1108,8 @@ def run_internal_eval(
             if res.status is FanoutStatus.UNIT_TIMEOUT:
                 outcome = InternalRowOutcome(
                     score=None,
-                    failed=True,
+                    row_state=ExecutedRowState.FAILED,
+                    executed_component_steps=(),
                     failure_code=RUNNER_TIMEOUT_CODE,
                     redrivable=True,
                 )
@@ -785,7 +1128,11 @@ def run_internal_eval(
                 # The whole-phase deadline stopped dispatch before this call:
                 # the planned row is absent (missing), never a fabricated
                 # failure, and nothing is recorded (a resume re-drives it).
-                driven[res.key] = InternalRowOutcome(score=None, missing=True)
+                driven[res.key] = InternalRowOutcome(
+                    score=None,
+                    row_state=ExecutedRowState.MISSING,
+                    executed_component_steps=(),
+                )
             elif res.value is not None:
                 driven[res.key] = res.value
         return (
@@ -826,33 +1173,32 @@ def run_internal_eval(
     deadline_reached = deadline_1 or deadline_2
     guard_timeouts = guard_1 + guard_2
 
-    # Assemble per-task rows in instance/repeat order (restored + driven), and
-    # collect the FULL model output text of every DRIVEN row (additive logging
-    # for qualitative prompt->output analysis; restored rows carry no fresh
-    # text since they were not re-driven).
+    # Assemble per-task rows and exact traces in instance/repeat order.
+    # Restored rows carry the same persisted trace as their fresh execution.
     task_rows: list[TaskRows] = []
     outputs: list[RolloutOutput] = []
     for instance, task in tasks:
         rows: list[RowValue] = []
         for index in range(repeats):
             key = (unit, str(instance.id), index)
-            if key in recorded:
-                rows.append(recorded[key].row)
-            else:
-                outcome = driven[key]
-                rows.append(outcome.row)
-                outputs.append(
-                    RolloutOutput(
-                        candidate_id=unit,
-                        instance_id=str(instance.id),
-                        repeat=index,
-                        output_text=outcome.output_text,
-                        score=outcome.score,
-                        failure_code=outcome.failure_code,
-                        finish_reason=outcome.finish_reason,
-                        provider_error=outcome.provider_error,
-                    )
+            outcome = recorded.get(key, driven.get(key))
+            if outcome is None:
+                raise RuntimeError("internal row assembly is incomplete")
+            rows.append(outcome.row)
+            outputs.append(
+                RolloutOutput(
+                    candidate_id=unit,
+                    instance_id=str(instance.id),
+                    repeat=index,
+                    row_state=outcome.row_state,
+                    executed_component_steps=outcome.executed_component_steps,
+                    output_text=outcome.output_text,
+                    score=outcome.score,
+                    failure_code=outcome.failure_code,
+                    finish_reason=outcome.finish_reason,
+                    provider_error=outcome.provider_error,
                 )
+            )
         task_rows.append(
             TaskRows(
                 task_identity=task.task_identity(),
@@ -920,9 +1266,17 @@ def _internal_outcome_from_record(
     record: PartialCallRecord,
 ) -> InternalRowOutcome:
     """Rebuild the accepted outcome stored for one exact row request."""
+    payload = ExecutedComponentTracePayload.from_json_value(
+        record.observation_payload
+    )
+    if record.failed != (payload.row_state is ExecutedRowState.FAILED):
+        raise ValueError(
+            "internal partial row state conflicts with failed flag"
+        )
     return InternalRowOutcome(
         score=None if record.score is None else float(record.score),
-        failed=record.failed,
+        row_state=payload.row_state,
+        executed_component_steps=payload.executed_component_steps,
         failure_code=record.failure_code,
         prompt_tokens=record.prompt_tokens,
         completion_tokens=record.completion_tokens,
@@ -942,7 +1296,13 @@ def _internal_outcome_from_record(
 
 
 __all__ = [
+    "MAX_EXECUTED_COMPONENT_FIELDS",
+    "MAX_EXECUTED_COMPONENT_JSON_BYTES",
+    "MAX_EXECUTED_COMPONENT_STEPS",
     "RENDER_FAILURE_CODE",
+    "ExecutedComponentStep",
+    "ExecutedComponentTracePayload",
+    "ExecutedRowState",
     "InternalEvalResult",
     "InternalRowJobFactory",
     "InternalRowOutcome",

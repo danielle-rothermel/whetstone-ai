@@ -7,7 +7,9 @@ Reward -- per env, with no live paid call.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from dr_code.eval import AggregationStatus
@@ -21,18 +23,27 @@ from tests.envs.support import (
 )
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.internal_eval import (
+    MAX_EXECUTED_COMPONENT_FIELDS,
+    MAX_EXECUTED_COMPONENT_JSON_BYTES,
+    MAX_EXECUTED_COMPONENT_STEPS,
+    ExecutedComponentStep,
+    ExecutedComponentTracePayload,
+    ExecutedRowState,
     InternalRowOutcome,
     InternalRowRequest,
     InternalRowResult,
     ProcessInstance,
+    _bounded_trace_json_size,
+    _llm_component_step,
     process_request_identity,
     run_internal_eval,
     start_phase_deadline,
+    validate_executed_component_trace,
 )
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.reward import CandidateEvaluationFailure
-from whetstone.envs.rollout_definition import PromptInputError
+from whetstone.envs.rollout_definition import LLM_NODE_ID, PromptInputError
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import (
     FanoutResult,
@@ -40,6 +51,8 @@ from whetstone.execution.fanout import (
     PoolOutcome,
     ProcessJob,
 )
+from whetstone.execution.partials import PartialCallRecord, PartialLog
+from whetstone.optimization.identity import ImmutableJsonObject
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import (
@@ -51,6 +64,291 @@ from whetstone.optimization.schema import (
 
 _MODEL = "openai/gpt-5-nano"
 _SPLIT = (2, 2, 2)
+
+
+def _semantic_trace_bytes(
+    steps: tuple[ExecutedComponentStep, ...],
+) -> bytes:
+    return json.dumps(
+        [step.model_dump(mode="json") for step in steps],
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+
+
+def _attempt_mapping_mutation(value: Any, key: str, replacement: Any) -> None:
+    value[key] = replacement
+
+
+def _successful_internal_outcome(
+    *, prompt: str = "test prompt", output_text: str = "test output"
+) -> InternalRowOutcome:
+    return InternalRowOutcome(
+        score=1.0,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=LLM_NODE_ID,
+                prompt=prompt,
+                generation=output_text,
+            ),
+        ),
+        output_text=output_text,
+    )
+
+
+def test_executed_component_step_pins_wire_fields_and_order() -> None:
+    step = _llm_component_step(
+        trace_index=0,
+        component_id="generate",
+        prompt="exact prompt",
+        generation="exact generation",
+    )
+    assert step.model_dump(mode="json") == {
+        "trace_index": 0,
+        "component_id": "generate",
+        "input_field_names": ["prompt"],
+        "output_field_names": ["generation"],
+        "inputs": {"prompt": "exact prompt"},
+        "outputs": {"generation": "exact generation"},
+    }
+
+    ordered = ExecutedComponentStep.model_validate(
+        {
+            "trace_index": 0,
+            "component_id": "generate",
+            "input_field_names": ("second", "first"),
+            "output_field_names": ("generation",),
+            "inputs": {"first": 1, "second": 2},
+            "outputs": {"generation": "ok"},
+        },
+        strict=True,
+    )
+    assert tuple(ordered.inputs) == ("second", "first")
+    assert ordered.inputs.to_json() == {"second": 2, "first": 1}
+
+    with pytest.raises(ValueError, match="unique and non-overlapping"):
+        ExecutedComponentStep.model_validate(
+            {
+                "trace_index": 0,
+                "component_id": "generate",
+                "input_field_names": ("value",),
+                "output_field_names": ("value",),
+                "inputs": {"value": 1},
+                "outputs": {"value": 2},
+            },
+            strict=True,
+        )
+
+
+@pytest.mark.parametrize("malformed", [("python tuple",), float("nan")])
+def test_executed_component_step_rejects_non_strict_json(malformed) -> None:
+    with pytest.raises(ValueError, match=r"strict JSON|finite numbers"):
+        ExecutedComponentStep.model_validate(
+            {
+                "trace_index": 0,
+                "component_id": "generate",
+                "input_field_names": ("prompt",),
+                "output_field_names": ("generation",),
+                "inputs": {"prompt": malformed},
+                "outputs": {"generation": "ok"},
+            },
+            strict=True,
+        )
+
+
+def test_executed_component_step_is_deeply_mutation_isolated() -> None:
+    source: dict[str, Any] = {
+        "payload": {"messages": ["public"], "metadata": {"safe": True}}
+    }
+    step = ExecutedComponentStep.model_validate(
+        {
+            "trace_index": 0,
+            "component_id": "generate",
+            "input_field_names": ("payload",),
+            "output_field_names": ("generation",),
+            "inputs": source,
+            "outputs": {"generation": "accepted"},
+        },
+        strict=True,
+    )
+    original_bytes = _semantic_trace_bytes((step,))
+
+    _attempt_mapping_mutation(source["payload"], "api_key", "source-secret")
+    source["payload"]["messages"].append("source-secret")
+    assert _semantic_trace_bytes((step,)) == original_bytes
+
+    with pytest.raises(TypeError):
+        _attempt_mapping_mutation(
+            step.inputs, "payload", {"api_key": "model-secret"}
+        )
+    nested = step.inputs["payload"]
+    assert isinstance(nested, ImmutableJsonObject)
+    with pytest.raises(TypeError):
+        _attempt_mapping_mutation(nested, "api_key", "model-secret")
+
+    dumped = step.model_dump(mode="json")
+    dumped["inputs"]["payload"]["api_key"] = "dump-secret"
+    dumped["inputs"]["payload"]["messages"].append("dump-secret")
+    assert _semantic_trace_bytes((step,)) == original_bytes
+    assert b"secret" not in _semantic_trace_bytes((step,))
+
+
+def test_executed_component_trace_enforces_all_fixed_bounds() -> None:
+    names = tuple(
+        f"field_{index}" for index in range(MAX_EXECUTED_COMPONENT_FIELDS + 1)
+    )
+    with pytest.raises(ValueError, match="field count"):
+        ExecutedComponentStep.model_validate(
+            {
+                "trace_index": 0,
+                "component_id": "generate",
+                "input_field_names": names,
+                "output_field_names": (),
+                "inputs": {name: None for name in names},
+                "outputs": {},
+            },
+            strict=True,
+        )
+    with pytest.raises(ValueError, match="byte bound"):
+        _llm_component_step(
+            trace_index=0,
+            component_id="generate",
+            prompt="x" * MAX_EXECUTED_COMPONENT_JSON_BYTES,
+            generation="ok",
+        )
+
+    repeated = tuple(
+        _llm_component_step(
+            trace_index=index,
+            component_id="generate",
+            prompt="prompt",
+            generation="generation",
+        )
+        for index in range(MAX_EXECUTED_COMPONENT_STEPS)
+    )
+    assert validate_executed_component_trace(repeated) == repeated
+    with pytest.raises(ValueError, match="step count"):
+        validate_executed_component_trace(
+            (
+                *repeated,
+                _llm_component_step(
+                    trace_index=MAX_EXECUTED_COMPONENT_STEPS,
+                    component_id="generate",
+                    prompt="prompt",
+                    generation="generation",
+                ),
+            )
+        )
+    with pytest.raises(ValueError, match="contiguous from zero"):
+        validate_executed_component_trace(
+            (repeated[0], repeated[1].model_copy(update={"trace_index": 2}))
+        )
+
+
+def test_executed_component_trace_aborts_aggregate_accounting_early() -> None:
+    empty = _llm_component_step(
+        trace_index=0,
+        component_id="generate",
+        prompt="",
+        generation="",
+    )
+    target_size = MAX_EXECUTED_COMPONENT_JSON_BYTES - 8
+    large = _llm_component_step(
+        trace_index=0,
+        component_id="generate",
+        prompt="x" * (target_size - empty.canonical_json_bytes),
+        generation="",
+    )
+    small = _llm_component_step(
+        trace_index=1,
+        component_id="generate",
+        prompt="small",
+        generation="small",
+    )
+    assert large.canonical_json_bytes == target_size
+    assert (
+        large.canonical_json_bytes == len(_semantic_trace_bytes((large,))) - 2
+    )
+    assert validate_executed_component_trace((large,)) == (large,)
+    with pytest.raises(ValueError, match="byte bound"):
+        validate_executed_component_trace((large, small))
+
+    consumed = 0
+
+    def sizes():
+        nonlocal consumed
+        step_sizes = (
+            large.canonical_json_bytes,
+            small.canonical_json_bytes,
+            *(1 for _ in range(MAX_EXECUTED_COMPONENT_STEPS - 2)),
+        )
+        for size in step_sizes:
+            consumed += 1
+            yield size
+
+    with pytest.raises(ValueError, match="byte bound"):
+        _bounded_trace_json_size(sizes())
+    assert consumed == 2
+
+
+def test_executed_component_trace_partial_round_trip_preserves_order(
+    tmp_path: Path,
+) -> None:
+    step = ExecutedComponentStep.model_validate(
+        {
+            "trace_index": 0,
+            "component_id": "nonlexical",
+            "input_field_names": ("zeta", "alpha"),
+            "output_field_names": ("omega", "beta"),
+            "inputs": {"alpha": {"position": 2}, "zeta": [1, 2]},
+            "outputs": {"beta": False, "omega": "first"},
+        },
+        strict=True,
+    )
+    payload = ExecutedComponentTracePayload(
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=(step,),
+    )
+    before = _semantic_trace_bytes((step,))
+    log = PartialLog(path=tmp_path / "ordered-trace.partial")
+    log.append(
+        PartialCallRecord(
+            phase="internal",
+            instance_id="instance",
+            unit="unit",
+            repeat_id=0,
+            request_identity="0" * 64,
+            redrive_pending=False,
+            observation_payload=payload.model_dump(mode="json"),
+        )
+    )
+
+    restored_payload = ExecutedComponentTracePayload.from_json_value(
+        log.load()[0].observation_payload
+    )
+    restored = restored_payload.executed_component_steps[0]
+    assert restored.input_field_names == ("zeta", "alpha")
+    assert tuple(restored.inputs) == ("zeta", "alpha")
+    assert restored.inputs["zeta"] == (1, 2)
+    assert restored.inputs["alpha"] == {"position": 2}
+    assert restored.output_field_names == ("omega", "beta")
+    assert tuple(restored.outputs) == ("omega", "beta")
+    assert restored.outputs["omega"] == "first"
+    assert restored.outputs["beta"] is False
+    assert _semantic_trace_bytes((restored,)) == before
+
+
+def test_successful_row_cannot_omit_its_declared_trace() -> None:
+    with pytest.raises(ValueError, match="requires its trace"):
+        InternalRowOutcome(
+            score=1.0,
+            row_state=ExecutedRowState.SUCCESS,
+            executed_component_steps=(),
+            output_text=None,
+        )
 
 
 def _tiny_experiment(env_name: str) -> EnvExperiment:
@@ -170,7 +468,8 @@ def _internal_jobs(
         if not text.strip():
             return InternalRowOutcome(
                 score=None,
-                failed=True,
+                row_state=ExecutedRowState.FAILED,
+                executed_component_steps=(),
                 failure_code="blank_generation",
             )
         score = env_exact_match_score(
@@ -179,10 +478,8 @@ def _internal_jobs(
             gold=instance.gold,
             evaluation_procedure_config_hash=procedure_hash,
         )
-        return InternalRowOutcome(
-            score=float(score.value),
-            output_text=text,
-        )
+        outcome = _successful_internal_outcome(prompt=prompt, output_text=text)
+        return outcome.model_copy(update={"score": float(score.value)})
 
     return row_job_factory(outcome)
 
@@ -218,19 +515,19 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "whetstone.envs.internal_row_request/v2"
     )
     assert InternalRowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.internal_row_result/v2"
+        "whetstone.envs.internal_row_result/v3"
     )
     assert D1RowRequest.model_fields["schema_name"].default == (
         "whetstone.envs.d1_row_request/v2"
     )
     assert D1RowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.d1_row_result/v2"
+        "whetstone.envs.d1_row_result/v3"
     )
     assert Ed1RowRequest.model_fields["schema_name"].default == (
         "whetstone.envs.ed1_row_request/v2"
     )
     assert Ed1RowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.ed1_row_result/v2"
+        "whetstone.envs.ed1_row_result/v3"
     )
     assert tuple(InternalRowRequest.model_fields) == (
         "schema_name",
@@ -416,6 +713,12 @@ def test_internal_process_job_runs_real_row_driver() -> None:
 
     assert result.aggregate.rows_failed == 0
     assert result.aggregate.aggregation_output.value == pytest.approx(1.0)
+    output = result.outputs[0]
+    step = output.executed_component_steps[0]
+    assert output.row_state is ExecutedRowState.SUCCESS
+    assert step.component_id == "generate"
+    assert step.outputs == {"generation": output.output_text}
+    assert step.input_field_names == ("prompt",)
 
 
 def test_internal_result_for_different_request_is_rejected() -> None:
@@ -424,7 +727,7 @@ def test_internal_result_for_different_request_is_rejected() -> None:
     def mismatched(request: InternalRowRequest) -> ProcessJob:
         result = InternalRowResult(
             request_identity="0" * 64,
-            outcome=InternalRowOutcome(score=1.0),
+            outcome=_successful_internal_outcome(),
         )
         return ProcessJob(
             entrypoint="tests.envs.process_workers:return_payload",
@@ -533,7 +836,15 @@ def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
         first = len(calls) == 1
         outcome = InternalRowOutcome(
             score=None if first else 1.0,
-            failed=first,
+            row_state=(
+                ExecutedRowState.FAILED if first else ExecutedRowState.SUCCESS
+            ),
+            executed_component_steps=(
+                ()
+                if first
+                else _successful_internal_outcome().executed_component_steps
+            ),
+            output_text=None if first else "test output",
             failure_code="rate_limit" if first else "",
             rate_limited=first,
             redrivable=first,
@@ -560,7 +871,7 @@ def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
         sampling=exp.eval_configs.internal,
         execution_policy=execution_policy(),
         row_job_factory=row_job_factory(
-            lambda _instance, _repeat, _drive: InternalRowOutcome(score=1.0)
+            lambda _instance, _repeat, _drive: _successful_internal_outcome()
         ),
         evaluation_binding=_binding(exp),
         concurrency=4,
@@ -620,6 +931,39 @@ def test_internal_resume_requires_exact_evaluation_binding(
     assert len(identities_b) == len(identities_a)
 
 
+def test_internal_partial_resume_restores_exact_trace(tmp_path: Path) -> None:
+    from whetstone.execution.partials import PartialLog
+
+    exp = _tiny_experiment("c18")
+    sampling = exp.eval_configs.internal
+    log = PartialLog(path=tmp_path / "internal-trace.partial")
+    reply = _correct_reply("c18", sampling.instances)
+    first = run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=_internal_jobs(exp, reply),
+        evaluation_binding=_binding(exp),
+        partial_log=log,
+    )
+
+    def boom(_request: InternalRowRequest) -> ProcessJob:
+        raise AssertionError("restored internal rows must not execute")
+
+    resumed = run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=boom,
+        evaluation_binding=_binding(exp),
+        partial_log=log,
+    )
+
+    assert resumed.outputs == first.outputs
+
+
 def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -630,7 +974,8 @@ def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
     log = PartialLog(path=tmp_path / "internal-redrive.partial")
     pending = InternalRowOutcome(
         score=None,
-        failed=True,
+        row_state=ExecutedRowState.FAILED,
+        executed_component_steps=(),
         failure_code="transport_error",
         redrivable=True,
     )
@@ -682,7 +1027,7 @@ def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
 
     def success(_instance, _repeat: int, drive_ordinal: int):
         resumed_ordinals.append(drive_ordinal)
-        return InternalRowOutcome(score=1.0)
+        return _successful_internal_outcome()
 
     run_internal_eval(
         exp,
@@ -729,7 +1074,7 @@ def test_internal_terminal_timeout_persists_both_exact_requests(
         sampling=sampling,
         execution_policy=execution_policy(),
         row_job_factory=row_job_factory(
-            lambda *_args: InternalRowOutcome(score=1.0)
+            lambda *_args: _successful_internal_outcome()
         ),
         evaluation_binding=_binding(exp, role=EvaluationRole.OFFICIAL),
         partial_log=log,

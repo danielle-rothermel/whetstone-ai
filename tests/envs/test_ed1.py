@@ -7,15 +7,20 @@ from pathlib import Path
 import pytest
 from dr_code.execution import SubprocessStartError
 from dr_code.humaneval import STRICT_FIELD_MARKER_PARSER_PROFILE
+from dr_providers import FailureClass
 
 from tests.envs.support import (
+    FakeTransport,
+    constant_reply,
     evaluation_binding,
     execution_policy,
     process_row_job_factory,
     row_job_factory,
     synthetic_ed1_tasks,
 )
+from tests.provider.support import build_evidence, failure_outcome
 from whetstone.envs.ed1 import (
+    DECODER_TEMPLATE,
     ED1_CANONICAL_MODEL,
     ED1_DATASET_REVISION,
     ED1_ENV_NAME,
@@ -32,6 +37,7 @@ from whetstone.envs.ed1_eval import (
     Ed1PartialPayload,
     Ed1RowOutcome,
     Ed1RowRequest,
+    drive_ed1_row,
     run_ed1_eval,
 )
 from whetstone.envs.ed1_scoring import score_ed1_submission
@@ -41,6 +47,10 @@ from whetstone.envs.encdec_rollout import (
     EVAL_NODE_ID,
     build_encdec_rollout_definition,
     encdec_graph_definition,
+)
+from whetstone.envs.internal_eval import (
+    ExecutedRowState,
+    _llm_component_step,
 )
 from whetstone.envs.sampling import Completeness
 from whetstone.execution.fanout import (
@@ -59,12 +69,33 @@ def _tasks(limit: int = 3):
 
 def _successful_outcome(instance, *, encoder_text: str = "REBUILD:ok"):
     max_budget = round(0.5 * len(instance.prompt_inputs["input_code"]))
+    decoder_text = "def rebuilt():\n    return 1\n"
+    encoder_prompt = render_encoder_frame(
+        ENCODER_BODY_A,
+        input_code=instance.prompt_inputs["input_code"],
+        max_budget=max_budget,
+    )
+    decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
     return Ed1RowOutcome(
         primary_value=1.0,
         compression_value=0.5,
         encoder_text=encoder_text,
-        decoder_text="def rebuilt():\n    return 1\n",
-        failed=False,
+        decoder_text=decoder_text,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=ENCODER_NODE_ID,
+                prompt=encoder_prompt,
+                generation=encoder_text,
+            ),
+            _llm_component_step(
+                trace_index=1,
+                component_id=DECODER_NODE_ID,
+                prompt=decoder_prompt,
+                generation=decoder_text,
+            ),
+        ),
         max_budget=max_budget,
         encoder_len=len(encoder_text),
     )
@@ -297,7 +328,82 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
 
     assert result.primary_aggregate.rows_failed == 0
     assert result.primary_aggregate.aggregation_output.value == 1.0
-    assert result.outputs[0].output_text is not None
+    output = result.outputs[0]
+    assert output.output_text is not None
+    assert [step.component_id for step in output.executed_component_steps] == [
+        "encode",
+        "decode",
+    ]
+    encoder_step = output.executed_component_steps[0]
+    assert encoder_step.outputs == {
+        "generation": "A compact executable reconstruction description."
+    }
+    assert encoder_step.outputs["generation"] != output.output_text
+    assert encoder_step.inputs == {
+        "prompt": render_encoder_frame(
+            str(candidate.payload[MUTATION_FIELD]),
+            input_code=tasks[0].input_code,
+            max_budget=round(0.5 * len(tasks[0].input_code)),
+        )
+    }
+
+
+def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
+    tasks = _tasks(1)
+    experiment = build_ed1_experiment(
+        tasks=tasks, repeats=1, internal_n=1, official_n=1
+    )
+    instance = tasks[0].instance
+    candidate = ed1_initial_candidate()
+    policy = execution_policy(max_attempts=1)
+    encoder_text = "encoder output that is not decoder code"
+    encoder_transport = FakeTransport(constant_reply(encoder_text))
+    calls = 0
+
+    def transport(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return encoder_transport(request)
+        return build_evidence(
+            request=request,
+            policy=policy.transport_policy,
+            outcome=failure_outcome(
+                failure_class=FailureClass.PERMANENT,
+                message="decoder rejected",
+            ),
+        )
+
+    def scorer_must_not_run(**_kwargs):
+        raise AssertionError("decoder failure must not reach scoring")
+
+    rollout = experiment.encdec_rollout
+    assert rollout is not None
+    outcome = drive_ed1_row(
+        experiment=experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        instance=instance,
+        provider_call_config=rollout.provider_call_config,
+        execution_policy=policy,
+        transport=transport,
+        scorer=scorer_must_not_run,
+        logical_call_id="decoder-failure",
+        repeat_index=0,
+        drive_ordinal=0,
+        cache=None,
+        cache_phase="internal_eval",
+        cache_unit="decoder-failure",
+    )
+
+    assert outcome.row_state is ExecutedRowState.FAILED
+    assert outcome.decoder_text is None
+    assert outcome.encoder_text == encoder_text
+    assert [
+        step.component_id for step in outcome.executed_component_steps
+    ] == ["encode"]
+    assert outcome.executed_component_steps[0].outputs == {
+        "generation": encoder_text
+    }
 
 
 def test_ed1_v2_request_hash_is_pinned() -> None:
@@ -389,12 +495,14 @@ def test_budget_and_healthy_diagnostics_are_explicit() -> None:
 
 def test_all_failed_diagnostics_name_dominant_failure() -> None:
     def failed(instance, _repeat: int, _drive_ordinal: int):
+        completed = _successful_outcome(instance)
         return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text="REBUILD:ok",
             decoder_text="def rebuilt():\n    return 1\n",
-            failed=True,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=completed.executed_component_steps,
             failure_code="code_eval_infrastructure_unknown",
             max_budget=round(0.5 * len(instance.prompt_inputs["input_code"])),
             encoder_len=len("REBUILD:ok"),
@@ -423,7 +531,8 @@ def test_bounded_skip_certifies_retained_scores_and_accounting() -> None:
                 compression_value=None,
                 encoder_text=None,
                 decoder_text=None,
-                failed=True,
+                row_state=ExecutedRowState.FAILED,
+                executed_component_steps=(),
                 failure_code="code_eval_infrastructure_unknown",
             )
         return _successful_outcome(
@@ -454,7 +563,7 @@ def test_streaming_resume_restores_rows_without_transport(
     assert len(records) == 2
     assert {record.raw_response for record in records} == {""}
     for record in records:
-        Ed1PartialPayload.model_validate(record.observation_payload)
+        Ed1PartialPayload.from_json_value(record.observation_payload)
 
     def boom(_instance, _repeat: int, _drive_ordinal: int):
         raise AssertionError("recorded rows must not be called again")
@@ -474,16 +583,20 @@ def test_streaming_resume_restores_rows_without_transport(
     )
     assert resumed.primary_aggregate == first.primary_aggregate
     assert resumed.compression_aggregate == first.compression_aggregate
+    assert resumed.outputs == first.outputs
 
 
 def test_ed1_partial_payload_rejects_shape_and_type_drift() -> None:
+    completed = _successful_outcome(_tasks(1)[0].instance)
     valid = {
         "compression_value": 0.5,
-        "encoder_text": "compact",
-        "decoder_text": "def rebuilt():\n    return 1\n",
+        "encoder_text": completed.encoder_text,
+        "decoder_text": completed.decoder_text,
         "attractor_pull": None,
-        "max_budget": 20,
-        "encoder_len": 7,
+        "max_budget": completed.max_budget,
+        "encoder_len": completed.encoder_len,
+        "row_state": ExecutedRowState.SUCCESS,
+        "executed_component_steps": completed.executed_component_steps,
     }
     Ed1PartialPayload.model_validate(valid)
 
@@ -557,7 +670,8 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
         compression_value=None,
         encoder_text=None,
         decoder_text=None,
-        failed=True,
+        row_state=ExecutedRowState.FAILED,
+        executed_component_steps=(),
         failure_code="transport_error",
         redrivable=True,
     )
@@ -777,6 +891,7 @@ def test_process_job_cache_hit_and_provenance_are_persisted(
     assert second.cache_source_call_id == (
         f"{candidate.candidate_id}:{tasks[0].instance.id}#0:enc"
     )
+    assert second.observation_payload == first.observation_payload
 
 
 def test_transient_encoder_failure_is_redriven_to_success() -> None:
