@@ -337,6 +337,10 @@ class EvaluationService(Protocol):
         self, intent: EvaluationIntent
     ) -> IntentResolution: ...
 
+    def validate_resolution_graph(self, resolution: IntentResolution) -> None:
+        """Validate service-owned references without executing evaluation."""
+        ...
+
 
 class ToolExecutor(Protocol):
     def runtime_handle(
@@ -1779,6 +1783,7 @@ class OptimizationHarness:
                 raise ValueError(
                     "successful Intent effect references a failed resolution"
                 )
+            self._evaluation_service.validate_resolution_graph(resolution)
             return resolution
         lease = self._acquired_lease(acquisition)
         with self._effect_authority.maintain(
@@ -1789,6 +1794,7 @@ class OptimizationHarness:
                 raw.model_dump(mode="json")
             )
             self._validate_resolution(intent, resolution)
+            self._evaluation_service.validate_resolution_graph(resolution)
             resolution_ref = self._put(
                 INTENT_RESOLUTION_SCHEMA,
                 resolution.model_dump(mode="json"),

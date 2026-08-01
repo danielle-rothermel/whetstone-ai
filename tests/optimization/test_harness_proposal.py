@@ -3,6 +3,7 @@
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 from dr_store import ObjectNotFoundError
@@ -15,12 +16,15 @@ from whetstone.optimization import (
     AdapterOutput,
     BudgetDelta,
     Candidate,
+    EvaluationIntent,
     IntentOutcome,
+    IntentResolution,
     ReplayPolicy,
     RuntimeToolHandle,
     StepMode,
     StepStatus,
     TerminalFailure,
+    TypedRef,
     candidate_reference,
     step_result_reference,
     typed_ref_for_record,
@@ -58,15 +62,87 @@ from .support import (
 class CrashOnceEvaluationService:
     def __init__(self) -> None:
         self.calls = 0
+        self.validation_calls: list[IntentResolution] = []
 
     @property
-    def replay_policy(self):
+    def replay_policy(self) -> ReplayPolicy:
         return ReplayPolicy.IDEMPOTENT
 
-    def resolve_evaluation_intent(self, intent):
+    def resolve_evaluation_intent(
+        self, intent: EvaluationIntent
+    ) -> IntentResolution:
         del intent
         self.calls += 1
         raise RuntimeError("crash during external evaluation")
+
+    def validate_resolution_graph(self, resolution: IntentResolution) -> None:
+        self.validation_calls.append(resolution)
+
+
+NESTED_EVALUATION_RESULT_SCHEMA = "whetstone.test.nested_evaluation_result"
+
+
+class NestedGraphEvaluationService(RecordingEvaluationService):
+    def __init__(
+        self,
+        *args,
+        persist_nested_result: bool = True,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._persist_nested_result = persist_nested_result
+
+    def resolve_evaluation_intent(
+        self, intent: EvaluationIntent
+    ) -> IntentResolution:
+        resolution = super().resolve_evaluation_intent(intent)
+        result_ref = resolution.evaluation_result_ref
+        if result_ref is None:
+            return resolution
+        nested_result: dict[str, Any] = {
+            "intent_id": intent.intent_id,
+            "score": 1.0,
+        }
+        nested_ref = typed_ref_for_record(
+            NESTED_EVALUATION_RESULT_SCHEMA,
+            nested_result,
+        )
+        if self._persist_nested_result:
+            self._store.put(NESTED_EVALUATION_RESULT_SCHEMA, nested_result)
+        stored_result = self._store.get(result_ref.reference)
+        if not isinstance(stored_result, dict):
+            raise AssertionError("test Evaluation Result must be an object")
+        evaluation_result = dict(stored_result)
+        evaluation_result["nested_result_ref"] = nested_ref.model_dump(
+            mode="json"
+        )
+        self._store.put(result_ref.schema_name, evaluation_result)
+        return resolution.model_copy(
+            update={
+                "evaluation_result_ref": typed_ref_for_record(
+                    result_ref.schema_name,
+                    evaluation_result,
+                )
+            }
+        )
+
+    def validate_resolution_graph(self, resolution: IntentResolution) -> None:
+        self.validation_calls.append(resolution)
+        result_ref = resolution.evaluation_result_ref
+        if result_ref is None:
+            return
+        evaluation_result = self._store.get(result_ref.reference)
+        if not isinstance(evaluation_result, dict):
+            raise AssertionError("test Evaluation Result must be an object")
+        nested_ref = TypedRef.model_validate(
+            evaluation_result["nested_result_ref"]
+        )
+        nested_result = self._store.get(nested_ref.reference)
+        if (
+            typed_ref_for_record(nested_ref.schema_name, nested_result)
+            != nested_ref
+        ):
+            raise ValueError("nested Evaluation Result ref is not exact")
 
 
 @dataclass
@@ -352,6 +428,126 @@ def test_restart_reuses_terminal_intent_prefix_after_later_crash(
     assert tuple(
         resolution.intent for resolution in result.resolved_intents
     ) == (first_intent, crashed_intent)
+
+
+def test_fresh_resolution_runs_service_graph_validation_with_exact_value(
+    tmp_path,
+) -> None:
+    store = make_store(tmp_path)
+    service = NestedGraphEvaluationService(store)
+    request = proposal_request()
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(CountingProposalAdapter()),
+        run=request.run,
+        evaluation_service=service,
+    )
+
+    result, _ = harness.run_step(request)
+
+    assert len(service.calls) == 1
+    assert service.validation_calls == list(result.resolved_intents)
+
+
+def test_graph_validation_failure_is_atomic_before_fresh_terminalization(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = make_store(tmp_path)
+    authority = EffectAuthority.memory()
+    service = NestedGraphEvaluationService(
+        store,
+        persist_nested_result=False,
+    )
+    request = proposal_request()
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(CountingProposalAdapter()),
+        run=request.run,
+        effect_authority=authority,
+        evaluation_service=service,
+    )
+    persisted_schemas: list[str] = []
+    real_put = harness._put
+
+    def record_put(schema, content):
+        persisted_schemas.append(schema)
+        return real_put(schema, content)
+
+    monkeypatch.setattr(harness, "_put", record_put)
+
+    with pytest.raises(ObjectNotFoundError):
+        harness.run_step(request)
+
+    assert len(service.calls) == 1
+    assert len(service.validation_calls) == 1
+    assert service.validation_calls[0].intent == service.calls[0]
+    assert INTENT_RESOLUTION_SCHEMA not in persisted_schemas
+    assert harness.resolve_step_result(request.run_id, 0) is None
+    acquisition = authority.acquire(
+        harness._intent_effect_request(request, service.calls[0]),
+        owner_id="terminalization-probe",
+        attempt_id="terminalization-probe",
+        lease_duration=timedelta(seconds=1),
+    )
+    assert acquisition.outcome is AcquireOutcome.BUSY
+    assert acquisition.terminal is None
+
+
+def test_terminal_replay_graph_loss_blocks_binding_without_reexecution(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    authority = EffectAuthority.memory(clock=clock)
+    store = make_store(tmp_path)
+    service = NestedGraphEvaluationService(store, crash_on_call=2)
+    adapter = CountingProposalAdapter(
+        candidates=(candidate("first"), candidate("second")),
+        budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+    )
+    request = proposal_request(contract=output_contract(2))
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(adapter),
+        run=request.run,
+        effect_authority=authority,
+        evaluation_service=service,
+        lease_duration=timedelta(seconds=1),
+    )
+
+    with pytest.raises(RuntimeError, match="crash during evaluation"):
+        harness.run_step(request)
+
+    terminal_resolution = service.validation_calls[0]
+    result_ref = terminal_resolution.evaluation_result_ref
+    assert result_ref is not None
+    evaluation_result = store.get(result_ref.reference)
+    assert isinstance(evaluation_result, dict)
+    missing_nested_ref = TypedRef.model_validate(
+        evaluation_result["nested_result_ref"]
+    )
+    real_get = store.get
+
+    def get_with_nested_result_loss(reference):
+        if reference == missing_nested_ref.reference:
+            raise ObjectNotFoundError(reference=reference)
+        return real_get(reference)
+
+    monkeypatch.setattr(store, "get", get_with_nested_result_loss)
+    calls_before_replay = list(service.calls)
+    clock.current += timedelta(seconds=2)
+
+    with pytest.raises(ObjectNotFoundError):
+        harness.run_step(request)
+
+    assert service.calls == calls_before_replay
+    assert service.validation_calls == [
+        terminal_resolution,
+        terminal_resolution,
+    ]
+    assert adapter.invocations == 1
+    assert harness.resolve_step_result(request.run_id, 0) is None
 
 
 def test_terminal_intent_replay_rechecks_missing_primary_result(

@@ -506,6 +506,7 @@ class RecordingEvaluationService:
         self._persist_evaluation_result = persist_evaluation_result
         self._persist_reward_evidence = persist_reward_evidence
         self.calls: list[EvaluationIntent] = []
+        self.validation_calls: list[IntentResolution] = []
 
     @property
     def replay_policy(self) -> ReplayPolicy:
@@ -594,6 +595,9 @@ class RecordingEvaluationService:
                 else None
             ),
         )
+
+    def validate_resolution_graph(self, resolution: IntentResolution) -> None:
+        self.validation_calls.append(resolution)
 
 
 class CountingProposalAdapter:

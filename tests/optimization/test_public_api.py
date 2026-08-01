@@ -1,9 +1,13 @@
 """Public optimization package contract."""
 
+from typing import get_type_hints
+
 import whetstone.optimization as optimization
 from whetstone.optimization import (
     EffectAuthoritySchemaMismatchError,
     EvaluationBinding,
+    EvaluationService,
+    IntentResolution,
     IssuedToolCallConflictError,
     OptimizationHarness,
     Reward,
@@ -208,3 +212,10 @@ def test_canonical_capabilities_import_from_package() -> None:
         getattr(optimization, name) is value
         for name, value in _CANONICAL_IMPORTS.items()
     )
+
+
+def test_graph_validation_protocol_stays_optimization_owned() -> None:
+    hints = get_type_hints(EvaluationService.validate_resolution_graph)
+
+    assert hints == {"resolution": IntentResolution, "return": type(None)}
+    assert IntentResolution.__module__ == "whetstone.optimization.schema"
