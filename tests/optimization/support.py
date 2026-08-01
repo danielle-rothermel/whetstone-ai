@@ -69,7 +69,6 @@ from whetstone.optimization.effect_authority import (
 )
 from whetstone.optimization.identity import TypedRef
 from whetstone.optimization.schema import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
     EvalConfigRef,
     EvaluationBinding,
 )
