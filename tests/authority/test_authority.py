@@ -22,7 +22,10 @@ from whetstone.authority import (
     UnauthorizedOfficialWriteError,
 )
 from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.schema import EvaluationBinding
+from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
+    EvaluationBinding,
+)
 
 from .support import (
     GRAPH_A,
@@ -51,6 +54,7 @@ def _internal_binding() -> EvaluationBinding:
     # Same ordinary Eval Config hash as the official run: identical config
     # identity, internal role.
     return EvaluationBinding(
+        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=eval_config_ref(),
         role=EvaluationRole.INTERNAL,
         campaign="camp-1",

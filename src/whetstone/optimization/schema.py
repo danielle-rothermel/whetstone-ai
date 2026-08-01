@@ -45,6 +45,7 @@ from whetstone.optimization.tools import (
     ToolConfigRef,
     ToolResultRef,
 )
+from whetstone.provider.policy import PROVIDER_EXECUTION_POLICY_SCHEMA
 
 __all__ = [
     "CANDIDATE_IDENTITY_SCHEMA",
@@ -102,7 +103,7 @@ EVAL_CONFIG_RECORD_SCHEMA = "dr_code.eval_config"
 INTENT_RESOLUTION_SCHEMA = "whetstone.optimization_intent_resolution"
 INTENT_RESOLUTION_SCHEMA_VERSION = 2
 EVALUATION_BINDING_SCHEMA = "whetstone.evaluation_binding"
-EVALUATION_BINDING_SCHEMA_VERSION = 1
+EVALUATION_BINDING_SCHEMA_VERSION = 2
 EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
 EVALUATION_FAILURE_SCHEMA = "whetstone.evaluation_failure"
 OPTIMIZATION_RUN_SCHEMA = "whetstone.optimization_run"
@@ -485,11 +486,12 @@ class EvaluationBinding(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    schema_version: Literal[2]
     eval_config: EvalConfigRef
     role: EvaluationRole
     authority_principal: NonEmptyId | None = None
     campaign: NonEmptyId
-    provider_execution_policy_ref: TypedRef | None = None
+    provider_execution_policy_ref: IdentityRef | None = None
     retry_policy_ref: TypedRef | None = None
     operational_policy_refs: tuple[TypedRef, ...] = ()
     environment_fingerprint: ExecutionEnvironmentFingerprint = Field(
@@ -497,6 +499,22 @@ class EvaluationBinding(BaseModel):
     )
     provenance_note: NonEmptyId | None = None
     provenance_ordinal: NonNegativeInt | None = None
+
+    @field_validator("provider_execution_policy_ref")
+    @classmethod
+    def _validate_provider_execution_policy_ref(
+        cls, value: IdentityRef | None
+    ) -> IdentityRef | None:
+        if (
+            value is not None
+            and value.record_ref.schema_name
+            != PROVIDER_EXECUTION_POLICY_SCHEMA
+        ):
+            raise ValueError(
+                "provider_execution_policy_ref must use schema "
+                f"{PROVIDER_EXECUTION_POLICY_SCHEMA!r}"
+            )
+        return value
 
     @field_validator("operational_policy_refs", mode="before")
     @classmethod
@@ -527,6 +545,7 @@ class EvaluationBinding(BaseModel):
         # These persisted identity keys are an explicit wire contract. Never
         # derive them by iterating over model fields.
         return {
+            "schema_version": self.schema_version,
             "eval_config": self.eval_config.model_dump(mode="json"),
             "role": self.role.value,
             "authority_principal": self.authority_principal,

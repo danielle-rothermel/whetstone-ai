@@ -51,8 +51,9 @@ from whetstone.authority.records import (
     RecordRevision,
 )
 from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.identity import IdentityRef, TypedRef
 from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     EvalConfigRef,
     EvaluationBinding,
     ExecutionEnvironmentFingerprint,
@@ -112,7 +113,7 @@ class EvaluationAuthority:
         *,
         eval_config: EvalConfigRef,
         campaign: str,
-        provider_execution_policy_ref: TypedRef | None = None,
+        provider_execution_policy_ref: IdentityRef | None = None,
         retry_policy_ref: TypedRef | None = None,
         operational_policy_refs: Sequence[TypedRef] = (),
         environment_fingerprint: ExecutionEnvironmentFingerprint | None = None,
@@ -128,6 +129,7 @@ class EvaluationAuthority:
         role qualifies its use, it is not a new Config type or identity).
         """
         return EvaluationBinding(
+            schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
             eval_config=eval_config,
             role=EvaluationRole.OFFICIAL,
             authority_principal=self.name,
