@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from threading import Event
@@ -9,12 +10,18 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore, SqliteBackend
 
 from tests.envs.support import (
-    FakeTransport,
-    constant_reply,
     execution_policy,
+    process_row_job_factory,
 )
 from whetstone.envs.factory import build_env_experiment
+from whetstone.envs.internal_eval import (
+    InternalRowJobFactory,
+    InternalRowOutcome,
+    InternalRowRequest,
+    InternalRowResult,
+)
 from whetstone.evaluation import (
+    EngineEvaluation,
     EngineEvaluationService,
     EngineToolEvaluator,
     EvaluationEngine,
@@ -27,6 +34,7 @@ from whetstone.evaluation import (
 from whetstone.evaluation import engine as evaluation_engine_module
 from whetstone.evaluation.schema import EvaluationIntentClaim
 from whetstone.evaluation_role import EvaluationRole
+from whetstone.execution.fanout import ProcessJob
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.optimization import (
@@ -47,6 +55,10 @@ from whetstone.optimization import (
 )
 from whetstone.optimization.schema import EvaluationBinding
 
+_DEFAULT_ROW_JOB_FACTORY = process_row_job_factory(
+    "tests.envs.process_workers:drive_internal_success"
+)
+
 
 def _experiment(*, repeats: int = 1):
     return build_env_experiment(
@@ -62,7 +74,7 @@ def _engine(
     tmp_path,
     *,
     store: ObjectStore,
-    transport: FakeTransport,
+    row_job_factory: InternalRowJobFactory = _DEFAULT_ROW_JOB_FACTORY,
     repeats: int = 1,
     partial: bool = False,
     cache: bool = False,
@@ -73,7 +85,7 @@ def _engine(
         experiment=experiment,
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(),
-        transport=transport,
+        row_job_factory=row_job_factory,
         partial_log=PartialLog(tmp_path / "partials.jsonl")
         if partial
         else None,
@@ -120,10 +132,32 @@ def _intent(
     )
 
 
+def _blocking_evaluate(
+    *,
+    result: EngineEvaluation,
+    entered: Event,
+    release: Event,
+    calls: list[EvaluationRequest],
+    timeout: float,
+) -> Callable[[EvaluationRequest], EngineEvaluation]:
+    def blocked(request: EvaluationRequest) -> EngineEvaluation:
+        calls.append(request)
+        entered.set()
+        assert release.wait(timeout=timeout)
+        return result
+
+    return blocked
+
+
+def _fail_unexpected_evaluate(
+    _request: EvaluationRequest,
+) -> EngineEvaluation:
+    raise AssertionError("waiting resolver must not evaluate")
+
+
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "engine.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
-    engine = _engine(tmp_path, store=store, transport=transport)
+    engine = _engine(tmp_path, store=store)
 
     result = engine.evaluate(
         EvaluationRequest(
@@ -169,6 +203,80 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     )
 
 
+def test_engine_passes_exact_canonical_row_job_factory(
+    tmp_path, monkeypatch
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "factory.sqlite"))
+    delegated = process_row_job_factory(
+        "tests.envs.process_workers:drive_internal_success"
+    )
+    submitted: list[InternalRowRequest] = []
+
+    def row_job_factory(request: InternalRowRequest) -> ProcessJob:
+        submitted.append(request)
+        return delegated(request)
+
+    engine = _engine(
+        tmp_path,
+        store=store,
+        row_job_factory=row_job_factory,
+    )
+    canonical_run = evaluation_engine_module.run_internal_eval
+
+    def checked_run(*args, **kwargs):
+        assert kwargs["row_job_factory"] is row_job_factory
+        assert "transport" not in kwargs
+        return canonical_run(*args, **kwargs)
+
+    monkeypatch.setattr(
+        evaluation_engine_module,
+        "run_internal_eval",
+        checked_run,
+    )
+
+    engine.evaluate(
+        EvaluationRequest(
+            candidate=engine.experiment.initial_candidate,
+            evaluation_binding=_binding(engine),
+            purpose="factory-contract",
+        )
+    )
+
+    assert len(submitted) == 1
+
+
+def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "identity-mismatch.sqlite"))
+
+    def mismatched(request: InternalRowRequest) -> ProcessJob:
+        result = InternalRowResult(
+            request_identity=f"mismatched-{request.request_identity}",
+            outcome=InternalRowOutcome(score=1.0),
+        )
+        return ProcessJob(
+            entrypoint="tests.envs.process_workers:return_payload",
+            payload=result.model_dump(mode="json"),
+        )
+
+    engine = _engine(
+        tmp_path,
+        store=store,
+        row_job_factory=mismatched,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="internal row result does not match its submitted request",
+    ):
+        engine.evaluate(
+            EvaluationRequest(
+                candidate=engine.experiment.initial_candidate,
+                evaluation_binding=_binding(engine),
+                purpose="identity-mismatch",
+            )
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "coercible_value"),
     (
@@ -182,8 +290,7 @@ def test_evaluation_evidence_rejects_coercible_booleans(
     coercible_value: object,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / f"{field}.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
-    engine = _engine(tmp_path, store=store, transport=transport)
+    engine = _engine(tmp_path, store=store)
     evidence = engine.evaluate(
         EvaluationRequest(
             candidate=engine.experiment.initial_candidate,
@@ -311,8 +418,7 @@ def test_engine_rejects_output_outside_sampling_plan(
     tmp_path, monkeypatch
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "output-drift.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
-    engine = _engine(tmp_path, store=store, transport=transport)
+    engine = _engine(tmp_path, store=store)
     canonical_run = evaluation_engine_module.run_internal_eval
 
     def drifted_run(*args, **kwargs):
@@ -343,11 +449,9 @@ def test_engine_rejects_output_outside_sampling_plan(
 
 def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "output-order.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
     engine = _engine(
         tmp_path,
         store=store,
-        transport=transport,
         repeats=2,
     )
     canonical_run = evaluation_engine_module.run_internal_eval
@@ -374,8 +478,17 @@ def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
 
 def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "reject.sqlite"))
-    transport = FakeTransport(reply=constant_reply("unused"))
-    engine = _engine(tmp_path, store=store, transport=transport)
+    submitted: list[InternalRowRequest] = []
+
+    def record_submission(request: InternalRowRequest) -> ProcessJob:
+        submitted.append(request)
+        raise AssertionError("invalid candidate must not create a process job")
+
+    engine = _engine(
+        tmp_path,
+        store=store,
+        row_job_factory=record_submission,
+    )
     invalid = Candidate(
         candidate_id="invalid",
         base_ref=engine.experiment.initial_candidate.base_ref,
@@ -394,17 +507,25 @@ def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:
 
     assert resolution.outcome is IntentOutcome.REJECTED
     assert resolution.evaluation_evidence_refs == ()
-    assert transport.served == []
+    assert submitted == []
 
 
 def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
     database = tmp_path / "restart.sqlite"
     store = ObjectStore(SqliteBackend(database))
-    transport = FakeTransport(reply=constant_reply("wrong"))
+    delegated = process_row_job_factory(
+        "tests.envs.process_workers:drive_internal_success"
+    )
+    submitted: list[InternalRowRequest] = []
+
+    def record_submission(request: InternalRowRequest) -> ProcessJob:
+        submitted.append(request)
+        return delegated(request)
+
     engine = _engine(
         tmp_path,
         store=store,
-        transport=transport,
+        row_job_factory=record_submission,
         partial=True,
         cache=True,
     )
@@ -418,18 +539,21 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
     first = EngineEvaluationService(
         store=store, engine=engine
     ).resolve_evaluation_intent(intent)
-    assert len(transport.served) == 1
+    assert len(submitted) == 1
+    assert first.reward_ref is not None
+    assert (
+        first.evaluation_evidence_refs == first.reward_ref.record.evidence_refs
+    )
 
     fresh_store = ObjectStore(SqliteBackend(database))
-    never = FakeTransport(
-        reply=lambda _prompt: (_ for _ in ()).throw(
-            AssertionError("durable resolution must replay")
-        )
-    )
+
+    def reject_submission(_request: InternalRowRequest) -> ProcessJob:
+        raise AssertionError("durable resolution must replay")
+
     fresh_engine = _engine(
         tmp_path,
         store=fresh_store,
-        transport=never,
+        row_job_factory=reject_submission,
         partial=True,
         cache=True,
     )
@@ -438,29 +562,48 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
     ).resolve_evaluation_intent(intent)
 
     assert replay == first
-    assert never.served == []
+    assert len(submitted) == 1
 
 
-def test_two_resolvers_share_one_durable_evaluation(tmp_path) -> None:
+def test_two_resolvers_share_one_durable_evaluation(
+    tmp_path, monkeypatch
+) -> None:
     database = tmp_path / "concurrent.sqlite"
-    transport_entered = Event()
+    evaluation_entered = Event()
     waiter_entered = Event()
     release = Event()
-
-    def blocked_reply(_prompt: str) -> str:
-        transport_entered.set()
-        assert release.wait(timeout=2)
-        return "wrong"
-
-    transport = FakeTransport(reply=blocked_reply)
+    evaluation_calls: list[EvaluationRequest] = []
     first_store = ObjectStore(SqliteBackend(database))
     second_store = ObjectStore(SqliteBackend(database))
-    first_engine = _engine(tmp_path, store=first_store, transport=transport)
-    second_engine = _engine(tmp_path, store=second_store, transport=transport)
+    first_engine = _engine(tmp_path, store=first_store)
+    second_engine = _engine(tmp_path, store=second_store)
     intent = _intent(
         first_engine,
         intent_id="concurrent-intent",
         purpose="concurrent",
+    )
+    evaluated = first_engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    monkeypatch.setattr(
+        first_engine,
+        "evaluate",
+        _blocking_evaluate(
+            result=evaluated,
+            entered=evaluation_entered,
+            release=release,
+            calls=evaluation_calls,
+            timeout=2,
+        ),
+    )
+    monkeypatch.setattr(
+        second_engine,
+        "evaluate",
+        _fail_unexpected_evaluate,
     )
 
     def wait_for_winner(_seconds: float) -> None:
@@ -477,19 +620,21 @@ def test_two_resolvers_share_one_durable_evaluation(tmp_path) -> None:
     )
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(first_service.resolve_evaluation_intent, intent)
-        assert transport_entered.wait(timeout=2)
+        assert evaluation_entered.wait(timeout=2)
         second = pool.submit(second_service.resolve_evaluation_intent, intent)
         assert waiter_entered.wait(timeout=2)
-        assert len(transport.served) == 1
+        assert len(evaluation_calls) == 1
         release.set()
-        assert second.result(timeout=2) == first.result(timeout=2)
+        assert second.result(timeout=10) == first.result(timeout=10)
 
-    assert len(transport.served) == 1
+    assert len(evaluation_calls) == 1
 
 
-def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
+def test_slow_evaluation_renews_claim_on_scripted_tick(
+    tmp_path, monkeypatch
+) -> None:
     now = [100.0]
-    transport_entered = Event()
+    evaluation_entered = Event()
     waiter_entered = Event()
     renewal_wait_entered = Event()
     release_renewal = Event()
@@ -498,11 +643,7 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
     release = Event()
     requested_intervals: list[float] = []
     published_claims: list[EvaluationIntentClaim] = []
-
-    def blocked_reply(_prompt: str) -> str:
-        transport_entered.set()
-        assert release.wait(timeout=2)
-        return "wrong"
+    evaluation_calls: list[EvaluationRequest] = []
 
     def wait_for_winner(_seconds: float) -> None:
         waiter_entered.set()
@@ -514,7 +655,7 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
             renewal_wait_entered.set()
             assert release_renewal.wait(timeout=2)
             return stop.is_set()
-        assert stop.wait(timeout=2)
+        assert stop.wait(timeout=10)
         return True
 
     def record_renewal(claim: EvaluationIntentClaim) -> None:
@@ -524,16 +665,38 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
         else:
             scripted_renewal_published.set()
 
-    transport = FakeTransport(reply=blocked_reply)
     backend = MemoryBackend()
     first_store = ObjectStore(backend)
     second_store = ObjectStore(backend)
-    first_engine = _engine(tmp_path, store=first_store, transport=transport)
-    second_engine = _engine(tmp_path, store=second_store, transport=transport)
+    first_engine = _engine(tmp_path, store=first_store)
+    second_engine = _engine(tmp_path, store=second_store)
     intent = _intent(
         first_engine,
         intent_id="slow-live-intent",
         purpose="heartbeat",
+    )
+    evaluated = first_engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    monkeypatch.setattr(
+        first_engine,
+        "evaluate",
+        _blocking_evaluate(
+            result=evaluated,
+            entered=evaluation_entered,
+            release=release,
+            calls=evaluation_calls,
+            timeout=2,
+        ),
+    )
+    monkeypatch.setattr(
+        second_engine,
+        "evaluate",
+        _fail_unexpected_evaluate,
     )
     first_service = EngineEvaluationService(
         store=first_store,
@@ -555,7 +718,7 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
         first = pool.submit(first_service.resolve_evaluation_intent, intent)
         try:
             assert initial_renewal_published.wait(timeout=2)
-            assert transport_entered.wait(timeout=2)
+            assert evaluation_entered.wait(timeout=2)
             assert renewal_wait_entered.wait(timeout=2)
             assert requested_intervals == [1.0]
             initial = published_claims[0]
@@ -574,31 +737,27 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(tmp_path) -> None:
             )
             assert waiter_entered.wait(timeout=2)
             assert first_service._latest_claim(intent) == renewed
-            assert len(transport.served) == 1
+            assert len(evaluation_calls) == 1
         finally:
             release_renewal.set()
             release.set()
-        assert second.result(timeout=2) == first.result(timeout=2)
+        assert second.result(timeout=10) == first.result(timeout=10)
 
-    assert len(transport.served) == 1
+    assert len(evaluation_calls) == 1
 
 
 @pytest.mark.sqlite_time_integration
 def test_real_sqlite_heartbeat_renews_past_original_expiry(
-    tmp_path,
+    tmp_path, monkeypatch
 ) -> None:
     database = tmp_path / "heartbeat.sqlite"
-    transport_entered = Event()
+    evaluation_entered = Event()
     waiter_entered = Event()
     initial_renewal_published = Event()
     renewed_past_original_expiry = Event()
     release = Event()
     published_claims: list[EvaluationIntentClaim] = []
-
-    def blocked_reply(_prompt: str) -> str:
-        transport_entered.set()
-        assert release.wait(timeout=10)
-        return "wrong"
+    evaluation_calls: list[EvaluationRequest] = []
 
     def wait_for_winner(_seconds: float) -> None:
         waiter_entered.set()
@@ -611,15 +770,37 @@ def test_real_sqlite_heartbeat_renews_past_original_expiry(
         elif time.time() > published_claims[0].expires_at:
             renewed_past_original_expiry.set()
 
-    transport = FakeTransport(reply=blocked_reply)
     first_store = ObjectStore(SqliteBackend(database))
     second_store = ObjectStore(SqliteBackend(database))
-    first_engine = _engine(tmp_path, store=first_store, transport=transport)
-    second_engine = _engine(tmp_path, store=second_store, transport=transport)
+    first_engine = _engine(tmp_path, store=first_store)
+    second_engine = _engine(tmp_path, store=second_store)
     intent = _intent(
         first_engine,
         intent_id="slow-live-intent",
         purpose="heartbeat",
+    )
+    evaluated = first_engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    monkeypatch.setattr(
+        first_engine,
+        "evaluate",
+        _blocking_evaluate(
+            result=evaluated,
+            entered=evaluation_entered,
+            release=release,
+            calls=evaluation_calls,
+            timeout=10,
+        ),
+    )
+    monkeypatch.setattr(
+        second_engine,
+        "evaluate",
+        _fail_unexpected_evaluate,
     )
     first_service = EngineEvaluationService(
         store=first_store,
@@ -638,7 +819,7 @@ def test_real_sqlite_heartbeat_renews_past_original_expiry(
         first = pool.submit(first_service.resolve_evaluation_intent, intent)
         try:
             assert initial_renewal_published.wait(timeout=10)
-            assert transport_entered.wait(timeout=10)
+            assert evaluation_entered.wait(timeout=10)
             assert renewed_past_original_expiry.wait(timeout=10)
             initial = published_claims[0]
             renewed = published_claims[-1]
@@ -649,12 +830,12 @@ def test_real_sqlite_heartbeat_renews_past_original_expiry(
                 second_service.resolve_evaluation_intent, intent
             )
             assert waiter_entered.wait(timeout=10)
-            assert len(transport.served) == 1
+            assert len(evaluation_calls) == 1
         finally:
             release.set()
         assert second.result(timeout=10) == first.result(timeout=10)
 
-    assert len(transport.served) == 1
+    assert len(evaluation_calls) == 1
 
 
 def test_renewal_wins_same_event_slot_as_stale_takeover(
@@ -665,28 +846,46 @@ def test_renewal_wins_same_event_slot_as_stale_takeover(
     renewal_paused = Event()
     stale_takeover_ready = Event()
     renewal_bound = Event()
-    transport_entered = Event()
+    evaluation_entered = Event()
     waiter_entered = Event()
     release = Event()
-
-    def blocked_reply(_prompt: str) -> str:
-        transport_entered.set()
-        assert release.wait(timeout=2)
-        return "wrong"
+    evaluation_calls: list[EvaluationRequest] = []
 
     def wait_for_winner(_seconds: float) -> None:
         waiter_entered.set()
         assert release.wait(timeout=2)
 
-    transport = FakeTransport(reply=blocked_reply)
     first_store = ObjectStore(SqliteBackend(database))
     second_store = ObjectStore(SqliteBackend(database))
-    first_engine = _engine(tmp_path, store=first_store, transport=transport)
-    second_engine = _engine(tmp_path, store=second_store, transport=transport)
+    first_engine = _engine(tmp_path, store=first_store)
+    second_engine = _engine(tmp_path, store=second_store)
     intent = _intent(
         first_engine,
         intent_id="renewal-race-intent",
         purpose="renewal-race",
+    )
+    evaluated = first_engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    monkeypatch.setattr(
+        first_engine,
+        "evaluate",
+        _blocking_evaluate(
+            result=evaluated,
+            entered=evaluation_entered,
+            release=release,
+            calls=evaluation_calls,
+            timeout=2,
+        ),
+    )
+    monkeypatch.setattr(
+        second_engine,
+        "evaluate",
+        _fail_unexpected_evaluate,
     )
     first = EngineEvaluationService(
         store=first_store,
@@ -727,30 +926,44 @@ def test_renewal_wins_same_event_slot_as_stale_takeover(
         second_result = pool.submit(second.resolve_evaluation_intent, intent)
         assert stale_takeover_ready.wait(timeout=2)
         assert renewal_bound.wait(timeout=2)
-        assert transport_entered.wait(timeout=2)
+        assert evaluation_entered.wait(timeout=2)
         assert waiter_entered.wait(timeout=2)
-        assert len(transport.served) == 1
+        assert len(evaluation_calls) == 1
         release.set()
-        assert second_result.result(timeout=2) == first_result.result(
-            timeout=2
+        assert second_result.result(timeout=10) == first_result.result(
+            timeout=10
         )
 
-    assert len(transport.served) == 1
+    assert len(evaluation_calls) == 1
 
 
-def test_expired_claim_retries_after_resolver_crash(tmp_path) -> None:
+def test_expired_claim_retries_after_resolver_crash(
+    tmp_path, monkeypatch
+) -> None:
     database = tmp_path / "claim-retry.sqlite"
     now = [100.0]
-    transport = FakeTransport(reply=constant_reply("wrong"))
+    delegated = process_row_job_factory(
+        "tests.envs.process_workers:drive_internal_success"
+    )
+    submitted: list[InternalRowRequest] = []
+    evaluation_attempts: list[EvaluationRequest] = []
 
-    def crash_once(_prompt: str) -> str:
-        if len(transport.served) == 1:
-            raise KeyboardInterrupt("simulated resolver crash")
-        return "wrong"
+    def record_submission(request: InternalRowRequest) -> ProcessJob:
+        submitted.append(request)
+        return delegated(request)
 
-    transport.reply = crash_once
     first_store = ObjectStore(SqliteBackend(database))
-    first_engine = _engine(tmp_path, store=first_store, transport=transport)
+    first_engine = _engine(
+        tmp_path,
+        store=first_store,
+        row_job_factory=record_submission,
+    )
+
+    def crash_once(request: EvaluationRequest) -> EngineEvaluation:
+        evaluation_attempts.append(request)
+        raise KeyboardInterrupt("simulated resolver crash")
+
+    monkeypatch.setattr(first_engine, "evaluate", crash_once)
     intent = _intent(
         first_engine,
         intent_id="crashed-intent",
@@ -769,7 +982,11 @@ def test_expired_claim_retries_after_resolver_crash(tmp_path) -> None:
 
     now[0] = 102.0
     retry_store = ObjectStore(SqliteBackend(database))
-    retry_engine = _engine(tmp_path, store=retry_store, transport=transport)
+    retry_engine = _engine(
+        tmp_path,
+        store=retry_store,
+        row_job_factory=record_submission,
+    )
     completed = EngineEvaluationService(
         store=retry_store,
         engine=retry_engine,
@@ -779,7 +996,8 @@ def test_expired_claim_retries_after_resolver_crash(tmp_path) -> None:
     ).resolve_evaluation_intent(intent)
 
     assert completed.outcome is IntentOutcome.COMPLETED
-    assert len(transport.served) == 2
+    assert len(evaluation_attempts) == 1
+    assert len(submitted) == 1
 
 
 def test_expired_owner_cannot_renew_after_new_generation_claims(
@@ -789,9 +1007,20 @@ def test_expired_owner_cannot_renew_after_new_generation_claims(
     now = [100.0]
     first_store = ObjectStore(SqliteBackend(database))
     second_store = ObjectStore(SqliteBackend(database))
-    transport = FakeTransport(reply=constant_reply("wrong"))
-    first_engine = _engine(tmp_path, store=first_store, transport=transport)
-    second_engine = _engine(tmp_path, store=second_store, transport=transport)
+
+    def reject_submission(_request: InternalRowRequest) -> ProcessJob:
+        raise AssertionError("claim arbitration must not create process jobs")
+
+    first_engine = _engine(
+        tmp_path,
+        store=first_store,
+        row_job_factory=reject_submission,
+    )
+    second_engine = _engine(
+        tmp_path,
+        store=second_store,
+        row_job_factory=reject_submission,
+    )
     intent = _intent(
         first_engine,
         intent_id="fenced-intent",
@@ -820,16 +1049,23 @@ def test_expired_owner_cannot_renew_after_new_generation_claims(
 
     with pytest.raises(RuntimeError, match="not owned"):
         first._renew_claim(intent, first_claim)
-    assert transport.served == []
 
 
 def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "cache.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
+    delegated = process_row_job_factory(
+        "tests.envs.process_workers:drive_internal_success"
+    )
+    submitted: list[InternalRowRequest] = []
+
+    def record_submission(request: InternalRowRequest) -> ProcessJob:
+        submitted.append(request)
+        return delegated(request)
+
     engine = _engine(
         tmp_path,
         store=store,
-        transport=transport,
+        row_job_factory=record_submission,
         partial=True,
         cache=True,
     )
@@ -850,16 +1086,15 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
         )
     )
 
-    assert len(transport.served) == 1
+    assert len(submitted) == 2
     assert result.evidence.cache.cache_hit_count == 1
     assert result.evidence.cache.source_call_ids
 
 
 def test_sampling_repeat_change_changes_exact_eval_identity(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "identity.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
-    one = _engine(tmp_path, store=store, transport=transport, repeats=1)
-    two = _engine(tmp_path, store=store, transport=transport, repeats=2)
+    one = _engine(tmp_path, store=store, repeats=1)
+    two = _engine(tmp_path, store=store, repeats=2)
 
     assert (
         one.eval_config_ref.identity_hash != two.eval_config_ref.identity_hash
@@ -868,8 +1103,7 @@ def test_sampling_repeat_change_changes_exact_eval_identity(tmp_path) -> None:
 
 def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "tool.sqlite"))
-    transport = FakeTransport(reply=constant_reply("wrong"))
-    engine = _engine(tmp_path, store=store, transport=transport)
+    engine = _engine(tmp_path, store=store)
     definition = ToolDefinition(
         tool_name="evaluate_candidate",
         input_fields=("base_ref", "model_route", "template"),

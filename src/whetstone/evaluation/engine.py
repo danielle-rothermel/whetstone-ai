@@ -8,7 +8,11 @@ from typing import Any
 from dr_store import ObjectStore
 
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.internal_eval import InternalEvalResult, run_internal_eval
+from whetstone.envs.internal_eval import (
+    InternalEvalResult,
+    InternalRowJobFactory,
+    run_internal_eval,
+)
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import (
     render_prompt,
@@ -41,7 +45,6 @@ from whetstone.optimization.schema import (
     candidate_reference,
     eval_config_reference,
 )
-from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 
@@ -83,7 +86,7 @@ class EvaluationEngine:
         experiment: EnvExperiment,
         sampling: EnvSplitSampling,
         execution_policy: ProviderExecutionPolicy,
-        transport: TransportCall,
+        row_job_factory: InternalRowJobFactory,
         concurrency: int = DEFAULT_CONCURRENCY,
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
@@ -93,7 +96,7 @@ class EvaluationEngine:
         self.experiment = experiment
         self.sampling = sampling
         self._execution_policy = execution_policy
-        self._transport = transport
+        self._row_job_factory = row_job_factory
         self._concurrency = concurrency
         self._max_wall_seconds = max_wall_seconds
         self._partial_log = partial_log
@@ -226,7 +229,7 @@ class EvaluationEngine:
             candidate=request.candidate,
             sampling=self.sampling,
             execution_policy=self._execution_policy,
-            transport=self._transport,
+            row_job_factory=self._row_job_factory,
             evaluation_binding=request.evaluation_binding,
             concurrency=self._concurrency,
             max_wall_seconds=self._max_wall_seconds,

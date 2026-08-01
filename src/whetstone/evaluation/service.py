@@ -478,6 +478,12 @@ class EngineEvaluationService:
                 ),
                 owned,
             )
+        reward_ref = evaluated.evidence.reward_ref
+        evaluation_evidence_refs = (
+            (evaluated.evidence_ref,)
+            if reward_ref is None
+            else reward_ref.record.evidence_refs
+        )
         return self._bind_if_owned(
             intent,
             IntentResolution(
@@ -487,9 +493,9 @@ class EngineEvaluationService:
                     classification=ResolutionClass.MEASURED,
                     message="candidate evaluated under exact sampling binding",
                 ),
-                evaluation_evidence_refs=(evaluated.evidence_ref,),
+                evaluation_evidence_refs=evaluation_evidence_refs,
                 resolved_eval_config=intent.target_eval_config,
-                reward_ref=evaluated.evidence.reward_ref,
+                reward_ref=reward_ref,
             ),
             owned,
         )
