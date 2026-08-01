@@ -2377,6 +2377,10 @@ def test_concrete_evaluation_service_reaches_harness_boundary(
         def mode(self) -> StepMode:
             return StepMode.PROPOSAL_ONLY
 
+        @property
+        def required_replay_policy(self) -> ReplayPolicy:
+            return ReplayPolicy.IDEMPOTENT
+
         def invoke(self, request, handles) -> AdapterOutput:
             assert handles == ()
             base = request.candidates[0]
@@ -2416,11 +2420,14 @@ def test_concrete_evaluation_service_reaches_harness_boundary(
         run=run,
         candidates=(engine.experiment.initial_candidate,),
     )
+    adapter = EngineProposalAdapter()
+    assert adapter.required_replay_policy is ReplayPolicy.IDEMPOTENT
     harness = make_harness(
         store=store,
-        adapter_registry=registry(EngineProposalAdapter()),
+        adapter_registry=registry(adapter),
         run=request.run,
         evaluation_service=service,
+        adapter_replay_policy=ReplayPolicy.IDEMPOTENT,
     )
 
     result, _result_ref = harness.run_step(request)
