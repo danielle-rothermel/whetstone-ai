@@ -20,10 +20,11 @@ from dr_providers import (
 
 import whetstone.execution._file_lock as file_lock_module
 from tests.provider import support as s
-from whetstone.execution._file_lock import FileLock
+from whetstone.execution._file_lock import FileLock, open_private_directory
 from whetstone.execution.partials import (
     PartialCallRecord,
     PartialLog,
+    _create_temporary,
     _encode_frame,
 )
 from whetstone.execution.prompt_cache import PromptResultCache, execute_call
@@ -162,6 +163,8 @@ def append_partial_worker(
             instance_id=f"task-{worker_id}",
             unit=f"candidate-{worker_id}",
             repeat_id=worker_id,
+            request_identity=f"{worker_id:064x}",
+            redrive_pending=False,
             output_text=str(worker_id) * payload_size,
         )
     )
@@ -179,16 +182,22 @@ def write_torn_partial_worker(
         instance_id="torn-task",
         unit="torn-candidate",
         repeat_id=99,
+        request_identity="c" * 64,
+        redrive_pending=False,
         at="2026-07-31T12:00:00+00:00",
     )
     body = _encode_frame(record)
     with FileLock(log._lock_path):
-        fd = os.open(log.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        try:
-            os.write(fd, body[: len(body) // 2])
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        with open_private_directory(log.path) as directory:
+            _temporary, fd = _create_temporary(
+                directory,
+                log._entry_path(record).name,
+            )
+            try:
+                os.write(fd, body[: len(body) // 2])
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         started.set()
         signal.pause()
         raise AssertionError("signal.pause returned without termination")
@@ -222,6 +231,8 @@ def run_partial_operation(
                 instance_id="task-operation",
                 unit="candidate-operation",
                 repeat_id=20,
+                request_identity="d" * 64,
+                redrive_pending=False,
             )
         )
         output.put("appended")
