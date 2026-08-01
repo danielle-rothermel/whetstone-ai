@@ -5,8 +5,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from dr_store import ObjectNotFoundError
+from pydantic import ValidationError
 
 from whetstone.optimization import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA,
+    REWARD_SCHEMA,
     AdapterOutput,
     BudgetDelta,
     Candidate,
@@ -15,10 +20,15 @@ from whetstone.optimization import (
     RuntimeToolHandle,
     StepMode,
     StepStatus,
+    TerminalFailure,
     candidate_reference,
     step_result_reference,
+    typed_ref_for_record,
 )
-from whetstone.optimization.effect_authority import EffectAuthority
+from whetstone.optimization.effect_authority import (
+    AcquireOutcome,
+    EffectAuthority,
+)
 from whetstone.optimization.harness import (
     ADAPTER_CHECKPOINT_SCHEMA,
     INTENT_EFFECT_KEY_PREFIX,
@@ -243,6 +253,8 @@ def test_invalid_adapter_output_is_not_checkpointed_and_can_retry(
     assert len(service.calls) == 1
     assert len(result.resolved_intents) == 1
     assert ADAPTER_CHECKPOINT_SCHEMA in persisted_schemas
+    assert persisted_schemas.count(INTENT_RESOLUTION_SCHEMA) == 1
+    assert "whetstone.intent_resolution" not in persisted_schemas
 
 
 @pytest.mark.sqlite_time_integration
@@ -342,6 +354,220 @@ def test_restart_reuses_terminal_intent_prefix_after_later_crash(
     ) == (first_intent, crashed_intent)
 
 
+def test_terminal_intent_replay_rechecks_missing_primary_result(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    authority = EffectAuthority.memory(clock=clock)
+    store = make_store(tmp_path)
+    adapter = CountingProposalAdapter(
+        candidates=(candidate("first"), candidate("second")),
+        budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+    )
+    request = proposal_request(contract=output_contract(2))
+    crashed_service = RecordingEvaluationService(store, crash_on_call=2)
+    crashed = make_harness(
+        store=store,
+        adapter_registry=registry(adapter),
+        run=request.run,
+        effect_authority=authority,
+        evaluation_service=crashed_service,
+        lease_duration=timedelta(seconds=1),
+    )
+
+    with pytest.raises(RuntimeError, match="crash during evaluation"):
+        crashed.run_step(request)
+    first_intent, _ = crashed_service.calls
+    missing_ref = typed_ref_for_record(
+        EVALUATION_EVIDENCE_SCHEMA,
+        {
+            "intent_id": first_intent.intent_id,
+            "candidate_identity_hash": first_intent.candidate.identity_hash,
+            "outcome": IntentOutcome.COMPLETED.value,
+        },
+    )
+    clock.current += timedelta(seconds=2)
+
+    fresh_store = make_store(tmp_path)
+    fresh_service = RecordingEvaluationService(fresh_store)
+    fresh = make_harness(
+        store=fresh_store,
+        adapter_registry=registry(adapter),
+        run=request.run,
+        effect_authority=authority,
+        evaluation_service=fresh_service,
+        lease_duration=timedelta(seconds=1),
+    )
+    real_get = fresh_store.get
+    missing_reads = 0
+
+    def get_with_missing_primary(reference):
+        nonlocal missing_reads
+        if reference == missing_ref.reference:
+            missing_reads += 1
+            raise ObjectNotFoundError(reference=reference)
+        return real_get(reference)
+
+    monkeypatch.setattr(fresh_store, "get", get_with_missing_primary)
+    maintenance_calls = 0
+    real_maintain = authority.maintain
+
+    def record_maintenance(*args, **kwargs):
+        nonlocal maintenance_calls
+        maintenance_calls += 1
+        return real_maintain(*args, **kwargs)
+
+    monkeypatch.setattr(authority, "maintain", record_maintenance)
+
+    with pytest.raises(ObjectNotFoundError):
+        fresh.run_step(request)
+
+    assert missing_reads == 1
+    assert maintenance_calls == 0
+    assert adapter.invocations == 1
+    assert fresh_service.calls == []
+    assert fresh.resolve_step_result(request.run_id, 0) is None
+
+
+@pytest.mark.parametrize(
+    ("missing", "outcome"),
+    [
+        ("evaluation_result", IntentOutcome.COMPLETED),
+        ("evaluation_result", IntentOutcome.FAILED),
+        ("reward_evidence", IntentOutcome.COMPLETED),
+    ],
+)
+def test_missing_referenced_object_stops_before_resolution_terminalization(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: str,
+    outcome: IntentOutcome,
+) -> None:
+    store = make_store(tmp_path)
+    request = proposal_request()
+    service = RecordingEvaluationService(
+        store,
+        outcome=outcome,
+        persist_evaluation_result=missing != "evaluation_result",
+        persist_reward_evidence=missing != "reward_evidence",
+    )
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(CountingProposalAdapter()),
+        run=request.run,
+        evaluation_service=service,
+    )
+    persisted_schemas: list[str] = []
+    real_put = harness._put
+
+    def record_put(schema, content):
+        persisted_schemas.append(schema)
+        return real_put(schema, content)
+
+    monkeypatch.setattr(harness, "_put", record_put)
+
+    with pytest.raises(ObjectNotFoundError):
+        harness.run_step(request)
+
+    assert len(service.calls) == 1
+    assert INTENT_RESOLUTION_SCHEMA not in persisted_schemas
+    assert harness.resolve_step_result(request.run_id, 0) is None
+
+
+@pytest.mark.parametrize("bypass", ["outcome_schema", "duplicate_reward"])
+def test_model_copy_bypass_is_revalidated_before_terminalization(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    bypass: str,
+) -> None:
+    store = make_store(tmp_path)
+    request = proposal_request()
+    service = RecordingEvaluationService(store)
+    real_resolve = service.resolve_evaluation_intent
+    authority = EffectAuthority.memory()
+
+    def resolve_with_bypass(intent):
+        resolution = real_resolve(intent)
+        if bypass == "outcome_schema":
+            return resolution.model_copy(
+                update={
+                    "outcome": IntentOutcome.FAILED,
+                    "terminal_failure": TerminalFailure(
+                        code="forged_failure",
+                        message="forged failure",
+                    ),
+                }
+            )
+        reward_ref = resolution.reward_ref
+        assert reward_ref is not None
+        duplicated = reward_ref.record.model_copy(
+            update={
+                "evidence_refs": (
+                    *reward_ref.record.evidence_refs,
+                    reward_ref.record.evidence_refs[0],
+                )
+            }
+        )
+        duplicated_ref = reward_ref.model_copy(
+            update={
+                "record": duplicated,
+                "record_ref": typed_ref_for_record(
+                    REWARD_SCHEMA, duplicated.record_content()
+                ),
+            }
+        )
+        return resolution.model_copy(
+            update={
+                "reward_ref": duplicated_ref,
+                "reward_evidence_refs": duplicated.evidence_refs,
+            }
+        )
+
+    monkeypatch.setattr(
+        service,
+        "resolve_evaluation_intent",
+        resolve_with_bypass,
+    )
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(CountingProposalAdapter()),
+        run=request.run,
+        effect_authority=authority,
+        evaluation_service=service,
+    )
+    persisted_schemas: list[str] = []
+    real_put = harness._put
+
+    def record_put(schema, content):
+        persisted_schemas.append(schema)
+        return real_put(schema, content)
+
+    monkeypatch.setattr(harness, "_put", record_put)
+
+    with pytest.raises(
+        ValidationError,
+        match=(
+            "evaluation_result_ref must use schema"
+            if bypass == "outcome_schema"
+            else "Reward evidence_refs must be unique"
+        ),
+    ):
+        harness.run_step(request)
+
+    assert len(service.calls) == 1
+    assert INTENT_RESOLUTION_SCHEMA not in persisted_schemas
+    assert harness.resolve_step_result(request.run_id, 0) is None
+    acquisition = authority.acquire(
+        harness._intent_effect_request(request, service.calls[0]),
+        owner_id="terminalization-probe",
+        attempt_id="terminalization-probe",
+        lease_duration=timedelta(seconds=1),
+    )
+    assert acquisition.outcome is AcquireOutcome.BUSY
+    assert acquisition.terminal is None
+
+
 def test_candidate_local_failure_does_not_erase_successful_steps(
     tmp_path,
 ) -> None:
@@ -403,4 +629,5 @@ def test_pre_execution_rejection_is_recorded_without_evidence(
     result, _ = harness.run_step(request)
     resolution = result.resolved_intents[0]
     assert resolution.outcome is IntentOutcome.REJECTED
-    assert resolution.evaluation_evidence_refs == ()
+    assert resolution.evaluation_result_ref is None
+    assert resolution.reward_evidence_refs == ()

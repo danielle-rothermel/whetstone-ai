@@ -197,6 +197,8 @@ class Reward(BaseModel):
             raise ValueError(
                 "an internal Reward must cite at least one exact evidence ref"
             )
+        if len(set(self.evidence_refs)) != len(self.evidence_refs):
+            raise ValueError("Reward evidence_refs must be unique")
         if self.reward_name != self.reward_policy.reward_name:
             raise ValueError("Reward name must match its exact Reward Policy")
         expected_names = tuple(term.name for term in self.reward_policy.terms)

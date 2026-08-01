@@ -17,6 +17,12 @@ from whetstone.optimization import (
     step_result_reference,
 )
 from whetstone.optimization.effect_authority import EffectAuthority
+from whetstone.optimization.harness import (
+    INTENT_EFFECT_KEY_PREFIX,
+    INTENT_EFFECT_KEY_SCHEMA_VERSION,
+    OPTIMIZATION_RESULT_BINDING_PREFIX,
+    STEP_RESULT_BINDING_PREFIX,
+)
 
 from .support import (
     CountingProposalAdapter,
@@ -160,6 +166,49 @@ class OmittingToolOutputAdapter:
         )
 
 
+def test_intent_effect_and_result_namespaces_are_v2(tmp_path) -> None:
+    store = make_store(tmp_path)
+    request = proposal_request()
+    harness = make_harness(
+        store=store,
+        adapter_registry=registry(),
+        run=request.run,
+        evaluation_service=RecordingEvaluationService(store),
+    )
+    intent = make_intent(
+        request.candidates[0],
+        run_id=request.run_id,
+        step_index=request.step_index,
+    )
+
+    effect_request = harness._intent_effect_request(request, intent)
+
+    assert INTENT_EFFECT_KEY_SCHEMA_VERSION == 2
+    assert effect_request.semantic_key == (
+        f"{INTENT_EFFECT_KEY_PREFIX}"
+        "7c53474e62bd45c4ac1a278473a62640a7ce348467cb89311e4e2dc87602a97d"
+    )
+    assert harness._result_binding_key(request.run_id, 0) == (
+        f"{STEP_RESULT_BINDING_PREFIX}{request.run_id}#0"
+    )
+    assert harness._terminal_binding_key(request.run_id) == (
+        f"{OPTIMIZATION_RESULT_BINDING_PREFIX}{request.run_id}"
+    )
+    assert ":v2:" in STEP_RESULT_BINDING_PREFIX
+    assert ":v2:" in OPTIMIZATION_RESULT_BINDING_PREFIX
+
+    store.bind(
+        f"whetstone.optimization_step_result:{request.run_id}#0",
+        request.run.record_ref.reference,
+    )
+    store.bind(
+        f"whetstone.optimization_result:{request.run_id}",
+        request.run.record_ref.reference,
+    )
+    assert harness.resolve_step_result(request.run_id, 0) is None
+    assert harness.resolve_optimization_result(request.run_id) is None
+
+
 def test_prior_result_must_embed_the_current_exact_run(tmp_path) -> None:
     run_id = "same-logical-run"
     foreign_run = proposal_run(run_id=run_id)
@@ -194,7 +243,7 @@ def test_prior_result_must_embed_the_current_exact_run(tmp_path) -> None:
     )
     assert persisted == foreign_result_ref.record_ref.reference
     store.bind(
-        f"whetstone.optimization_step_result:{run_id}#0",
+        f"{STEP_RESULT_BINDING_PREFIX}{run_id}#0",
         foreign_result_ref.record_ref.reference,
     )
 

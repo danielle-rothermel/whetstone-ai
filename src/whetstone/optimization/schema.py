@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping
 from enum import UNIQUE, StrEnum, verify
-from typing import Any
+from typing import Any, Literal
 
 from dr_code.eval import EvalConfig
 from pydantic import (
@@ -52,7 +52,11 @@ __all__ = [
     "CANDIDATE_RECORD_SCHEMA",
     "EVALUATION_BINDING_SCHEMA",
     "EVALUATION_BINDING_SCHEMA_VERSION",
+    "EVALUATION_EVIDENCE_SCHEMA",
+    "EVALUATION_FAILURE_SCHEMA",
     "EVAL_CONFIG_RECORD_SCHEMA",
+    "INTENT_RESOLUTION_SCHEMA",
+    "INTENT_RESOLUTION_SCHEMA_VERSION",
     "OPTIMIZATION_RESULT_SCHEMA",
     "OPTIMIZATION_RUN_SCHEMA",
     "OPTIMIZATION_RUN_SCHEMA_VERSION",
@@ -95,8 +99,12 @@ __all__ = [
 
 CANDIDATE_RECORD_SCHEMA = "whetstone.optimization_candidate"
 EVAL_CONFIG_RECORD_SCHEMA = "dr_code.eval_config"
+INTENT_RESOLUTION_SCHEMA = "whetstone.optimization_intent_resolution"
+INTENT_RESOLUTION_SCHEMA_VERSION = 2
 EVALUATION_BINDING_SCHEMA = "whetstone.evaluation_binding"
 EVALUATION_BINDING_SCHEMA_VERSION = 1
+EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
+EVALUATION_FAILURE_SCHEMA = "whetstone.evaluation_failure"
 OPTIMIZATION_RUN_SCHEMA = "whetstone.optimization_run"
 OPTIMIZATION_RUN_SCHEMA_VERSION = 1
 STEP_REQUEST_SCHEMA = "whetstone.optimization_step_request"
@@ -901,17 +909,19 @@ class IntentResolution(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    schema_version: Literal[2]
     intent: EvaluationIntent
     outcome: IntentOutcome
     detail: ResolutionDetail
-    evaluation_evidence_refs: tuple[TypedRef, ...] = ()
+    evaluation_result_ref: TypedRef | None = None
+    reward_evidence_refs: tuple[TypedRef, ...] = ()
     resolved_eval_config: EvalConfigRef
     reward_ref: RewardRef | None = None
     terminal_failure: TerminalFailure | None = None
 
-    @field_validator("evaluation_evidence_refs", mode="before")
+    @field_validator("reward_evidence_refs", mode="before")
     @classmethod
-    def _validate_evaluation_evidence_refs(
+    def _validate_reward_evidence_refs(
         cls, value: Any, info: ValidationInfo
     ) -> Any:
         return _require_ordered_sequence(value, info)
@@ -924,17 +934,30 @@ class IntentResolution(BaseModel):
             )
         if (
             self.outcome is not IntentOutcome.REJECTED
-            and not self.evaluation_evidence_refs
+            and self.evaluation_result_ref is None
         ):
             raise ValueError(
-                "completed/failed resolution requires execution evidence"
+                "completed/failed resolution requires an Evaluation Result"
             )
         if (
             self.outcome is IntentOutcome.REJECTED
-            and self.evaluation_evidence_refs
+            and self.evaluation_result_ref is not None
         ):
             raise ValueError(
-                "pre-execution rejection must not carry execution evidence"
+                "pre-execution rejection must not carry an Evaluation Result"
+            )
+        expected_result_schema = {
+            IntentOutcome.COMPLETED: EVALUATION_EVIDENCE_SCHEMA,
+            IntentOutcome.FAILED: EVALUATION_FAILURE_SCHEMA,
+        }.get(self.outcome)
+        if (
+            self.evaluation_result_ref is not None
+            and self.evaluation_result_ref.schema_name
+            != expected_result_schema
+        ):
+            raise ValueError(
+                f"{self.outcome.value} evaluation_result_ref must use "
+                f"schema {expected_result_schema!r}"
             )
         if (
             self.outcome is IntentOutcome.COMPLETED
@@ -980,12 +1003,17 @@ class IntentResolution(BaseModel):
             raise ValueError(
                 "a completed internal Intent Resolution requires a Reward"
             )
+        if self.reward_ref is None and self.reward_evidence_refs:
+            raise ValueError(
+                "a rewardless Intent Resolution must not carry Reward "
+                "evidence refs"
+            )
         if self.reward_ref is not None:
             reward = self.reward_ref.record
-            if reward.evidence_refs != self.evaluation_evidence_refs:
+            if reward.evidence_refs != self.reward_evidence_refs:
                 raise ValueError(
                     "Reward evidence_refs must exactly equal the ordered "
-                    "Intent Resolution evaluation_evidence_refs"
+                    "Intent Resolution reward_evidence_refs"
                 )
             if (
                 reward.reward_policy_hash

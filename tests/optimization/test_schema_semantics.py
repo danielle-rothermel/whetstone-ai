@@ -9,6 +9,9 @@ from pydantic import ValidationError
 
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_FAILURE_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
     Candidate,
     EffectTerminal,
     IntentOutcome,
@@ -75,11 +78,31 @@ def _resolution(
         step_index=exact_request.step_index,
         binding=binding,
     )
-    evidence_refs = (
-        typed_ref_for_record(
-            "whetstone.test.evaluation_evidence",
-            {"intent_id": intent.intent_id},
-        ),
+    evaluation_result_ref = (
+        None
+        if outcome is IntentOutcome.REJECTED
+        else typed_ref_for_record(
+            (
+                EVALUATION_EVIDENCE_SCHEMA
+                if outcome is IntentOutcome.COMPLETED
+                else EVALUATION_FAILURE_SCHEMA
+            ),
+            {"intent_id": intent.intent_id, "outcome": outcome.value},
+        )
+    )
+    reward_evidence_refs = (
+        tuple(
+            typed_ref_for_record(
+                "whetstone.test.reward_evidence",
+                {"intent_id": intent.intent_id, "ordinal": ordinal},
+            )
+            for ordinal in range(2)
+        )
+        if (
+            outcome is IntentOutcome.COMPLETED
+            and intent.evaluation_binding.role is EvaluationRole.INTERNAL
+        )
+        else ()
     )
     reward_ref = None
     if (
@@ -93,10 +116,11 @@ def _resolution(
                 policy,
                 aggregates={term.name: 0.75 for term in policy.terms},
                 evidence_role=EvaluationRole.INTERNAL,
-                evidence_refs=evidence_refs,
+                evidence_refs=reward_evidence_refs,
             )
         )
     return IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
         intent=intent,
         outcome=outcome,
         detail=ResolutionDetail(
@@ -107,7 +131,8 @@ def _resolution(
             ),
             message=outcome.value,
         ),
-        evaluation_evidence_refs=evidence_refs,
+        evaluation_result_ref=evaluation_result_ref,
+        reward_evidence_refs=reward_evidence_refs,
         resolved_eval_config=intent.target_eval_config,
         reward_ref=reward_ref,
         terminal_failure=failure,
@@ -360,7 +385,7 @@ def test_resolution_composes_reward_and_official_forbids_it() -> None:
     request = proposal_request()
     policy = request.run.record.reward_policy
     assert policy is not None
-    evidence_refs = _resolution(request=request).evaluation_evidence_refs
+    evidence_refs = _resolution(request=request).reward_evidence_refs
     reward = apply_reward_policy(
         policy,
         aggregates={term.name: 0.75 for term in policy.terms},
@@ -385,12 +410,125 @@ def test_resolution_composes_reward_and_official_forbids_it() -> None:
     official_payload["authority_principal"] = "official-publisher"
     official = EvaluationBinding.model_validate(official_payload)
     official_resolution = _resolution(request=request, binding=official)
+    assert official_resolution.evaluation_result_ref is not None
+    assert official_resolution.reward_ref is None
+    assert official_resolution.reward_evidence_refs == ()
     official_payload = official_resolution.model_dump(mode="json")
     official_payload["reward_ref"] = reward_reference(reward).model_dump(
         mode="json"
     )
     with pytest.raises(ValidationError, match=r"official.*must not"):
         IntentResolution.model_validate(official_payload)
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [IntentOutcome.COMPLETED, IntentOutcome.FAILED],
+)
+def test_executed_resolution_requires_evaluation_result(
+    outcome: IntentOutcome,
+) -> None:
+    resolution = _resolution(
+        outcome=outcome,
+        failure=(
+            TerminalFailure(code="evaluation_failed", message="failed")
+            if outcome is IntentOutcome.FAILED
+            else None
+        ),
+    )
+    payload = resolution.model_dump(mode="json")
+    payload["evaluation_result_ref"] = None
+
+    with pytest.raises(ValidationError, match="requires an Evaluation Result"):
+        IntentResolution.model_validate(payload)
+
+
+def test_rejected_resolution_forbids_evaluation_result() -> None:
+    resolution = _resolution(outcome=IntentOutcome.REJECTED)
+    payload = resolution.model_dump(mode="json")
+    payload["evaluation_result_ref"] = typed_ref_for_record(
+        EVALUATION_EVIDENCE_SCHEMA, {"result": "forbidden"}
+    ).model_dump(mode="json")
+
+    with pytest.raises(
+        ValidationError, match="must not carry an Evaluation Result"
+    ):
+        IntentResolution.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "wrong_schema"),
+    [
+        (IntentOutcome.COMPLETED, EVALUATION_FAILURE_SCHEMA),
+        (IntentOutcome.FAILED, EVALUATION_EVIDENCE_SCHEMA),
+        (IntentOutcome.COMPLETED, "whetstone.evaluation_binding"),
+        (IntentOutcome.FAILED, "whetstone.evaluation_binding"),
+        (IntentOutcome.COMPLETED, "whetstone.evaluation_outputs"),
+        (IntentOutcome.FAILED, "whetstone.evaluation_outputs"),
+        (IntentOutcome.COMPLETED, "whetstone.evaluation_intent_claim"),
+        (IntentOutcome.FAILED, "whetstone.evaluation_intent_claim"),
+    ],
+)
+def test_executed_resolution_rejects_non_evaluation_result_schema(
+    outcome: IntentOutcome,
+    wrong_schema: str,
+) -> None:
+    resolution = _resolution(
+        outcome=outcome,
+        failure=(
+            TerminalFailure(code="evaluation_failed", message="failed")
+            if outcome is IntentOutcome.FAILED
+            else None
+        ),
+    )
+    payload = resolution.model_dump(mode="json")
+    payload["evaluation_result_ref"] = typed_ref_for_record(
+        wrong_schema, {"result": "wrong schema"}
+    ).model_dump(mode="json")
+
+    with pytest.raises(
+        ValidationError, match="evaluation_result_ref must use schema"
+    ):
+        IntentResolution.model_validate(payload)
+
+
+def test_completed_internal_resolution_requires_reward() -> None:
+    resolution = _resolution()
+    payload = resolution.model_dump(mode="json")
+    payload["reward_ref"] = None
+    payload["reward_evidence_refs"] = []
+
+    with pytest.raises(ValidationError, match="requires a Reward"):
+        IntentResolution.model_validate(payload)
+
+
+@pytest.mark.parametrize("kind", ["official_completed", "failed"])
+def test_rewardless_resolution_requires_empty_reward_evidence_refs(
+    kind: str,
+) -> None:
+    if kind == "official_completed":
+        binding_payload = evaluation_binding().model_dump(mode="json")
+        binding_payload["role"] = EvaluationRole.OFFICIAL.value
+        binding_payload["authority_principal"] = "official-publisher"
+        resolution = _resolution(
+            binding=EvaluationBinding.model_validate(binding_payload)
+        )
+    else:
+        resolution = _resolution(
+            outcome=IntentOutcome.FAILED,
+            failure=TerminalFailure(
+                code="evaluation_failed", message="failed"
+            ),
+        )
+    payload = resolution.model_dump(mode="json")
+    payload["reward_evidence_refs"] = [
+        typed_ref_for_record(
+            "whetstone.test.reward_evidence", {"forbidden": kind}
+        ).model_dump(mode="json")
+    ]
+
+    with pytest.raises(ValidationError, match=r"rewardless.*must not carry"):
+        IntentResolution.model_validate(payload)
 
 
 @pytest.mark.parametrize(
@@ -427,6 +565,7 @@ def test_only_completed_intent_resolution_may_carry_reward(
             step_index=request.step_index,
         )
         resolution = IntentResolution(
+            schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
             intent=intent,
             outcome=outcome,
             detail=ResolutionDetail(
@@ -725,6 +864,18 @@ def test_resolution_reward_binds_evidence_and_run_policy() -> None:
     request = proposal_request()
     resolution = _resolution(request=request)
     assert resolution.reward_ref is not None
+    assert len(resolution.reward_evidence_refs) == 2
+    assert (
+        resolution.reward_ref.record.evidence_refs
+        == resolution.reward_evidence_refs
+    )
+
+    order_payload = resolution.model_dump(mode="json")
+    order_payload["reward_evidence_refs"] = list(
+        reversed(order_payload["reward_evidence_refs"])
+    )
+    with pytest.raises(ValidationError, match="exactly equal"):
+        IntentResolution.model_validate(order_payload)
 
     evidence_payload = resolution.model_dump(mode="json")
     changed_reward = resolution.reward_ref.record.model_dump(mode="json")
@@ -748,7 +899,7 @@ def test_resolution_reward_binds_evidence_and_run_policy() -> None:
         alternate,
         aggregates={"score": 0.75},
         evidence_role=EvaluationRole.INTERNAL,
-        evidence_refs=resolution.evaluation_evidence_refs,
+        evidence_refs=resolution.reward_evidence_refs,
     )
     policy_payload = resolution.model_dump(mode="json")
     policy_payload["reward_ref"] = reward_reference(reward).model_dump(

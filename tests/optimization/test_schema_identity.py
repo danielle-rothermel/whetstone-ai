@@ -7,6 +7,10 @@ from pydantic import ValidationError
 
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_FAILURE_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
     BudgetState,
     Candidate,
     CandidateRef,
@@ -290,6 +294,76 @@ def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
     )
 
 
+def test_intent_resolution_v2_wire_contract_is_exact() -> None:
+    intent = _evaluation_intent(candidate("P1"))
+    resolution = IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+        intent=intent,
+        outcome=IntentOutcome.REJECTED,
+        detail=ResolutionDetail(
+            classification=ResolutionClass.VALIDATION,
+            message="rejected",
+        ),
+        resolved_eval_config=intent.target_eval_config,
+    )
+    record = resolution.model_dump(mode="json")
+
+    assert INTENT_RESOLUTION_SCHEMA == (
+        "whetstone.optimization_intent_resolution"
+    )
+    assert INTENT_RESOLUTION_SCHEMA_VERSION == 2
+    assert EVALUATION_EVIDENCE_SCHEMA == "whetstone.evaluation_evidence"
+    assert EVALUATION_FAILURE_SCHEMA == "whetstone.evaluation_failure"
+    assert tuple(record) == (
+        "schema_version",
+        "intent",
+        "outcome",
+        "detail",
+        "evaluation_result_ref",
+        "reward_evidence_refs",
+        "resolved_eval_config",
+        "reward_ref",
+        "terminal_failure",
+    )
+    assert record["schema_version"] == 2
+    assert record["evaluation_result_ref"] is None
+    assert record["reward_evidence_refs"] == []
+    assert (
+        typed_ref_for_record(INTENT_RESOLUTION_SCHEMA, record).content_hash
+        == "782647392bf80d24922165b5b453dbfe998b470c7ff3c5071998c327b106fd1a"
+    )
+
+
+def test_intent_resolution_rejects_v1_wire() -> None:
+    intent = _evaluation_intent(candidate("P1"))
+    resolution = IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+        intent=intent,
+        outcome=IntentOutcome.REJECTED,
+        detail=ResolutionDetail(
+            classification=ResolutionClass.VALIDATION,
+            message="rejected",
+        ),
+        resolved_eval_config=intent.target_eval_config,
+    )
+    payload = resolution.model_dump(mode="json")
+    payload["evaluation_evidence_refs"] = []
+
+    with pytest.raises(
+        ValidationError, match="Extra inputs are not permitted"
+    ):
+        IntentResolution.model_validate(payload)
+
+    payload.pop("schema_version")
+    with pytest.raises(ValidationError):
+        IntentResolution.model_validate(payload)
+
+    with pytest.raises(ValidationError, match="Input should be 2"):
+        IntentResolution.model_validate(
+            {**resolution.model_dump(mode="json"), "schema_version": 1}
+        )
+
+
 def test_evaluation_binding_enforces_official_authority() -> None:
     with pytest.raises(ValidationError, match="required for official"):
         _evaluation_binding(role=EvaluationRole.OFFICIAL)
@@ -470,6 +544,7 @@ def test_ordered_fields_reject_unordered_python_containers(
             }
         )
     resolution = IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
         intent=_evaluation_intent(candidate("P1")),
         outcome=IntentOutcome.REJECTED,
         detail=ResolutionDetail(
@@ -482,7 +557,7 @@ def test_ordered_fields_reject_unordered_python_containers(
         IntentResolution.model_validate(
             {
                 **resolution.model_dump(mode="json"),
-                "evaluation_evidence_refs": unordered,
+                "reward_evidence_refs": unordered,
             }
         )
 
@@ -492,9 +567,10 @@ def test_dependency_pairs_reject_unordered_containers() -> None:
         ExecutionEnvironmentFingerprint(dependency_versions=[{"dr-code", "1"}])
 
 
-def test_only_pre_execution_rejection_may_have_empty_evidence() -> None:
+def test_only_pre_execution_rejection_may_omit_evaluation_result() -> None:
     intent = _evaluation_intent(candidate("P1"))
     rejected = IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
         intent=intent,
         outcome=IntentOutcome.REJECTED,
         detail=ResolutionDetail(
@@ -503,9 +579,11 @@ def test_only_pre_execution_rejection_may_have_empty_evidence() -> None:
         ),
         resolved_eval_config=intent.target_eval_config,
     )
-    assert rejected.evaluation_evidence_refs == ()
-    with pytest.raises(ValidationError, match="requires execution evidence"):
+    assert rejected.evaluation_result_ref is None
+    assert rejected.reward_evidence_refs == ()
+    with pytest.raises(ValidationError, match="requires an Evaluation Result"):
         IntentResolution(
+            schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
             intent=intent,
             outcome=IntentOutcome.FAILED,
             detail=ResolutionDetail(
@@ -520,6 +598,7 @@ def test_resolution_rejects_a_different_eval_config() -> None:
     intent = _evaluation_intent(candidate("P1"))
     with pytest.raises(ValidationError, match="exact target"):
         IntentResolution(
+            schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
             intent=intent,
             outcome=IntentOutcome.REJECTED,
             detail=ResolutionDetail(

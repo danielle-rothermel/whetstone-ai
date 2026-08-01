@@ -12,6 +12,9 @@ from dr_store import ObjectStore, SqliteBackend
 
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_FAILURE_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
     AdapterOutput,
     AdapterRegistry,
     BudgetDelta,
@@ -80,7 +83,7 @@ FULL_A = "a" * 64
 FULL_B = "b" * 64
 FULL_C = "c" * 64
 FULL_D = "d" * 64
-EVIDENCE_SCHEMA = "whetstone.test.evaluation_evidence"
+REWARD_EVIDENCE_SCHEMA = "whetstone.test.reward_evidence"
 BASE_SCHEMA = "whetstone.test.candidate_base"
 OPTIMIZER_CONFIG_SCHEMA = "whetstone.test.optimizer_config"
 OPTIMIZER_CONFIG_SCHEMA_VERSION = 1
@@ -483,6 +486,8 @@ class RecordingEvaluationService:
         replay_policy: ReplayPolicy = ReplayPolicy.IDEMPOTENT,
         crash_on_call: int | None = None,
         reward_policy: RewardPolicy | None = None,
+        persist_evaluation_result: bool = True,
+        persist_reward_evidence: bool = True,
     ) -> None:
         if replay_policy not in {
             ReplayPolicy.IDEMPOTENT,
@@ -498,6 +503,8 @@ class RecordingEvaluationService:
         self._replay_policy = replay_policy
         self._crash_on_call = crash_on_call
         self._reward_policy = reward_policy or internal_reward_policy()
+        self._persist_evaluation_result = persist_evaluation_result
+        self._persist_reward_evidence = persist_reward_evidence
         self.calls: list[EvaluationIntent] = []
 
     @property
@@ -512,6 +519,7 @@ class RecordingEvaluationService:
             raise RuntimeError("crash during evaluation resolution")
         if self._outcome is IntentOutcome.REJECTED:
             return IntentResolution(
+                schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
                 intent=intent,
                 outcome=self._outcome,
                 detail=ResolutionDetail(
@@ -520,30 +528,54 @@ class RecordingEvaluationService:
                 ),
                 resolved_eval_config=intent.target_eval_config,
             )
-        evidence: dict[str, Any] = {
+        evaluation_result: dict[str, Any] = {
             "intent_id": intent.intent_id,
             "candidate_identity_hash": intent.candidate.identity_hash,
+            "outcome": self._outcome.value,
         }
-        self._store.put(EVIDENCE_SCHEMA, evidence)
+        evaluation_result_schema = (
+            EVALUATION_EVIDENCE_SCHEMA
+            if self._outcome is IntentOutcome.COMPLETED
+            else EVALUATION_FAILURE_SCHEMA
+        )
+        if self._persist_evaluation_result:
+            self._store.put(evaluation_result_schema, evaluation_result)
         classification = (
             ResolutionClass.MEASURED
             if self._outcome is IntentOutcome.COMPLETED
             else ResolutionClass.UNSCORABLE
         )
-        evidence_refs = (typed_ref_for_record(EVIDENCE_SCHEMA, evidence),)
+        evaluation_result_ref = typed_ref_for_record(
+            evaluation_result_schema, evaluation_result
+        )
+        reward_evidence_refs: tuple[TypedRef, ...] = ()
+        if self._outcome is IntentOutcome.COMPLETED:
+            refs: list[TypedRef] = []
+            for ordinal in range(2):
+                evidence: dict[str, Any] = {
+                    "intent_id": intent.intent_id,
+                    "ordinal": ordinal,
+                }
+                if self._persist_reward_evidence:
+                    self._store.put(REWARD_EVIDENCE_SCHEMA, evidence)
+                refs.append(
+                    typed_ref_for_record(REWARD_EVIDENCE_SCHEMA, evidence)
+                )
+            reward_evidence_refs = tuple(refs)
         reward = (
             reward_reference(
                 apply_reward_policy(
                     self._reward_policy,
                     aggregates={"score": 1.0},
                     evidence_role=EvaluationRole.INTERNAL,
-                    evidence_refs=evidence_refs,
+                    evidence_refs=reward_evidence_refs,
                 )
             )
             if self._outcome is IntentOutcome.COMPLETED
             else None
         )
         return IntentResolution(
+            schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
             intent=intent,
             outcome=self._outcome,
             detail=ResolutionDetail(
@@ -552,7 +584,8 @@ class RecordingEvaluationService:
                 if self._outcome is IntentOutcome.COMPLETED
                 else "candidate was unscorable",
             ),
-            evaluation_evidence_refs=evidence_refs,
+            evaluation_result_ref=evaluation_result_ref,
+            reward_evidence_refs=reward_evidence_refs,
             resolved_eval_config=intent.target_eval_config,
             reward_ref=reward,
             terminal_failure=(

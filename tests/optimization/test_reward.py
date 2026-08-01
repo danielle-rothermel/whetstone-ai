@@ -301,6 +301,11 @@ def test_internal_reward_requires_ordered_nonempty_exact_evidence() -> None:
     with pytest.raises(ValidationError, match="ordered tuple or JSON array"):
         Reward.model_validate(payload)
 
+    exact_ref = _evidence_refs()[0].model_dump(mode="json")
+    payload["evidence_refs"] = [exact_ref, exact_ref]
+    with pytest.raises(ValidationError, match="evidence_refs must be unique"):
+        Reward.model_validate(payload)
+
 
 def test_finite_negative_zero_canonicalizes_to_positive_zero() -> None:
     import math

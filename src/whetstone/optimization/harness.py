@@ -43,6 +43,7 @@ from whetstone.optimization.schema import (
     CANDIDATE_RECORD_SCHEMA,
     EVAL_CONFIG_RECORD_SCHEMA,
     EVALUATION_BINDING_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA,
     OPTIMIZATION_RESULT_SCHEMA,
     OPTIMIZATION_RUN_SCHEMA,
     STEP_REQUEST_SCHEMA,
@@ -88,7 +89,6 @@ from whetstone.optimization.tools import (
 
 __all__ = [
     "ADAPTER_CHECKPOINT_SCHEMA",
-    "INTENT_RESOLUTION_SCHEMA",
     "EffectBusyError",
     "EffectRecoveryRequiredError",
     "EffectRequestConflictError",
@@ -104,7 +104,6 @@ __all__ = [
 ADAPTER_CHECKPOINT_SCHEMA = "whetstone.optimization_adapter_checkpoint"
 STATE_SNAPSHOT_SCHEMA = "whetstone.optimization_state_snapshot"
 HISTORY_SNAPSHOT_SCHEMA = "whetstone.optimization_history_snapshot"
-INTENT_RESOLUTION_SCHEMA = "whetstone.optimization_intent_resolution"
 ADAPTER_EFFECT_SCHEMA = "whetstone.optimization_adapter_effect"
 ADAPTER_EFFECT_SCHEMA_VERSION = 1
 ADAPTER_EFFECT_KEY_SCHEMA = "whetstone.optimization_adapter_effect_key"
@@ -113,8 +112,10 @@ ADAPTER_EFFECT_KEY_PREFIX = "whetstone.optimization_adapter:"
 INTENT_EFFECT_SCHEMA = "whetstone.optimization_intent_effect"
 INTENT_EFFECT_SCHEMA_VERSION = 1
 INTENT_EFFECT_KEY_SCHEMA = "whetstone.optimization_intent_effect_key"
-INTENT_EFFECT_KEY_SCHEMA_VERSION = 1
+INTENT_EFFECT_KEY_SCHEMA_VERSION = 2
 INTENT_EFFECT_KEY_PREFIX = "whetstone.optimization_intent:"
+STEP_RESULT_BINDING_PREFIX = "whetstone.optimization_step_result:v2:"
+OPTIMIZATION_RESULT_BINDING_PREFIX = "whetstone.optimization_result:v2:"
 ISSUED_TOOL_CALL_CLAIM_SCHEMA = "whetstone.optimization_issued_tool_call_claim"
 ISSUED_TOOL_CALL_SLOT_SCHEMA = "whetstone.optimization_issued_tool_call_slot"
 ISSUED_TOOL_CALL_TERMINAL_SCHEMA = (
@@ -836,11 +837,11 @@ class OptimizationHarness:
 
     @staticmethod
     def _result_binding_key(run_id: str, step_index: int) -> str:
-        return f"whetstone.optimization_step_result:{run_id}#{step_index}"
+        return f"{STEP_RESULT_BINDING_PREFIX}{run_id}#{step_index}"
 
     @staticmethod
     def _terminal_binding_key(run_id: str) -> str:
-        return f"whetstone.optimization_result:{run_id}"
+        return f"{OPTIMIZATION_RESULT_BINDING_PREFIX}{run_id}"
 
     @staticmethod
     def _run_binding_key(run_id: str) -> str:
@@ -1859,8 +1860,8 @@ class OptimizationHarness:
             raise ValueError("persisted Intent Resolution ref is not exact")
         return resolution
 
-    @staticmethod
     def _validate_resolution(
+        self,
         intent: EvaluationIntent,
         resolution: IntentResolution,
     ) -> None:
@@ -1870,6 +1871,21 @@ class OptimizationHarness:
             raise ValueError(
                 "Intent Resolution used another exact Eval Config"
             )
+        if resolution.evaluation_result_ref is not None:
+            self._validate_stored_ref(
+                resolution.evaluation_result_ref,
+                label="Evaluation Result",
+            )
+        for evidence_ref in resolution.reward_evidence_refs:
+            self._validate_stored_ref(
+                evidence_ref,
+                label="Reward evidence",
+            )
+
+    def _validate_stored_ref(self, ref: TypedRef, *, label: str) -> None:
+        record = self._store.get(ref.reference)
+        if typed_ref_for_record(ref.schema_name, record) != ref:
+            raise ValueError(f"{label} ref is not exact")
 
     def terminalize(
         self,
