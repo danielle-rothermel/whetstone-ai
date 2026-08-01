@@ -1159,7 +1159,9 @@ def _run_spawned_authority_contention(
                 payload,
                 "shared-worker",
                 attempt,
-                0.25,
+                # The bounded process checks below finish long before this
+                # lease, so elapsed scheduling cannot create a second owner.
+                60.0,
                 ready[index],
                 start,
                 attempted[index],
@@ -1242,49 +1244,10 @@ def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
     first_expiry = datetime.fromisoformat(first["lease"]["expires_at"])
     wait_for_sqlite_authority_after(database, first_expiry)
 
-    start = context.Event()
-    takeover_output = context.Queue()
-    ready = [context.Event() for _ in range(2)]
-    attempted = [context.Event() for _ in range(2)]
-    acquired_signals = [context.Event() for _ in range(2)]
-    replacements = [
-        context.Process(
-            target=race_acquire,
-            args=(
-                str(database),
-                request.model_dump(),
-                owner,
-                attempt,
-                0.25,
-                ready[index],
-                start,
-                attempted[index],
-                acquired_signals[index],
-                takeover_output,
-            ),
-        )
-        for index, (owner, attempt) in enumerate(
-            (
-                ("replacement-1", "attempt-1"),
-                ("replacement-2", "attempt-2"),
-            )
-        )
-    ]
-    started_replacements: list[Any] = []
-    try:
-        for replacement in replacements:
-            replacement.start()
-            started_replacements.append(replacement)
-        assert all(signal.wait(timeout=10) for signal in ready)
-        start.set()
-        assert all(signal.wait(timeout=10) for signal in attempted)
-        assert all(signal.wait(timeout=10) for signal in acquired_signals)
-        takeovers = [_spawn_result(takeover_output) for _ in replacements]
-        assert not [result for result in takeovers if "error" in result]
-        join_processes(replacements, timeout=10)
-    finally:
-        start.set()
-        terminate_processes(started_replacements, timeout=10)
+    takeovers = _run_spawned_authority_contention(
+        database,
+        start_method="spawn",
+    )
     assert sorted(result["outcome"] for result in takeovers) == [
         AcquireOutcome.ACQUIRED.value,
         AcquireOutcome.BUSY.value,
@@ -1294,7 +1257,13 @@ def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
         for result in takeovers
         if result["outcome"] == AcquireOutcome.ACQUIRED
     )
+    busy = next(
+        result
+        for result in takeovers
+        if result["outcome"] == AcquireOutcome.BUSY
+    )
     assert acquired["lease"]["fence"] == 2
+    assert busy["busy_expires_at"] == acquired["lease"]["expires_at"]
 
 
 class _RecordingCursor:
