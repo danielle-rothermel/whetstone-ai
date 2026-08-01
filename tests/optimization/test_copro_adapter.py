@@ -16,6 +16,8 @@ from tests.optimization.support import (
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.lm.boundary import PlainPromptAdapter
 from whetstone.optimization import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
     BudgetState,
     Candidate,
     CoproAdapter,
@@ -189,6 +191,10 @@ def _entry(
         "test.copro_evidence",
         {"occurrence_ordinal": occurrence_ordinal},
     )
+    evaluation_result_ref = typed_ref_for_record(
+        EVALUATION_EVIDENCE_SCHEMA,
+        {"occurrence_ordinal": occurrence_ordinal},
+    )
     reward_ref = reward_reference(
         apply_reward_policy(
             internal_reward_policy(),
@@ -207,7 +213,8 @@ def _entry(
         evaluation_binding=control.evaluation_binding,
         reward=reward_value,
         expected_reward_policy_hash=control.expected_reward_policy_hash,
-        evaluation_evidence_refs=(evidence_ref,),
+        evaluation_result_ref=evaluation_result_ref,
+        reward_evidence_refs=(evidence_ref,),
         reward_ref=reward_ref,
     ).model_dump(mode="json")
 
@@ -384,13 +391,19 @@ def test_driver_owns_round_counts_ranking_and_statistics() -> None:
 
 def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
     control = _control()
-    evidence_ref = typed_ref_for_record("test.evidence", {"value": 1})
+    evaluation_result_ref = typed_ref_for_record(
+        EVALUATION_EVIDENCE_SCHEMA, {"candidate": "a"}
+    )
+    reward_evidence_refs = (
+        typed_ref_for_record("test.aggregate", {"name": "first"}),
+        typed_ref_for_record("test.aggregate", {"name": "second"}),
+    )
     reward_ref = reward_reference(
         apply_reward_policy(
             internal_reward_policy(),
             aggregates={"score": 0.75},
             evidence_role=EvaluationRole.INTERNAL,
-            evidence_refs=(evidence_ref,),
+            evidence_refs=reward_evidence_refs,
         )
     )
     intent = EvaluationIntent(
@@ -404,13 +417,15 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
         expected_reward_policy_hash=control.expected_reward_policy_hash,
     )
     resolution = IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
         intent=intent,
         outcome=IntentOutcome.COMPLETED,
         detail=ResolutionDetail(
             classification=ResolutionClass.MEASURED,
             message="measured",
         ),
-        evaluation_evidence_refs=(evidence_ref,),
+        evaluation_result_ref=evaluation_result_ref,
+        reward_evidence_refs=reward_evidence_refs,
         resolved_eval_config=control.evaluation_binding.eval_config,
         reward_ref=reward_ref,
     )
@@ -426,6 +441,9 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
 
     assert attempt.reward_ref == reward_ref
     assert attempt.evaluation_binding == control.evaluation_binding
+    assert attempt.evaluation_result_ref == evaluation_result_ref
+    assert attempt.reward_evidence_refs == reward_evidence_refs
+    assert attempt.evaluation_result_ref not in attempt.reward_evidence_refs
     with pytest.raises(ValueError, match="expects an unexpected"):
         CoproAttempt.from_resolution(
             occurrence_ordinal=0,
@@ -435,6 +453,172 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
             expected_evaluation_binding=control.evaluation_binding,
             expected_reward_policy_hash=FULL_B,
         )
+
+    forged_result_ref = evaluation_result_ref.model_copy(
+        update={"content_hash": "not-a-hash"}
+    )
+    forged_resolution = resolution.model_copy(
+        update={"evaluation_result_ref": forged_result_ref}
+    )
+    with pytest.raises(ValueError, match="content hash must be a full"):
+        CoproAttempt.from_resolution(
+            occurrence_ordinal=0,
+            round_index=0,
+            resolution=forged_resolution,
+            expected_run_id="copro-run",
+            expected_evaluation_binding=control.evaluation_binding,
+            expected_reward_policy_hash=control.expected_reward_policy_hash,
+        )
+
+    forged_reward_ref = reward_ref.model_copy(
+        update={
+            "record_ref": reward_ref.record_ref.model_copy(
+                update={"content_hash": "not-a-hash"}
+            )
+        }
+    )
+    forged_resolution = resolution.model_copy(
+        update={"reward_ref": forged_reward_ref}
+    )
+    with pytest.raises(ValueError, match="content hash must be a full"):
+        CoproAttempt.from_resolution(
+            occurrence_ordinal=0,
+            round_index=0,
+            resolution=forged_resolution,
+            expected_run_id="copro-run",
+            expected_evaluation_binding=control.evaluation_binding,
+            expected_reward_policy_hash=control.expected_reward_policy_hash,
+        )
+
+
+def test_attempt_wire_pins_separate_result_and_ordered_reward_refs() -> None:
+    control = _control()
+    attempt = CoproAttempt.model_validate(
+        _entry(control, 0, "a", "a {input}", 0.75)
+    )
+    record = attempt.model_dump(mode="json")
+
+    assert tuple(record) == (
+        "occurrence_ordinal",
+        "round_index",
+        "run_id",
+        "step_index",
+        "intent_id",
+        "candidate",
+        "evaluation_binding",
+        "reward",
+        "expected_reward_policy_hash",
+        "evaluation_result_ref",
+        "reward_evidence_refs",
+        "reward_ref",
+    )
+    assert record["evaluation_result_ref"]["schema_name"] == (
+        EVALUATION_EVIDENCE_SCHEMA
+    )
+    assert len(record["reward_evidence_refs"]) == 1
+    assert typed_ref_for_record(
+        "test.copro_attempt_wire", record
+    ).content_hash == (
+        "6d6ace1d345e79006ba8d9096b390eb4621e75b06e54967f75916bf9d13371da"
+    )
+
+
+def test_attempt_replay_rejects_missing_or_mismatched_result_ref() -> None:
+    control = _control()
+    record = _entry(control, 0, "a", "a {input}", 0.75)
+
+    missing = dict(record)
+    missing.pop("evaluation_result_ref")
+    with pytest.raises(ValueError, match="Field required"):
+        CoproAttempt.model_validate(missing)
+
+    mismatched = dict(record)
+    mismatched["evaluation_result_ref"] = typed_ref_for_record(
+        "test.aggregate", {"name": "not-an-evaluation-result"}
+    ).model_dump(mode="json")
+    with pytest.raises(ValueError, match="evaluation_result_ref must use"):
+        CoproAttempt.model_validate(mismatched)
+
+
+def test_attempt_replay_preserves_reward_citation_order() -> None:
+    control = _control()
+    first = typed_ref_for_record("test.aggregate", {"name": "first"})
+    second = typed_ref_for_record("test.aggregate", {"name": "second"})
+    reward_ref = reward_reference(
+        apply_reward_policy(
+            internal_reward_policy(),
+            aggregates={"score": 0.75},
+            evidence_role=EvaluationRole.INTERNAL,
+            evidence_refs=(first, second),
+        )
+    )
+    record = _entry(control, 0, "a", "a {input}", 0.75)
+    record["reward_ref"] = reward_ref.model_dump(mode="json")
+    record["reward_evidence_refs"] = [
+        second.model_dump(mode="json"),
+        first.model_dump(mode="json"),
+    ]
+
+    with pytest.raises(ValueError, match="citations must match"):
+        CoproAttempt.model_validate(record)
+
+    record["reward_evidence_refs"] = {
+        first,
+        second,
+    }
+    with pytest.raises(ValueError, match="must be an ordered"):
+        CoproAttempt.model_validate(record)
+
+
+def test_completed_resolution_requires_exact_primary_result() -> None:
+    control = _control()
+    intent = EvaluationIntent(
+        intent_id="copro-run:0:0",
+        candidate=candidate_reference(_candidate("a", "a {input}")),
+        target_eval_config=control.evaluation_binding.eval_config,
+        evaluation_binding=control.evaluation_binding,
+        purpose=SEED_PROPOSAL,
+        run_id="copro-run",
+        step_index=0,
+        expected_reward_policy_hash=control.expected_reward_policy_hash,
+    )
+    reward_evidence_ref = typed_ref_for_record(
+        "test.aggregate", {"name": "score"}
+    )
+    reward_ref = reward_reference(
+        apply_reward_policy(
+            internal_reward_policy(),
+            aggregates={"score": 0.75},
+            evidence_role=EvaluationRole.INTERNAL,
+            evidence_refs=(reward_evidence_ref,),
+        )
+    )
+    resolution = IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+        intent=intent,
+        outcome=IntentOutcome.COMPLETED,
+        detail=ResolutionDetail(
+            classification=ResolutionClass.MEASURED,
+            message="measured",
+        ),
+        evaluation_result_ref=typed_ref_for_record(
+            EVALUATION_EVIDENCE_SCHEMA, {"candidate": "a"}
+        ),
+        reward_evidence_refs=(reward_evidence_ref,),
+        resolved_eval_config=control.evaluation_binding.eval_config,
+        reward_ref=reward_ref,
+    )
+    payload = resolution.model_dump(mode="json")
+
+    payload["evaluation_result_ref"] = None
+    with pytest.raises(ValueError, match="requires an Evaluation Result"):
+        IntentResolution.model_validate(payload)
+
+    payload["evaluation_result_ref"] = reward_evidence_ref.model_dump(
+        mode="json"
+    )
+    with pytest.raises(ValueError, match="evaluation_result_ref must use"):
+        IntentResolution.model_validate(payload)
 
 
 def test_exact_control_and_transport_are_verified_before_effects() -> None:

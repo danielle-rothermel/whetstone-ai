@@ -13,6 +13,8 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StrictStr,
+    ValidationInfo,
+    field_validator,
     model_validator,
 )
 
@@ -40,6 +42,7 @@ from whetstone.optimization.proposer import (
 )
 from whetstone.optimization.reward import RewardRef
 from whetstone.optimization.schema import (
+    EVALUATION_EVIDENCE_SCHEMA,
     BudgetDelta,
     Candidate,
     CandidateRef,
@@ -115,8 +118,20 @@ class CoproAttempt(BaseModel):
     evaluation_binding: EvaluationBinding
     reward: float
     expected_reward_policy_hash: StrictStr
-    evaluation_evidence_refs: tuple[TypedRef, ...]
+    evaluation_result_ref: TypedRef
+    reward_evidence_refs: tuple[TypedRef, ...]
     reward_ref: RewardRef
+
+    @field_validator("reward_evidence_refs", mode="before")
+    @classmethod
+    def _validate_reward_evidence_refs(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        if type(value) not in (list, tuple):
+            raise ValueError(
+                f"{info.field_name} must be an ordered tuple or JSON array"
+            )
+        return value
 
     @model_validator(mode="after")
     def _validate(self) -> CoproAttempt:
@@ -142,8 +157,14 @@ class CoproAttempt(BaseModel):
                 "COPRO attempt candidate requires a non-empty "
                 "user_prompt_template"
             )
-        if not self.evaluation_evidence_refs:
-            raise ValueError("COPRO attempt requires evaluation evidence")
+        if (
+            self.evaluation_result_ref.schema_name
+            != EVALUATION_EVIDENCE_SCHEMA
+        ):
+            raise ValueError(
+                "COPRO attempt evaluation_result_ref must use schema "
+                f"{EVALUATION_EVIDENCE_SCHEMA!r}"
+            )
         reward = self.reward_ref.record
         if reward.value != self.reward:
             raise ValueError(
@@ -153,9 +174,9 @@ class CoproAttempt(BaseModel):
             raise ValueError(
                 "COPRO attempt Reward Policy must match its expected hash"
             )
-        if reward.evidence_refs != self.evaluation_evidence_refs:
+        if reward.evidence_refs != self.reward_evidence_refs:
             raise ValueError(
-                "COPRO attempt evidence must match its exact Reward"
+                "COPRO attempt Reward citations must match its exact Reward"
             )
         if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
             raise ValueError("COPRO attempt requires an internal binding")
@@ -184,12 +205,19 @@ class CoproAttempt(BaseModel):
     ) -> CoproAttempt:
         """Bind an externally loaded Reward to one measured resolution."""
 
+        resolution = IntentResolution.model_validate(
+            resolution.model_dump(mode="json")
+        )
         if resolution.outcome is not IntentOutcome.COMPLETED:
             raise ValueError("COPRO folds only completed measured resolutions")
         if resolution.detail.classification is not ResolutionClass.MEASURED:
             raise ValueError("COPRO folds only measured resolution details")
         if resolution.reward_ref is None:
             raise ValueError("COPRO measured resolution requires Reward ref")
+        if resolution.evaluation_result_ref is None:
+            raise ValueError(
+                "COPRO measured resolution requires an Evaluation Result ref"
+            )
         if (
             resolution.intent.evaluation_binding.role
             is not EvaluationRole.INTERNAL
@@ -224,7 +252,8 @@ class CoproAttempt(BaseModel):
             evaluation_binding=resolution.intent.evaluation_binding,
             reward=reward.value,
             expected_reward_policy_hash=reward.reward_policy_hash,
-            evaluation_evidence_refs=resolution.evaluation_evidence_refs,
+            evaluation_result_ref=resolution.evaluation_result_ref,
+            reward_evidence_refs=resolution.reward_evidence_refs,
             reward_ref=reward_ref,
         )
 
