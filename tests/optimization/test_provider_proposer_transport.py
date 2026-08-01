@@ -4,6 +4,7 @@ import pytest
 from dr_providers import (
     CostInfo,
     FailureClass,
+    ProviderCallConfig,
     ProviderTransportOutcome,
     ProviderTransportResponse,
     TokenUsage,
@@ -44,6 +45,7 @@ def _transport(
     *outcomes: ProviderTransportOutcome,
     temperature: float = 1.4,
     max_attempts: int = 1,
+    resolved_provider_config: ProviderCallConfig | None = None,
 ):
     provider_config = openrouter_chat_config(model="proposal-model")
     transport_policy = provider_support.build_transport_policy()
@@ -56,6 +58,8 @@ def _transport(
 
     def resolve(ref: IdentityRef):
         resolved_refs.append(ref)
+        if resolved_provider_config is not None:
+            return resolved_provider_config
         return provider_config
 
     proposer = ProviderProposerTransport(
@@ -183,6 +187,55 @@ def test_invalid_generation_is_an_explicit_failed_slot_not_an_underfill() -> (
     )
 
 
+def test_rejected_response_retains_accounting_and_failure_evidence() -> None:
+    response = ProviderTransportResponse(
+        text="   ",
+        raw_body={"id": "rejected-1", "output": "   "},
+        response_id="rejected-1",
+        model="proposal-model",
+        finish_reason="stop",
+        usage=TokenUsage(total_tokens=23),
+        cost=CostInfo(total_cost=0.047),
+    )
+    proposer, config, recording, _ = _transport(response)
+
+    (draft,) = proposer.draft(config, _proposal_request(), 1)
+
+    assert draft.failed
+    assert draft.template == ""
+    assert draft.usage == {"total_tokens": 23}
+    assert draft.cost == 0.047
+    assert draft.terminal_failure is not None
+    assert draft.terminal_failure.model_dump(mode="json") == {
+        "code": "proposal_failed",
+        "message": (
+            "provider proposer failed with blank-generation: provider "
+            "returned a blank or whitespace-only generation"
+        ),
+        "details": {},
+    }
+
+    result_evidence = draft.response_evidence["provider_call_result"]
+    assert (
+        result_evidence["logical_call_id"]
+        == (draft.request_evidence["logical_call_id"])
+    )
+    assert result_evidence["generation"] is None
+    assert result_evidence["semantic_failure"] == {
+        "failure_class": "blank-generation",
+        "message": "provider returned a blank or whitespace-only generation",
+        "transport_failure": None,
+        "rejected_response": response.model_dump(mode="json"),
+    }
+    assert (
+        result_evidence["attempts"][0]["semantic_failure"]
+        == (result_evidence["semantic_failure"])
+    )
+    assert "response_metadata" not in draft.response_evidence
+    assert "response_id" not in draft.response_evidence
+    assert len(recording.served) == 1
+
+
 def test_injected_attempt_policy_retries_within_one_batch_slot() -> None:
     transient = provider_support.failure_outcome(
         failure_class=FailureClass.TRANSIENT
@@ -217,6 +270,41 @@ def test_resolved_provider_config_hash_must_match_proposer_identity() -> None:
         proposer.draft(mismatched, _proposal_request(), 1)
 
     assert recording.served == []
+
+
+def test_resolved_provider_config_record_ref_must_match_before_call() -> None:
+    resolved = openrouter_chat_config(model="proposal-model")
+    # Prime the cached provider identity, then copy a different body carrying
+    # that claim so only exact content-reference verification can reject it.
+    claimed_identity_hash = resolved.identity_hash
+    wrong_record = resolved.model_copy(
+        update={
+            "controls": resolved.controls.model_copy(
+                update={"temperature": 0.25}
+            )
+        }
+    )
+    assert wrong_record.identity_hash == claimed_identity_hash
+
+    proposer, config, recording, resolved_refs = _transport(
+        provider_support.response_outcome(text="unused"),
+        resolved_provider_config=wrong_record,
+    )
+    wrong_ref = typed_ref_for_record(
+        str(config.provider_call_config.record_ref.schema_name),
+        wrong_record.model_dump(mode="json"),
+    )
+    assert wrong_ref != config.provider_call_config.record_ref
+    assert (
+        wrong_record.identity_hash == config.provider_call_config.identity_hash
+    )
+
+    with pytest.raises(ValueError, match="record does not match"):
+        proposer.draft(config, _proposal_request(), 1)
+
+    assert resolved_refs == [config.provider_call_config]
+    assert recording.served == []
+    assert recording.produced == []
 
 
 @pytest.mark.parametrize("count", [0, -1, True])
