@@ -30,38 +30,39 @@ from whetstone.optimization.identity import (
     require_full_hash,
 )
 from whetstone.optimization.miprov2_control import (
+    MIPROV2_ALGORITHM_VERSION,
     MIPROV2_CANDIDATE_RENDERER_VERSION,
+    MIPROV2_OPTUNA_VERSION,
+    MIPROV2_REFERENCE_COMMIT,
     Miprov2ProgramLayout,
 )
 from whetstone.optimization.miprov2_demo import ComponentDemoSet
 from whetstone.optimization.miprov2_eval_config import (
     Miprov2EvalConfigBinding,
 )
-from whetstone.optimization.prompt_program import (
-    PROMPT_PROGRAM_PAYLOAD_FIELD,
-    PromptProgram,
-    PromptProgramComponent,
-    PromptProgramExample,
-)
+from whetstone.optimization.miprov2_render import candidate_from_components
+from whetstone.optimization.mutation import diff_check
+from whetstone.optimization.reward import RewardRef
 from whetstone.optimization.schema import (
-    Candidate,
     CandidateRef,
     EvalConfigRef,
+    EvaluationBinding,
+    TemplateRenderContract,
     candidate_reference,
 )
 
-MIPROV2_ALGORITHM_VERSION = "dspy_miprov2_prompt_program/v1"
-MIPROV2_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 MIPROV2_STUDY_SCHEMA = "whetstone.miprov2_study_transcript"
-MIPROV2_STUDY_SCHEMA_VERSION = 1
-OPTUNA_VERSION = "4.8.0"
+MIPROV2_STUDY_SCHEMA_VERSION = 3
+OPTUNA_VERSION = MIPROV2_OPTUNA_VERSION
 EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
 EVALUATION_FAILURE_SCHEMA = "whetstone.evaluation_failure"
 REWARD_SCHEMA = "whetstone.reward"
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA = "whetstone.miprov2_candidate_assembly"
-MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 1
+MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 2
 MIPROV2_CANDIDATE_RENDERING_SCHEMA = "whetstone.miprov2_candidate_rendering"
 MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION = 1
+MIPROV2_CANDIDATE_PROGRAM_SCHEMA = "whetstone.miprov2_candidate_program"
+MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION = 1
 MIPROV2_COMPONENT_DEMO_SET_SCHEMA = "whetstone.miprov2_component_demo_set"
 MIPROV2_INSTRUCTION_SCHEMA = "whetstone.miprov2_instruction"
 MIPROV2_RENDERER_VERSION = MIPROV2_CANDIDATE_RENDERER_VERSION
@@ -315,123 +316,47 @@ class Miprov2StudySchedule(_IdentityRecord):
         )
 
 
-class VerifiedEvaluationCitation(_IdentityRecord):
-    """Identity-bound projection of externally verified evaluation evidence.
+class Miprov2EvaluationObservation(_IdentityRecord):
+    """Algorithm evidence composed from canonical evaluation records."""
 
-    The evaluation engine owns the full evidence record.  Before this pure
-    study seam accepts its reference, the caller projects the fields whose
-    equality is algorithmically significant.  Keeping that projection inside
-    the transcript makes a cross-run, cross-candidate, reordered-task, or
-    changed-config substitution detectable without loading the object store
-    during Optuna replay.
-    """
-
-    _identity_schema = "whetstone.miprov2_verified_evaluation_citation"
+    _identity_schema = "whetstone.miprov2_evaluation_observation"
 
     run_id: StrictStr
     intent_id: StrictStr
     effect_identity_hash: StrictStr
     purpose: EvaluationPurpose
-    candidate_identity_hash: StrictStr
-    task_batch_identities: tuple[StrictStr, ...]
-    validation_eval_source_identity_hash: StrictStr
-    eval_config_identity_hash: StrictStr
-    eval_config_binding_identity_hash: StrictStr
-    reward_policy_hash: StrictStr
-    evidence_ref: TypedRef
-    reward_ref: TypedRef
-    normalized_score: float
-
-    @model_validator(mode="after")
-    def _validate_citation(self) -> VerifiedEvaluationCitation:
-        if not self.run_id or not self.intent_id:
-            raise ValueError(
-                "evaluation citation run_id and intent_id are required"
-            )
-        require_full_hash(
-            self.effect_identity_hash,
-            field="effect_identity_hash",
-        )
-        require_full_hash(
-            self.candidate_identity_hash,
-            field="candidate_identity_hash",
-        )
-        require_full_hash(
-            self.validation_eval_source_identity_hash,
-            field="validation_eval_source_identity_hash",
-        )
-        require_full_hash(
-            self.eval_config_identity_hash,
-            field="eval_config_identity_hash",
-        )
-        require_full_hash(
-            self.eval_config_binding_identity_hash,
-            field="eval_config_binding_identity_hash",
-        )
-        require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
-        )
-        if not self.task_batch_identities:
-            raise ValueError(
-                "citation task_batch_identities must not be empty"
-            )
-        for index, identity_hash in enumerate(self.task_batch_identities):
-            require_full_hash(
-                identity_hash,
-                field=f"task_batch_identities[{index}]",
-            )
-        if self.evidence_ref.schema_name not in {
-            EVALUATION_EVIDENCE_SCHEMA,
-            EVALUATION_FAILURE_SCHEMA,
-        }:
-            raise ValueError(
-                "evaluation citation must reference canonical "
-                "evaluation evidence"
-            )
-        if self.reward_ref.schema_name != REWARD_SCHEMA:
-            raise ValueError(
-                "evaluation citation must reference a canonical reward"
-            )
-        _require_finite(self.normalized_score, field="normalized_score")
-        return self
-
-
-class EvaluationBinding(_IdentityRecord):
-    """Exact durable provenance for one candidate evaluation."""
-
-    _identity_schema = "whetstone.miprov2_evaluation_binding"
-
-    run_id: StrictStr
-    intent_id: StrictStr
-    effect_identity_hash: StrictStr
-    purpose: EvaluationPurpose
-    candidate_identity_hash: StrictStr
+    candidate: CandidateRef
     task_batch_identities: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     eval_config_binding: Miprov2EvalConfigBinding
-    reward_policy_hash: StrictStr
-    reward_ref: TypedRef
-    evidence_citations: tuple[VerifiedEvaluationCitation, ...]
+    evaluation_binding: EvaluationBinding
+    evaluation_result_ref: TypedRef
+    expected_reward_policy_hash: StrictStr
+    reward_ref: RewardRef | None
     normalized_score: float
 
     @model_validator(mode="after")
-    def _validate_evidence(self) -> EvaluationBinding:
+    def _validate_evidence(self) -> Miprov2EvaluationObservation:
+        CandidateRef.model_validate(self.candidate.model_dump(mode="json"))
+        EvaluationBinding.model_validate(
+            self.evaluation_binding.model_dump(mode="json")
+        )
+        Miprov2EvalConfigBinding.model_validate(
+            self.eval_config_binding.model_dump(mode="json")
+        )
+        if self.reward_ref is not None:
+            RewardRef.model_validate(self.reward_ref.model_dump(mode="json"))
         if not self.run_id or not self.intent_id:
             raise ValueError(
-                "evaluation binding run_id and intent_id are required"
+                "evaluation observation run_id and intent_id are required"
             )
         require_full_hash(
             self.effect_identity_hash,
             field="effect_identity_hash",
         )
         require_full_hash(
-            self.candidate_identity_hash,
-            field="candidate_identity_hash",
-        )
-        require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
+            self.expected_reward_policy_hash,
+            field="expected_reward_policy_hash",
         )
         if not self.task_batch_identities:
             raise ValueError("task_batch_identities must not be empty")
@@ -440,61 +365,49 @@ class EvaluationBinding(_IdentityRecord):
                 identity_hash,
                 field=f"task_batch_identities[{index}]",
             )
-        if self.reward_ref.schema_name != REWARD_SCHEMA:
-            raise ValueError(
-                "evaluation binding must reference a canonical reward"
-            )
-        if not self.evidence_citations:
-            raise ValueError("evaluation evidence_citations must not be empty")
         if self.eval_config != self.eval_config_binding.eval_config:
             raise ValueError(
                 "evaluation Eval Config differs from its derivation binding"
             )
-        eval_config_binding_identity = self.eval_config_binding.identity_hash()
-        validation_eval_source_identity = (
-            self.eval_config_binding.request.source_eval_config.identity_hash
-        )
-        expected = (
-            self.run_id,
-            self.intent_id,
-            self.effect_identity_hash,
-            self.purpose,
-            self.candidate_identity_hash,
-            self.task_batch_identities,
-            validation_eval_source_identity,
-            self.eval_config.identity_hash,
-            eval_config_binding_identity,
-            self.reward_policy_hash,
-            self.reward_ref,
-            self.normalized_score,
-        )
-        for citation in self.evidence_citations:
-            actual = (
-                citation.run_id,
-                citation.intent_id,
-                citation.effect_identity_hash,
-                citation.purpose,
-                citation.candidate_identity_hash,
-                citation.task_batch_identities,
-                citation.validation_eval_source_identity_hash,
-                citation.eval_config_identity_hash,
-                citation.eval_config_binding_identity_hash,
-                citation.reward_policy_hash,
-                citation.reward_ref,
-                citation.normalized_score,
+        if self.evaluation_binding.eval_config != self.eval_config:
+            raise ValueError(
+                "canonical Evaluation Binding differs from exact Eval Config"
             )
-            if actual != expected:
+        if (
+            self.evaluation_result_ref.schema_name
+            == EVALUATION_EVIDENCE_SCHEMA
+        ):
+            if self.reward_ref is None:
                 raise ValueError(
-                    "evaluation citation does not match its bound evaluation"
+                    "measured observation requires exact RewardRef"
                 )
+            if (
+                self.reward_ref.record.reward_policy_hash
+                != self.expected_reward_policy_hash
+            ):
+                raise ValueError("observation Reward uses another policy")
+            if (
+                round(self.reward_ref.record.value * 100, 2)
+                != self.normalized_score
+            ):
+                raise ValueError("observation score differs from exact Reward")
+        elif (
+            self.evaluation_result_ref.schema_name == EVALUATION_FAILURE_SCHEMA
+        ):
+            if self.reward_ref is not None or self.normalized_score != 0.0:
+                raise ValueError(
+                    "failed observation has zero score and no Reward"
+                )
+        else:
+            raise ValueError(
+                "observation has the wrong Evaluation Result schema"
+            )
         _require_finite(self.normalized_score, field="normalized_score")
         return self
 
     @property
-    def evidence_refs(self) -> tuple[TypedRef, ...]:
-        return tuple(
-            citation.evidence_ref for citation in self.evidence_citations
-        )
+    def reward_policy_hash(self) -> str:
+        return self.expected_reward_policy_hash
 
 
 class BaselineObservation(_IdentityRecord):
@@ -505,7 +418,7 @@ class BaselineObservation(_IdentityRecord):
     categorical_combination_identity_hash: StrictStr
     evaluated_base_candidate: CandidateRef
     score: float
-    evaluation: EvaluationBinding
+    evaluation: Miprov2EvaluationObservation
 
     @model_validator(mode="after")
     def _validate_baseline(self) -> BaselineObservation:
@@ -518,7 +431,7 @@ class BaselineObservation(_IdentityRecord):
             field="evaluated_candidate_identity_hash",
         )
         if (
-            self.evaluation.candidate_identity_hash
+            self.evaluation.candidate.identity_hash
             != self.evaluated_base_candidate.identity_hash
         ):
             raise ValueError(
@@ -534,6 +447,81 @@ class BaselineObservation(_IdentityRecord):
         return self
 
 
+class Miprov2ComponentSelection(BaseModel):
+    """One exact instruction and demonstration selection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    component_id: StrictStr
+    instruction_index: StrictInt
+    instruction: StrictStr
+    instruction_identity_hash: StrictStr
+    demo_index: StrictInt | None
+    demo_set: ComponentDemoSet | None
+    demo_identity_hash: StrictStr | None
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> Miprov2ComponentSelection:
+        if not self.component_id:
+            raise ValueError("component_id must be non-empty")
+        if self.instruction_index < 0:
+            raise ValueError("instruction_index cannot be negative")
+        expected_instruction = compute_identity_hash(
+            schema=MIPROV2_INSTRUCTION_SCHEMA,
+            schema_version=1,
+            payload={"instruction": self.instruction},
+        )
+        if self.instruction_identity_hash != expected_instruction:
+            raise ValueError("instruction identity does not match its text")
+        if (self.demo_index is None) != (self.demo_set is None):
+            raise ValueError("demo index and structured demo must be paired")
+        if (self.demo_set is None) != (self.demo_identity_hash is None):
+            raise ValueError("structured demo and identity must be paired")
+        if self.demo_index is not None and self.demo_index < 0:
+            raise ValueError("demo_index cannot be negative")
+        if self.demo_set is not None:
+            if self.demo_identity_hash != self.demo_set.identity_hash():
+                raise ValueError(
+                    "demo identity does not match structured demo"
+                )
+            if tuple(
+                sequence.component_id for sequence in self.demo_set.components
+            ) != (self.component_id,):
+                raise ValueError(
+                    "structured demo must contain only its selected component"
+                )
+        return self
+
+
+class Miprov2CandidateRendering(_IdentityRecord):
+    """Exact selections composed into the sole candidate mutation field."""
+
+    _identity_schema = MIPROV2_CANDIDATE_RENDERING_SCHEMA
+    _identity_schema_version = MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION
+
+    control_identity_hash: StrictStr
+    base_candidate_identity_hash: StrictStr
+    categorical_combination_identity_hash: StrictStr
+    renderer_version: Literal["whetstone_native_prompt_components/v1"] = (
+        MIPROV2_CANDIDATE_RENDERER_VERSION
+    )
+    components: tuple[Miprov2ComponentSelection, ...]
+
+    @model_validator(mode="after")
+    def _validate_rendering(self) -> Miprov2CandidateRendering:
+        for field in (
+            "control_identity_hash",
+            "base_candidate_identity_hash",
+            "categorical_combination_identity_hash",
+        ):
+            require_full_hash(getattr(self, field), field=field)
+        if len(self.components) != 1:
+            raise ValueError(
+                "candidate rendering requires exactly one component"
+            )
+        return self
+
+
 class Miprov2CandidateAssemblyBinding(_IdentityRecord):
     """Canonical params-to-native-program assembly persisted for evaluation."""
 
@@ -544,10 +532,12 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
     categorical_combination_identity_hash: StrictStr
     candidate: CandidateRef
     program_identity_hash: StrictStr
+    rendering: Miprov2CandidateRendering
     control_identity_hash: StrictStr
     base_candidate: CandidateRef
     program_layout: Miprov2ProgramLayout
     prompt_adapter_identity_hash: StrictStr
+    template_render_contract: TemplateRenderContract
 
     @model_validator(mode="after")
     def _validate_assembly(self) -> Miprov2CandidateAssemblyBinding:
@@ -558,162 +548,41 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
             "prompt_adapter_identity_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
-        rendering = self.candidate.record.payload.get(
-            "miprov2_candidate_rendering"
+        diff_check(
+            base=self.base_candidate.record,
+            proposed=self.candidate.record,
         )
-        if not isinstance(rendering, dict):
+        if self.candidate.record.base_ref != self.base_candidate.record_ref:
+            raise ValueError("assembled candidate must bind its exact base")
+        if (
+            self.rendering.control_identity_hash != self.control_identity_hash
+            or self.rendering.base_candidate_identity_hash
+            != self.base_candidate.identity_hash
+            or self.rendering.categorical_combination_identity_hash
+            != self.categorical_combination_identity_hash
+        ):
             raise ValueError(
-                "assembled candidate requires canonical MIPROv2 rendering"
+                "candidate rendering context does not match assembly"
             )
-        if set(rendering) != {
-            "control_identity_hash",
-            "base_candidate_identity_hash",
-            "categorical_combination_identity_hash",
-            "renderer_version",
-            "components",
-        }:
-            raise ValueError("candidate rendering has a non-canonical shape")
-        if rendering.get("renderer_version") != MIPROV2_RENDERER_VERSION:
-            raise ValueError(
-                "candidate rendering has the wrong renderer version"
-            )
-        expected_rendering_context = (
-            self.control_identity_hash,
-            self.base_candidate.identity_hash,
-            self.categorical_combination_identity_hash,
+        expected_candidate = candidate_from_components(
+            base=self.base_candidate,
+            candidate_id=f"miprov2-{self.rendering.identity_hash()[:24]}",
+            components=self.rendering.model_dump(mode="json")["components"],
+            template_render_contract=self.template_render_contract,
         )
-        actual_rendering_context = (
-            rendering.get("control_identity_hash"),
-            rendering.get("base_candidate_identity_hash"),
-            rendering.get("categorical_combination_identity_hash"),
-        )
-        if actual_rendering_context != expected_rendering_context:
+        if candidate_reference(expected_candidate) != self.candidate:
             raise ValueError(
-                "candidate rendering does not match its assembly context"
+                "assembled candidate differs from deterministic rendering"
             )
         expected_program_identity = compute_identity_hash(
-            schema=MIPROV2_CANDIDATE_RENDERING_SCHEMA,
-            schema_version=MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION,
-            payload=rendering,
+            schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+            schema_version=MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
+            payload={"candidate": self.candidate.model_dump(mode="json")},
         )
         if self.program_identity_hash != expected_program_identity:
             raise ValueError(
                 "program identity does not match canonical candidate rendering"
             )
-        if (
-            self.candidate.record.candidate_id
-            != f"miprov2-{self.program_identity_hash[:24]}"
-        ):
-            raise ValueError(
-                "assembled candidate id does not match its program identity"
-            )
-        components = rendering.get("components")
-        if not isinstance(components, list):
-            raise ValueError("candidate rendering components must be ordered")
-        if any(not isinstance(component, dict) for component in components):
-            raise ValueError(
-                "candidate rendering component must be a JSON object"
-            )
-        canonical_components = cast("list[dict[str, Any]]", components)
-        component_ids = [
-            component.get("component_id") for component in canonical_components
-        ]
-        candidate_fields = [
-            component.get("candidate_field")
-            for component in canonical_components
-        ]
-        if len(component_ids) != len(set(component_ids)) or len(
-            candidate_fields
-        ) != len(set(candidate_fields)):
-            raise ValueError("candidate rendering components must be unique")
-        values = dict(self.params)
-        if len(canonical_components) * (
-            2
-            if any(name.endswith("_predictor_demos") for name in values)
-            else 1
-        ) != len(values):
-            raise ValueError(
-                "candidate rendering component count does not match parameters"
-            )
-        for index, component in enumerate(canonical_components):
-            if set(component) != {
-                "component_id",
-                "candidate_field",
-                "instruction_index",
-                "instruction",
-                "instruction_identity_hash",
-                "demo_index",
-                "demo_set",
-                "demo_identity_hash",
-            }:
-                raise ValueError(
-                    "candidate rendering component has a non-canonical shape"
-                )
-            if not component.get("component_id") or not component.get(
-                "candidate_field"
-            ):
-                raise ValueError(
-                    "candidate rendering component identifiers are required"
-                )
-            if component.get("instruction_index") != values.get(
-                f"{index}_predictor_instruction"
-            ):
-                raise ValueError(
-                    "candidate rendering instruction index differs from params"
-                )
-            instruction = component.get("instruction")
-            if not isinstance(instruction, str):
-                raise ValueError(
-                    "candidate rendering instruction must be a string"
-                )
-            expected_instruction_identity = compute_identity_hash(
-                schema=MIPROV2_INSTRUCTION_SCHEMA,
-                schema_version=1,
-                payload={"instruction": instruction},
-            )
-            if (
-                component.get("instruction_identity_hash")
-                != expected_instruction_identity
-            ):
-                raise ValueError(
-                    "candidate rendering instruction identity differs "
-                    "from text"
-                )
-            demo_name = f"{index}_predictor_demos"
-            if demo_name in values:
-                if component.get("demo_index") != values[demo_name]:
-                    raise ValueError(
-                        "candidate rendering demo index differs from params"
-                    )
-                demo_set = component.get("demo_set")
-                if not isinstance(demo_set, dict):
-                    raise ValueError(
-                        "few-shot candidate rendering requires a demo set"
-                    )
-                expected_demo_identity = compute_identity_hash(
-                    schema=MIPROV2_COMPONENT_DEMO_SET_SCHEMA,
-                    schema_version=1,
-                    payload=demo_set,
-                )
-                if (
-                    component.get("demo_identity_hash")
-                    != expected_demo_identity
-                ):
-                    raise ValueError(
-                        "candidate rendering demo identity differs "
-                        "from content"
-                    )
-            elif component.get("demo_index") is not None:
-                raise ValueError(
-                    "zero-shot candidate rendering cannot contain demo index"
-                )
-            elif (
-                component.get("demo_set") is not None
-                or component.get("demo_identity_hash") is not None
-            ):
-                raise ValueError(
-                    "zero-shot candidate rendering cannot contain demo data"
-                )
         return self
 
 
@@ -730,7 +599,7 @@ class Promotion(_IdentityRecord):
     source_sample_trial_number: StrictInt
     minibatch_mean: float
     full_score: float
-    evaluation: EvaluationBinding
+    evaluation: Miprov2EvaluationObservation
 
     @model_validator(mode="after")
     def _validate_promotion(self) -> Promotion:
@@ -747,7 +616,7 @@ class Promotion(_IdentityRecord):
             field="evaluated_candidate_identity_hash",
         )
         if (
-            self.evaluation.candidate_identity_hash
+            self.evaluation.candidate.identity_hash
             != self.evaluated_candidate_identity_hash
         ):
             raise ValueError(
@@ -782,7 +651,7 @@ class SampleObservation(_IdentityRecord):
     evaluated_candidate_identity_hash: StrictStr
     candidate_assembly: Miprov2CandidateAssemblyBinding
     score: float
-    evaluation: EvaluationBinding
+    evaluation: Miprov2EvaluationObservation
     batch_full_evaluation: StrictBool
     promotion: Promotion | None = None
 
@@ -799,7 +668,7 @@ class SampleObservation(_IdentityRecord):
             field="evaluated_candidate_identity_hash",
         )
         if (
-            self.evaluation.candidate_identity_hash
+            self.evaluation.candidate.identity_hash
             != self.evaluated_candidate_identity_hash
         ):
             raise ValueError(
@@ -828,10 +697,8 @@ class StudyTranscript(_IdentityRecord):
     schema_name: Literal["whetstone.miprov2_study_transcript"] = (
         MIPROV2_STUDY_SCHEMA
     )
-    schema_version: Literal[1] = MIPROV2_STUDY_SCHEMA_VERSION
-    algorithm_version: Literal["dspy_miprov2_prompt_program/v1"] = (
-        MIPROV2_ALGORITHM_VERSION
-    )
+    schema_version: Literal[3] = MIPROV2_STUDY_SCHEMA_VERSION
+    algorithm_version: Literal["dspy_miprov2/v2"] = MIPROV2_ALGORITHM_VERSION
     reference_commit: Literal["6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"] = (
         MIPROV2_REFERENCE_COMMIT
     )
@@ -845,6 +712,7 @@ class StudyTranscript(_IdentityRecord):
     prompt_adapter_identity_hash: StrictStr
     expected_base_candidate: CandidateRef
     program_layout: Miprov2ProgramLayout
+    template_render_contract: TemplateRenderContract
     instruction_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...]
     demo_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...] | None = None
     parameter_space_identity_hash: StrictStr
@@ -1047,11 +915,12 @@ class StudyTranscript(_IdentityRecord):
             expected_base_candidate=self.expected_base_candidate,
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
             program_layout=self.program_layout,
+            template_render_contract=self.template_render_contract,
         )
 
     def _validate_evaluation_binding(
         self,
-        binding: EvaluationBinding,
+        binding: Miprov2EvaluationObservation,
         *,
         expected_purpose: EvaluationPurpose,
         expected_tasks: tuple[str, ...],
@@ -1106,6 +975,7 @@ def _require_candidate_assembly(
     expected_base_candidate: CandidateRef,
     prompt_adapter_identity_hash: str,
     program_layout: Miprov2ProgramLayout,
+    template_render_contract: TemplateRenderContract,
 ) -> None:
     """Verify one rendered program against its exact durable study inputs."""
 
@@ -1139,84 +1009,50 @@ def _require_candidate_assembly(
         raise ValueError(
             "candidate assembly does not bind the exact program topology"
         )
-    if (
-        assembly.candidate.record.base_ref
-        != expected_base_candidate.record.base_ref
-    ):
+    if assembly.template_render_contract != template_render_contract:
         raise ValueError(
-            "assembled candidate does not preserve the native base reference"
+            "candidate assembly does not bind the render contract"
         )
-    rendering = assembly.candidate.record.payload[
-        "miprov2_candidate_rendering"
-    ]
-    components = rendering["components"]
-    values = dict(expected_params)
-    expected_payload = dict(expected_base_candidate.record.payload)
-    prompt_components: list[PromptProgramComponent] = []
-    for predictor_index, (spec, component) in enumerate(
-        zip(program_layout.component_specs, components, strict=True)
+    components = assembly.rendering.components
+    if tuple(component.component_id for component in components) != tuple(
+        spec.component_id for spec in program_layout.component_specs
     ):
+        raise ValueError("candidate rendering does not match program topology")
+    values = dict(expected_params)
+    for index, component in enumerate(components):
+        instruction_index = values[f"{index}_predictor_instruction"]
         if (
-            component["component_id"] != spec.component_id
-            or component["candidate_field"] != spec.candidate_field
+            component.instruction_index != instruction_index
+            or space.instruction_pool_identity_hashes[index][instruction_index]
+            != component.instruction_identity_hash
         ):
             raise ValueError(
-                "candidate rendering differs from the bound program topology"
+                "candidate instruction differs from the selected category"
             )
-        instruction_index = values[f"{predictor_index}_predictor_instruction"]
-        expected_instruction_identity = space.instruction_pool_identity_hashes[
-            predictor_index
-        ][instruction_index]
-        if (
-            component["instruction_identity_hash"]
-            != expected_instruction_identity
-        ):
-            raise ValueError(
-                "assembled instruction does not match the frozen pool"
-            )
-        instruction = cast("str", component["instruction"])
-        expected_payload[spec.candidate_field] = instruction
-        examples: tuple[PromptProgramExample, ...] = ()
-        demo_pools = space.demo_pool_identity_hashes
-        if demo_pools is not None:
-            demo_index = values[f"{predictor_index}_predictor_demos"]
+        if space.demo_pool_identity_hashes is None:
+            if component.demo_index is not None:
+                raise ValueError("zeroshot candidate cannot select a demo")
+        else:
+            demo_index = values[f"{index}_predictor_demos"]
             if (
-                component["demo_identity_hash"]
-                != demo_pools[predictor_index][demo_index]
+                component.demo_index != demo_index
+                or space.demo_pool_identity_hashes[index][demo_index]
+                != component.demo_identity_hash
             ):
                 raise ValueError(
-                    "assembled demonstrations do not match the frozen pool"
+                    "candidate demo differs from the selected category"
                 )
-            demo_set = ComponentDemoSet.model_validate(component["demo_set"])
-            examples = tuple(
-                PromptProgramExample(
-                    inputs=demo.inputs,
-                    outputs=demo.outputs,
-                )
-                for demo in demo_set.demos_for(spec.component_id)
-            )
-        prompt_components.append(
-            PromptProgramComponent(
-                component_id=spec.component_id,
-                candidate_field=spec.candidate_field,
-                examples=examples,
-            )
-        )
-    expected_payload["miprov2_candidate_rendering"] = rendering
-    expected_payload[PROMPT_PROGRAM_PAYLOAD_FIELD] = PromptProgram(
-        components=tuple(prompt_components)
-    ).model_dump(mode="json")
-    expected_candidate = candidate_reference(
-        Candidate(
-            candidate_id=f"miprov2-{assembly.program_identity_hash[:24]}",
-            base_ref=expected_base_candidate.record.base_ref,
-            payload=expected_payload,
-        )
-    )
-    if assembly.candidate != expected_candidate:
+    if (
+        assembly.candidate.record.base_ref
+        != expected_base_candidate.record_ref
+    ):
         raise ValueError(
-            "assembled candidate differs from canonical native rendering"
+            "assembled candidate does not bind the exact input CandidateRef"
         )
+    diff_check(
+        base=expected_base_candidate.record,
+        proposed=assembly.candidate.record,
+    )
 
 
 class StudySuggestion(_IdentityRecord):
@@ -1357,6 +1193,7 @@ class Miprov2Study:
         prompt_adapter_identity_hash: str,
         expected_base_candidate: CandidateRef,
         program_layout: Miprov2ProgramLayout,
+        template_render_contract: TemplateRenderContract,
     ) -> None:
         self.seed = seed
         self.space = space
@@ -1369,12 +1206,13 @@ class Miprov2Study:
         self.prompt_adapter_identity_hash = prompt_adapter_identity_hash
         self.expected_base_candidate = expected_base_candidate
         self.program_layout = program_layout
+        self.template_render_contract = template_render_contract
 
     def initial_transcript(
         self,
         *,
         baseline_score: float,
-        baseline_evaluation: EvaluationBinding,
+        baseline_evaluation: Miprov2EvaluationObservation,
     ) -> StudyTranscript:
         """Create the bound trial-zero durability record."""
 
@@ -1398,6 +1236,7 @@ class Miprov2Study:
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
             expected_base_candidate=self.expected_base_candidate,
             program_layout=self.program_layout,
+            template_render_contract=self.template_render_contract,
             instruction_pool_identity_hashes=(
                 self.space.instruction_pool_identity_hashes
             ),
@@ -1431,7 +1270,7 @@ class Miprov2Study:
         suggestion: StudySuggestion,
         *,
         score: float,
-        evaluation: EvaluationBinding,
+        evaluation: Miprov2EvaluationObservation,
         candidate_assembly: Miprov2CandidateAssemblyBinding,
     ) -> PromotionCandidate | None:
         """Return the exact candidate requiring a promotion effect, if due."""
@@ -1455,10 +1294,10 @@ class Miprov2Study:
         suggestion: StudySuggestion,
         *,
         score: float,
-        evaluation: EvaluationBinding,
+        evaluation: Miprov2EvaluationObservation,
         candidate_assembly: Miprov2CandidateAssemblyBinding,
         promotion_full_score: float | None = None,
-        promotion_evaluation: EvaluationBinding | None = None,
+        promotion_evaluation: Miprov2EvaluationObservation | None = None,
     ) -> StudyTranscript:
         """Append a sample using DSPy's promotion-before-tell ordering."""
 
@@ -1511,7 +1350,7 @@ class Miprov2Study:
                 expected_tasks=self.validation_task_identities,
             )
             if (
-                promotion_evaluation.candidate_identity_hash
+                promotion_evaluation.candidate.identity_hash
                 != selected.evaluated_candidate_identity_hash
             ):
                 raise ValueError(
@@ -1633,7 +1472,7 @@ class Miprov2Study:
         *,
         suggestion: StudySuggestion,
         score: float,
-        evaluation: EvaluationBinding,
+        evaluation: Miprov2EvaluationObservation,
         candidate_assembly: Miprov2CandidateAssemblyBinding,
     ) -> SampleObservation:
         _require_candidate_assembly(
@@ -1647,6 +1486,7 @@ class Miprov2Study:
             expected_base_candidate=self.expected_base_candidate,
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
             program_layout=self.program_layout,
+            template_render_contract=self.template_render_contract,
         )
         expected_batch_size = (
             self.schedule.minibatch_size
@@ -1691,7 +1531,7 @@ class Miprov2Study:
 
     def _validate_evaluation_binding(
         self,
-        binding: EvaluationBinding,
+        binding: Miprov2EvaluationObservation,
         *,
         expected_purpose: EvaluationPurpose,
         expected_tasks: tuple[str, ...],
@@ -1747,6 +1587,7 @@ class Miprov2Study:
             self.prompt_adapter_identity_hash,
             self.expected_base_candidate,
             self.program_layout,
+            self.template_render_contract,
             self.space.instruction_pool_identity_hashes,
             self.space.demo_pool_identity_hashes,
             self.space.identity_hash(),
@@ -1763,6 +1604,7 @@ class Miprov2Study:
             transcript.prompt_adapter_identity_hash,
             transcript.expected_base_candidate,
             transcript.program_layout,
+            transcript.template_render_contract,
             transcript.instruction_pool_identity_hashes,
             transcript.demo_pool_identity_hashes,
             transcript.parameter_space_identity_hash,
@@ -1982,6 +1824,8 @@ __all__ = [
     "MIPROV2_ALGORITHM_VERSION",
     "MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA",
     "MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION",
+    "MIPROV2_CANDIDATE_PROGRAM_SCHEMA",
+    "MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION",
     "MIPROV2_CANDIDATE_RENDERING_SCHEMA",
     "MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION",
     "MIPROV2_REFERENCE_COMMIT",
@@ -1990,9 +1834,11 @@ __all__ = [
     "OPTUNA_VERSION",
     "REWARD_SCHEMA",
     "BaselineObservation",
-    "EvaluationBinding",
     "FullEvaluation",
     "Miprov2CandidateAssemblyBinding",
+    "Miprov2CandidateRendering",
+    "Miprov2ComponentSelection",
+    "Miprov2EvaluationObservation",
     "Miprov2ParameterSpace",
     "Miprov2Study",
     "Miprov2StudySchedule",
@@ -2003,6 +1849,5 @@ __all__ = [
     "StudyTranscript",
     "StudyTranscriptMismatch",
     "TrialParams",
-    "VerifiedEvaluationCitation",
     "select_promotion",
 ]

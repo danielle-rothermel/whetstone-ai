@@ -76,13 +76,18 @@ from whetstone.optimization.miprov2_proposal import (
     proposal_candidates_from_demo_sets,
     start_miprov2_proposal,
 )
+from whetstone.optimization.miprov2_render import candidate_from_components
 from whetstone.optimization.miprov2_rng import (
     Miprov2DurableBindings,
     Miprov2RngCheckpoint,
 )
 from whetstone.optimization.miprov2_study import (
-    EvaluationBinding,
+    MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+    MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
     Miprov2CandidateAssemblyBinding,
+    Miprov2CandidateRendering,
+    Miprov2ComponentSelection,
+    Miprov2EvaluationObservation,
     Miprov2ParameterSpace,
     Miprov2Study,
     Miprov2StudySchedule,
@@ -90,13 +95,6 @@ from whetstone.optimization.miprov2_study import (
     StudySuggestion,
     StudyTranscript,
     TrialParams,
-)
-from whetstone.optimization.prompt_program import (
-    PROMPT_PROGRAM_PAYLOAD_FIELD,
-    PromptProgram,
-    PromptProgramComponent,
-    PromptProgramExample,
-    prompt_program,
 )
 from whetstone.optimization.schema import (
     Candidate,
@@ -177,99 +175,6 @@ def _component_demo_projection(
             ),
         ),
     )
-
-
-class Miprov2ComponentSelection(BaseModel):
-    """One component's independently selected instruction and demo program."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    component_id: StrictStr
-    candidate_field: StrictStr
-    instruction_index: StrictInt
-    instruction: StrictStr
-    instruction_identity_hash: StrictStr
-    demo_index: StrictInt | None
-    demo_set: ComponentDemoSet | None
-    demo_identity_hash: StrictStr | None
-
-    @model_validator(mode="after")
-    def _validate_selection(self) -> Miprov2ComponentSelection:
-        if not self.component_id or not self.candidate_field:
-            raise ValueError(
-                "rendered component identifiers must be non-empty"
-            )
-        if self.instruction_index < 0:
-            raise ValueError("instruction_index cannot be negative")
-        if self.instruction_identity_hash != _instruction_identity(
-            self.instruction
-        ):
-            raise ValueError("instruction identity does not match its text")
-        if (self.demo_index is None) != (self.demo_set is None):
-            raise ValueError("demo index and structured demo must be paired")
-        if (self.demo_set is None) != (self.demo_identity_hash is None):
-            raise ValueError("structured demo and identity must be paired")
-        if self.demo_index is not None and self.demo_index < 0:
-            raise ValueError("demo_index cannot be negative")
-        if self.demo_set is not None:
-            expected = self.demo_set.identity_hash()
-            if self.demo_identity_hash != expected:
-                raise ValueError(
-                    "demo identity does not match structured demo"
-                )
-            if (
-                tuple(
-                    sequence.component_id
-                    for sequence in self.demo_set.components
-                )
-                == ()
-            ):
-                raise ValueError("structured demo set cannot be empty")
-        return self
-
-
-class Miprov2CandidateRendering(BaseModel):
-    """Versioned, prompt-format-neutral execution payload.
-
-    Instructions remain in their native candidate fields.  Demonstrations
-    remain structured data for the bound renderer; they are never concatenated
-    into instruction text.
-    """
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    control_identity_hash: StrictStr
-    base_candidate_identity_hash: StrictStr
-    categorical_combination_identity_hash: StrictStr
-    renderer_version: Literal["whetstone_native_prompt_components/v1"] = (
-        MIPROV2_CANDIDATE_RENDERER_VERSION
-    )
-    components: tuple[Miprov2ComponentSelection, ...]
-
-    @model_validator(mode="after")
-    def _validate_rendering(self) -> Miprov2CandidateRendering:
-        for field in (
-            "control_identity_hash",
-            "base_candidate_identity_hash",
-            "categorical_combination_identity_hash",
-        ):
-            require_full_hash(getattr(self, field), field=field)
-        if not self.components:
-            raise ValueError("candidate rendering requires components")
-        ids = tuple(component.component_id for component in self.components)
-        fields = tuple(
-            component.candidate_field for component in self.components
-        )
-        if len(ids) != len(set(ids)) or len(fields) != len(set(fields)):
-            raise ValueError("candidate rendering components must be unique")
-        return self
-
-    def identity_hash(self) -> str:
-        return compute_identity_hash(
-            schema=MIPROV2_CANDIDATE_RENDERER_SCHEMA,
-            schema_version=MIPROV2_CANDIDATE_RENDERER_SCHEMA_VERSION,
-            payload=self.model_dump(mode="json"),
-        )
 
 
 class Miprov2EvaluationEffect(BaseModel):
@@ -621,7 +526,7 @@ class Miprov2PendingSample(BaseModel):
 
     suggestion: StudySuggestion
     score: float
-    evaluation: EvaluationBinding
+    evaluation: Miprov2EvaluationObservation
     candidate_identity_hash: StrictStr
     candidate_assembly: Miprov2CandidateAssemblyBinding
 
@@ -1805,119 +1710,68 @@ def _materialize_bootstrap_teacher(
     plan: FewshotCandidatePlan,
     attempt: BootstrapAttemptPlan,
 ) -> CandidateRef:
-    """Apply the pure teacher plan to one exact bootstrap attempt."""
+    """Apply the teacher plan through the sole candidate mutation surface."""
 
     teacher_plan = plan.teacher
     if teacher_plan is None:
         raise ValueError("bootstrap plan has no teacher preparation")
-    source = state.control.teacher_candidate.record
-    prior_program = prompt_program(source)
-    prior_by_component = (
-        {}
-        if prior_program is None
-        else {
-            component.component_id: component
-            for component in prior_program.components
-        }
-    )
-    components: list[PromptProgramComponent] = []
+    source = state.control.teacher_candidate
     selection = teacher_plan.labeled_selection
-    current_task = next(
-        item
-        for item in state.labeled_trainset
-        if item.source_task_identity == attempt.task_identity
-    )
+    components: list[dict[str, object]] = []
     for component_index, spec in enumerate(state.control.component_specs):
-        examples: tuple[PromptProgramExample, ...]
+        examples: list[dict[str, object]] = []
         if selection is not None:
-            indices = selection.per_component_task_indices[component_index]
-            selected = (
-                state.labeled_trainset[index]
-                for index in indices
-                if (
-                    state.labeled_trainset[index].inputs_by_component
-                    != current_task.inputs_by_component
-                    or state.labeled_trainset[index].outputs_by_component
-                    != current_task.outputs_by_component
+            for index in selection.per_component_task_indices[component_index]:
+                item = state.labeled_trainset[index]
+                if item.source_task_identity == attempt.task_identity:
+                    continue
+                examples.append(
+                    {
+                        "inputs": item.inputs_by_component[spec.component_id],
+                        "outputs": item.outputs_by_component[
+                            spec.component_id
+                        ],
+                    }
                 )
-            )
-            examples = tuple(
-                PromptProgramExample(
-                    inputs=item.inputs_by_component[spec.component_id],
-                    outputs=item.outputs_by_component[spec.component_id],
-                )
-                for item in selected
-            )
-        else:
-            prior = prior_by_component.get(spec.component_id)
-            current_inputs = current_task.inputs_by_component[
-                spec.component_id
-            ]
-            current_outputs = current_task.outputs_by_component[
-                spec.component_id
-            ]
-            examples = (
-                ()
-                if prior is None
-                else tuple(
-                    example
-                    for example in prior.examples
-                    if (
-                        example.inputs != current_inputs
-                        or example.outputs != current_outputs
-                    )
-                )
-            )
+        instruction = source.record.payload["user_prompt_template"]
+        assert isinstance(instruction, str)
         components.append(
-            PromptProgramComponent(
-                component_id=spec.component_id,
-                candidate_field=spec.candidate_field,
-                examples=examples,
-            )
+            {
+                "component_id": spec.component_id,
+                "instruction_index": component_index,
+                "instruction": instruction,
+                "instruction_identity_hash": _instruction_identity(
+                    instruction
+                ),
+                "demo_index": component_index if examples else None,
+                "demo_set": examples or None,
+                "demo_identity_hash": (
+                    compute_identity_hash(
+                        schema="whetstone.miprov2_teacher_examples",
+                        schema_version=1,
+                        payload=examples,
+                    )
+                    if examples
+                    else None
+                ),
+            }
         )
-    teacher_settings = state.control.model_dump(mode="json")[
-        "teacher_settings"
-    ]
-    execution_policy = _execution_policy(
-        state.control,
-        bootstrap_attempt=attempt,
-    )
-    execution = {
-        "plan_identity_hash": plan.identity_hash(),
-        "attempt_identity_hash": attempt.identity_hash(),
-        "teacher_source": teacher_plan.source.value,
-        "teacher_compiled": state.control.teacher_compiled,
-        "teacher_settings": teacher_settings,
-        "execution_policy": execution_policy.model_dump(mode="json"),
-        "execution_policy_identity_hash": execution_policy.identity_hash(),
-        "copy_task_model": attempt.copy_task_model,
-        "rollout_id": attempt.rollout_id,
-        "temperature": attempt.temperature,
-        "excluded_task_identity": attempt.task_identity,
-        "components": [
-            component.model_dump(mode="json") for component in components
-        ],
-    }
-    payload = dict(source.payload)
-    payload[PROMPT_PROGRAM_PAYLOAD_FIELD] = PromptProgram(
-        components=tuple(components)
-    ).model_dump(mode="json")
-    payload["miprov2_bootstrap_teacher_execution"] = execution
     identity = compute_identity_hash(
         schema="whetstone.miprov2_bootstrap_teacher_execution",
-        schema_version=1,
+        schema_version=2,
         payload={
-            "source_candidate_identity_hash": (
-                state.control.teacher_candidate.identity_hash
-            ),
-            "execution": execution,
+            "source_candidate_identity_hash": source.identity_hash,
+            "plan_identity_hash": plan.identity_hash(),
+            "attempt_identity_hash": attempt.identity_hash(),
+            "components": components,
         },
     )
     return candidate_reference(
-        Candidate(
+        candidate_from_components(
+            base=source,
             candidate_id=f"miprov2-teacher-{identity[:24]}",
-            base_ref=source.base_ref,
-            payload=payload,
+            components=components,
+            template_render_contract=state.control.template_render_contract,
         )
     )
 
@@ -1930,7 +1784,34 @@ def render_miprov2_candidate(
     params: TrialParams,
     categorical_combination_identity_hash: str,
 ) -> Candidate:
-    """Render one categorical program without flattening its demonstrations."""
+    """Render one categorical program into ``user_prompt_template`` only."""
+
+    rendering = _miprov2_candidate_rendering(
+        control=control,
+        instruction_pools=instruction_pools,
+        demo_candidates=demo_candidates,
+        params=params,
+        categorical_combination_identity_hash=(
+            categorical_combination_identity_hash
+        ),
+    )
+    return candidate_from_components(
+        base=control.base_candidate,
+        candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
+        components=rendering.model_dump(mode="json")["components"],
+        template_render_contract=control.template_render_contract,
+    )
+
+
+def _miprov2_candidate_rendering(
+    *,
+    control: Miprov2Control,
+    instruction_pools: tuple[tuple[str, ...], ...],
+    demo_candidates: tuple[ComponentDemoSet, ...] | None,
+    params: TrialParams,
+    categorical_combination_identity_hash: str,
+) -> Miprov2CandidateRendering:
+    """Bind exact categorical selections before candidate composition."""
 
     values = dict(params)
     specs = control.component_specs
@@ -1968,7 +1849,6 @@ def render_miprov2_candidate(
             "categorical combination identity conflicts with selections"
         )
     selections: list[Miprov2ComponentSelection] = []
-    payload = dict(control.base_candidate.record.payload)
     for index, (spec, pool) in enumerate(
         zip(specs, instruction_pools, strict=True)
     ):
@@ -1992,11 +1872,9 @@ def render_miprov2_candidate(
             except IndexError as exc:
                 raise ValueError("demo category is outside its pool") from exc
             demo_hash = demo_set.identity_hash()
-        payload[spec.candidate_field] = instruction
         selections.append(
             Miprov2ComponentSelection(
                 component_id=spec.component_id,
-                candidate_field=spec.candidate_field,
                 instruction_index=instruction_index,
                 instruction=instruction,
                 instruction_identity_hash=_instruction_identity(instruction),
@@ -2005,40 +1883,13 @@ def render_miprov2_candidate(
                 demo_identity_hash=demo_hash,
             )
         )
-    rendering = Miprov2CandidateRendering(
+    return Miprov2CandidateRendering(
         control_identity_hash=control.identity_hash(),
         base_candidate_identity_hash=control.base_candidate.identity_hash,
         categorical_combination_identity_hash=(
             categorical_combination_identity_hash
         ),
         components=tuple(selections),
-    )
-    payload["miprov2_candidate_rendering"] = rendering.model_dump(mode="json")
-    prompt_components: list[PromptProgramComponent] = []
-    for selection in selections:
-        examples: tuple[PromptProgramExample, ...] = ()
-        if selection.demo_set is not None:
-            examples = tuple(
-                PromptProgramExample(inputs=demo.inputs, outputs=demo.outputs)
-                for demo in selection.demo_set.demos_for(
-                    selection.component_id
-                )
-            )
-        prompt_components.append(
-            PromptProgramComponent(
-                component_id=selection.component_id,
-                candidate_field=selection.candidate_field,
-                examples=examples,
-            )
-        )
-    payload[PROMPT_PROGRAM_PAYLOAD_FIELD] = PromptProgram(
-        components=tuple(prompt_components)
-    ).model_dump(mode="json")
-    identity = rendering.identity_hash()
-    return Candidate(
-        candidate_id=f"miprov2-{identity[:24]}",
-        base_ref=control.base_candidate.record.base_ref,
-        payload=payload,
     )
 
 
@@ -2276,7 +2127,7 @@ class Miprov2Driver:
             resolved.context.effect_identity_hash,
             evaluation.run_id,
             evaluation.purpose,
-            evaluation.candidate_identity_hash,
+            evaluation.candidate.identity_hash,
             evaluation.task_batch_identities,
             evaluation.eval_config,
             evaluation.reward_policy_hash,
@@ -2779,6 +2630,7 @@ class Miprov2Driver:
             ),
             expected_base_candidate=state.control.base_candidate,
             program_layout=state.control.program_layout,
+            template_render_contract=state.control.template_render_contract,
         )
 
     def _space(self, state: Miprov2State) -> Miprov2ParameterSpace:
@@ -2812,27 +2664,41 @@ class Miprov2Driver:
         params: TrialParams,
         combination_identity: str,
     ) -> Miprov2CandidateAssemblyBinding:
-        candidate = render_miprov2_candidate(
+        rendering = _miprov2_candidate_rendering(
             control=state.control,
             instruction_pools=state.instruction_pools,
             demo_candidates=state.study_demo_candidates,
             params=params,
             categorical_combination_identity_hash=combination_identity,
         )
-        rendering = Miprov2CandidateRendering.model_validate(
-            candidate.payload["miprov2_candidate_rendering"]
+        candidate = candidate_from_components(
+            base=state.control.base_candidate,
+            candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
+            components=rendering.model_dump(mode="json")["components"],
+            template_render_contract=(state.control.template_render_contract),
+        )
+        program_identity_hash = compute_identity_hash(
+            schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+            schema_version=MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
+            payload={
+                "candidate": candidate_reference(candidate).model_dump(
+                    mode="json"
+                )
+            },
         )
         return Miprov2CandidateAssemblyBinding(
             params=params,
             categorical_combination_identity_hash=combination_identity,
             candidate=candidate_reference(candidate),
-            program_identity_hash=rendering.identity_hash(),
+            program_identity_hash=program_identity_hash,
+            rendering=rendering,
             control_identity_hash=state.control.identity_hash(),
             base_candidate=state.control.base_candidate,
             program_layout=state.control.program_layout,
             prompt_adapter_identity_hash=(
                 state.control.prompt_adapter_identity_hash
             ),
+            template_render_contract=(state.control.template_render_contract),
         )
 
     @staticmethod

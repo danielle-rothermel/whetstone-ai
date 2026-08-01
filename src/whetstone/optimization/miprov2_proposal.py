@@ -29,8 +29,8 @@ from pydantic import (
 )
 
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
     compute_identity_hash,
-    reject_non_json,
     require_full_hash,
 )
 from whetstone.optimization.miprov2_demo import (
@@ -439,7 +439,7 @@ class Miprov2ProposalResponse(BaseModel):
             self.request_identity_hash,
             field="proposal request_identity_hash",
         )
-        reject_non_json(self.evidence, field="proposal response evidence")
+        ImmutableJsonObject(self.evidence)
         if self.failed and not self.failure_detail:
             raise ValueError("failed proposal response requires detail")
         if not self.failed and self.failure_detail is not None:

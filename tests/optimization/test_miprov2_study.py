@@ -1,1525 +1,778 @@
 from __future__ import annotations
 
-from typing import Any, Literal, cast
+from typing import Any
 
 import pytest
-from dr_code.eval import (
-    DefinitionRef,
-    EvalConfig,
-    RepeatPlan,
-    SamplingDefinition,
-    TaskSet,
-)
-from dr_code.eval.identity import SCHEMA_EVAL_CONFIG, identity_hash_for
+from dr_store import ObjectStore, SqliteBackend
 from pydantic import ValidationError
 
-from whetstone.optimization.identity import TypedRef, compute_identity_hash
-from whetstone.optimization.miprov2_control import (
-    Miprov2ComponentSpec,
-    Miprov2ProgramLayout,
+from tests.optimization.support import candidate, internal_reward_policy
+from tests.optimization.test_miprov2_control import _configure
+from tests.optimization.test_miprov2_evidence import TASK, _fixture
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.identity import (
+    TypedRef,
+    compute_identity_hash,
 )
 from whetstone.optimization.miprov2_eval_config import (
     Miprov2EvalConfigBinding,
-    Miprov2EvalConfigBindingRequest,
-    Miprov2EvalPurpose,
-    Miprov2EvaluationExecutionPolicy,
-    derive_eval_config_reference,
 )
+from whetstone.optimization.miprov2_render import candidate_from_components
 from whetstone.optimization.miprov2_study import (
     EVALUATION_EVIDENCE_SCHEMA,
-    MIPROV2_CANDIDATE_RENDERING_SCHEMA,
-    MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION,
-    MIPROV2_REFERENCE_COMMIT,
-    OPTUNA_VERSION,
-    REWARD_SCHEMA,
-    EvaluationBinding,
+    EVALUATION_FAILURE_SCHEMA,
+    MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION,
+    MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+    MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
+    MIPROV2_STUDY_SCHEMA_VERSION,
     Miprov2CandidateAssemblyBinding,
+    Miprov2CandidateRendering,
+    Miprov2ComponentSelection,
+    Miprov2EvaluationObservation,
     Miprov2ParameterSpace,
     Miprov2Study,
     Miprov2StudySchedule,
-    Promotion,
-    SampleObservation,
     StudyTranscript,
     StudyTranscriptMismatch,
-    VerifiedEvaluationCitation,
     select_promotion,
 )
-from whetstone.optimization.prompt_program import (
-    PROMPT_PROGRAM_PAYLOAD_FIELD,
-    PromptProgram,
-    PromptProgramComponent,
-)
+from whetstone.optimization.reward import apply_reward_policy, reward_reference
 from whetstone.optimization.schema import (
     Candidate,
+    EvaluationBinding,
     candidate_reference,
-    eval_config_reference,
 )
 
 FULL_A = "a" * 64
 FULL_B = "b" * 64
-FULL_C = "c" * 64
-FULL_D = "d" * 64
-RUN_ID = "run-miprov2-study"
-REWARD_POLICY_HASH = "e" * 64
-CONTROL_IDENTITY_HASH = "f" * 64
-PROMPT_ADAPTER_IDENTITY_HASH = "9" * 64
-BASE_CANDIDATE = candidate_reference(
-    Candidate(
-        candidate_id="base",
-        base_ref="root",
-        payload={"user_prompt_template": "base"},
-    )
-)
 
 
-def _hash(index: int) -> str:
-    return f"{index:064x}"
-
-
-def _execution_policy() -> Miprov2EvaluationExecutionPolicy:
-    return Miprov2EvaluationExecutionPolicy(
-        num_threads=1,
-        max_errors=1,
-        provide_traceback=False,
-        task_model_identity_hash=_hash(50_001),
-        provider_execution_policy_hash=_hash(50_002),
-    )
-
-
-def _instruction(predictor_index: int, candidate_index: int) -> str:
-    return f"instruction-{predictor_index}-{candidate_index}"
-
-
-def _instruction_identity(
-    predictor_index: int,
-    candidate_index: int,
-) -> str:
-    return compute_identity_hash(
-        schema="whetstone.miprov2_instruction",
-        schema_version=1,
-        payload={
-            "instruction": _instruction(predictor_index, candidate_index)
-        },
-    )
-
-
-def _demo_set(predictor_index: int, candidate_index: int) -> dict[str, Any]:
-    return {
-        "candidate_seed": predictor_index * 100 + candidate_index,
-        "components": [
-            {
-                "component_id": f"component-{predictor_index}",
-                "demos": [],
-            }
-        ],
-    }
-
-
-def _demo_identity(predictor_index: int, candidate_index: int) -> str:
-    return compute_identity_hash(
-        schema="whetstone.miprov2_component_demo_set",
-        schema_version=1,
-        payload=_demo_set(predictor_index, candidate_index),
-    )
-
-
-def _eval_config(sampling_config_hash: str) -> EvalConfig:
-    definition_ref = DefinitionRef(
-        definition_id="eval",
-        version="1",
-        schema_name="dr_code.eval_definition",
-        identity_hash=FULL_A,
-    )
-    config_identity_hash = identity_hash_for(
-        schema=SCHEMA_EVAL_CONFIG,
-        payload={
-            "definition_identity": definition_ref.identity_hash,
-            "sampling_config": sampling_config_hash,
-            "evaluation_procedure_config": FULL_C,
-            "aggregation_config": FULL_D,
-        },
-    )
-    return EvalConfig(
-        definition_ref=definition_ref,
-        sampling_config_hash=sampling_config_hash,
-        evaluation_procedure_config_hash=FULL_C,
-        aggregation_config_hash=FULL_D,
-        config_identity_hash=config_identity_hash,
-    )
-
-
-def _program_layout(component_count: int) -> Miprov2ProgramLayout:
-    return Miprov2ProgramLayout(
-        layout_id=f"test-layout-{component_count}",
-        component_specs=tuple(
-            Miprov2ComponentSpec(
-                component_id=f"component-{index}",
-                candidate_field=f"field-{index}",
-                prompt_format_identity_hash=PROMPT_ADAPTER_IDENTITY_HASH,
-            )
-            for index in range(component_count)
-        ),
-    )
-
-
-def _space(
-    instruction_counts: tuple[int, ...] = (3,),
-    demo_counts: tuple[int, ...] | None = None,
-    *,
-    offset: int = 1,
-) -> Miprov2ParameterSpace:
-    cursor = offset
-    instructions: list[tuple[str, ...]] = []
-    for predictor_index, count in enumerate(instruction_counts):
-        if offset == 1:
-            identities = tuple(
-                _instruction_identity(predictor_index, i) for i in range(count)
-            )
-        else:
-            identities = tuple(_hash(cursor + i) for i in range(count))
-        instructions.append(identities)
-        cursor += count
-    demos: list[tuple[str, ...]] | None = None
-    if demo_counts is not None:
-        demos = []
-        for predictor_index, count in enumerate(demo_counts):
-            if offset == 1:
-                identities = tuple(
-                    _demo_identity(predictor_index, i) for i in range(count)
-                )
-            else:
-                identities = tuple(_hash(cursor + i) for i in range(count))
-            demos.append(identities)
-            cursor += count
+def _space() -> Miprov2ParameterSpace:
     return Miprov2ParameterSpace(
-        instruction_pool_identity_hashes=tuple(instructions),
-        demo_pool_identity_hashes=tuple(demos) if demos is not None else None,
+        instruction_pool_identity_hashes=(("1" * 64, "2" * 64, "3" * 64),),
+        demo_pool_identity_hashes=(("4" * 64, "5" * 64),),
     )
 
 
-def _schedule(
-    *,
-    num_trials: int = 12,
-    minibatch: bool = False,
-    minibatch_size: int = 3,
-    valset_size: int = 3,
-    steps: int = 5,
-) -> Miprov2StudySchedule:
-    return Miprov2StudySchedule(
-        num_trials=num_trials,
-        minibatch=minibatch,
-        minibatch_size=minibatch_size,
-        valset_size=valset_size,
-        minibatch_full_eval_steps=steps,
+def test_parameter_order_is_instruction_then_demo_for_one_component() -> None:
+    assert MIPROV2_STUDY_SCHEMA_VERSION == 3
+    assert MIPROV2_CANDIDATE_PROGRAM_SCHEMA == (
+        "whetstone.miprov2_candidate_program"
     )
-
-
-def _binding(
-    task_identities: tuple[str, ...],
-    *,
-    nonce: int,
-    purpose: Literal[
-        "miprov2_baseline",
-        "miprov2_sample",
-        "miprov2_promotion",
-    ],
-    candidate_identity_hash: str,
-    eval_config_source: Any,
-    control_identity_hash: str = CONTROL_IDENTITY_HASH,
-    normalized_score: float,
-) -> EvaluationBinding:
-    evidence_ref = TypedRef(
-        schema_name=EVALUATION_EVIDENCE_SCHEMA,
-        content_hash=_hash(30_000 + nonce),
-    )
-    reward_ref = TypedRef(
-        schema_name=REWARD_SCHEMA,
-        content_hash=_hash(35_000 + nonce),
-    )
-    effect_identity_hash = _hash(25_000 + nonce)
-    derivation_request = Miprov2EvalConfigBindingRequest(
-        control_identity_hash=control_identity_hash,
-        source_eval_config=eval_config_source,
-        purpose=cast(
-            "Miprov2EvalPurpose",
-            purpose.removeprefix("miprov2_"),
-        ),
-        effect_identity_hash=effect_identity_hash,
-        execution_policy=_execution_policy(),
-        task_batch_identities=task_identities,
-    )
-    task_set = TaskSet(
-        manifest_id=f"miprov2-test-tasks-{nonce}",
-        version="1",
-        dataset_revision="test",
-        task_identities=task_identities,
-    )
-    repeat_plan = RepeatPlan(
-        plan_id=f"miprov2-test-repeats-{nonce}",
-        version="1",
-        task_identities=task_identities,
-        repeat_count=1,
-    )
-    sampling_config = SamplingDefinition(
-        definition_id="miprov2-test-sampling",
-        version="1",
-    ).materialize(
-        {
-            "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
-        }
-    )
-    derived_eval_config = derive_eval_config_reference(
-        eval_config_source,
-        sampling_config,
-    )
-    eval_config_binding = Miprov2EvalConfigBinding(
-        request=derivation_request,
-        task_set=task_set,
-        repeat_plan=repeat_plan,
-        sampling_config=sampling_config,
-        eval_config=derived_eval_config,
-    )
-    citation = VerifiedEvaluationCitation(
-        run_id=RUN_ID,
-        intent_id=f"intent-{nonce}",
-        effect_identity_hash=effect_identity_hash,
-        purpose=purpose,
-        candidate_identity_hash=candidate_identity_hash,
-        task_batch_identities=task_identities,
-        validation_eval_source_identity_hash=eval_config_source.identity_hash,
-        eval_config_identity_hash=derived_eval_config.identity_hash,
-        eval_config_binding_identity_hash=eval_config_binding.identity_hash(),
-        reward_policy_hash=REWARD_POLICY_HASH,
-        evidence_ref=evidence_ref,
-        reward_ref=reward_ref,
-        normalized_score=normalized_score,
-    )
-    return EvaluationBinding(
-        run_id=RUN_ID,
-        intent_id=f"intent-{nonce}",
-        effect_identity_hash=effect_identity_hash,
-        purpose=purpose,
-        candidate_identity_hash=candidate_identity_hash,
-        task_batch_identities=task_identities,
-        eval_config=derived_eval_config,
-        eval_config_binding=eval_config_binding,
-        reward_policy_hash=REWARD_POLICY_HASH,
-        reward_ref=reward_ref,
-        evidence_citations=(citation,),
-        normalized_score=normalized_score,
-    )
-
-
-def _assembly(
-    seam: Miprov2Study,
-    params: Any,
-    *,
-    component_suffix: str = "",
-    instruction_suffix: str = "",
-) -> Miprov2CandidateAssemblyBinding:
-    normalized = seam.space.normalize(params)
-    combination = seam.space.combination_identity_hash(normalized)
-    values = dict(normalized)
-    components: list[dict[str, Any]] = []
-    payload = dict(BASE_CANDIDATE.record.payload)
-    prompt_components: list[PromptProgramComponent] = []
-    for index, spec in enumerate(seam.program_layout.component_specs):
-        instruction_index = values[f"{index}_predictor_instruction"]
-        demo_name = f"{index}_predictor_demos"
-        instruction = (
-            _instruction(index, instruction_index) + instruction_suffix
-        )
-        components.append(
-            {
-                "component_id": f"{spec.component_id}{component_suffix}",
-                "candidate_field": f"{spec.candidate_field}{component_suffix}",
-                "instruction_index": instruction_index,
-                "instruction": instruction,
-                "instruction_identity_hash": compute_identity_hash(
-                    schema="whetstone.miprov2_instruction",
-                    schema_version=1,
-                    payload={"instruction": instruction},
-                ),
-                "demo_index": values.get(demo_name),
-                "demo_set": (
-                    _demo_set(index, values[demo_name])
-                    if demo_name in values
-                    else None
-                ),
-                "demo_identity_hash": (
-                    _demo_identity(index, values[demo_name])
-                    if demo_name in values
-                    else None
-                ),
-            }
-        )
-        candidate_field = f"{spec.candidate_field}{component_suffix}"
-        payload[candidate_field] = instruction
-        prompt_components.append(
-            PromptProgramComponent(
-                component_id=f"{spec.component_id}{component_suffix}",
-                candidate_field=candidate_field,
-            )
-        )
-    rendering = {
-        "control_identity_hash": CONTROL_IDENTITY_HASH,
-        "base_candidate_identity_hash": BASE_CANDIDATE.identity_hash,
-        "categorical_combination_identity_hash": combination,
-        "renderer_version": "whetstone_native_prompt_components/v1",
-        "components": components,
-    }
-    program_identity_hash = compute_identity_hash(
-        schema=MIPROV2_CANDIDATE_RENDERING_SCHEMA,
-        schema_version=MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION,
-        payload=rendering,
-    )
-    candidate = candidate_reference(
-        Candidate(
-            candidate_id=f"miprov2-{program_identity_hash[:24]}",
-            base_ref=BASE_CANDIDATE.record.base_ref,
-            payload={
-                **payload,
-                "miprov2_candidate_rendering": rendering,
-                PROMPT_PROGRAM_PAYLOAD_FIELD: PromptProgram(
-                    components=tuple(prompt_components)
-                ).model_dump(mode="json"),
-            },
-        )
-    )
-    return Miprov2CandidateAssemblyBinding(
-        params=normalized,
-        categorical_combination_identity_hash=combination,
-        candidate=candidate,
-        program_identity_hash=program_identity_hash,
-        control_identity_hash=CONTROL_IDENTITY_HASH,
-        base_candidate=BASE_CANDIDATE,
-        program_layout=seam.program_layout,
-        prompt_adapter_identity_hash=PROMPT_ADAPTER_IDENTITY_HASH,
-    )
-
-
-def _seam(
-    *,
-    space: Miprov2ParameterSpace | None = None,
-    schedule: Miprov2StudySchedule | None = None,
-    seed: int = 9,
-) -> tuple[Miprov2Study, StudyTranscript]:
-    resolved_space = space or _space()
-    resolved_schedule = schedule or _schedule()
-    validation_task_identities = tuple(
-        _hash(40_000 + index) for index in range(resolved_schedule.valset_size)
-    )
-    validation_eval_source = eval_config_reference(_eval_config(_hash(20_000)))
-    seam = Miprov2Study(
-        seed=seed,
-        space=resolved_space,
-        schedule=resolved_schedule,
-        run_id=RUN_ID,
-        validation_task_identities=validation_task_identities,
-        validation_eval_source=validation_eval_source,
-        reward_policy_hash=REWARD_POLICY_HASH,
-        control_identity_hash=CONTROL_IDENTITY_HASH,
-        prompt_adapter_identity_hash=PROMPT_ADAPTER_IDENTITY_HASH,
-        expected_base_candidate=BASE_CANDIDATE,
-        program_layout=_program_layout(
-            len(resolved_space.instruction_candidate_counts)
-        ),
-    )
-    transcript = seam.initial_transcript(
-        baseline_score=0.25,
-        baseline_evaluation=_binding(
-            validation_task_identities,
-            nonce=0,
-            purpose="miprov2_baseline",
-            candidate_identity_hash=BASE_CANDIDATE.identity_hash,
-            eval_config_source=validation_eval_source,
-            normalized_score=0.25,
-        ),
-    )
-    return seam, transcript
-
-
-def _record(
-    seam: Miprov2Study,
-    transcript: StudyTranscript,
-    *,
-    score: float,
-    nonce: int,
-) -> StudyTranscript:
-    suggestion = seam.suggest_next(transcript)
-    candidate_assembly = _assembly(seam, suggestion.params)
-    candidate_identity_hash = candidate_assembly.candidate.identity_hash
-    sample_is_full = (
-        not seam.schedule.minibatch
-        or seam.schedule.minibatch_size >= seam.schedule.valset_size
-    )
-    task_identities = (
-        seam.validation_task_identities
-        if sample_is_full
-        else seam.validation_task_identities[: seam.schedule.minibatch_size]
-    )
-    evaluation = _binding(
-        task_identities,
-        nonce=nonce,
-        purpose="miprov2_sample",
-        candidate_identity_hash=candidate_identity_hash,
-        eval_config_source=seam.validation_eval_source,
-        normalized_score=score,
-    )
-    promoted = seam.promotion_candidate(
-        transcript,
-        suggestion,
-        score=score,
-        evaluation=evaluation,
-        candidate_assembly=candidate_assembly,
-    )
-    kwargs: dict[str, Any] = {}
-    if promoted is not None:
-        kwargs = {
-            "promotion_full_score": score + 0.01,
-            "promotion_evaluation": _binding(
-                seam.validation_task_identities,
-                nonce=500 + nonce,
-                purpose="miprov2_promotion",
-                candidate_identity_hash=(
-                    promoted.evaluated_candidate_identity_hash
-                ),
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=score + 0.01,
-            ),
-        }
-    return seam.record_sample(
-        transcript,
-        suggestion,
-        score=score,
-        evaluation=evaluation,
-        candidate_assembly=candidate_assembly,
-        **kwargs,
-    )
-
-
-def test_parameter_order_is_predictor_major_instruction_then_demo() -> None:
-    space = _space((3, 2), (2, 4))
+    assert MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION == 1
+    assert MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION == 2
+    space = _space()
 
     assert space.parameter_names == (
         "0_predictor_instruction",
         "0_predictor_demos",
-        "1_predictor_instruction",
-        "1_predictor_demos",
     )
-    assert space.baseline_params == tuple(
-        (name, 0) for name in space.parameter_names
-    )
-
-
-def test_space_and_transcript_bind_exact_ordered_pool_identities() -> None:
-    first_space = _space((2,), offset=1)
-    other_space = _space((2,), offset=100)
-    assert first_space.instruction_candidate_counts == (
-        other_space.instruction_candidate_counts
-    )
-    assert first_space.identity_hash() != other_space.identity_hash()
-    first, transcript = _seam(space=first_space)
-    other = Miprov2Study(
-        seed=first.seed,
-        space=other_space,
-        schedule=first.schedule,
-        run_id=first.run_id,
-        validation_task_identities=first.validation_task_identities,
-        validation_eval_source=first.validation_eval_source,
-        reward_policy_hash=first.reward_policy_hash,
-        control_identity_hash=first.control_identity_hash,
-        prompt_adapter_identity_hash=first.prompt_adapter_identity_hash,
-        expected_base_candidate=first.expected_base_candidate,
-        program_layout=first.program_layout,
+    assert space.baseline_params == (
+        ("0_predictor_instruction", 0),
+        ("0_predictor_demos", 0),
     )
 
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="bound MIPROv2 study contract",
-    ):
-        other.reconstruct_study(transcript)
 
+def test_parameter_space_normalization_is_exact_and_ordered() -> None:
+    space = _space()
+    params = {
+        "0_predictor_demos": 1,
+        "0_predictor_instruction": 2,
+    }
 
-def test_transcript_binds_versions_schedule_baseline_and_distributions() -> (
-    None
-):
-    seam, transcript = _seam()
-    dumped = transcript.model_dump(mode="json")
+    normalized = space.normalize(params)
 
-    assert dumped["reference_commit"] == MIPROV2_REFERENCE_COMMIT
-    assert dumped["optuna_version"] == OPTUNA_VERSION
-    assert dumped["seed"] == seam.seed
-    assert (
-        dumped["parameter_space_identity_hash"] == seam.space.identity_hash()
+    assert normalized == (
+        ("0_predictor_instruction", 2),
+        ("0_predictor_demos", 1),
     )
-    assert dumped["distribution_identity_hash"] == (
-        seam.space.distribution_identity_hash()
-    )
-    assert transcript.baseline.evaluation.evidence_refs
-    assert (
-        transcript.baseline.categorical_combination_identity_hash
-        != transcript.baseline.evaluated_base_candidate.identity_hash
-    )
-    assert len(transcript.identity_hash()) == 64
-
-    with pytest.raises(ValidationError, match="extra"):
-        StudyTranscript.model_validate({**dumped, "runtime_handle": "no"})
+    assert len(space.combination_identity_hash(normalized)) == 64
+    with pytest.raises(ValueError, match="does not match"):
+        space.normalize({"0_predictor_instruction": 0})
 
 
-def test_study_rejects_cross_run_candidate_task_and_config_evidence() -> None:
-    seam, transcript = _seam(
-        schedule=_schedule(minibatch=True, minibatch_size=2)
-    )
-    binding = transcript.baseline.evaluation
-    citation = binding.evidence_citations[0]
-
-    def rejected(changed_binding: EvaluationBinding) -> None:
-        changed = transcript.model_copy(
-            update={
-                "baseline": transcript.baseline.model_copy(
-                    update={"evaluation": changed_binding}
-                )
-            }
-        )
-        with pytest.raises(
-            StudyTranscriptMismatch,
-            match="identity and evidence contract",
-        ):
-            seam.reconstruct_study(changed)
-
-    other_run_citation = citation.model_copy(update={"run_id": "other-run"})
-    rejected(
-        binding.model_copy(
-            update={
-                "run_id": "other-run",
-                "evidence_citations": (other_run_citation,),
-            }
-        )
-    )
-
-    other_candidate_citation = citation.model_copy(
-        update={"candidate_identity_hash": FULL_B}
-    )
-    rejected(
-        binding.model_copy(
-            update={"evidence_citations": (other_candidate_citation,)}
-        )
-    )
-
-    reversed_tasks = tuple(reversed(binding.task_batch_identities))
-    reordered_citation = citation.model_copy(
-        update={"task_batch_identities": reversed_tasks}
-    )
-    rejected(
-        binding.model_copy(
-            update={
-                "task_batch_identities": reversed_tasks,
-                "evidence_citations": (reordered_citation,),
-            }
-        )
-    )
-
-    other_config = eval_config_reference(_eval_config(_hash(99_999)))
-    other_config_citation = citation.model_copy(
-        update={"eval_config_identity_hash": other_config.identity_hash}
-    )
-    rejected(
-        binding.model_copy(
-            update={
-                "eval_config": other_config,
-                "evidence_citations": (other_config_citation,),
-            }
-        )
-    )
-
-    with pytest.raises(ValidationError, match="canonical evaluation evidence"):
-        VerifiedEvaluationCitation.model_validate(
-            {
-                **citation.model_dump(mode="json"),
-                "evidence_ref": {
-                    "schema_name": "other.evidence",
-                    "content_hash": FULL_A,
-                },
-            }
-        )
-
-
-@pytest.mark.parametrize(
-    "tamper",
-    ["observation", "binding", "citation", "coherent_evidence"],
-)
-def test_verified_score_is_bound_at_every_persistence_layer(
-    tamper: str,
-) -> None:
-    seam, transcript = _seam()
-    baseline = transcript.baseline
-    binding = baseline.evaluation
-    citation = binding.evidence_citations[0]
-    if tamper == "observation":
-        changed_baseline = baseline.model_copy(update={"score": 0.75})
-    elif tamper == "binding":
-        changed_baseline = baseline.model_copy(
-            update={
-                "evaluation": binding.model_copy(
-                    update={"normalized_score": 0.75}
-                )
-            }
-        )
-    elif tamper == "citation":
-        changed_baseline = baseline.model_copy(
-            update={
-                "evaluation": binding.model_copy(
-                    update={
-                        "evidence_citations": (
-                            citation.model_copy(
-                                update={"normalized_score": 0.75}
-                            ),
-                        )
-                    }
-                )
-            }
-        )
-    else:
-        changed_baseline = baseline.model_copy(
-            update={
-                "evaluation": binding.model_copy(
-                    update={
-                        "normalized_score": 0.75,
-                        "evidence_citations": (
-                            citation.model_copy(
-                                update={"normalized_score": 0.75}
-                            ),
-                        ),
-                    }
-                )
-            }
-        )
-    changed = transcript.model_copy(update={"baseline": changed_baseline})
-
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="identity and evidence contract",
-    ):
-        seam.reconstruct_study(changed)
-
-
-@pytest.mark.parametrize("observation", ["sample", "promotion"])
-def test_sample_and_promotion_scores_equal_verified_values(
-    observation: str,
-) -> None:
-    seam, transcript = _seam(
-        schedule=_schedule(
-            num_trials=1,
-            minibatch=True,
-            minibatch_size=2,
-            steps=1,
-        )
-    )
-    transcript = _record(seam, transcript, score=0.5, nonce=1)
-    sample = transcript.samples[0]
-    assert sample.promotion is not None
-    if observation == "sample":
-        changed_sample = sample.model_copy(update={"score": 0.9})
-    else:
-        changed_sample = sample.model_copy(
-            update={
-                "promotion": sample.promotion.model_copy(
-                    update={"full_score": 0.9}
-                )
-            }
-        )
-    changed = transcript.model_copy(update={"samples": (changed_sample,)})
-
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="identity and evidence contract",
-    ):
-        seam.reconstruct_study(changed)
-
-
-def test_bound_study_rejects_a_coherently_substituted_base_candidate() -> None:
-    seam, transcript = _seam()
-    other_base = candidate_reference(
-        Candidate(
-            candidate_id="other-base",
-            base_ref="other-root",
-            payload={"user_prompt_template": "substituted"},
-        )
-    )
-    binding = transcript.baseline.evaluation
-    citation = binding.evidence_citations[0].model_copy(
-        update={"candidate_identity_hash": other_base.identity_hash}
-    )
-    other_binding = binding.model_copy(
-        update={
-            "candidate_identity_hash": other_base.identity_hash,
-            "evidence_citations": (citation,),
-        }
-    )
-    changed = transcript.model_copy(
-        update={
-            "expected_base_candidate": other_base,
-            "baseline": transcript.baseline.model_copy(
-                update={
-                    "evaluated_base_candidate": other_base,
-                    "evaluation": other_binding,
-                }
-            ),
-        }
-    )
-
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="bound MIPROv2 study contract",
-    ):
-        seam.reconstruct_study(changed)
-
-
-def test_sample_candidate_identity_cannot_diverge_from_its_assembly() -> None:
-    seam, transcript = _seam(schedule=_schedule(num_trials=1))
-    transcript = _record(seam, transcript, score=0.5, nonce=1)
-    sample = transcript.samples[0]
-    changed_sample = sample.model_copy(
-        update={
-            "evaluated_candidate_identity_hash": FULL_B,
-            "evaluation": _binding(
-                seam.validation_task_identities,
-                nonce=90,
-                purpose="miprov2_sample",
-                candidate_identity_hash=FULL_B,
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=sample.score,
-            ),
-        }
-    )
-    changed = transcript.model_copy(update={"samples": (changed_sample,)})
-
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="identity and evidence contract",
-    ):
-        seam.reconstruct_study(changed)
-
-
-def test_suggestion_rejects_noncanonical_candidate_assembly() -> None:
-    seam, transcript = _seam(space=_space((3,)))
-    suggestion = seam.suggest_next(transcript)
-    changed_value = (suggestion.params[0][1] + 1) % 3
-    other_params = (("0_predictor_instruction", changed_value),)
-    other_assembly = _assembly(seam, other_params)
-
-    with pytest.raises(ValueError, match="parameters do not match"):
-        seam.promotion_candidate(
-            transcript,
-            suggestion,
-            score=0.5,
-            evaluation=_binding(
-                seam.validation_task_identities,
-                nonce=10,
-                purpose="miprov2_sample",
-                candidate_identity_hash=other_assembly.candidate.identity_hash,
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=0.5,
-            ),
-            candidate_assembly=other_assembly,
-        )
-
-    foreign_instruction = _assembly(
-        seam,
-        suggestion.params,
-        instruction_suffix="-not-from-pool",
-    )
-    with pytest.raises(ValueError, match=r"instruction.*frozen pool"):
-        seam.promotion_candidate(
-            transcript,
-            suggestion,
-            score=0.5,
-            evaluation=_binding(
-                seam.validation_task_identities,
-                nonce=11,
-                purpose="miprov2_sample",
-                candidate_identity_hash=(
-                    foreign_instruction.candidate.identity_hash
-                ),
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=0.5,
-            ),
-            candidate_assembly=foreign_instruction,
-        )
-
-
-@pytest.mark.parametrize(
-    "tamper",
-    ["omit_base_payload", "change_prompt_program"],
-)
-def test_candidate_assembly_recomputes_the_exact_native_candidate(
-    tamper: str,
-) -> None:
-    seam, transcript = _seam(space=_space((3,)))
-    suggestion = seam.suggest_next(transcript)
-    assembly = _assembly(seam, suggestion.params)
-    payload = dict(assembly.candidate.record.payload)
-    if tamper == "omit_base_payload":
-        del payload["user_prompt_template"]
-    else:
-        payload[PROMPT_PROGRAM_PAYLOAD_FIELD] = {
-            "renderer_version": "whetstone_plain_examples/v1",
-            "components": [
-                {
-                    "component_id": "forged",
-                    "candidate_field": "field-0",
-                    "examples": [],
-                }
-            ],
-        }
-    changed_candidate = candidate_reference(
-        assembly.candidate.record.model_copy(update={"payload": payload})
-    )
-    changed_assembly = assembly.model_copy(
-        update={"candidate": changed_candidate}
-    )
-
-    with pytest.raises(ValueError, match="canonical native rendering"):
-        seam.promotion_candidate(
-            transcript,
-            suggestion,
-            score=0.5,
-            evaluation=_binding(
-                seam.validation_task_identities,
-                nonce=12,
-                purpose="miprov2_sample",
-                candidate_identity_hash=changed_candidate.identity_hash,
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=0.5,
-            ),
-            candidate_assembly=changed_assembly,
-        )
-
-
-def test_eval_config_derivation_rejects_identity_and_task_tampering() -> None:
-    _, transcript = _seam()
-    derivation = transcript.baseline.evaluation.eval_config_binding
-
-    changed_tasks = derivation.task_set.model_copy(
-        update={
-            "task_identities": tuple(
-                reversed(derivation.task_set.task_identities)
+def test_parameter_space_rejects_out_of_range_categories() -> None:
+    with pytest.raises(ValueError, match="outside"):
+        _space().normalize(
+            (
+                ("0_predictor_instruction", 3),
+                ("0_predictor_demos", 0),
             )
-        }
+        )
+
+
+@pytest.mark.parametrize(
+    ("trial_number", "due"),
+    ((0, False), (4, False), (5, True), (10, False), (11, True)),
+)
+def test_minibatch_promotion_cadence_is_frozen(
+    trial_number: int,
+    due: bool,
+) -> None:
+    schedule = Miprov2StudySchedule(
+        num_trials=10,
+        minibatch=True,
+        minibatch_size=2,
+        valset_size=5,
+        minibatch_full_eval_steps=5,
     )
-    with pytest.raises(ValidationError, match="wrong ordered tasks"):
-        Miprov2EvalConfigBinding.model_validate(
-            {
-                **derivation.model_dump(mode="json"),
-                "task_set": changed_tasks.model_dump(mode="json"),
-            }
-        )
 
-    changed_sampling = derivation.sampling_config.model_copy(
-        update={"config_identity_hash": FULL_B}
-    )
-    with pytest.raises(ValidationError, match="identity is not canonical"):
-        Miprov2EvalConfigBinding.model_validate(
-            {
-                **derivation.model_dump(mode="json"),
-                "sampling_config": changed_sampling.model_dump(mode="json"),
-            }
-        )
-
-    changed_eval = eval_config_reference(_eval_config(_hash(99_100)))
-    with pytest.raises(
-        ValidationError,
-        match="canonical source derivation",
-    ):
-        Miprov2EvalConfigBinding.model_validate(
-            {
-                **derivation.model_dump(mode="json"),
-                "eval_config": changed_eval.model_dump(mode="json"),
-            }
-        )
+    assert schedule.adjusted_num_trials == 13
+    assert schedule.promotion_due(optuna_trial_number=trial_number) is due
 
 
-def test_provisional_rejects_foreign_eval_source_before_promotion() -> None:
-    seam, transcript = _seam(
-        schedule=_schedule(
-            num_trials=1,
-            minibatch=True,
-            minibatch_size=2,
-            steps=1,
-        )
-    )
-    suggestion = seam.suggest_next(transcript)
-    assembly = _assembly(seam, suggestion.params)
-    foreign_source = eval_config_reference(_eval_config(_hash(99_200)))
-    evaluation = _binding(
-        seam.validation_task_identities[:2],
-        nonce=13,
+def test_failed_observation_is_zero_and_has_no_reward(tmp_path) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "study-observation.sqlite"))
+    intent, context = _fixture(store, reward_policy_hash=FULL_A)
+
+    observation = Miprov2EvaluationObservation(
+        run_id="run",
+        intent_id="intent",
+        effect_identity_hash=FULL_B,
         purpose="miprov2_sample",
-        candidate_identity_hash=assembly.candidate.identity_hash,
-        eval_config_source=foreign_source,
-        normalized_score=0.5,
+        candidate=intent.candidate,
+        task_batch_identities=context.task_batch_identities,
+        eval_config=context.eval_config,
+        eval_config_binding=context.eval_config_binding,
+        evaluation_binding=intent.evaluation_binding,
+        evaluation_result_ref=TypedRef(
+            schema_name=EVALUATION_FAILURE_SCHEMA,
+            content_hash=FULL_B,
+        ),
+        expected_reward_policy_hash=FULL_A,
+        reward_ref=None,
+        normalized_score=0.0,
     )
 
-    with pytest.raises(ValueError, match="evaluation derivation"):
-        seam.promotion_candidate(
-            transcript,
-            suggestion,
-            score=0.5,
-            evaluation=evaluation,
-            candidate_assembly=assembly,
+    assert observation.normalized_score == 0.0
+    assert observation.reward_ref is None
+
+
+def test_failed_observation_rejects_score_or_reward_model_copy_bypass(
+    tmp_path,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "study-bypass.sqlite"))
+    intent, context = _fixture(store, reward_policy_hash=FULL_A)
+    payload = {
+        "run_id": "run",
+        "intent_id": "intent",
+        "effect_identity_hash": FULL_B,
+        "purpose": "miprov2_sample",
+        "candidate": intent.candidate.model_dump(mode="json"),
+        "task_batch_identities": list(context.task_batch_identities),
+        "eval_config": context.eval_config.model_dump(mode="json"),
+        "eval_config_binding": context.eval_config_binding.model_dump(
+            mode="json"
+        ),
+        "evaluation_binding": intent.evaluation_binding.model_dump(
+            mode="json"
+        ),
+        "evaluation_result_ref": {
+            "schema_name": EVALUATION_FAILURE_SCHEMA,
+            "content_hash": FULL_B,
+        },
+        "expected_reward_policy_hash": FULL_A,
+        "reward_ref": None,
+        "normalized_score": 1.0,
+    }
+
+    with pytest.raises(ValidationError, match="zero score"):
+        Miprov2EvaluationObservation.model_validate(payload)
+
+
+def test_observation_candidate_is_an_exact_candidate_ref(tmp_path) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "study-candidate.sqlite"))
+    intent, context = _fixture(store, reward_policy_hash=FULL_A)
+    other = candidate_reference(candidate("other", text="Other {query}."))
+
+    with pytest.raises(ValidationError):
+        Miprov2EvaluationObservation(
+            run_id="run",
+            intent_id="intent",
+            effect_identity_hash=FULL_B,
+            purpose="miprov2_sample",
+            candidate=other.model_copy(
+                update={"record_ref": intent.candidate.record_ref}
+            ),
+            task_batch_identities=context.task_batch_identities,
+            eval_config=context.eval_config,
+            eval_config_binding=context.eval_config_binding,
+            evaluation_binding=intent.evaluation_binding,
+            evaluation_result_ref=TypedRef(
+                schema_name=EVALUATION_FAILURE_SCHEMA,
+                content_hash=FULL_B,
+            ),
+            expected_reward_policy_hash=FULL_A,
+            reward_ref=None,
+            normalized_score=0.0,
         )
 
 
-def test_pydantic_records_are_frozen_and_reject_unknown_fields() -> None:
-    _, transcript = _seam()
-    binding = transcript.baseline.evaluation
-    with pytest.raises(ValidationError, match="extra"):
-        EvaluationBinding.model_validate(
-            {**binding.model_dump(mode="json"), "loose_label": "bad"}
-        )
-    with pytest.raises(ValidationError, match="frozen"):
-        binding.task_batch_identities = (FULL_A,)  # ty: ignore[invalid-assignment]
-
-
-def test_promotion_is_stable_by_first_observed_mean() -> None:
-    seam, transcript = _seam(
-        space=_space((2,)),
-        schedule=_schedule(minibatch=True, minibatch_size=2),
+def test_candidate_assembly_recomputes_exact_native_candidate() -> None:
+    control = _configure()
+    instruction = "Improved {query}."
+    instruction_hash = compute_identity_hash(
+        schema="whetstone.miprov2_instruction",
+        schema_version=1,
+        payload={"instruction": instruction},
     )
-    first_suggestion = seam.suggest_next(transcript)
-    first_params = (("0_predictor_instruction", 0),)
-    first_assembly = _assembly(seam, first_params)
-    first = SampleObservation(
-        trial_number=first_suggestion.trial_number,
-        params=first_params,
-        candidate_combination_identity_hash=(
-            first_assembly.categorical_combination_identity_hash
-        ),
-        evaluated_candidate_identity_hash=first_assembly.candidate.identity_hash,
-        candidate_assembly=first_assembly,
-        score=0.5,
-        evaluation=_binding(
-            seam.validation_task_identities[:2],
-            nonce=1,
-            purpose="miprov2_sample",
-            candidate_identity_hash=first_assembly.candidate.identity_hash,
-            eval_config_source=seam.validation_eval_source,
-            normalized_score=0.5,
-        ),
-        batch_full_evaluation=False,
-    )
-    second_params = (("0_predictor_instruction", 1),)
-    second_assembly = _assembly(seam, second_params)
-    second = SampleObservation(
-        trial_number=2,
-        params=second_params,
-        candidate_combination_identity_hash=(
-            second_assembly.categorical_combination_identity_hash
-        ),
-        evaluated_candidate_identity_hash=(
-            second_assembly.candidate.identity_hash
-        ),
-        candidate_assembly=second_assembly,
-        score=0.5,
-        evaluation=_binding(
-            seam.validation_task_identities[:2],
-            nonce=2,
-            purpose="miprov2_sample",
-            candidate_identity_hash=second_assembly.candidate.identity_hash,
-            eval_config_source=seam.validation_eval_source,
-            normalized_score=0.5,
-        ),
-        batch_full_evaluation=False,
-    )
-
-    assert select_promotion((first, second)).params == first.params
-    first_again = first.model_copy(update={"trial_number": 3, "score": 0.1})
-    assert select_promotion((first, second, first_again)).params == (
-        second.params
-    )
-
-
-def test_exact_promotion_exhaustion_message() -> None:
-    seam, _ = _seam(
-        space=_space((1,)),
-        schedule=_schedule(
-            num_trials=2,
-            minibatch=True,
-            minibatch_size=2,
-            steps=1,
+    params = (("0_predictor_instruction", 0),)
+    combination = Miprov2ParameterSpace(
+        instruction_pool_identity_hashes=((instruction_hash,),)
+    ).combination_identity_hash(params)
+    rendering = Miprov2CandidateRendering(
+        control_identity_hash=control.identity_hash(),
+        base_candidate_identity_hash=control.base_candidate.identity_hash,
+        categorical_combination_identity_hash=combination,
+        components=(
+            Miprov2ComponentSelection(
+                component_id="generate",
+                instruction_index=0,
+                instruction=instruction,
+                instruction_identity_hash=instruction_hash,
+                demo_index=None,
+                demo_set=None,
+                demo_identity_hash=None,
+            ),
         ),
     )
-    params = seam.space.baseline_params
-    combination = seam.space.combination_identity_hash(params)
-    assembly = _assembly(seam, params)
-    first = SampleObservation(
-        trial_number=1,
+    exact = candidate_from_components(
+        base=control.base_candidate,
+        candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
+        components=rendering.model_dump(mode="json")["components"],
+        template_render_contract=control.template_render_contract,
+    )
+    exact_ref = candidate_reference(exact)
+    program_hash = compute_identity_hash(
+        schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+        schema_version=MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
+        payload={"candidate": exact_ref.model_dump(mode="json")},
+    )
+    assembly = Miprov2CandidateAssemblyBinding(
         params=params,
-        candidate_combination_identity_hash=combination,
-        evaluated_candidate_identity_hash=assembly.candidate.identity_hash,
-        candidate_assembly=assembly,
-        score=0.5,
-        evaluation=_binding(
-            seam.validation_task_identities[:2],
-            nonce=1,
-            purpose="miprov2_sample",
-            candidate_identity_hash=assembly.candidate.identity_hash,
-            eval_config_source=seam.validation_eval_source,
-            normalized_score=0.5,
-        ),
-        batch_full_evaluation=False,
+        categorical_combination_identity_hash=combination,
+        candidate=exact_ref,
+        program_identity_hash=program_hash,
+        rendering=rendering,
+        control_identity_hash=control.identity_hash(),
+        base_candidate=control.base_candidate,
+        program_layout=control.program_layout,
+        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+        template_render_contract=control.template_render_contract,
     )
-    promoted = first.model_copy(
-        update={
-            "promotion": Promotion(
-                trial_number=2,
-                params=params,
-                candidate_combination_identity_hash=combination,
-                evaluated_candidate_identity_hash=(
-                    assembly.candidate.identity_hash
-                ),
-                candidate_assembly=assembly,
-                source_sample_trial_number=1,
-                minibatch_mean=0.5,
-                full_score=0.6,
-                evaluation=_binding(
-                    seam.validation_task_identities,
-                    nonce=2,
-                    purpose="miprov2_promotion",
-                    candidate_identity_hash=assembly.candidate.identity_hash,
-                    eval_config_source=seam.validation_eval_source,
-                    normalized_score=0.6,
-                ),
-            )
+
+    assert assembly.candidate == exact_ref
+
+    foreign = Candidate.model_validate(
+        {
+            **exact.model_dump(mode="json"),
+            "payload": {
+                **exact.payload.to_json(),
+                "user_prompt_template": "Foreign {query}.",
+            },
         }
     )
-
-    with pytest.raises(
-        ValueError,
-        match=r"^No valid program found in param_score_dict$",
-    ):
-        select_promotion((promoted,))
-
-
-def test_missing_and_extra_promotions_are_rejected() -> None:
-    seam, transcript = _seam(
-        schedule=_schedule(
-            num_trials=3,
-            minibatch=True,
-            minibatch_size=2,
-            steps=1,
-        )
+    foreign_ref = candidate_reference(foreign)
+    foreign_program_hash = compute_identity_hash(
+        schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+        schema_version=MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
+        payload={"candidate": foreign_ref.model_dump(mode="json")},
     )
-    suggestion = seam.suggest_next(transcript)
-    assembly = _assembly(seam, suggestion.params)
-    candidate_identity_hash = assembly.candidate.identity_hash
-    evaluation = _binding(
-        seam.validation_task_identities[:2],
-        nonce=1,
-        purpose="miprov2_sample",
-        candidate_identity_hash=candidate_identity_hash,
-        eval_config_source=seam.validation_eval_source,
-        normalized_score=0.5,
-    )
-    assert seam.schedule.promotion_due(
-        optuna_trial_number=suggestion.trial_number
-    )
-    with pytest.raises(ValueError, match="promotion evaluation is required"):
-        seam.record_sample(
-            transcript,
-            suggestion,
-            score=0.5,
-            evaluation=evaluation,
-            candidate_assembly=assembly,
-        )
-
-    non_minibatch, full_transcript = _seam(schedule=_schedule(minibatch=False))
-    full_suggestion = non_minibatch.suggest_next(full_transcript)
-    full_assembly = _assembly(non_minibatch, full_suggestion.params)
-    with pytest.raises(ValueError, match="supplied off cadence"):
-        non_minibatch.record_sample(
-            full_transcript,
-            full_suggestion,
-            score=0.5,
-            evaluation=_binding(
-                non_minibatch.validation_task_identities,
-                nonce=2,
-                purpose="miprov2_sample",
-                candidate_identity_hash=full_assembly.candidate.identity_hash,
-                eval_config_source=non_minibatch.validation_eval_source,
-                normalized_score=0.5,
-            ),
-            candidate_assembly=full_assembly,
-            promotion_full_score=0.6,
-            promotion_evaluation=_binding(
-                non_minibatch.validation_task_identities,
-                nonce=3,
-                purpose="miprov2_promotion",
-                candidate_identity_hash=full_assembly.candidate.identity_hash,
-                eval_config_source=non_minibatch.validation_eval_source,
-                normalized_score=0.6,
-            ),
+    with pytest.raises(ValidationError, match="deterministic rendering"):
+        Miprov2CandidateAssemblyBinding.model_validate(
+            {
+                **assembly.model_dump(mode="json"),
+                "candidate": foreign_ref.model_dump(mode="json"),
+                "program_identity_hash": foreign_program_hash,
+            }
         )
 
 
-@pytest.mark.parametrize(
-    ("num_trials", "expected_sample_promotions"),
-    [
-        (10, (5, 11)),
-        (11, (5, 11, 13)),
-    ],
-)
-def test_divisible_and_nondivisible_final_promotion_cadence(
-    num_trials: int,
-    expected_sample_promotions: tuple[int, ...],
-) -> None:
-    seam, transcript = _seam(
-        space=_space((20,)),
-        schedule=_schedule(
-            num_trials=num_trials,
-            minibatch=True,
-            minibatch_size=2,
-            steps=5,
-        ),
-    )
-    for index in range(num_trials):
-        transcript = _record(
-            seam,
-            transcript,
-            score=float(index),
-            nonce=index + 1,
-        )
-
-    assert (
-        tuple(
-            sample.trial_number
-            for sample in transcript.samples
-            if sample.promotion is not None
-        )
-        == expected_sample_promotions
-    )
-    with pytest.raises(ValueError, match="schedule is exhausted"):
-        seam.suggest_next(transcript)
-
-
-def test_promotion_is_inserted_before_tell_with_exact_mean_and_source() -> (
-    None
+def _study_observation(
+    *,
+    context,
+    candidate_ref,
+    purpose,
+    score: float,
+    nonce: int,
 ):
-    seam, transcript = _seam(
-        space=_space((1,)),
-        schedule=_schedule(
-            num_trials=1,
-            minibatch=True,
-            minibatch_size=2,
-            steps=1,
+    effect_hash = f"{10_000 + nonce:064x}"
+    request = context.eval_config_binding.request.model_copy(
+        update={
+            "purpose": purpose.removeprefix("miprov2_"),
+            "effect_identity_hash": effect_hash,
+        }
+    )
+    binding = Miprov2EvalConfigBinding.model_validate(
+        {
+            **context.eval_config_binding.model_dump(mode="json"),
+            "request": request.model_dump(mode="json"),
+        }
+    )
+    evaluation_binding = EvaluationBinding(
+        schema_version=2,
+        eval_config=binding.eval_config,
+        role=EvaluationRole.INTERNAL,
+        campaign="miprov2-study-test",
+    )
+    policy = internal_reward_policy()
+    reward = apply_reward_policy(
+        policy,
+        aggregates={"score": score / 100},
+        evidence_role=EvaluationRole.INTERNAL,
+        evidence_refs=(
+            TypedRef(
+                schema_name="whetstone.rollout_aggregate",
+                content_hash=f"{20_000 + nonce:064x}",
+            ),
         ),
     )
-    transcript = _record(seam, transcript, score=0.6, nonce=1)
-    sample = transcript.samples[0]
-    assert sample.promotion is not None
-    assert sample.trial_number == 1
-    assert sample.promotion.trial_number == 2
-    assert sample.promotion.source_sample_trial_number == 1
-    assert sample.promotion.minibatch_mean == 0.6
+    return Miprov2EvaluationObservation(
+        run_id="study-run",
+        intent_id=f"study-intent-{nonce}",
+        effect_identity_hash=effect_hash,
+        purpose=purpose,
+        candidate=candidate_ref,
+        task_batch_identities=(TASK,),
+        eval_config=binding.eval_config,
+        eval_config_binding=binding,
+        evaluation_binding=evaluation_binding,
+        evaluation_result_ref=TypedRef(
+            schema_name=EVALUATION_EVIDENCE_SCHEMA,
+            content_hash=f"{30_000 + nonce:064x}",
+        ),
+        expected_reward_policy_hash=policy.identity_hash(),
+        reward_ref=reward_reference(reward),
+        normalized_score=score,
+    )
 
-    study = seam.reconstruct_study(transcript)
-    assert [trial.number for trial in study.trials] == [0, 1, 2]
-    assert study.trials[1].value == 0.6
-    assert study.trials[2].value == 0.61
 
-
-def test_equal_minibatch_is_full_but_not_winner_eligible() -> None:
-    seam, transcript = _seam(
-        space=_space((2,)),
-        schedule=_schedule(
-            num_trials=1,
-            minibatch=True,
-            minibatch_size=3,
-            valset_size=3,
-            steps=5,
+def _study_assembly(
+    control,
+    space,
+    params,
+    *,
+    instructions=("Baseline {query}.", "Improved {query}."),
+):
+    values = dict(params)
+    instruction_index = values["0_predictor_instruction"]
+    instruction = instructions[instruction_index]
+    instruction_hash = space.instruction_pool_identity_hashes[0][
+        instruction_index
+    ]
+    combination = space.combination_identity_hash(params)
+    rendering = Miprov2CandidateRendering(
+        control_identity_hash=FULL_A,
+        base_candidate_identity_hash=control.base_candidate.identity_hash,
+        categorical_combination_identity_hash=combination,
+        components=(
+            Miprov2ComponentSelection(
+                component_id="generate",
+                instruction_index=instruction_index,
+                instruction=instruction,
+                instruction_identity_hash=instruction_hash,
+                demo_index=None,
+                demo_set=None,
+                demo_identity_hash=None,
+            ),
         ),
     )
-    suggestion = seam.suggest_next(transcript)
-    assembly = _assembly(seam, suggestion.params)
-    candidate_identity_hash = assembly.candidate.identity_hash
-    evaluation = _binding(
-        seam.validation_task_identities,
-        nonce=1,
-        purpose="miprov2_sample",
-        candidate_identity_hash=candidate_identity_hash,
-        eval_config_source=seam.validation_eval_source,
-        normalized_score=1.0,
+    assembled = candidate_from_components(
+        base=control.base_candidate,
+        candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
+        components=rendering.model_dump(mode="json")["components"],
+        template_render_contract=control.template_render_contract,
     )
-    assert (
-        seam.promotion_candidate(
-            transcript,
-            suggestion,
-            score=1.0,
-            evaluation=evaluation,
-            candidate_assembly=assembly,
+    assembled_ref = candidate_reference(assembled)
+    return Miprov2CandidateAssemblyBinding(
+        params=params,
+        categorical_combination_identity_hash=combination,
+        candidate=assembled_ref,
+        program_identity_hash=compute_identity_hash(
+            schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+            schema_version=1,
+            payload={"candidate": assembled_ref.model_dump(mode="json")},
+        ),
+        rendering=rendering,
+        control_identity_hash=FULL_A,
+        base_candidate=control.base_candidate,
+        program_layout=control.program_layout,
+        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+        template_render_contract=control.template_render_contract,
+    )
+
+
+def _study_case(
+    tmp_path,
+    *,
+    num_trials: int,
+    minibatch: bool,
+    steps: int = 5,
+    seed: int = 23,
+):
+    store = ObjectStore(SqliteBackend(tmp_path / "study-case.sqlite"))
+    _, context = _fixture(
+        store,
+        reward_policy_hash=internal_reward_policy().identity_hash(),
+    )
+    control = _configure()
+    instructions = tuple(
+        f"Instruction {index} {{query}}." for index in range(4)
+    )
+    instruction_hashes = tuple(
+        compute_identity_hash(
+            schema="whetstone.miprov2_instruction",
+            schema_version=1,
+            payload={"instruction": instruction},
         )
-        is not None
+        for instruction in instructions
     )
-    transcript = seam.record_sample(
+    space = Miprov2ParameterSpace(
+        instruction_pool_identity_hashes=(instruction_hashes,)
+    )
+    study = Miprov2Study(
+        seed=seed,
+        space=space,
+        schedule=Miprov2StudySchedule(
+            num_trials=num_trials,
+            minibatch=minibatch,
+            minibatch_size=1,
+            valset_size=1,
+            minibatch_full_eval_steps=steps,
+        ),
+        run_id="study-run",
+        validation_task_identities=(TASK,),
+        validation_eval_source=(
+            context.eval_config_binding.request.source_eval_config
+        ),
+        reward_policy_hash=internal_reward_policy().identity_hash(),
+        control_identity_hash=FULL_A,
+        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+        expected_base_candidate=control.base_candidate,
+        program_layout=control.program_layout,
+        template_render_contract=control.template_render_contract,
+    )
+    transcript = study.initial_transcript(
+        baseline_score=0.0,
+        baseline_evaluation=_study_observation(
+            context=context,
+            candidate_ref=control.base_candidate,
+            purpose="miprov2_baseline",
+            score=0.0,
+            nonce=0,
+        ),
+    )
+    return context, control, instructions, space, study, transcript
+
+
+def _record_study_sample(
+    *,
+    context,
+    control,
+    instructions,
+    space,
+    study,
+    transcript,
+    score: float,
+    nonce: int,
+):
+    suggestion = study.suggest_next(transcript)
+    assembly = _study_assembly(
+        control,
+        space,
+        suggestion.params,
+        instructions=instructions,
+    )
+    evaluation = _study_observation(
+        context=context,
+        candidate_ref=assembly.candidate,
+        purpose="miprov2_sample",
+        score=score,
+        nonce=nonce,
+    )
+    promotion = study.promotion_candidate(
         transcript,
         suggestion,
-        score=1.0,
+        score=score,
         evaluation=evaluation,
         candidate_assembly=assembly,
-        promotion_full_score=0.2,
-        promotion_evaluation=_binding(
-            seam.validation_task_identities,
-            nonce=2,
-            purpose="miprov2_promotion",
-            candidate_identity_hash=candidate_identity_hash,
-            eval_config_source=seam.validation_eval_source,
-            normalized_score=0.2,
-        ),
     )
-
-    assert transcript.samples[0].batch_full_evaluation is True
-    assert transcript.samples[0].promotion is not None
-    assert seam.best_full_evaluation(transcript).source == "baseline"
-
-
-def test_non_minibatch_strict_best_update_keeps_first_tie() -> None:
-    seam, transcript = _seam(
-        space=_space((3,)),
-        schedule=_schedule(num_trials=2, minibatch=False),
-    )
-    transcript = _record(seam, transcript, score=0.8, nonce=1)
-    first_trial = transcript.samples[0].trial_number
-    transcript = _record(seam, transcript, score=0.8, nonce=2)
-
-    best = seam.best_full_evaluation(transcript)
-    assert best.source == "sample"
-    assert best.trial_number == first_trial
-    assert best.score == 0.8
-
-
-def test_reconstruction_rejects_trial_parameter_and_promotion_tampering() -> (
-    None
-):
-    seam, transcript = _seam(
-        space=_space((4,)),
-        schedule=_schedule(
-            num_trials=2,
-            minibatch=True,
-            minibatch_size=2,
-            steps=1,
-        ),
-    )
-    transcript = _record(seam, transcript, score=0.6, nonce=1)
-    sample = transcript.samples[0]
-    assert sample.promotion is not None
-    changed_value = (sample.params[0][1] + 1) % 4
-    changed_params = (("0_predictor_instruction", changed_value),)
-    changed_combination = seam.space.combination_identity_hash(changed_params)
-    changed_sample = sample.model_copy(
-        update={
-            "params": changed_params,
-            "candidate_combination_identity_hash": changed_combination,
-            "promotion": sample.promotion.model_copy(
-                update={
-                    "params": changed_params,
-                    "candidate_combination_identity_hash": changed_combination,
-                }
-            ),
-        }
-    )
-    tampered = transcript.model_copy(update={"samples": (changed_sample,)})
-
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="identity and evidence contract",
-    ):
-        seam.reconstruct_study(tampered)
-
-    changed_promotion = sample.promotion.model_copy(
-        update={"minibatch_mean": 0.7}
-    )
-    tampered_promotion = transcript.model_copy(
-        update={
-            "samples": (
-                sample.model_copy(update={"promotion": changed_promotion}),
-            )
-        }
-    )
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="stable mean ranking",
-    ):
-        seam.reconstruct_study(tampered_promotion)
-
-    alternate_assembly = _assembly(
-        seam,
-        sample.params,
-        component_suffix="-substituted",
-    )
-    changed_promotion_candidate = sample.promotion.model_copy(
-        update={
-            "evaluated_candidate_identity_hash": (
-                alternate_assembly.candidate.identity_hash
-            ),
-            "candidate_assembly": alternate_assembly,
-            "evaluation": _binding(
-                seam.validation_task_identities,
-                nonce=700,
+    promotion_score = round(score + 0.1, 1)
+    kwargs: dict[str, Any] = {}
+    if promotion is not None:
+        kwargs = {
+            "promotion_full_score": promotion_score,
+            "promotion_evaluation": _study_observation(
+                context=context,
+                candidate_ref=promotion.candidate_assembly.candidate,
                 purpose="miprov2_promotion",
-                candidate_identity_hash=(
-                    alternate_assembly.candidate.identity_hash
-                ),
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=sample.promotion.full_score,
+                score=promotion_score,
+                nonce=10_000 + nonce,
             ),
         }
+    completed = study.record_sample(
+        transcript,
+        suggestion,
+        score=score,
+        evaluation=evaluation,
+        candidate_assembly=assembly,
+        **kwargs,
     )
-    changed_promotion_transcript = transcript.model_copy(
-        update={
-            "samples": (
-                sample.model_copy(
-                    update={"promotion": changed_promotion_candidate}
-                ),
-            )
-        }
-    )
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="identity and evidence contract",
-    ):
-        seam.reconstruct_study(changed_promotion_transcript)
-
-    changed_promotion_number = sample.promotion.model_copy(
-        update={"trial_number": 9}
-    )
-    bad_promotion_chronology = transcript.model_copy(
-        update={
-            "samples": (
-                sample.model_copy(
-                    update={"promotion": changed_promotion_number}
-                ),
-            )
-        }
-    )
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="promotion trial chronology",
-    ):
-        seam.reconstruct_study(bad_promotion_chronology)
-
-    bad_sample_chronology = transcript.model_copy(
-        update={"samples": (sample.model_copy(update={"trial_number": 7}),)}
-    )
-    with pytest.raises(
-        StudyTranscriptMismatch,
-        match="sample trial chronology",
-    ):
-        seam.reconstruct_study(bad_sample_chronology)
+    return suggestion, completed
 
 
-def test_restart_after_every_event_reproduces_next_suggestion() -> None:
-    seam, transcript = _seam(
-        space=_space((5, 4), (3, 2)),
-        schedule=_schedule(
-            num_trials=14,
+def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
+    tmp_path,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "study-flow.sqlite"))
+    _, context = _fixture(
+        store,
+        reward_policy_hash=internal_reward_policy().identity_hash(),
+    )
+    control = _configure()
+    instruction_hashes = tuple(
+        compute_identity_hash(
+            schema="whetstone.miprov2_instruction",
+            schema_version=1,
+            payload={"instruction": instruction},
+        )
+        for instruction in ("Baseline {query}.", "Improved {query}.")
+    )
+    space = Miprov2ParameterSpace(
+        instruction_pool_identity_hashes=(instruction_hashes,)
+    )
+    study = Miprov2Study(
+        seed=9,
+        space=space,
+        schedule=Miprov2StudySchedule(
+            num_trials=1,
             minibatch=True,
-            minibatch_size=2,
-            steps=5,
+            minibatch_size=1,
+            valset_size=1,
+            minibatch_full_eval_steps=5,
         ),
-        seed=23,
+        run_id="study-run",
+        validation_task_identities=(TASK,),
+        validation_eval_source=(
+            context.eval_config_binding.request.source_eval_config
+        ),
+        reward_policy_hash=internal_reward_policy().identity_hash(),
+        control_identity_hash=FULL_A,
+        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+        expected_base_candidate=control.base_candidate,
+        program_layout=control.program_layout,
+        template_render_contract=control.template_render_contract,
     )
-    for index in range(14):
-        before = seam.suggest_next(transcript)
+    baseline = _study_observation(
+        context=context,
+        candidate_ref=control.base_candidate,
+        purpose="miprov2_baseline",
+        score=25.0,
+        nonce=0,
+    )
+    transcript = study.initial_transcript(
+        baseline_score=25.0,
+        baseline_evaluation=baseline,
+    )
+    suggestion = study.suggest_next(transcript)
+    assembly = _study_assembly(control, space, suggestion.params)
+    sample = _study_observation(
+        context=context,
+        candidate_ref=assembly.candidate,
+        purpose="miprov2_sample",
+        score=100.0,
+        nonce=1,
+    )
+    selected = study.promotion_candidate(
+        transcript,
+        suggestion,
+        score=100.0,
+        evaluation=sample,
+        candidate_assembly=assembly,
+    )
+    assert selected is not None
+    promotion = _study_observation(
+        context=context,
+        candidate_ref=selected.candidate_assembly.candidate,
+        purpose="miprov2_promotion",
+        score=20.0,
+        nonce=2,
+    )
+    completed = study.record_sample(
+        transcript,
+        suggestion,
+        score=100.0,
+        evaluation=sample,
+        candidate_assembly=assembly,
+        promotion_full_score=20.0,
+        promotion_evaluation=promotion,
+    )
+
+    observation = completed.samples[0]
+    assert observation.batch_full_evaluation is True
+    assert observation.promotion is not None
+    assert observation.promotion.trial_number == suggestion.trial_number + 1
+    assert observation.promotion.minibatch_mean == 100.0
+    assert [
+        (trial.number, trial.value)
+        for trial in study.reconstruct_study(completed).trials
+    ] == [(0, 25.0), (1, 100.0), (2, 20.0)]
+    winner = study.best_full_evaluation(completed)
+    assert (winner.source, winner.score) == ("baseline", 25.0)
+
+    restarted = type(completed).model_validate_json(
+        completed.model_dump_json()
+    )
+    assert study.reconstruct_study(restarted).trials[-1].value == 20.0
+
+    foreign_instruction = "Foreign {query}."
+    foreign_hash = compute_identity_hash(
+        schema="whetstone.miprov2_instruction",
+        schema_version=1,
+        payload={"instruction": foreign_instruction},
+    )
+    foreign_rendering = Miprov2CandidateRendering(
+        control_identity_hash=FULL_A,
+        base_candidate_identity_hash=control.base_candidate.identity_hash,
+        categorical_combination_identity_hash=(
+            suggestion.candidate_combination_identity_hash
+        ),
+        components=(
+            Miprov2ComponentSelection(
+                component_id="generate",
+                instruction_index=dict(suggestion.params)[
+                    "0_predictor_instruction"
+                ],
+                instruction=foreign_instruction,
+                instruction_identity_hash=foreign_hash,
+                demo_index=None,
+                demo_set=None,
+                demo_identity_hash=None,
+            ),
+        ),
+    )
+    foreign_candidate = candidate_reference(
+        candidate_from_components(
+            base=control.base_candidate,
+            candidate_id=f"miprov2-{foreign_rendering.identity_hash()[:24]}",
+            components=foreign_rendering.model_dump(mode="json")["components"],
+            template_render_contract=control.template_render_contract,
+        )
+    )
+    foreign_assembly = Miprov2CandidateAssemblyBinding(
+        params=suggestion.params,
+        categorical_combination_identity_hash=(
+            suggestion.candidate_combination_identity_hash
+        ),
+        candidate=foreign_candidate,
+        program_identity_hash=compute_identity_hash(
+            schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
+            schema_version=1,
+            payload={"candidate": foreign_candidate.model_dump(mode="json")},
+        ),
+        rendering=foreign_rendering,
+        control_identity_hash=FULL_A,
+        base_candidate=control.base_candidate,
+        program_layout=control.program_layout,
+        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+        template_render_contract=control.template_render_contract,
+    )
+    tampered: Any = completed.model_dump(mode="json")
+    tampered_sample = tampered["samples"][0]
+    tampered_sample["candidate_assembly"] = foreign_assembly.model_dump(
+        mode="json"
+    )
+    tampered_sample["evaluated_candidate_identity_hash"] = (
+        foreign_candidate.identity_hash
+    )
+    tampered_sample["evaluation"]["candidate"] = foreign_candidate.model_dump(
+        mode="json"
+    )
+
+    with pytest.raises(ValidationError, match="selected category"):
+        StudyTranscript.model_validate(tampered)
+
+
+def test_frozen_optuna_oracle_exceeds_ten_sampled_trials(tmp_path) -> None:
+    (
+        context,
+        control,
+        instructions,
+        space,
+        study,
+        transcript,
+    ) = _study_case(tmp_path, num_trials=12, minibatch=False)
+    observed: list[tuple[int, tuple[int, ...]]] = []
+
+    for index in range(12):
         restored = StudyTranscript.model_validate_json(
             transcript.model_dump_json()
         )
-        assert seam.suggest_next(restored) == before
-        transcript = _record(
-            seam,
-            restored,
-            score=(index % 7) / 10,
+        assert study.suggest_next(restored) == study.suggest_next(transcript)
+        suggestion, transcript = _record_study_sample(
+            context=context,
+            control=control,
+            instructions=instructions,
+            space=space,
+            study=study,
+            transcript=restored,
+            score=(index * 10 % 11) / 10,
             nonce=index + 1,
         )
-        restored_after = StudyTranscript.model_validate_json(
-            transcript.model_dump_json()
-        )
-        assert seam.reconstruct_study(restored_after)
-
-
-def test_frozen_optuna_oracle_exceeds_ten_sampled_trials() -> None:
-    seam, transcript = _seam(
-        space=_space((4, 3), (2, 2)),
-        schedule=_schedule(num_trials=12, minibatch=False),
-        seed=23,
-    )
-    observed: list[tuple[int, tuple[int, ...]]] = []
-    for index in range(12):
-        suggestion = seam.suggest_next(transcript)
         observed.append(
             (
                 suggestion.trial_number,
                 tuple(value for _, value in suggestion.params),
             )
         )
-        score = (index * 17 % 11) / 10
-        assembly = _assembly(seam, suggestion.params)
-        transcript = seam.record_sample(
-            transcript,
-            suggestion,
-            score=score,
-            evaluation=_binding(
-                seam.validation_task_identities,
-                nonce=index + 1,
-                purpose="miprov2_sample",
-                candidate_identity_hash=assembly.candidate.identity_hash,
-                eval_config_source=seam.validation_eval_source,
-                normalized_score=score,
-            ),
-            candidate_assembly=assembly,
-        )
 
     assert observed == [
         # Frozen from optuna==4.8.0 TPESampler(seed=23, multivariate=True),
         # after the all-zero completed baseline trial.
-        (1, (1, 1, 2, 0)),
-        (2, (1, 0, 1, 0)),
-        (3, (2, 0, 0, 0)),
-        (4, (3, 0, 2, 0)),
-        (5, (2, 1, 0, 0)),
-        (6, (2, 1, 1, 1)),
-        (7, (2, 1, 0, 0)),
-        (8, (2, 0, 1, 0)),
-        (9, (0, 1, 0, 1)),
-        (10, (2, 0, 1, 0)),
-        (11, (2, 0, 1, 0)),
-        (12, (1, 0, 2, 1)),
+        (1, (1,)),
+        (2, (1,)),
+        (3, (3,)),
+        (4, (3,)),
+        (5, (0,)),
+        (6, (0,)),
+        (7, (0,)),
+        (8, (0,)),
+        (9, (1,)),
+        (10, (2,)),
+        (11, (3,)),
+        (12, (1,)),
     ]
+    with pytest.raises(ValueError, match="schedule is exhausted"):
+        study.suggest_next(transcript)
 
 
-def test_frozen_optuna_oracle_interleaves_promotions_across_tpe_startup() -> (
-    None
-):
-    seam, transcript = _seam(
-        space=_space((4, 3), (2, 2)),
-        schedule=_schedule(
-            num_trials=12,
-            minibatch=True,
-            minibatch_size=2,
-            steps=3,
-        ),
-        seed=23,
+def test_frozen_optuna_oracle_interleaves_promotions(tmp_path) -> None:
+    (
+        context,
+        control,
+        instructions,
+        space,
+        study,
+        transcript,
+    ) = _study_case(
+        tmp_path,
+        num_trials=12,
+        minibatch=True,
+        steps=3,
     )
     observed: list[
         tuple[int, tuple[int, ...], int | None, tuple[int, ...] | None]
     ] = []
+
     for index in range(12):
-        suggestion = seam.suggest_next(transcript)
-        transcript = _record(
-            seam,
-            transcript,
-            score=(index * 17 % 11) / 10,
+        suggestion, transcript = _record_study_sample(
+            context=context,
+            control=control,
+            instructions=instructions,
+            space=space,
+            study=study,
+            transcript=transcript,
+            score=(index * 10 % 11) / 10,
             nonce=index + 1,
         )
         promotion = transcript.samples[-1].promotion
@@ -1537,18 +790,207 @@ def test_frozen_optuna_oracle_interleaves_promotions_across_tpe_startup() -> (
         )
 
     assert observed == [
-        # Frozen from the DSPy API order under optuna==4.8.0:
-        # ask/suggest, optional promotion add_trial, then sample tell.
-        (1, (1, 1, 2, 0), None, None),
-        (2, (1, 0, 1, 0), None, None),
-        (3, (2, 0, 0, 0), 4, (1, 0, 1, 0)),
-        (5, (3, 0, 2, 0), None, None),
-        (6, (2, 1, 0, 0), None, None),
-        (7, (2, 1, 1, 1), 8, (2, 1, 1, 1)),
-        (9, (2, 1, 0, 0), None, None),
-        (10, (3, 1, 0, 1), None, None),
-        (11, (3, 1, 2, 1), 12, (3, 1, 0, 1)),
-        (13, (0, 1, 1, 1), None, None),
-        (14, (0, 1, 1, 1), None, None),
-        (15, (3, 0, 0, 1), 16, (0, 1, 1, 1)),
+        # DSPy ordering is ask/suggest, optional promotion add_trial, tell.
+        (1, (1,), None, None),
+        (2, (1,), None, None),
+        (3, (3,), 4, (3,)),
+        (5, (3,), None, None),
+        (6, (0,), None, None),
+        (7, (0,), 8, (0,)),
+        (9, (0,), None, None),
+        (10, (1,), None, None),
+        (11, (2,), 12, (1,)),
+        (13, (3,), None, None),
+        (14, (2,), None, None),
+        (15, (3,), 16, (2,)),
     ]
+
+
+def test_study_rejects_missing_and_off_cadence_promotions(tmp_path) -> None:
+    (
+        context,
+        control,
+        instructions,
+        space,
+        study,
+        transcript,
+    ) = _study_case(tmp_path, num_trials=1, minibatch=True, steps=1)
+    suggestion = study.suggest_next(transcript)
+    assembly = _study_assembly(
+        control,
+        space,
+        suggestion.params,
+        instructions=instructions,
+    )
+    evaluation = _study_observation(
+        context=context,
+        candidate_ref=assembly.candidate,
+        purpose="miprov2_sample",
+        score=0.5,
+        nonce=1,
+    )
+    with pytest.raises(ValueError, match="promotion evaluation is required"):
+        study.record_sample(
+            transcript,
+            suggestion,
+            score=0.5,
+            evaluation=evaluation,
+            candidate_assembly=assembly,
+        )
+
+    (
+        full_context,
+        full_control,
+        full_instructions,
+        full_space,
+        full_study,
+        full_transcript,
+    ) = _study_case(
+        tmp_path,
+        num_trials=1,
+        minibatch=False,
+    )
+    full_suggestion = full_study.suggest_next(full_transcript)
+    full_assembly = _study_assembly(
+        full_control,
+        full_space,
+        full_suggestion.params,
+        instructions=full_instructions,
+    )
+    full_evaluation = _study_observation(
+        context=full_context,
+        candidate_ref=full_assembly.candidate,
+        purpose="miprov2_sample",
+        score=0.5,
+        nonce=2,
+    )
+    with pytest.raises(ValueError, match="supplied off cadence"):
+        full_study.record_sample(
+            full_transcript,
+            full_suggestion,
+            score=0.5,
+            evaluation=full_evaluation,
+            candidate_assembly=full_assembly,
+            promotion_full_score=0.6,
+            promotion_evaluation=_study_observation(
+                context=full_context,
+                candidate_ref=full_assembly.candidate,
+                purpose="miprov2_promotion",
+                score=0.6,
+                nonce=3,
+            ),
+        )
+
+
+def test_strict_best_update_and_stable_promotion_ranking(tmp_path) -> None:
+    (
+        context,
+        control,
+        instructions,
+        space,
+        study,
+        transcript,
+    ) = _study_case(tmp_path, num_trials=2, minibatch=False)
+    _, transcript = _record_study_sample(
+        context=context,
+        control=control,
+        instructions=instructions,
+        space=space,
+        study=study,
+        transcript=transcript,
+        score=0.8,
+        nonce=1,
+    )
+    first_trial = transcript.samples[0].trial_number
+    _, transcript = _record_study_sample(
+        context=context,
+        control=control,
+        instructions=instructions,
+        space=space,
+        study=study,
+        transcript=transcript,
+        score=0.8,
+        nonce=2,
+    )
+
+    best = study.best_full_evaluation(transcript)
+    assert (best.source, best.trial_number, best.score) == (
+        "sample",
+        first_trial,
+        0.8,
+    )
+    assert select_promotion(transcript.samples).source_sample_trial_number == (
+        first_trial
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("seed", 99, "bound MIPROv2 study contract"),
+        ("run_id", "foreign", "identity and evidence contract"),
+        ("reward_policy_hash", FULL_B, "identity and evidence contract"),
+        (
+            "distribution_identity_hash",
+            FULL_B,
+            "identity and evidence contract",
+        ),
+    ),
+)
+def test_transcript_binds_study_authorities(
+    tmp_path, field: str, value: Any, message: str
+) -> None:
+    *_, study, transcript = _study_case(
+        tmp_path,
+        num_trials=1,
+        minibatch=False,
+    )
+    changed = transcript.model_copy(update={field: value})
+
+    with pytest.raises(StudyTranscriptMismatch, match=message):
+        study.reconstruct_study(changed)
+
+
+def test_study_records_are_frozen_and_reject_unknown_fields(tmp_path) -> None:
+    *_, transcript = _study_case(
+        tmp_path,
+        num_trials=1,
+        minibatch=False,
+    )
+    dumped = transcript.model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match="extra"):
+        StudyTranscript.model_validate({**dumped, "runtime_handle": "no"})
+    with pytest.raises(ValidationError, match="frozen"):
+        transcript.run_id = "other"
+
+
+def test_score_is_bound_at_observation_and_transcript_layers(tmp_path) -> None:
+    (
+        context,
+        control,
+        instructions,
+        space,
+        study,
+        transcript,
+    ) = _study_case(tmp_path, num_trials=1, minibatch=False)
+    _, transcript = _record_study_sample(
+        context=context,
+        control=control,
+        instructions=instructions,
+        space=space,
+        study=study,
+        transcript=transcript,
+        score=0.5,
+        nonce=1,
+    )
+    sample = transcript.samples[0]
+    changed = transcript.model_copy(
+        update={"samples": (sample.model_copy(update={"score": 0.9}),)}
+    )
+
+    with pytest.raises(
+        StudyTranscriptMismatch,
+        match="identity and evidence contract",
+    ):
+        study.reconstruct_study(changed)

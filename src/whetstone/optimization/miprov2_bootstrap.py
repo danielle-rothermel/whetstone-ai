@@ -27,8 +27,8 @@ from pydantic import (
 )
 
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
     compute_identity_hash,
-    reject_non_json,
     require_full_hash,
 )
 from whetstone.optimization.miprov2_demo import (
@@ -710,7 +710,7 @@ def _next_bootstrap_attempt_unchecked(
 
 
 class BootstrapRolloutResult(BaseModel):
-    """Normalized evidence returned by one DBOS-owned bootstrap effect."""
+    """Normalized evidence returned by one canonical bootstrap evaluation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1064,8 +1064,8 @@ def _frozen_dspy_demo_tuple_pickle(
 
     demos: list[_FrozenDspyExample] = []
     for step in steps:
-        reject_non_json(step.inputs, field="bootstrap trace inputs")
-        reject_non_json(step.outputs, field="bootstrap trace outputs")
+        ImmutableJsonObject(step.inputs)
+        ImmutableJsonObject(step.outputs)
         duplicate_fields = set(step.inputs) & set(step.outputs)
         if duplicate_fields:
             raise ValueError(

@@ -14,7 +14,10 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.optimization.identity import reject_non_json, require_full_hash
+from whetstone.optimization.identity import (
+    ImmutableJsonObject,
+    require_full_hash,
+)
 
 Miprov2RngOperation = Literal["sample", "shuffle", "choice", "randint"]
 MIPROV2_DEMO_BRIDGE_VERSION = "whetstone_component_demo_bridge/v1"
@@ -72,8 +75,8 @@ class Miprov2RngDraw(BaseModel):
         if self.ordinal < 0:
             raise ValueError("RNG draw ordinal cannot be negative")
         dumped = self.model_dump(mode="json")
-        reject_non_json(dumped["arguments"], field="RNG draw arguments")
-        reject_non_json(dumped["result"], field="RNG draw result")
+        ImmutableJsonObject({"value": dumped["arguments"]})
+        ImmutableJsonObject({"value": dumped["result"]})
         return self
 
 

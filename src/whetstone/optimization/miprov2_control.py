@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import math
 import random
-from collections import Counter
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -25,9 +24,11 @@ from pydantic import (
 
 from whetstone.lm.boundary import PlainPromptAdapter
 from whetstone.optimization.identity import (
+    IdentityRef,
+    ImmutableJsonObject,
     compute_identity_hash,
-    reject_non_json,
     require_full_hash,
+    typed_ref_for_record,
 )
 from whetstone.optimization.miprov2_bootstrap import (
     MIPROV2_TRACE_SELECTION_PROJECTION_VERSION,
@@ -40,26 +41,24 @@ from whetstone.optimization.miprov2_proposal import (
     INSTRUCTION_PROPOSAL_SCHEMA_TAG,
     PROGRAM_DESCRIPTION_SCHEMA_TAG,
 )
-from whetstone.optimization.mutation import (
-    MUTATION_FIELD,
-    template_placeholder_fields,
-)
-from whetstone.optimization.prompt_program import (
-    PROMPT_PROGRAM_RENDERER_VERSION,
-    PROMPT_PROGRAM_SCHEMA,
-    PROMPT_PROGRAM_SCHEMA_VERSION,
-)
+from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.proposer import (
     ProposerConfig,
     prompt_adapter_identity_hash,
 )
-from whetstone.optimization.schema import CandidateRef, EvalConfigRef
+from whetstone.optimization.reward import RewardPolicy
+from whetstone.optimization.schema import (
+    CandidateRef,
+    EvalConfigRef,
+    EvaluationBinding,
+    TemplateRenderContract,
+)
 
-MIPROV2_ALGORITHM_VERSION = "dspy_miprov2_prompt_program/v1"
+MIPROV2_ALGORITHM_VERSION = "dspy_miprov2/v2"
 MIPROV2_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 MIPROV2_OPTUNA_VERSION = "4.8.0"
 MIPROV2_CONTROL_SCHEMA = "whetstone.miprov2_optimizer_config"
-MIPROV2_CONTROL_SCHEMA_VERSION = 3
+MIPROV2_CONTROL_SCHEMA_VERSION = 4
 MIPROV2_COMPONENT_SPEC_SCHEMA = "whetstone.miprov2_component_spec"
 MIPROV2_COMPONENT_SPEC_SCHEMA_VERSION = 1
 MIPROV2_PROGRAM_LAYOUT_SCHEMA = "whetstone.miprov2_program_layout"
@@ -74,7 +73,6 @@ MIPROV2_STATE_SCHEMA = "whetstone.miprov2_runtime"
 MIPROV2_STATE_SCHEMA_VERSION = 1
 MIPROV2_RESULT_SCHEMA = "whetstone.miprov2_result"
 MIPROV2_RESULT_SCHEMA_VERSION = 1
-MIPROV2_TEACHER_COMPILED_PAYLOAD_FIELD = "miprov2_teacher_compiled"
 MIPROV2_PHASE_SCHEMA_MANIFEST: tuple[tuple[str, int], ...] = (
     ("whetstone.miprov2_grounded_proposal", 1),
     (DATASET_INITIAL_SCHEMA_TAG, 1),
@@ -88,12 +86,13 @@ MIPROV2_PHASE_SCHEMA_MANIFEST: tuple[tuple[str, int], ...] = (
     (MIPROV2_TRACE_SELECTION_PROJECTION_VERSION, 1),
     ("whetstone.miprov2_component_demo_set", 1),
     ("whetstone.miprov2_candidate_rendering", 1),
+    ("whetstone.miprov2_candidate_program", 1),
+    ("whetstone.miprov2_candidate_assembly", 2),
     ("whetstone.miprov2_evaluation_execution_policy", 1),
     ("whetstone.miprov2_eval_binding_request", 1),
     ("whetstone.miprov2_eval_binding", 1),
-    ("whetstone.miprov2_intent_context", 1),
-    ("whetstone.miprov2_study_transcript", 1),
-    (PROMPT_PROGRAM_SCHEMA, PROMPT_PROGRAM_SCHEMA_VERSION),
+    ("whetstone.miprov2_intent_context", 2),
+    ("whetstone.miprov2_study_transcript", 3),
 )
 
 Miprov2AutoMode = Literal["light", "medium", "heavy"]
@@ -104,76 +103,6 @@ _AUTO_RUN_SETTINGS: dict[Miprov2AutoMode, tuple[int, int]] = {
     "heavy": (18, 1000),
 }
 _MIN_MINIBATCH_SIZE = 50
-_PERMISSION_WARNING = (
-    "'requires_permission_to_run' is deprecated and will be removed in a "
-    "future version."
-)
-
-
-class _FrozenDict(dict[str, Any]):
-    """A JSON mapping that cannot drift after control validation."""
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> dict[str, Any]:
-        """Thaw for Pydantic serialization without mutating this snapshot."""
-
-        return {key: deepcopy(value, memo) for key, value in dict.items(self)}
-
-    @staticmethod
-    def _immutable(*_args: Any, **_kwargs: Any) -> None:
-        raise TypeError("resolved MIPROv2 JSON is immutable")
-
-    __delitem__ = _immutable  # ty: ignore[invalid-method-override]
-    __ior__ = _immutable  # ty: ignore[invalid-method-override]
-    __setitem__ = _immutable  # ty: ignore[invalid-method-override]
-    clear = _immutable  # ty: ignore[invalid-method-override]
-    pop = _immutable  # ty: ignore[invalid-method-override]
-    popitem = _immutable  # ty: ignore[invalid-method-override]
-    setdefault = _immutable  # ty: ignore[invalid-method-override]
-    update = _immutable  # ty: ignore[invalid-method-override]
-
-
-class _FrozenList(list[Any]):
-    """A JSON array that cannot drift after control validation."""
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> list[Any]:
-        """Thaw for Pydantic serialization without mutating this snapshot."""
-
-        return [deepcopy(value, memo) for value in list.__iter__(self)]
-
-    @staticmethod
-    def _immutable(*_args: Any, **_kwargs: Any) -> None:
-        raise TypeError("resolved MIPROv2 JSON is immutable")
-
-    __delitem__ = _immutable  # ty: ignore[invalid-method-override]
-    __iadd__ = _immutable  # ty: ignore[invalid-method-override]
-    __imul__ = _immutable  # ty: ignore[invalid-method-override]
-    __setitem__ = _immutable  # ty: ignore[invalid-method-override]
-    append = _immutable  # ty: ignore[invalid-method-override]
-    clear = _immutable  # ty: ignore[invalid-method-override]
-    extend = _immutable  # ty: ignore[invalid-method-override]
-    insert = _immutable  # ty: ignore[invalid-method-override]
-    pop = _immutable  # ty: ignore[invalid-method-override]
-    remove = _immutable  # ty: ignore[invalid-method-override]
-    reverse = _immutable  # ty: ignore[invalid-method-override]
-    sort = _immutable  # ty: ignore[invalid-method-override]
-
-
-def _freeze_json(value: Any) -> Any:
-    if isinstance(value, dict):
-        return _FrozenDict(
-            {key: _freeze_json(item) for key, item in value.items()}
-        )
-    if isinstance(value, list):
-        return _FrozenList(_freeze_json(item) for item in value)
-    return value
-
-
-def _thaw_json(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {key: _thaw_json(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [_thaw_json(item) for item in value]
-    return value
 
 
 class Miprov2ComponentSpec(BaseModel):
@@ -182,9 +111,7 @@ class Miprov2ComponentSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
-    candidate_field: StrictStr
     prompt_format_identity_hash: StrictStr
-    required_placeholders: tuple[StrictStr, ...] = ()
 
     @model_validator(mode="after")
     def _validate_component(self) -> Miprov2ComponentSpec:
@@ -192,18 +119,10 @@ class Miprov2ComponentSpec(BaseModel):
             raise ValueError(
                 "Whetstone safety: component_id must be non-empty"
             )
-        if not self.candidate_field:
-            raise ValueError(
-                "Whetstone safety: candidate_field must be non-empty"
-            )
         require_full_hash(
             self.prompt_format_identity_hash,
             field="prompt_format_identity_hash",
         )
-        if any(not placeholder for placeholder in self.required_placeholders):
-            raise ValueError(
-                "Whetstone safety: required_placeholders must be non-empty"
-            )
         return self
 
     def identity_payload(self) -> dict[str, Any]:
@@ -229,21 +148,18 @@ class Miprov2ProgramLayout(BaseModel):
     def _validate_layout(self) -> Miprov2ProgramLayout:
         if not self.layout_id:
             raise ValueError("Whetstone safety: layout_id must be non-empty")
-        if not self.component_specs:
+        if len(self.component_specs) != 1:
             raise ValueError(
-                "Whetstone safety: program layout components must not be empty"
+                "MIPROv2 requires exactly one optimizable component"
             )
         component_ids = tuple(
             spec.component_id for spec in self.component_specs
         )
         if len(set(component_ids)) != len(component_ids):
             raise ValueError("Whetstone safety: component_ids must be unique")
-        candidate_fields = tuple(
-            spec.candidate_field for spec in self.component_specs
-        )
-        if len(set(candidate_fields)) != len(candidate_fields):
+        if component_ids[0] not in {"generate", "encode"}:
             raise ValueError(
-                "Whetstone safety: component candidate fields must be unique"
+                "MIPROv2 optimizes generate (Internal/D1) or encode (ED1)"
             )
         return self
 
@@ -282,19 +198,17 @@ class Miprov2InjectedDefaults(BaseModel):
     # Eval Config from the corresponding source before issuing an Intent.
     bootstrap_eval_source: EvalConfigRef
     validation_eval_source: EvalConfigRef
-    reward_policy_hash: StrictStr
+    reward_policy: RewardPolicy
+    evaluation_binding: EvaluationBinding
     provider_execution_policy_hash: StrictStr
     task_model_identity_hash: StrictStr
     prompt_adapter: PlainPromptAdapter
+    template_render_contract: TemplateRenderContract
     max_errors: StrictInt
     validation_eval_source_is_metric_authority: StrictBool = False
 
     @model_validator(mode="after")
     def _validate_whetstone_bindings(self) -> Miprov2InjectedDefaults:
-        require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
-        )
         require_full_hash(
             self.provider_execution_policy_hash,
             field="provider_execution_policy_hash",
@@ -325,13 +239,17 @@ class Miprov2Control(BaseModel):
     prompt_model: ProposerConfig
     bootstrap_eval_source: EvalConfigRef
     validation_eval_source: EvalConfigRef
-    reward_policy_hash: StrictStr
+    reward_policy: RewardPolicy
+    evaluation_binding: EvaluationBinding
     provider_execution_policy_hash: StrictStr
     task_model_identity_hash: StrictStr
     prompt_adapter_identity_hash: StrictStr
+    template_render_contract: TemplateRenderContract
     metric_authority: Literal["explicit", "injected_default"]
 
-    teacher_settings: dict[str, Any] = Field(default_factory=dict)
+    teacher_settings: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     max_bootstrapped_demos: StrictInt
     max_labeled_demos: StrictInt
     auto: Miprov2AutoMode | None
@@ -356,7 +274,6 @@ class Miprov2Control(BaseModel):
     tip_aware_proposer: StrictBool
     fewshot_aware_proposer: StrictBool
     provide_traceback: StrictBool | None
-    deprecated_warnings: tuple[StrictStr, ...] = ()
     zeroshot_opt: StrictBool
 
     algorithm_version: StrictStr = MIPROV2_ALGORITHM_VERSION
@@ -364,11 +281,6 @@ class Miprov2Control(BaseModel):
     optuna_version: StrictStr = MIPROV2_OPTUNA_VERSION
     prompt_format_adapter_version: StrictStr = (
         MIPROV2_PROMPT_FORMAT_ADAPTER_VERSION
-    )
-    prompt_program_schema: StrictStr = PROMPT_PROGRAM_SCHEMA
-    prompt_program_schema_version: StrictInt = PROMPT_PROGRAM_SCHEMA_VERSION
-    prompt_program_renderer_version: StrictStr = (
-        PROMPT_PROGRAM_RENDERER_VERSION
     )
     candidate_renderer_version: StrictStr = MIPROV2_CANDIDATE_RENDERER_VERSION
     proposer_output_parser_schema: StrictStr = (
@@ -408,24 +320,12 @@ class Miprov2Control(BaseModel):
             self.component_specs,
             role="teacher candidate",
         )
-        persisted_teacher_compiled = self.teacher_candidate.record.payload.get(
-            MIPROV2_TEACHER_COMPILED_PAYLOAD_FIELD
+        self.template_render_contract.validate_template(
+            self.base_candidate.record.payload.get(MUTATION_FIELD)
         )
-        if (
-            persisted_teacher_compiled is not None
-            and type(persisted_teacher_compiled) is not bool
-        ):
-            raise ValueError(
-                "Whetstone safety: teacher compiled metadata must be a boolean"
-            )
-        if (
-            persisted_teacher_compiled is not None
-            and persisted_teacher_compiled is not self.teacher_compiled
-        ):
-            raise ValueError(
-                "Whetstone safety: teacher compiled metadata conflicts with "
-                "resolved control"
-            )
+        self.template_render_contract.validate_template(
+            self.teacher_candidate.record.payload.get(MUTATION_FIELD)
+        )
         for field, identities in (
             (
                 "source_trainset_task_identities",
@@ -449,12 +349,11 @@ class Miprov2Control(BaseModel):
                     identity,
                     field="source_valset_task_identities",
                 )
-        reject_non_json(self.teacher_settings, field="teacher_settings")
-        _validate_teacher_settings(self.teacher_settings)
-        require_full_hash(
-            self.reward_policy_hash,
-            field="reward_policy_hash",
-        )
+        _validate_teacher_settings(self.teacher_settings.to_json())
+        if self.evaluation_binding.eval_config != self.validation_eval_source:
+            raise ValueError(
+                "MIPROv2 Evaluation Binding must match validation source"
+            )
         require_full_hash(
             self.provider_execution_policy_hash,
             field="provider_execution_policy_hash",
@@ -485,14 +384,6 @@ class Miprov2Control(BaseModel):
         ):
             raise ValueError("MIPROv2 prompt_format_adapter_version is fixed")
         if (
-            self.prompt_program_schema != PROMPT_PROGRAM_SCHEMA
-            or self.prompt_program_schema_version
-            != PROMPT_PROGRAM_SCHEMA_VERSION
-            or self.prompt_program_renderer_version
-            != PROMPT_PROGRAM_RENDERER_VERSION
-        ):
-            raise ValueError("MIPROv2 prompt-program renderer is fixed")
-        if (
             self.candidate_renderer_version
             != MIPROV2_CANDIDATE_RENDERER_VERSION
         ):
@@ -519,7 +410,6 @@ class Miprov2Control(BaseModel):
         ):
             raise ValueError("MIPROv2 result schema identity is fixed")
         _validate_resolved_derivations(self)
-        _freeze_control_json(self)
         return self
 
     @property
@@ -545,11 +435,6 @@ class Miprov2Control(BaseModel):
             "prompt_format_adapter_version": (
                 self.prompt_format_adapter_version
             ),
-            "prompt_program": {
-                "schema": self.prompt_program_schema,
-                "schema_version": self.prompt_program_schema_version,
-                "renderer_version": self.prompt_program_renderer_version,
-            },
             "candidate_renderer_version": self.candidate_renderer_version,
             "proposer_output_parser": {
                 "schema": self.proposer_output_parser_schema,
@@ -601,7 +486,10 @@ class Miprov2Control(BaseModel):
             "validation_eval_source": self.validation_eval_source.model_dump(
                 mode="json"
             ),
-            "reward_policy_hash": self.reward_policy_hash,
+            "reward_policy": self.reward_policy.model_dump(mode="json"),
+            "evaluation_binding": self.evaluation_binding.model_dump(
+                mode="json"
+            ),
             "provider_execution_policy_hash": (
                 self.provider_execution_policy_hash
             ),
@@ -609,8 +497,11 @@ class Miprov2Control(BaseModel):
             "prompt_adapter_identity_hash": (
                 self.prompt_adapter_identity_hash
             ),
+            "template_render_contract": (
+                self.template_render_contract.model_dump(mode="json")
+            ),
             "metric_authority": self.metric_authority,
-            "teacher_settings": _thaw_json(self.teacher_settings),
+            "teacher_settings": self.teacher_settings.to_json(),
             "max_bootstrapped_demos": self.max_bootstrapped_demos,
             "max_labeled_demos": self.max_labeled_demos,
             "auto": self.auto,
@@ -635,7 +526,6 @@ class Miprov2Control(BaseModel):
             "tip_aware_proposer": self.tip_aware_proposer,
             "fewshot_aware_proposer": self.fewshot_aware_proposer,
             "provide_traceback": self.provide_traceback,
-            "deprecated_warnings": list(self.deprecated_warnings),
             "zeroshot_opt": self.zeroshot_opt,
         }
 
@@ -644,6 +534,21 @@ class Miprov2Control(BaseModel):
             schema=MIPROV2_CONTROL_SCHEMA,
             schema_version=MIPROV2_CONTROL_SCHEMA_VERSION,
             payload=self.identity_payload(),
+        )
+
+    @property
+    def reward_policy_hash(self) -> str:
+        return self.reward_policy.identity_hash()
+
+    def reference(self) -> IdentityRef:
+        """Return the exact persisted-record and identity binding."""
+
+        return IdentityRef(
+            record_ref=typed_ref_for_record(
+                MIPROV2_CONTROL_SCHEMA,
+                self.model_dump(mode="json"),
+            ),
+            identity_hash=self.identity_hash(),
         )
 
     def require_identity_hash(self, persisted_hash: str) -> None:
@@ -795,22 +700,6 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
         )
 
 
-def _freeze_candidate_payload(candidate: CandidateRef) -> None:
-    frozen_payload = _freeze_json(candidate.record.payload)
-    object.__setattr__(candidate.record, "payload", frozen_payload)
-
-
-def _freeze_control_json(control: Miprov2Control) -> None:
-    _freeze_candidate_payload(control.base_candidate)
-    if control.teacher_candidate is not control.base_candidate:
-        _freeze_candidate_payload(control.teacher_candidate)
-    object.__setattr__(
-        control,
-        "teacher_settings",
-        _freeze_json(control.teacher_settings),
-    )
-
-
 def _require_strict_int(value: Any, *, field: str) -> int:
     if type(value) is not int:
         raise ValueError(f"Whetstone safety: {field} must be an integer")
@@ -926,21 +815,12 @@ def _normalize_program_layout(
                 "Whetstone safety: base candidate requires a non-empty "
                 "string user_prompt_template"
             )
-        try:
-            placeholders = template_placeholder_fields(template)
-        except ValueError as exc:
-            raise ValueError(
-                "Whetstone safety: base candidate user_prompt_template has "
-                "malformed placeholders"
-            ) from exc
         return Miprov2ProgramLayout(
             layout_id="canonical-mutation-surface",
             component_specs=(
                 Miprov2ComponentSpec(
-                    component_id=field,
-                    candidate_field=field,
+                    component_id="generate",
                     prompt_format_identity_hash=prompt_format_identity_hash,
-                    required_placeholders=placeholders,
                 ),
             ),
         )
@@ -955,27 +835,14 @@ def _validate_candidate_components(
     *,
     role: str,
 ) -> None:
-    for spec in component_specs:
-        template = candidate.record.payload.get(spec.candidate_field)
-        if type(template) is not str or not template:
-            raise ValueError(
-                f"Whetstone safety: {role} component field "
-                f"{spec.candidate_field!r} must be a non-empty string"
-            )
-        try:
-            actual = Counter(template_placeholder_fields(template))
-        except ValueError as exc:
-            raise ValueError(
-                f"Whetstone safety: {role} component field "
-                f"{spec.candidate_field!r} has malformed placeholders"
-            ) from exc
-        required = Counter(spec.required_placeholders)
-        if actual != required:
-            raise ValueError(
-                f"Whetstone safety: {role} component field "
-                f"{spec.candidate_field!r} placeholder structure does not "
-                "match its component spec"
-            )
+    if len(component_specs) != 1:
+        raise ValueError("MIPROv2 requires exactly one optimizable component")
+    template = candidate.record.payload.get(MUTATION_FIELD)
+    if type(template) is not str or not template:
+        raise ValueError(
+            f"Whetstone safety: {role} component field "
+            f"{MUTATION_FIELD!r} must be a non-empty string"
+        )
 
 
 def _validate_input_numeric_controls(
@@ -1090,7 +957,6 @@ def configure_miprov2(
     view_data_batch_size: int = 10,
     tip_aware_proposer: bool = True,
     fewshot_aware_proposer: bool = True,
-    requires_permission_to_run: bool | None = None,
     provide_traceback: bool | None = None,
     defaults: Miprov2InjectedDefaults,
 ) -> Miprov2Control:
@@ -1117,22 +983,6 @@ def configure_miprov2(
         )
     metric_authority: Literal["explicit", "injected_default"] = (
         "injected_default" if metric is None else "explicit"
-    )
-
-    if (
-        requires_permission_to_run is not None
-        and type(requires_permission_to_run) is not bool
-    ):
-        raise ValueError(
-            "Whetstone safety: requires_permission_to_run must be a boolean"
-        )
-    if requires_permission_to_run is True:
-        raise ValueError(
-            "User confirmation is removed from MIPROv2. Please remove the "
-            "'requires_permission_to_run' argument."
-        )
-    deprecated_warnings = (
-        (_PERMISSION_WARNING,) if requires_permission_to_run is False else ()
     )
 
     effective_max_errors = (
@@ -1286,34 +1136,11 @@ def configure_miprov2(
     )
 
     resolved_teacher = base_candidate if teacher is None else teacher
-    persisted_teacher_compiled = resolved_teacher.record.payload.get(
-        MIPROV2_TEACHER_COMPILED_PAYLOAD_FIELD
-    )
-    if (
-        persisted_teacher_compiled is not None
-        and type(persisted_teacher_compiled) is not bool
-    ):
-        raise ValueError(
-            "Whetstone safety: teacher compiled metadata must be a boolean"
-        )
     if teacher_compiled is not None and type(teacher_compiled) is not bool:
         raise ValueError(
             "Whetstone safety: teacher_compiled must be a boolean"
         )
-    if (
-        teacher_compiled is not None
-        and persisted_teacher_compiled is not None
-        and teacher_compiled is not persisted_teacher_compiled
-    ):
-        raise ValueError(
-            "Whetstone safety: teacher_compiled conflicts with teacher "
-            "candidate metadata"
-        )
-    resolved_teacher_compiled = (
-        persisted_teacher_compiled
-        if teacher_compiled is None and persisted_teacher_compiled is not None
-        else bool(teacher_compiled)
-    )
+    resolved_teacher_compiled = bool(teacher_compiled)
     _validate_candidate_components(
         base_candidate,
         resolved_component_specs,
@@ -1357,14 +1184,23 @@ def configure_miprov2(
         prompt_model=prompt_model_snapshot,
         bootstrap_eval_source=bootstrap_source_snapshot,
         validation_eval_source=validation_source_snapshot,
-        reward_policy_hash=defaults.reward_policy_hash,
+        reward_policy=defaults.reward_policy,
+        evaluation_binding=EvaluationBinding.model_validate(
+            {
+                **defaults.evaluation_binding.model_dump(mode="json"),
+                "eval_config": validation_source_snapshot.model_dump(
+                    mode="json"
+                ),
+            }
+        ),
         provider_execution_policy_hash=(
             defaults.provider_execution_policy_hash
         ),
         task_model_identity_hash=resolved_task_model_hash,
         prompt_adapter_identity_hash=adapter_identity_hash,
+        template_render_contract=defaults.template_render_contract,
         metric_authority=metric_authority,
-        teacher_settings=deepcopy(teacher_settings or {}),
+        teacher_settings=ImmutableJsonObject(deepcopy(teacher_settings or {})),
         max_bootstrapped_demos=effective_max_bootstrapped_demos,
         max_labeled_demos=effective_max_labeled_demos,
         auto=auto,
@@ -1389,7 +1225,6 @@ def configure_miprov2(
         tip_aware_proposer=tip_aware_proposer,
         fewshot_aware_proposer=fewshot_aware_proposer,
         provide_traceback=provide_traceback,
-        deprecated_warnings=deprecated_warnings,
         zeroshot_opt=zeroshot_opt,
     )
 
@@ -1412,7 +1247,6 @@ __all__ = [
     "MIPROV2_RESULT_SCHEMA_VERSION",
     "MIPROV2_STATE_SCHEMA",
     "MIPROV2_STATE_SCHEMA_VERSION",
-    "MIPROV2_TEACHER_COMPILED_PAYLOAD_FIELD",
     "Miprov2AutoMode",
     "Miprov2ComponentSpec",
     "Miprov2Control",

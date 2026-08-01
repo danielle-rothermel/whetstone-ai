@@ -21,8 +21,8 @@ from pydantic import (
 )
 
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
     compute_identity_hash,
-    reject_non_json,
     require_full_hash,
 )
 from whetstone.optimization.schema import (
@@ -65,10 +65,7 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
             "provider_execution_policy_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
-        reject_non_json(
-            self.provider_parameters,
-            field="provider_parameters",
-        )
+        ImmutableJsonObject(self.provider_parameters)
         return self
 
     def identity_hash(self) -> str:

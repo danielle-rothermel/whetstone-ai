@@ -1,11 +1,12 @@
-"""Exact ObjectStore evidence bridge for durable MIPROv2 effects."""
+"""Exact-reference evidence bridge for durable MIPROv2 effects."""
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal, Protocol, cast
 
-from dr_store import ObjectStore
+from dr_store import BindingConflictError, ObjectStore
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -14,11 +15,20 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.graph.rollout import EvaluationRole
+from whetstone.evaluation.schema import (
+    EVALUATION_COMPONENT_TRACES_SCHEMA,
+    EvaluationComponentTraces,
+    EvaluationComponentTracesRef,
+    EvaluationEvidence,
+    EvaluationEvidenceRef,
+    EvaluationFailureEvidence,
+    EvaluationFailureEvidenceRef,
+)
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
     TypedRef,
     compute_identity_hash,
-    reject_non_json,
     require_full_hash,
 )
 from whetstone.optimization.miprov2_bootstrap import (
@@ -32,27 +42,49 @@ from whetstone.optimization.miprov2_eval_config import (
 )
 from whetstone.optimization.miprov2_study import (
     EVALUATION_FAILURE_SCHEMA,
-    REWARD_SCHEMA,
-    EvaluationBinding,
-    VerifiedEvaluationCitation,
+    Miprov2EvaluationObservation,
 )
-from whetstone.optimization.reward import Reward, RewardInputCitation
+from whetstone.optimization.reward import REWARD_SCHEMA, RewardRef
 from whetstone.optimization.schema import (
+    EVALUATION_EVIDENCE_SCHEMA,
     CandidateRef,
     EvalConfigRef,
+    EvaluationBinding,
     EvaluationIntent,
     IntentOutcome,
     IntentResolution,
 )
 
 MIPROV2_INTENT_CONTEXT_SCHEMA = "whetstone.miprov2_intent_context"
-MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION = 1
-EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
-ROLLOUT_AGGREGATE_SCHEMA = "whetstone.rollout_aggregate"
+MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION = 2
+MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA = (
+    "whetstone.miprov2_selected_component_step"
+)
+MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA_VERSION = 1
+
+
+class _ExecutedComponentStep(Protocol):
+    @property
+    def trace_index(self) -> int: ...
+
+    @property
+    def component_id(self) -> str: ...
+
+    @property
+    def input_field_names(self) -> tuple[str, ...]: ...
+
+    @property
+    def output_field_names(self) -> tuple[str, ...]: ...
+
+    @property
+    def inputs(self) -> ImmutableJsonObject: ...
+
+    @property
+    def outputs(self) -> ImmutableJsonObject: ...
 
 
 class Miprov2RowAccounting(BaseModel):
-    """Dependency-safe exact projection of evaluation row accounting."""
+    """Exact projection of canonical evaluation row accounting."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -63,46 +95,12 @@ class Miprov2RowAccounting(BaseModel):
     invalid: StrictInt
 
 
-class _RolloutAggregateProjection(BaseModel):
-    """Exact fields required to bind evidence to its aggregate artifact."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    name: StrictStr
-    graph_hash: StrictStr
-    eval_config_hash: StrictStr
-    evaluation_context_id: StrictStr
-    task_count: StrictInt
-    repeat_count: StrictInt
-    aggregation_output: dict[str, object]
-    rows_present: StrictInt
-    rows_missing: StrictInt
-    rows_failed: StrictInt
-    rows_invalid: StrictInt
-
-
-class Miprov2BootstrapTraceProjection(BaseModel):
-    """Expected native trace fields for one ordered teacher component."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    component_id: StrictStr
-    inputs: dict[str, object]
-    output_field: StrictStr
-
-    @model_validator(mode="after")
-    def _validate_projection(self) -> Miprov2BootstrapTraceProjection:
-        if not self.component_id or not self.output_field:
-            raise ValueError("bootstrap trace component fields are required")
-        reject_non_json(self.inputs, field="bootstrap component inputs")
-        return self
-
-
 class Miprov2IntentContext(BaseModel):
-    """Typed context persisted before one MIPROv2 evaluation Intent."""
+    """Typed context persisted before one MIPROv2 Evaluation Intent."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    schema_version: Literal[2] = MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION
     control_identity_hash: StrictStr
     run_id: StrictStr
     effect_kind: Literal["bootstrap", "baseline", "sample", "promotion"]
@@ -112,13 +110,18 @@ class Miprov2IntentContext(BaseModel):
     task_batch_identities: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     eval_config_binding: Miprov2EvalConfigBinding
+    evaluation_binding: EvaluationBinding
     execution_policy: Miprov2EvaluationExecutionPolicy
     reward_policy_hash: StrictStr
     bootstrap_attempt: BootstrapAttemptPlan | None = None
-    trace_components: tuple[Miprov2BootstrapTraceProjection, ...] = ()
+    optimizable_component_id: StrictStr | None = None
+    optimizable_trace_index: StrictInt | None = None
 
     @model_validator(mode="after")
     def _validate_context(self) -> Miprov2IntentContext:
+        EvaluationBinding.model_validate(
+            self.evaluation_binding.model_dump(mode="json")
+        )
         for field in (
             "control_identity_hash",
             "effect_identity_hash",
@@ -148,16 +151,32 @@ class Miprov2IntentContext(BaseModel):
             or request.repeat_count != 1
             or request.execution_policy != self.execution_policy
             or self.eval_config_binding.eval_config != self.eval_config
+            or self.evaluation_binding.eval_config != self.eval_config
+            or self.evaluation_binding.role is not EvaluationRole.INTERNAL
         ):
             raise ValueError(
                 "intent context conflicts with exact Eval Config binding"
             )
         if self.effect_kind == "bootstrap":
-            if self.bootstrap_attempt is None or not self.trace_components:
+            if (
+                self.bootstrap_attempt is None
+                or self.optimizable_component_id is None
+                or self.optimizable_trace_index is None
+            ):
                 raise ValueError(
-                    "bootstrap context requires attempt and component traces"
+                    "bootstrap context requires its attempt and exact "
+                    "optimizable graph position"
                 )
-            assert self.bootstrap_attempt is not None
+            if self.optimizable_component_id not in {"generate", "encode"}:
+                raise ValueError(
+                    "bootstrap optimizable component must be "
+                    "generate or encode"
+                )
+            if self.optimizable_trace_index != 0:
+                raise ValueError(
+                    "the supported optimizable component occupies "
+                    "trace index 0"
+                )
             if self.task_batch_identities != (
                 self.bootstrap_attempt.task_identity,
             ):
@@ -171,16 +190,16 @@ class Miprov2IntentContext(BaseModel):
                 raise ValueError(
                     "bootstrap context effect identity does not match attempt"
                 )
-            component_ids = tuple(
-                item.component_id for item in self.trace_components
+        elif any(
+            value is not None
+            for value in (
+                self.bootstrap_attempt,
+                self.optimizable_component_id,
+                self.optimizable_trace_index,
             )
-            if len(component_ids) != len(set(component_ids)):
-                raise ValueError(
-                    "bootstrap trace component ids must be unique"
-                )
-        elif self.bootstrap_attempt is not None or self.trace_components:
+        ):
             raise ValueError(
-                "non-bootstrap context cannot carry bootstrap projection"
+                "non-bootstrap context cannot carry bootstrap trace selection"
             )
         return self
 
@@ -193,29 +212,26 @@ class Miprov2IntentContext(BaseModel):
 
 
 class Miprov2ResolvedEvaluation(BaseModel):
-    """Score and provenance derived only from canonical persisted evidence."""
+    """Algorithm observation derived only from canonical persisted evidence."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     context: Miprov2IntentContext
     reward_value: float
     normalized_score: float
-    evaluation: EvaluationBinding
+    evaluation: Miprov2EvaluationObservation
     row_accounting: Miprov2RowAccounting
 
 
 @dataclass(frozen=True, slots=True)
 class _ResolvedEvidence:
-    """Internal common evidence projection shared by eval and bootstrap."""
-
     context: Miprov2IntentContext
     evidence_ref: TypedRef
+    evidence: EvaluationEvidence
+    component_traces_ref: TypedRef
+    component_traces: EvaluationComponentTraces
+    reward_ref: RewardRef
     row_accounting: Miprov2RowAccounting
-    repeat_count: int
-    outputs_ref: TypedRef
-    aggregate_ref: TypedRef
-    reward_ref: TypedRef
-    reward: Reward
 
 
 def persist_miprov2_intent_context(
@@ -227,6 +243,18 @@ def persist_miprov2_intent_context(
         context.model_dump(mode="json"),
     )
     typed = TypedRef(schema_name=ref.schema, content_hash=ref.content_hash)
+    key = (
+        "whetstone.miprov2_intent_context:"
+        f"{context.run_id}:{context.intent_id}"
+    )
+    try:
+        store.bind(key, ref)
+    except BindingConflictError as error:
+        existing = store.resolve(key)
+        if existing != ref:
+            raise ValueError(
+                "MIPROv2 intent identity is bound to another exact context"
+            ) from error
     return typed
 
 
@@ -234,26 +262,28 @@ def load_miprov2_intent_context(
     store: ObjectStore,
     intent: EvaluationIntent,
 ) -> Miprov2IntentContext:
-    if intent.context_policy_ref is None:
-        raise ValueError("MIPROv2 intent has no persisted effect context")
-    ref = TypedRef(
-        schema_name=MIPROV2_INTENT_CONTEXT_SCHEMA,
-        content_hash=intent.context_policy_ref,
+    key = (
+        f"whetstone.miprov2_intent_context:{intent.run_id}:{intent.intent_id}"
     )
-    context = Miprov2IntentContext.model_validate(store.get(ref.reference))
-    expected = (
-        context.intent_id,
-        context.run_id,
-        context.candidate,
-        context.eval_config,
-    )
-    actual = (
+    resolved = store.resolve(key)
+    if resolved is None:
+        raise ValueError("MIPROv2 intent has no persisted exact context")
+    context = Miprov2IntentContext.model_validate(store.get(resolved))
+    if (
         intent.intent_id,
         intent.run_id,
         intent.candidate,
         intent.target_eval_config,
-    )
-    if actual != expected:
+        intent.evaluation_binding,
+        intent.expected_reward_policy_hash,
+    ) != (
+        context.intent_id,
+        context.run_id,
+        context.candidate,
+        context.eval_config,
+        context.evaluation_binding,
+        context.reward_policy_hash,
+    ):
         raise ValueError("MIPROv2 intent conflicts with persisted context")
     expected_purpose = {
         "bootstrap": "miprov2_bootstrap",
@@ -266,453 +296,401 @@ def load_miprov2_intent_context(
     return context
 
 
-def _resolve_miprov2_evidence(
-    store: ObjectStore,
-    resolution: IntentResolution,
-) -> _ResolvedEvidence:
-    """Validate one resolution without assigning optimizer semantics."""
-
-    # The evaluation package eagerly imports its engine, which depends back on
-    # optimization through environment construction. Import its contract only
-    # once the module graph is initialized and evidence is actually resolved.
-    from whetstone.evaluation.schema import (
-        EVALUATION_OUTPUTS_SCHEMA,
-        EvaluationEvidence,
+def _row_accounting(evidence: EvaluationEvidence) -> Miprov2RowAccounting:
+    accounting = Miprov2RowAccounting.model_validate(
+        evidence.row_accounting.model_dump(mode="json")
     )
-
-    context = load_miprov2_intent_context(store, resolution.intent)
-    if resolution.outcome is not IntentOutcome.COMPLETED:
-        raise ValueError("MIPROv2 requires a completed measured resolution")
-    if len(resolution.evaluation_evidence_refs) != 1:
-        raise ValueError(
-            "MIPROv2 requires exactly one evaluation evidence ref"
-        )
-    evidence_ref = resolution.evaluation_evidence_refs[0]
-    if evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA:
-        raise ValueError("MIPROv2 requires canonical evaluation evidence")
-    evidence = EvaluationEvidence.model_validate(
-        store.get(evidence_ref.reference)
-    )
-    expected = (
-        context.candidate,
-        context.eval_config,
-        EvaluationRole.INTERNAL,
-        context.intent_id,
-        resolution.intent.purpose,
-        context.task_batch_identities,
-    )
-    actual = (
-        evidence.candidate,
-        evidence.eval_config,
-        evidence.evaluation_role,
-        evidence.evaluation_context_id,
-        evidence.purpose,
-        evidence.task_identities,
-    )
-    if actual != expected:
-        raise ValueError(
-            "evaluation evidence conflicts with MIPROv2 intent context"
-        )
-    if evidence.row_accounting.planned != (
-        len(context.task_batch_identities) * evidence.repeat_count
-    ):
-        raise ValueError("evaluation row accounting conflicts with task batch")
     counts = (
-        evidence.row_accounting.present,
-        evidence.row_accounting.missing,
-        evidence.row_accounting.failed,
-        evidence.row_accounting.invalid,
+        accounting.present,
+        accounting.missing,
+        accounting.failed,
+        accounting.invalid,
     )
     if any(count < 0 for count in counts):
         raise ValueError("evaluation row accounting cannot be negative")
-    if sum(counts) != evidence.row_accounting.planned:
+    if accounting.planned != sum(counts):
         raise ValueError("evaluation row accounting is not exhaustive")
-    if (
-        evidence.repeat_count <= 0
-        or len(evidence.per_task_values) != len(context.task_batch_identities)
-        or len(evidence.per_task_counts) != len(context.task_batch_identities)
-    ):
-        raise ValueError("evaluation per-task evidence has the wrong shape")
-    if evidence.outputs_ref.schema_name != EVALUATION_OUTPUTS_SCHEMA:
-        raise ValueError("evaluation outputs ref has the wrong schema")
-    if evidence.aggregate_ref.schema_name != ROLLOUT_AGGREGATE_SCHEMA:
-        raise ValueError("evaluation aggregate ref has the wrong schema")
-    aggregate = _RolloutAggregateProjection.model_validate(
-        store.get(evidence.aggregate_ref.reference)
-    )
-    aggregate_output = aggregate.aggregation_output
-    if (
-        aggregate.name,
-        aggregate.graph_hash,
-        aggregate.eval_config_hash,
-        aggregate.evaluation_context_id,
-        aggregate.task_count,
-        aggregate.repeat_count,
-        aggregate_output.get("value"),
-        aggregate_output.get("status"),
-        aggregate.rows_present,
-        aggregate.rows_missing,
-        aggregate.rows_failed,
-        aggregate.rows_invalid,
-    ) != (
-        evidence.aggregate_name,
-        evidence.graph_hash,
-        context.eval_config.identity_hash,
-        context.intent_id,
-        len(context.task_batch_identities),
-        evidence.repeat_count,
-        evidence.aggregate_value,
-        evidence.aggregate_status,
-        *counts,
-    ):
-        raise ValueError("evaluation aggregate conflicts with evidence")
-    if resolution.reward_ref is None or evidence.reward_ref is None:
-        raise ValueError("MIPROv2 evaluation has no canonical Reward")
-    if resolution.reward_ref != evidence.reward_ref:
-        raise ValueError("resolution and evidence Reward refs differ")
-    if resolution.reward_ref.schema_name != REWARD_SCHEMA:
-        raise ValueError("MIPROv2 Reward ref has the wrong schema")
-    reward = Reward.model_validate(store.get(resolution.reward_ref.reference))
-    if (
-        reward.reward_policy_hash != context.reward_policy_hash
-        or reward.evidence_role is not EvaluationRole.INTERNAL
-    ):
-        raise ValueError("Reward conflicts with MIPROv2 policy or role")
-    if reward.evidence_ref_content_hash != evidence.aggregate_ref.content_hash:
-        raise ValueError("Reward cites another evaluation aggregate")
-    return _ResolvedEvidence(
-        context=context,
-        evidence_ref=evidence_ref,
-        row_accounting=Miprov2RowAccounting.model_validate(
-            evidence.row_accounting.model_dump(mode="json")
-        ),
-        repeat_count=evidence.repeat_count,
-        outputs_ref=evidence.outputs_ref,
-        aggregate_ref=evidence.aggregate_ref,
-        reward_ref=resolution.reward_ref,
-        reward=reward,
+    return accounting
+
+
+def _selected_step_identity(step: _ExecutedComponentStep) -> str:
+    return compute_identity_hash(
+        schema=MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA,
+        schema_version=MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA_VERSION,
+        payload={
+            "trace_index": step.trace_index,
+            "component_id": step.component_id,
+            "input_field_names": list(step.input_field_names),
+            "output_field_names": list(step.output_field_names),
+            "inputs": step.inputs.to_json(),
+            "outputs": step.outputs.to_json(),
+        },
     )
 
 
-def resolve_miprov2_evaluation(
-    store: ObjectStore,
-    resolution: IntentResolution,
-) -> Miprov2ResolvedEvaluation:
-    """Validate and project one exact completed evaluation resolution."""
+@dataclass(frozen=True, slots=True)
+class Miprov2EvidenceResolver:
+    """Resolve only the exact records named by one Intent Resolution."""
 
-    resolved = _resolve_miprov2_evidence(store, resolution)
-    context = resolved.context
-    if context.effect_kind == "bootstrap":
-        raise ValueError(
-            "bootstrap evidence cannot be folded as a study evaluation"
-        )
-    purpose = cast(
-        Literal[
-            "miprov2_baseline",
-            "miprov2_sample",
-            "miprov2_promotion",
-        ],
-        resolution.intent.purpose,
-    )
-    normalized_score = round(resolved.reward.value * 100, 2)
-    citation = VerifiedEvaluationCitation(
-        run_id=context.run_id,
-        intent_id=context.intent_id,
-        effect_identity_hash=context.effect_identity_hash,
-        purpose=purpose,
-        candidate_identity_hash=context.candidate.identity_hash,
-        task_batch_identities=context.task_batch_identities,
-        validation_eval_source_identity_hash=(
-            context.eval_config_binding.request.source_eval_config.identity_hash
-        ),
-        eval_config_identity_hash=context.eval_config.identity_hash,
-        eval_config_binding_identity_hash=(
-            context.eval_config_binding.identity_hash()
-        ),
-        reward_policy_hash=context.reward_policy_hash,
-        evidence_ref=resolved.evidence_ref,
-        reward_ref=resolved.reward_ref,
-        normalized_score=normalized_score,
-    )
-    binding = EvaluationBinding(
-        run_id=context.run_id,
-        intent_id=context.intent_id,
-        effect_identity_hash=context.effect_identity_hash,
-        purpose=purpose,
-        candidate_identity_hash=context.candidate.identity_hash,
-        task_batch_identities=context.task_batch_identities,
-        eval_config=context.eval_config,
-        eval_config_binding=context.eval_config_binding,
-        reward_policy_hash=context.reward_policy_hash,
-        reward_ref=resolved.reward_ref,
-        evidence_citations=(citation,),
-        normalized_score=normalized_score,
-    )
-    return Miprov2ResolvedEvaluation(
-        context=context,
-        reward_value=resolved.reward.value,
-        normalized_score=normalized_score,
-        evaluation=binding,
-        row_accounting=resolved.row_accounting,
-    )
+    store: ObjectStore
 
-
-def resolve_miprov2_evaluation_failure(
-    store: ObjectStore,
-    resolution: IntentResolution,
-) -> Miprov2ResolvedEvaluation:
-    """Map a terminal evaluation exception to frozen DSPy's score zero."""
-
-    context = load_miprov2_intent_context(store, resolution.intent)
-    if context.effect_kind == "bootstrap":
-        raise ValueError("bootstrap failures use the bootstrap mapper")
-    if resolution.outcome is IntentOutcome.COMPLETED:
-        raise ValueError("completed evaluation must use measured evidence")
-    if len(resolution.evaluation_evidence_refs) != 1:
-        raise ValueError("failed evaluation requires exactly one evidence ref")
-    evidence_ref = resolution.evaluation_evidence_refs[0]
-    if evidence_ref.schema_name != EVALUATION_FAILURE_SCHEMA:
-        raise ValueError(
-            "failed evaluation requires canonical failure evidence"
-        )
-    failure = store.get(evidence_ref.reference)
-    if not isinstance(failure, dict):
-        raise ValueError("evaluation failure evidence must be an object")
-    expected = (
-        context.candidate,
-        context.eval_config,
-        resolution.intent.purpose,
-    )
-    actual = (
-        CandidateRef.model_validate(failure.get("candidate")),
-        EvalConfigRef.model_validate(failure.get("eval_config")),
-        failure.get("purpose"),
-    )
-    if actual != expected:
-        raise ValueError("evaluation failure conflicts with intent context")
-    reward = Reward(
-        reward_name="miprov2_evaluation_failure",
-        value=0.0,
-        reward_policy_hash=context.reward_policy_hash,
-        evidence_role=EvaluationRole.INTERNAL,
-        input_citations=(
-            RewardInputCitation(
-                name="evaluation_failure",
-                value=0.0,
-                contributed=0.0,
-            ),
-        ),
-        evidence_ref_content_hash=evidence_ref.content_hash,
-    )
-    reward_ref_raw, _ = store.put(REWARD_SCHEMA, reward.record_content())
-    reward_ref = TypedRef(
-        schema_name=reward_ref_raw.schema,
-        content_hash=reward_ref_raw.content_hash,
-    )
-    purpose = cast(
-        Literal[
-            "miprov2_baseline",
-            "miprov2_sample",
-            "miprov2_promotion",
-        ],
-        resolution.intent.purpose,
-    )
-    binding_identity = context.eval_config_binding.identity_hash()
-    citation = VerifiedEvaluationCitation(
-        run_id=context.run_id,
-        intent_id=context.intent_id,
-        effect_identity_hash=context.effect_identity_hash,
-        purpose=purpose,
-        candidate_identity_hash=context.candidate.identity_hash,
-        task_batch_identities=context.task_batch_identities,
-        validation_eval_source_identity_hash=(
-            context.eval_config_binding.request.source_eval_config.identity_hash
-        ),
-        eval_config_identity_hash=context.eval_config.identity_hash,
-        eval_config_binding_identity_hash=binding_identity,
-        reward_policy_hash=context.reward_policy_hash,
-        evidence_ref=evidence_ref,
-        reward_ref=reward_ref,
-        normalized_score=0.0,
-    )
-    evaluation = EvaluationBinding(
-        run_id=context.run_id,
-        intent_id=context.intent_id,
-        effect_identity_hash=context.effect_identity_hash,
-        purpose=purpose,
-        candidate_identity_hash=context.candidate.identity_hash,
-        task_batch_identities=context.task_batch_identities,
-        eval_config=context.eval_config,
-        eval_config_binding=context.eval_config_binding,
-        reward_policy_hash=context.reward_policy_hash,
-        reward_ref=reward_ref,
-        evidence_citations=(citation,),
-        normalized_score=0.0,
-    )
-    rows = len(context.task_batch_identities)
-    return Miprov2ResolvedEvaluation(
-        context=context,
-        reward_value=0.0,
-        normalized_score=0.0,
-        evaluation=evaluation,
-        row_accounting=Miprov2RowAccounting(
-            planned=rows,
-            present=0,
-            missing=0,
-            failed=rows,
-            invalid=0,
-        ),
-    )
-
-
-def resolve_miprov2_bootstrap(
-    store: ObjectStore,
-    resolution: IntentResolution,
-) -> BootstrapRolloutResult:
-    """Map exact single-task evidence/output rows to a bootstrap result."""
-
-    # See the package-cycle constraint in _resolve_miprov2_evidence.
-    from whetstone.evaluation.schema import EvaluationOutputsRecord
-
-    resolved = _resolve_miprov2_evidence(store, resolution)
-    context = resolved.context
-    if context.effect_kind != "bootstrap":
-        raise ValueError("resolution is not a MIPROv2 bootstrap effect")
-    if (
-        resolved.row_accounting.planned != 1
-        or resolved.row_accounting.present != 1
-        or resolved.row_accounting.missing
-        or resolved.row_accounting.failed
-        or resolved.row_accounting.invalid
-    ):
-        raise ValueError(
-            "bootstrap requires exactly one successful task output row"
-        )
-    if resolved.repeat_count != 1:
-        raise ValueError("bootstrap requires repeat_count=1")
-    output_record = EvaluationOutputsRecord.model_validate(
-        store.get(resolved.outputs_ref.reference)
-    )
-    if len(output_record.outputs) != 1:
-        raise ValueError("bootstrap requires exactly one output row")
-    row = output_record.outputs[0]
-    output_text = row.output_text
-    if output_text is None or row.failure_code != "":
-        raise ValueError("bootstrap output row is not a successful generation")
-    expected_candidate_id = context.candidate.record.candidate_id
-    if (
-        output_record.candidate_id != expected_candidate_id
-        or row.candidate_id != expected_candidate_id
-        or row.task_identity != context.task_batch_identities[0]
-        or row.repeat != 0
-    ):
-        raise ValueError(
-            "bootstrap output row conflicts with candidate, task, or repeat"
-        )
-    assert context.bootstrap_attempt is not None
-    trace_steps: tuple[ObservedTraceStep, ...]
-    component_traces = row.component_trace_steps
-    if len(context.trace_components) == 1 and not component_traces:
-        projection = context.trace_components[0]
-        trace_steps = (
-            ObservedTraceStep(
-                trace_index=0,
-                component_id=projection.component_id,
-                inputs=projection.inputs,
-                outputs={projection.output_field: output_text},
-            ),
-        )
-    else:
-        if len(component_traces) != len(context.trace_components):
+    def _resolve_completed(
+        self,
+        resolution: IntentResolution,
+    ) -> _ResolvedEvidence:
+        context = load_miprov2_intent_context(self.store, resolution.intent)
+        if resolution.outcome is not IntentOutcome.COMPLETED:
             raise ValueError(
-                "bootstrap output must carry every ordered component trace"
+                "MIPROv2 requires a completed measured resolution"
             )
-        observed: list[ObservedTraceStep] = []
-        for trace_index, (projection, trace) in enumerate(
-            zip(
-                context.trace_components,
-                component_traces,
-                strict=True,
-            )
+        evidence_ref = resolution.evaluation_result_ref
+        if (
+            evidence_ref is None
+            or evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA
         ):
-            inputs = trace.inputs
-            outputs = trace.outputs
-            if (
-                trace.component_id != projection.component_id
-                or inputs != projection.inputs
-                or tuple(outputs) != (projection.output_field,)
-                or type(outputs[projection.output_field]) is not str
-            ):
-                raise ValueError(
-                    "bootstrap component trace conflicts with context"
-                )
-            observed.append(
-                ObservedTraceStep(
-                    trace_index=trace_index,
-                    component_id=projection.component_id,
-                    inputs=inputs,
-                    outputs=outputs,
-                )
+            raise ValueError("MIPROv2 requires canonical evaluation evidence")
+        evidence = EvaluationEvidence.model_validate(
+            self.store.get(evidence_ref.reference)
+        )
+        EvaluationEvidenceRef(record=evidence, record_ref=evidence_ref)
+        expected_binding = resolution.intent.evaluation_binding
+        if (
+            evidence.candidate,
+            evidence.evaluation_binding,
+            evidence.purpose,
+            evidence.task_identities,
+            evidence.repeat_count,
+        ) != (
+            context.candidate,
+            expected_binding,
+            resolution.intent.purpose,
+            context.task_batch_identities,
+            1,
+        ):
+            raise ValueError(
+                "evaluation evidence conflicts with exact MIPROv2 context"
             )
-        trace_steps = tuple(observed)
-    row_identity = compute_identity_hash(
-        schema="whetstone.miprov2_bootstrap_output_row",
-        schema_version=1,
-        payload=row.model_dump(mode="json"),
-    )
-    return BootstrapRolloutResult(
-        attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-        source_rollout_identity=resolved.aggregate_ref.content_hash,
-        source_trace_identity=resolved.outputs_ref.content_hash,
-        source_output_identity=row_identity,
-        source_score_identity=resolved.reward_ref.content_hash,
-        metric_present=True,
-        score=resolved.reward.value,
-        trace_steps=trace_steps,
-    )
+        if expected_binding.role is not EvaluationRole.INTERNAL:
+            raise ValueError("MIPROv2 requires an internal Evaluation Binding")
+        accounting = _row_accounting(evidence)
+        if accounting.planned != len(context.task_batch_identities):
+            raise ValueError("evaluation row plan conflicts with task batch")
 
+        traces_ref = evidence.component_traces_ref
+        if traces_ref.schema_name != EVALUATION_COMPONENT_TRACES_SCHEMA:
+            raise ValueError(
+                "evaluation component traces have the wrong schema"
+            )
+        traces = EvaluationComponentTraces.model_validate_json(
+            json.dumps(self.store.get(traces_ref.reference))
+        )
+        EvaluationComponentTracesRef(record=traces, record_ref=traces_ref)
+        if (
+            traces.candidate,
+            traces.evaluation_binding,
+            traces.evaluation_role,
+            traces.graph_hash,
+            traces.purpose,
+            traces.split_role,
+            traces.task_identities,
+            traces.repeat_count,
+        ) != (
+            evidence.candidate,
+            evidence.evaluation_binding,
+            EvaluationRole.INTERNAL,
+            evidence.graph_hash,
+            evidence.purpose,
+            "internal",
+            evidence.task_identities,
+            evidence.repeat_count,
+        ):
+            raise ValueError(
+                "component traces conflict with exact evaluation evidence"
+            )
 
-def failure_bootstrap_result(
-    *,
-    context: Miprov2IntentContext,
-    resolution: IntentResolution,
-) -> BootstrapRolloutResult:
-    """Preserve a terminal failed rollout without inventing score or trace."""
+        reward_ref = resolution.reward_ref
+        if (
+            reward_ref is None
+            or reward_ref.record_ref.schema_name != REWARD_SCHEMA
+        ):
+            raise ValueError("MIPROv2 evaluation has no canonical Reward")
+        if evidence.reward_ref != reward_ref:
+            raise ValueError(
+                "evaluation evidence and resolution Reward refs differ"
+            )
+        reward = reward_ref.record
+        if (
+            reward.reward_policy_hash != context.reward_policy_hash
+            or reward.evidence_role is not EvaluationRole.INTERNAL
+            or reward.evidence_refs != resolution.reward_evidence_refs
+        ):
+            raise ValueError(
+                "Reward conflicts with MIPROv2 policy or evidence"
+            )
+        return _ResolvedEvidence(
+            context=context,
+            evidence_ref=evidence_ref,
+            evidence=evidence,
+            component_traces_ref=traces_ref,
+            component_traces=traces,
+            reward_ref=reward_ref,
+            row_accounting=accounting,
+        )
 
-    if context.effect_kind != "bootstrap" or context.bootstrap_attempt is None:
-        raise ValueError("failure context is not a bootstrap attempt")
-    if resolution.intent.intent_id != context.intent_id:
-        raise ValueError("failure resolution belongs to another intent")
-    if resolution.outcome is IntentOutcome.COMPLETED:
-        raise ValueError("completed bootstrap must use the evidence mapper")
-    evidence_hash = compute_identity_hash(
-        schema=EVALUATION_FAILURE_SCHEMA,
-        schema_version=1,
-        payload=resolution.model_dump(mode="json"),
-    )
-    return BootstrapRolloutResult(
-        attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-        source_rollout_identity=evidence_hash,
-        source_trace_identity=evidence_hash,
-        source_output_identity=evidence_hash,
-        source_score_identity=evidence_hash,
-        metric_present=False,
-        score=None,
-        error=resolution.detail.message,
-    )
+    def resolve_evaluation(
+        self,
+        resolution: IntentResolution,
+    ) -> Miprov2ResolvedEvaluation:
+        """Project one exact completed study evaluation."""
+
+        resolved = self._resolve_completed(resolution)
+        context = resolved.context
+        if context.effect_kind == "bootstrap":
+            raise ValueError("bootstrap evidence is not a study observation")
+        purpose = cast(
+            Literal[
+                "miprov2_baseline",
+                "miprov2_sample",
+                "miprov2_promotion",
+            ],
+            resolution.intent.purpose,
+        )
+        normalized_score = round(resolved.reward_ref.record.value * 100, 2)
+        observation = Miprov2EvaluationObservation(
+            run_id=context.run_id,
+            intent_id=context.intent_id,
+            effect_identity_hash=context.effect_identity_hash,
+            purpose=purpose,
+            candidate=context.candidate,
+            task_batch_identities=context.task_batch_identities,
+            eval_config=context.eval_config,
+            eval_config_binding=context.eval_config_binding,
+            evaluation_binding=resolution.intent.evaluation_binding,
+            evaluation_result_ref=resolved.evidence_ref,
+            expected_reward_policy_hash=context.reward_policy_hash,
+            reward_ref=resolved.reward_ref,
+            normalized_score=normalized_score,
+        )
+        return Miprov2ResolvedEvaluation(
+            context=context,
+            reward_value=resolved.reward_ref.record.value,
+            normalized_score=normalized_score,
+            evaluation=observation,
+            row_accounting=resolved.row_accounting,
+        )
+
+    def resolve_evaluation_failure(
+        self,
+        resolution: IntentResolution,
+    ) -> Miprov2ResolvedEvaluation:
+        """Map exact terminal failure evidence to a zero observation."""
+
+        context = load_miprov2_intent_context(self.store, resolution.intent)
+        if context.effect_kind == "bootstrap":
+            raise ValueError("bootstrap failures use the bootstrap mapper")
+        if resolution.outcome is not IntentOutcome.FAILED:
+            raise ValueError("failure mapping requires a failed resolution")
+        failure_ref = resolution.evaluation_result_ref
+        if (
+            failure_ref is None
+            or failure_ref.schema_name != EVALUATION_FAILURE_SCHEMA
+        ):
+            raise ValueError(
+                "failed evaluation requires exact failure evidence"
+            )
+        failure = EvaluationFailureEvidence.model_validate(
+            self.store.get(failure_ref.reference)
+        )
+        EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
+        if (
+            failure.candidate,
+            failure.evaluation_binding,
+            failure.purpose,
+        ) != (
+            context.candidate,
+            resolution.intent.evaluation_binding,
+            resolution.intent.purpose,
+        ):
+            raise ValueError(
+                "evaluation failure conflicts with intent context"
+            )
+        if (
+            resolution.reward_ref is not None
+            or resolution.reward_evidence_refs
+        ):
+            raise ValueError("failed evaluation cannot carry Reward evidence")
+        purpose = cast(
+            Literal[
+                "miprov2_baseline",
+                "miprov2_sample",
+                "miprov2_promotion",
+            ],
+            resolution.intent.purpose,
+        )
+        observation = Miprov2EvaluationObservation(
+            run_id=context.run_id,
+            intent_id=context.intent_id,
+            effect_identity_hash=context.effect_identity_hash,
+            purpose=purpose,
+            candidate=context.candidate,
+            task_batch_identities=context.task_batch_identities,
+            eval_config=context.eval_config,
+            eval_config_binding=context.eval_config_binding,
+            evaluation_binding=resolution.intent.evaluation_binding,
+            evaluation_result_ref=failure_ref,
+            expected_reward_policy_hash=context.reward_policy_hash,
+            reward_ref=None,
+            normalized_score=0.0,
+        )
+        rows = len(context.task_batch_identities)
+        return Miprov2ResolvedEvaluation(
+            context=context,
+            reward_value=0.0,
+            normalized_score=0.0,
+            evaluation=observation,
+            row_accounting=Miprov2RowAccounting(
+                planned=rows,
+                present=0,
+                missing=0,
+                failed=rows,
+                invalid=0,
+            ),
+        )
+
+    def resolve_bootstrap(
+        self,
+        resolution: IntentResolution,
+    ) -> BootstrapRolloutResult:
+        """Select the exact configured step from a successful trace row."""
+
+        resolved = self._resolve_completed(resolution)
+        context = resolved.context
+        if context.effect_kind != "bootstrap":
+            raise ValueError("resolution is not a MIPROv2 bootstrap effect")
+        accounting = resolved.row_accounting
+        if (
+            accounting.planned != 1
+            or accounting.present != 1
+            or accounting.missing
+            or accounting.failed
+            or accounting.invalid
+        ):
+            raise ValueError("bootstrap requires exactly one successful row")
+        if len(resolved.component_traces.rows) != 1:
+            raise ValueError(
+                "bootstrap requires exactly one component trace row"
+            )
+        row = resolved.component_traces.rows[0]
+        if (
+            row.task_identity != context.task_batch_identities[0]
+            or row.repeat != 0
+            or row.executed_component_trace.row_state.value != "success"
+        ):
+            raise ValueError(
+                "bootstrap trace row conflicts with task, repeat, or success"
+            )
+        assert context.optimizable_component_id is not None
+        assert context.optimizable_trace_index is not None
+        matching = tuple(
+            step
+            for step in row.executed_component_trace.executed_component_steps
+            if step.component_id == context.optimizable_component_id
+        )
+        if len(matching) != 1:
+            raise ValueError(
+                "bootstrap trace must contain the optimizable component "
+                "exactly once"
+            )
+        selected = matching[0]
+        if selected.trace_index != context.optimizable_trace_index:
+            raise ValueError(
+                "bootstrap optimizable component occupies another "
+                "graph position"
+            )
+        assert context.bootstrap_attempt is not None
+        return BootstrapRolloutResult(
+            attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
+            source_rollout_identity=resolved.evidence_ref.content_hash,
+            source_trace_identity=resolved.component_traces_ref.content_hash,
+            source_output_identity=_selected_step_identity(selected),
+            source_score_identity=resolved.reward_ref.record_ref.content_hash,
+            metric_present=True,
+            score=resolved.reward_ref.record.value,
+            trace_steps=(
+                ObservedTraceStep(
+                    trace_index=selected.trace_index,
+                    component_id=selected.component_id,
+                    inputs=selected.inputs.to_json(),
+                    outputs=selected.outputs.to_json(),
+                ),
+            ),
+        )
+
+    def resolve_bootstrap_failure(
+        self,
+        resolution: IntentResolution,
+    ) -> BootstrapRolloutResult:
+        """Preserve exact failure evidence without inventing score or trace."""
+
+        context = load_miprov2_intent_context(self.store, resolution.intent)
+        if (
+            context.effect_kind != "bootstrap"
+            or context.bootstrap_attempt is None
+        ):
+            raise ValueError("failure context is not a bootstrap attempt")
+        if resolution.outcome is not IntentOutcome.FAILED:
+            raise ValueError(
+                "bootstrap failure mapping requires FAILED outcome"
+            )
+        failure_ref = resolution.evaluation_result_ref
+        if (
+            failure_ref is None
+            or failure_ref.schema_name != EVALUATION_FAILURE_SCHEMA
+        ):
+            raise ValueError(
+                "failed bootstrap requires exact failure evidence"
+            )
+        failure = EvaluationFailureEvidence.model_validate(
+            self.store.get(failure_ref.reference)
+        )
+        EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
+        if (
+            failure.candidate,
+            failure.evaluation_binding,
+            failure.purpose,
+        ) != (
+            context.candidate,
+            context.evaluation_binding,
+            resolution.intent.purpose,
+        ):
+            raise ValueError("bootstrap failure conflicts with exact context")
+        if (
+            resolution.reward_ref is not None
+            or resolution.reward_evidence_refs
+        ):
+            raise ValueError("failed bootstrap cannot carry Reward evidence")
+        evidence_hash = failure_ref.content_hash
+        return BootstrapRolloutResult(
+            attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
+            source_rollout_identity=evidence_hash,
+            source_trace_identity=evidence_hash,
+            source_output_identity=evidence_hash,
+            source_score_identity=evidence_hash,
+            metric_present=False,
+            score=None,
+            error=resolution.detail.message,
+        )
 
 
 __all__ = [
     "MIPROV2_INTENT_CONTEXT_SCHEMA",
     "MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION",
-    "Miprov2BootstrapTraceProjection",
+    "MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA",
+    "MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA_VERSION",
+    "Miprov2EvidenceResolver",
     "Miprov2IntentContext",
     "Miprov2ResolvedEvaluation",
     "Miprov2RowAccounting",
-    "failure_bootstrap_result",
     "load_miprov2_intent_context",
     "persist_miprov2_intent_context",
-    "resolve_miprov2_bootstrap",
-    "resolve_miprov2_evaluation",
-    "resolve_miprov2_evaluation_failure",
 ]

@@ -8,30 +8,23 @@ effect or exposes one evaluation/bootstrap intent per harness step.
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 
-from dr_store import BindingConflictError, ObjectStore
-from pydantic import BaseModel, ConfigDict, StrictStr
+from dr_store import ObjectStore
 
-from whetstone.graph.rollout import EvaluationRole
 from whetstone.optimization.adapters import AdapterOutput
+from whetstone.optimization.effect_authority import ReplayPolicy
 from whetstone.optimization.identity import (
     TypedRef,
-    compute_identity_hash,
-    require_full_hash,
 )
 from whetstone.optimization.miprov2_eval_config import (
     Miprov2EvalConfigResolver,
 )
 from whetstone.optimization.miprov2_evidence import (
-    Miprov2BootstrapTraceProjection,
+    Miprov2EvidenceResolver,
     Miprov2IntentContext,
-    failure_bootstrap_result,
     load_miprov2_intent_context,
     persist_miprov2_intent_context,
-    resolve_miprov2_bootstrap,
-    resolve_miprov2_evaluation,
-    resolve_miprov2_evaluation_failure,
 )
 from whetstone.optimization.miprov2_proposal import (
     Miprov2ProposalRequest,
@@ -43,7 +36,7 @@ from whetstone.optimization.miprov2_runtime import (
     Miprov2State,
 )
 from whetstone.optimization.proposer import (
-    ProposalDraft,
+    ProposalExecutor,
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
@@ -52,9 +45,11 @@ from whetstone.optimization.schema import (
     STEP_RESULT_SCHEMA,
     BudgetDelta,
     BudgetState,
+    EvaluationBinding,
     EvaluationIntent,
     IntentOutcome,
     IntentResolution,
+    OptimizationRunRef,
     OptimizationStepRequest,
     OptimizationStepResult,
     OutputContract,
@@ -73,224 +68,7 @@ MIPROV2_BASELINE = "baseline_evaluation"
 MIPROV2_SAMPLE = "sample_evaluation"
 MIPROV2_PROMOTION = "promotion_evaluation"
 MIPROV2_COMPLETE = "complete"
-MIPROV2_PROPOSAL_EFFECT_CLAIM_SCHEMA = (
-    "whetstone.miprov2_proposal_effect_claim"
-)
-MIPROV2_PROPOSAL_EFFECT_RESULT_SCHEMA = (
-    "whetstone.miprov2_proposal_effect_result"
-)
 STATE_SNAPSHOT_SCHEMA = "whetstone.optimization_state_snapshot"
-
-
-class Miprov2ProposalEffectClaim(BaseModel):
-    """Durable accepted decision for one stable proposal request."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    native_request_identity_hash: StrictStr
-    generic_request: ProposalRequest
-    proposer_config_identity_hash: StrictStr
-    execution_policy_identity_hash: StrictStr
-    prompt_adapter_identity_hash: StrictStr
-    transport_durability_identity_hash: StrictStr
-    durability_scope_identity_hash: StrictStr
-
-    def identity_hash(self) -> str:
-        return compute_identity_hash(
-            schema=MIPROV2_PROPOSAL_EFFECT_CLAIM_SCHEMA,
-            schema_version=2,
-            payload=self.model_dump(mode="json"),
-        )
-
-    def run_scope_identity_hash(self) -> str:
-        """Stable logical request namespace shared by same-run retries."""
-
-        if self.generic_request.run_id is None:
-            raise ValueError(
-                "MIPROv2 proposal effects require a run-scoped request"
-            )
-        return compute_identity_hash(
-            schema="whetstone.miprov2_proposal_run_scope",
-            schema_version=1,
-            payload={
-                "run_id": self.generic_request.run_id,
-                "native_request_identity_hash": (
-                    self.native_request_identity_hash
-                ),
-            },
-        )
-
-
-class Miprov2ProposalEffectResult(BaseModel):
-    """Persisted provider response folded after an accepted effect claim."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    claim_identity_hash: StrictStr
-    draft: ProposalDraft
-
-
-class Miprov2ProposalRecoveryRequired(RuntimeError):
-    """An accepted provider effect has no safely replayable result."""
-
-
-class Miprov2ProposalEffectExecutor(Protocol):
-    """Durable authority for one retry-disabled proposal provider effect."""
-
-    @property
-    def durability_scope_identity_hash(self) -> str: ...
-
-    def execute(
-        self,
-        *,
-        config: ProposerConfig,
-        request: ProposalRequest,
-        transport: ProposerTransport,
-        count: int,
-    ) -> tuple[ProposalDraft, ...]: ...
-
-
-class Miprov2ProposalEffectStore:
-    """Cross-restart ownership around a durable provider-effect executor."""
-
-    def __init__(self, store: ObjectStore) -> None:
-        self._store = store
-
-    @staticmethod
-    def _claim_key(run_scope_identity_hash: str) -> str:
-        return f"whetstone.miprov2_proposal_claim:{run_scope_identity_hash}"
-
-    @staticmethod
-    def _result_key(identity_hash: str) -> str:
-        return f"whetstone.miprov2_proposal_result:{identity_hash}"
-
-    def execute(
-        self,
-        *,
-        native_request_identity_hash: str,
-        config: ProposerConfig,
-        request: ProposalRequest,
-        transport: ProposerTransport,
-        executor: Miprov2ProposalEffectExecutor,
-    ) -> ProposalDraft:
-        claim = Miprov2ProposalEffectClaim(
-            native_request_identity_hash=native_request_identity_hash,
-            generic_request=request,
-            proposer_config_identity_hash=config.identity_hash(),
-            execution_policy_identity_hash=transport.execution_policy_hash,
-            prompt_adapter_identity_hash=(
-                transport.prompt_adapter_identity_hash
-            ),
-            transport_durability_identity_hash=(
-                self._transport_durability_identity_hash(transport)
-            ),
-            durability_scope_identity_hash=(
-                executor.durability_scope_identity_hash
-            ),
-        )
-        identity = claim.identity_hash()
-        require_full_hash(
-            claim.durability_scope_identity_hash,
-            field="durability_scope_identity_hash",
-        )
-        claim_key = self._claim_key(claim.run_scope_identity_hash())
-        accepted_ref = self._store.resolve(claim_key)
-        if accepted_ref is not None:
-            accepted = Miprov2ProposalEffectClaim.model_validate(
-                self._store.get(accepted_ref)
-            )
-            if accepted != claim:
-                raise Miprov2ProposalRecoveryRequired(
-                    "proposal effect belongs to another durability scope"
-                )
-        completed_ref = self._store.resolve(self._result_key(identity))
-        completed_result = None
-        if completed_ref is not None:
-            completed_result = Miprov2ProposalEffectResult.model_validate(
-                self._store.get(completed_ref)
-            )
-            if completed_result.claim_identity_hash != identity:
-                raise ValueError("persisted proposal result has wrong claim")
-        if accepted_ref is None:
-            claim_ref, _ = self._store.put(
-                MIPROV2_PROPOSAL_EFFECT_CLAIM_SCHEMA,
-                claim.model_dump(mode="json"),
-            )
-            try:
-                self._store.bind(claim_key, claim_ref)
-            except BindingConflictError as exc:
-                winner = self._store.resolve(claim_key)
-                assert winner is not None
-                accepted = Miprov2ProposalEffectClaim.model_validate(
-                    self._store.get(winner)
-                )
-                if accepted != claim:
-                    raise Miprov2ProposalRecoveryRequired(
-                        "proposal effect claim conflicts with durable owner"
-                    ) from exc
-        drafts = executor.execute(
-            config=config,
-            request=request,
-            transport=transport,
-            count=1,
-        )
-        if len(drafts) != 1:
-            raise ValueError(
-                "MIPROv2 proposer transport must return exactly one draft"
-            )
-        result = Miprov2ProposalEffectResult(
-            claim_identity_hash=identity,
-            draft=drafts[0],
-        )
-        if completed_result is not None:
-            if completed_result != result:
-                raise ValueError(
-                    "replayed proposal effect diverges from persisted result"
-                )
-            return completed_result.draft
-        result_ref, _ = self._store.put(
-            MIPROV2_PROPOSAL_EFFECT_RESULT_SCHEMA,
-            result.model_dump(mode="json"),
-        )
-        try:
-            self._store.bind(self._result_key(identity), result_ref)
-        except BindingConflictError as exc:
-            winner = self._store.resolve(self._result_key(identity))
-            assert winner is not None
-            persisted = Miprov2ProposalEffectResult.model_validate(
-                self._store.get(winner)
-            )
-            if persisted != result:
-                raise ValueError(
-                    "divergent proposal result was rejected"
-                ) from exc
-        return result.draft
-
-    @staticmethod
-    def _transport_durability_identity_hash(
-        transport: ProposerTransport,
-    ) -> str:
-        identity = getattr(transport, "durability_identity_hash", None)
-        if identity is not None:
-            require_full_hash(
-                identity,
-                field="transport_durability_identity_hash",
-            )
-            return identity
-        return compute_identity_hash(
-            schema="whetstone.miprov2_legacy_proposer_durability",
-            schema_version=1,
-            payload={
-                "physical_attempt_boundary": "whole_draft_call",
-                "crash_safety": "at_least_once",
-                "execution_policy_identity_hash": (
-                    transport.execution_policy_hash
-                ),
-                "prompt_adapter_identity_hash": (
-                    transport.prompt_adapter_identity_hash
-                ),
-            },
-        )
 
 
 class Miprov2Adapter:
@@ -309,16 +87,16 @@ class Miprov2Adapter:
         proposer_config: ProposerConfig,
         transport: ProposerTransport,
         eval_config_resolver: Miprov2EvalConfigResolver,
-        proposal_effect_executor: Miprov2ProposalEffectExecutor,
+        proposal_executor: ProposalExecutor,
         driver: Miprov2Driver | None = None,
     ) -> None:
         self._proposer_config = proposer_config
         self._transport = transport
         self._store = store
-        self._effect_store = Miprov2ProposalEffectStore(store)
         self._eval_config_resolver = eval_config_resolver
-        self._proposal_effect_executor = proposal_effect_executor
+        self._proposal_executor = proposal_executor
         self._driver = driver or Miprov2Driver()
+        self._evidence = Miprov2EvidenceResolver(store)
 
     @property
     def key(self) -> str:
@@ -329,12 +107,17 @@ class Miprov2Adapter:
         return StepMode.PROPOSAL_ONLY
 
     @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.DURABLE_WORKFLOW
+
+    @property
     def proposer_config(self) -> ProposerConfig:
         return self._proposer_config
 
     def build_step_request(
         self,
         *,
+        run: OptimizationRunRef | None = None,
         step_index: int,
         initial_state: Miprov2State | None = None,
         initial_budget: BudgetState | None = None,
@@ -353,10 +136,13 @@ class Miprov2Adapter:
                 raise ValueError(
                     "initial request requires only state and budget"
                 )
+            if run is None:
+                raise ValueError("initial request requires the exact run")
             state = initial_state
             budget = initial_budget
             pools = {MIPROV2_STATE_KEY: state.model_dump(mode="json")}
             prior_state_ref = None
+            exact_run = run
         else:
             if (
                 initial_state is not None
@@ -380,21 +166,45 @@ class Miprov2Adapter:
             budget = prior_result.budget
             pools = {}
             prior_state_ref = state_ref
+            exact_run = prior_result.request.record.run
+        if exact_run.record.optimizer_config != state.control.reference():
+            raise ValueError(
+                "run optimizer config differs from MIPROv2 control"
+            )
+        if (
+            exact_run.record.template_render_contract
+            != state.control.template_render_contract
+        ):
+            raise ValueError(
+                "run render contract differs from MIPROv2 control"
+            )
+        if (
+            exact_run.record.reward_policy is None
+            or exact_run.record.reward_policy != state.control.reward_policy
+        ):
+            raise ValueError("run Reward Policy differs from MIPROv2 control")
         preview = self._driver.plan(state)
         returned_count = 1 if preview.kind == MIPROV2_COMPLETE else 0
         return OptimizationStepRequest(
-            run_id=state.run_id,
+            run=exact_run,
             step_id=f"{state.run_id}:miprov2:{step_index}",
-            optimizer_config_hash=state.control.identity_hash(),
-            adapter_key=self.key,
-            mode=self.mode,
             kind=StepKind.PROPOSAL,
+            kind_label=preview.kind,
             step_index=step_index,
             prior_step_result_ref=prior_result_ref,
             prior_state_ref=prior_state_ref,
             pools=pools,
+            candidates=(
+                (state.control.base_candidate.record,)
+                if state.control.teacher_candidate
+                == state.control.base_candidate
+                else (
+                    state.control.base_candidate.record,
+                    state.control.teacher_candidate.record,
+                )
+            ),
             budget=budget,
-            output_contract=OutputContract(
+            step_output_contract=OutputContract(
                 returned_proposal_count=returned_count
             ),
         )
@@ -411,7 +221,12 @@ class Miprov2Adapter:
         state, prior = self._load_request_state(request)
         if request.run_id != state.run_id:
             raise ValueError("request run_id conflicts with MIPROv2 state")
-        state.control.require_identity_hash(request.optimizer_config_hash)
+        if request.run.record.optimizer_config != state.control.reference():
+            raise ValueError("request run conflicts with MIPROv2 control")
+        if request.run.record.reward_policy != state.control.reward_policy:
+            raise ValueError(
+                "request run conflicts with MIPROv2 Reward Policy"
+            )
         if prior is not None:
             state = self._fold_prior_resolutions(state, prior)
         self._require_budget_agreement(request.budget, state)
@@ -450,41 +265,17 @@ class Miprov2Adapter:
             intent_id = (
                 f"{request.run_id}:miprov2:bootstrap:{attempt.identity_hash()}"
             )
-            try:
-                labeled_task = next(
-                    item
-                    for item in state.labeled_trainset
-                    if item.source_task_identity == attempt.task_identity
-                )
-            except (KeyError, StopIteration) as exc:
-                raise ValueError(
-                    "bootstrap task has no exact component projection"
-                ) from exc
-            trace_components: list[Miprov2BootstrapTraceProjection] = []
-            for component_id in state.control.component_ids:
-                try:
-                    trace_inputs = labeled_task.inputs_by_component[
-                        component_id
-                    ]
-                    labeled_outputs = labeled_task.outputs_by_component[
-                        component_id
-                    ]
-                except KeyError as exc:
-                    raise ValueError(
-                        "bootstrap task has no exact component projection"
-                    ) from exc
-                if len(labeled_outputs) != 1:
-                    raise ValueError(
-                        "bootstrap components require exactly one generated "
-                        "output field"
-                    )
-                trace_components.append(
-                    Miprov2BootstrapTraceProjection(
-                        component_id=component_id,
-                        inputs=trace_inputs,
-                        output_field=next(iter(labeled_outputs)),
-                    )
-                )
+            component = state.control.component_specs[0]
+            evaluation_binding = EvaluationBinding.model_validate(
+                {
+                    **state.control.evaluation_binding.model_dump(mode="json"),
+                    "eval_config": (
+                        plan.state.resolved_eval_binding.eval_config.model_dump(
+                            mode="json"
+                        )
+                    ),
+                }
+            )
             context = Miprov2IntentContext(
                 control_identity_hash=state.control.identity_hash(),
                 run_id=state.run_id,
@@ -495,23 +286,29 @@ class Miprov2Adapter:
                 task_batch_identities=(attempt.task_identity,),
                 eval_config=plan.state.resolved_eval_binding.eval_config,
                 eval_config_binding=plan.state.resolved_eval_binding,
+                evaluation_binding=evaluation_binding,
                 execution_policy=(
                     plan.state.resolved_eval_binding.request.execution_policy
                 ),
                 reward_policy_hash=state.control.reward_policy_hash,
                 bootstrap_attempt=attempt,
-                trace_components=tuple(trace_components),
+                optimizable_component_id=component.component_id,
+                optimizable_trace_index=0,
             )
-            context_ref = persist_miprov2_intent_context(self._store, context)
+            persist_miprov2_intent_context(self._store, context)
             intent = EvaluationIntent(
                 intent_id=intent_id,
                 candidate=teacher_candidate,
                 target_eval_config=context.eval_config,
-                context_role=EvaluationRole.INTERNAL,
-                context_policy_ref=context_ref.content_hash,
+                evaluation_binding=evaluation_binding,
                 purpose="miprov2_bootstrap",
                 run_id=request.run_id,
                 step_index=request.step_index,
+                expected_reward_policy_hash=(
+                    request.run.record.reward_policy.identity_hash()
+                    if request.run.record.reward_policy is not None
+                    else None
+                ),
             )
             return AdapterOutput(
                 proposed_candidates=(teacher_candidate.record,),
@@ -539,6 +336,12 @@ class Miprov2Adapter:
             effect_kind = "sample"
         else:
             effect_kind = "promotion"
+        evaluation_binding = EvaluationBinding.model_validate(
+            {
+                **state.control.evaluation_binding.model_dump(mode="json"),
+                "eval_config": effect.eval_config.model_dump(mode="json"),
+            }
+        )
         context = Miprov2IntentContext(
             control_identity_hash=state.control.identity_hash(),
             run_id=state.run_id,
@@ -549,19 +352,24 @@ class Miprov2Adapter:
             task_batch_identities=effect.task_batch_identities,
             eval_config=effect.eval_config,
             eval_config_binding=plan.state.resolved_eval_binding,
+            evaluation_binding=evaluation_binding,
             execution_policy=effect.execution_policy,
             reward_policy_hash=state.control.reward_policy_hash,
         )
-        context_ref = persist_miprov2_intent_context(self._store, context)
+        persist_miprov2_intent_context(self._store, context)
         intent = EvaluationIntent(
             intent_id=intent_id,
             candidate=candidate_reference(effect.candidate),
             target_eval_config=effect.eval_config,
-            context_role=EvaluationRole.INTERNAL,
-            context_policy_ref=context_ref.content_hash,
+            evaluation_binding=evaluation_binding,
             purpose=effect.purpose,
             run_id=request.run_id,
             step_index=request.step_index,
+            expected_reward_policy_hash=(
+                request.run.record.reward_policy.identity_hash()
+                if request.run.record.reward_policy is not None
+                else None
+            ),
         )
         return AdapterOutput(
             proposed_candidates=(effect.candidate,),
@@ -617,25 +425,31 @@ class Miprov2Adapter:
         config = self._proposer_config.model_copy(
             update={"temperature": native.temperature}
         )
-        draft = self._effect_store.execute(
-            native_request_identity_hash=native.identity_hash,
+        drafts = self._proposal_executor.execute(
             config=config,
             request=generic,
             transport=self._transport,
-            executor=self._proposal_effect_executor,
+            count=1,
         )
+        if len(drafts) != 1:
+            raise ValueError("MIPROv2 proposer must return exactly one draft")
+        draft = drafts[0]
         evidence = {
             "proposal_request_identity_hash": generic.identity_hash(),
-            "request_evidence": draft.request_evidence,
-            "response_evidence": draft.response_evidence,
-            "usage": draft.usage,
+            "request_evidence": draft.request_evidence.to_json(),
+            "response_evidence": draft.response_evidence.to_json(),
+            "usage": draft.usage.to_json(),
             "cost": draft.cost,
         }
         response = Miprov2ProposalResponse(
             request_identity_hash=native.identity_hash,
             text=draft.template,
             failed=draft.failed,
-            failure_detail=draft.failure_detail,
+            failure_detail=(
+                draft.terminal_failure.message
+                if draft.terminal_failure is not None
+                else None
+            ),
             evidence=evidence,
         )
         advanced = self._driver.fold_proposal(plan.state, response)
@@ -656,19 +470,14 @@ class Miprov2Adapter:
             raise ValueError("Intent Resolution belongs to another control")
         if context.effect_kind == "bootstrap":
             if resolution.outcome is IntentOutcome.COMPLETED:
-                result = resolve_miprov2_bootstrap(self._store, resolution)
+                result = self._evidence.resolve_bootstrap(resolution)
             else:
-                result = failure_bootstrap_result(
-                    context=context,
-                    resolution=resolution,
-                )
+                result = self._evidence.resolve_bootstrap_failure(resolution)
             return self._driver.fold_bootstrap(state, result)
         if resolution.outcome is IntentOutcome.COMPLETED:
-            resolved = resolve_miprov2_evaluation(self._store, resolution)
+            resolved = self._evidence.resolve_evaluation(resolution)
         else:
-            resolved = resolve_miprov2_evaluation_failure(
-                self._store, resolution
-            )
+            resolved = self._evidence.resolve_evaluation_failure(resolution)
         return self._driver.fold_evaluation(state, resolved)
 
     def _load_request_state(
@@ -770,18 +579,10 @@ class Miprov2Adapter:
         state: Miprov2State,
         native: Miprov2ProposalRequest,
     ) -> ProposalRequest:
-        base_template = ""
-        if native.component_index is not None:
-            base_template = state.proposal_components[
-                native.component_index
-            ].template
         return ProposalRequest(
             proposal_mode=native.effect,
             request_ordinal=native.effect_ordinal,
-            base_ref=state.control.base_candidate.record.base_ref,
-            base_template=base_template,
-            run_id=state.run_id,
-            step_index=native.effect_ordinal,
+            base_candidate=state.control.base_candidate,
             context={
                 "native_miprov2_request": native.model_dump(mode="json"),
                 "proposal_prompt": native.prompt,
@@ -799,6 +600,4 @@ __all__ = [
     "MIPROV2_SAMPLE",
     "MIPROV2_STATE_KEY",
     "Miprov2Adapter",
-    "Miprov2Driver",
-    "Miprov2ProposalEffectExecutor",
 ]

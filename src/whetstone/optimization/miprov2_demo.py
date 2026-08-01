@@ -25,8 +25,8 @@ from pydantic import (
 )
 
 from whetstone.optimization.identity import (
+    ImmutableJsonObject,
     compute_identity_hash,
-    reject_non_json,
     require_full_hash,
 )
 
@@ -136,8 +136,8 @@ class ObservedTraceStep(BaseModel):
             raise ValueError("trace_index cannot be negative")
         if self.component_id == "":
             raise ValueError("component_id must be non-empty when present")
-        reject_non_json(self.inputs, field="inputs")
-        reject_non_json(self.outputs, field="outputs")
+        ImmutableJsonObject(self.inputs)
+        ImmutableJsonObject(self.outputs)
         return self
 
     def identity_payload(self) -> dict[str, Any]:
@@ -193,8 +193,8 @@ class ComponentDemo(BaseModel):
                 raise ValueError(
                     "labeled demos cannot have a source trace index"
                 )
-        reject_non_json(self.inputs, field="inputs")
-        reject_non_json(self.outputs, field="outputs")
+        ImmutableJsonObject(self.inputs)
+        ImmutableJsonObject(self.outputs)
         return self
 
     def identity_payload(self) -> dict[str, Any]:
@@ -228,10 +228,8 @@ class LabeledTaskDemo(BaseModel):
             )
         if any(not component for component in self.inputs_by_component):
             raise ValueError("labeled component ids must be non-empty")
-        reject_non_json(self.inputs_by_component, field="inputs_by_component")
-        reject_non_json(
-            self.outputs_by_component, field="outputs_by_component"
-        )
+        ImmutableJsonObject(self.inputs_by_component)
+        ImmutableJsonObject(self.outputs_by_component)
         return self
 
     def for_component(self, component_id: str) -> ComponentDemo:
