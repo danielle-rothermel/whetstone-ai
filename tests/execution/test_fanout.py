@@ -136,7 +136,10 @@ def _assert_process_gone(pid: int) -> None:
         assert error.errno == errno.ESRCH
         return
     if hasattr(os, "pidfd_open"):
-        descriptor = os.pidfd_open(pid)
+        try:
+            descriptor = os.pidfd_open(pid)
+        except ProcessLookupError:
+            return
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(descriptor, selectors.EVENT_READ)
@@ -160,6 +163,93 @@ def _assert_process_gone(pid: int) -> None:
         queue.close()
     assert observed, f"process {pid} survived scheduler return"
     assert observed[0].fflags & kqueue_api.KQ_NOTE_EXIT
+
+
+@pytest.mark.process_integration
+def test_process_gone_accepts_exit_between_probe_and_pidfd_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    process = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.buffer.read(1)"],
+        stdin=subprocess.PIPE,
+    )
+    real_kill = os.kill
+    probed = False
+
+    def probe(pid: int, sig: int) -> None:
+        nonlocal probed
+        real_kill(pid, sig)
+        assert pid == process.pid
+        assert sig == 0
+        probed = True
+
+    def exit_before_open(pid: int) -> int:
+        assert pid == process.pid
+        assert probed
+        assert process.poll() is None
+        assert process.stdin is not None
+        process.stdin.close()
+        process.wait(timeout=3.0)
+        raise ProcessLookupError(errno.ESRCH, os.strerror(errno.ESRCH))
+
+    monkeypatch.setattr(os, "kill", probe)
+    monkeypatch.setattr(os, "pidfd_open", exit_before_open, raising=False)
+    try:
+        _assert_process_gone(process.pid)
+    finally:
+        if process.stdin is not None and not process.stdin.closed:
+            process.stdin.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=3.0)
+
+
+def test_process_gone_propagates_unrelated_pidfd_open_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = PermissionError(errno.EPERM, os.strerror(errno.EPERM))
+
+    def fail_open(_pid: int) -> int:
+        raise error
+
+    monkeypatch.setattr(os, "pidfd_open", fail_open, raising=False)
+
+    with pytest.raises(PermissionError) as raised:
+        _assert_process_gone(os.getpid())
+
+    assert raised.value is error
+
+
+def test_process_gone_rejects_live_pidfd_target_after_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    read_descriptor, write_descriptor = os.pipe()
+
+    def open_live_target(_pid: int) -> int:
+        return read_descriptor
+
+    def report_live_target(
+        _selector: selectors.BaseSelector,
+        timeout: float | None = None,
+    ) -> list[tuple[selectors.SelectorKey, int]]:
+        assert timeout == 3.0
+        return []
+
+    monkeypatch.setattr(os, "pidfd_open", open_live_target, raising=False)
+    monkeypatch.setattr(
+        selectors.DefaultSelector, "select", report_live_target
+    )
+    try:
+        with pytest.raises(
+            AssertionError,
+            match="survived scheduler return",
+        ):
+            _assert_process_gone(os.getpid())
+    finally:
+        os.close(write_descriptor)
+    with pytest.raises(OSError) as closed:
+        os.fstat(read_descriptor)
+    assert closed.value.errno == errno.EBADF
 
 
 def _assert_process_group_absent(process_group_id: int) -> None:
