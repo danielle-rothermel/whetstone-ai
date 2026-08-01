@@ -232,7 +232,7 @@ def test_d1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "f36012b2d65a5aef1850e873cb81501564be63bffef105fe36338c7ddd4c2c8e"
+        "53844a7fbcdd89ab33e969cbeb96ba231f75070a6b16e5c2e92196d05f896b8c"
     )
 
 

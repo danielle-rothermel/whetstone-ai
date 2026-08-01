@@ -43,6 +43,7 @@ from whetstone.execution.fanout import (
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     Candidate,
     EvaluationBinding,
     eval_config_reference,
@@ -83,6 +84,7 @@ def _binding(
         else exp.eval_configs.official
     )
     return EvaluationBinding(
+        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=eval_config_reference(sampling.eval_config),
         role=role,
         authority_principal=(
@@ -460,7 +462,7 @@ def test_internal_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "eef8f26faafea014d191ae473eb01e098a98785d7302eb6a520ef569d984bb9a"
+        "f40bb1bb5488c3165fa714f87498291ab2a6abc487434a7d6b2967cc978ff583"
     )
     provider = requests[0].model_dump(mode="json")["provider_call_config"]
     definition = provider["definition"]
@@ -489,6 +491,7 @@ def test_internal_eval_rejects_binding_role_mismatch_before_restore(
     exp = _tiny_experiment("c18")
     sampling = getattr(exp.eval_configs, split_name)
     binding = EvaluationBinding(
+        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=eval_config_reference(sampling.eval_config),
         role=evaluation_role,
         authority_principal=(

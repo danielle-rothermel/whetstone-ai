@@ -29,6 +29,7 @@ from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import ProcessJob
 from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     EvaluationBinding,
     eval_config_reference,
 )
@@ -120,6 +121,7 @@ def evaluation_binding(
 ) -> EvaluationBinding:
     role = EvaluationRole.OFFICIAL if official else EvaluationRole.INTERNAL
     return EvaluationBinding(
+        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=eval_config_reference(sampling.eval_config),
         role=role,
         authority_principal="test-authority" if official else None,
