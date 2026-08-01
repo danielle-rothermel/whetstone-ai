@@ -31,7 +31,7 @@ from whetstone.code_eval.aggregate import (
 
 GRAPH_A = "a" * 64
 GRAPH_B = "b" * 64
-BINDING_ID = "binding-official"
+BINDING_ID = "c" * 64
 SELECTION_QUALITY_AGGREGATE_NAME = "selection_quality"
 
 
@@ -119,7 +119,7 @@ def quality_aggregate(
     return unweighted_task_mean(
         aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
-        evaluation_context_id=BINDING_ID,
+        evaluation_binding_hash=BINDING_ID,
         task_rows=task_rows,
         plan=aggregate_plan(tasks=tasks, repeats=repeats),
     )
@@ -143,7 +143,7 @@ def compression_aggregate(
     return unweighted_task_mean(
         aggregate_name="mean_compression_ratio",
         graph_hash=graph_hash,
-        evaluation_context_id=BINDING_ID,
+        evaluation_binding_hash=BINDING_ID,
         task_rows=task_rows,
         plan=aggregate_plan(tasks=tasks, repeats=repeats),
     )
@@ -177,7 +177,7 @@ def incomplete_quality_aggregate(
     return unweighted_task_mean(
         aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
-        evaluation_context_id=BINDING_ID,
+        evaluation_binding_hash=BINDING_ID,
         task_rows=task_rows,
         plan=aggregate_plan(tasks=tasks, repeats=repeats),
     )

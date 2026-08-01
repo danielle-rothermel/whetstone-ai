@@ -40,7 +40,7 @@ from .support import eval_config_ref
 
 GRAPH_A = "a" * 64
 GRAPH_B = "b" * 64
-BINDING_ID = "binding"
+BINDING_ID = "d" * 64
 
 SPECS = (
     ObjectiveSpec(
@@ -60,7 +60,7 @@ def _quality(graph_hash: str, value: float) -> RolloutAggregate:
     return unweighted_task_mean(
         aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
-        evaluation_context_id=BINDING_ID,
+        evaluation_binding_hash=BINDING_ID,
         task_rows=(
             TaskRows(
                 task_identity="task-0",
@@ -75,7 +75,7 @@ def _compression(graph_hash: str, value: float) -> RolloutAggregate:
     return unweighted_task_mean(
         aggregate_name="mean_compression_ratio",
         graph_hash=graph_hash,
-        evaluation_context_id=BINDING_ID,
+        evaluation_binding_hash=BINDING_ID,
         task_rows=(
             TaskRows(
                 task_identity="task-0",
