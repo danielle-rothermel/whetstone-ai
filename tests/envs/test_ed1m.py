@@ -274,7 +274,11 @@ def test_build_uses_content_and_dataset_identities(
 def test_ed1m_eval_rewards_fidelity_reports_attractor(
     mutant_dataset_dir: Path,
 ) -> None:
-    from tests.envs.support import execution_policy, process_row_job_factory
+    from tests.envs.support import (
+        evaluation_binding,
+        execution_policy,
+        process_row_job_factory,
+    )
     from whetstone.envs.ed1 import ed1_initial_candidate
     from whetstone.envs.ed1_eval import run_ed1_eval
     from whetstone.envs.ed1m import (
@@ -296,12 +300,14 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
             ed1_initial_candidate().payload[MUTATION_FIELD]
         ),
         candidate_id="ed1m-naive",
-        sampling=experiment.eval_configs.official,
+        sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=process_row_job_factory(
             "tests.envs.process_workers:drive_ed1_success"
         ),
-        apply_reward=True,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
     )
 
     assert evaluation.per_task_scores[0] >= 0.9

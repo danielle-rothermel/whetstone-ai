@@ -37,7 +37,13 @@ from dr_providers import (
     ProviderCallRequest,
     Transcript,
 )
-from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    PrivateAttr,
+    model_validator,
+)
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
@@ -69,11 +75,16 @@ from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.internal_eval import (
     ProcessInstance,
     RolloutOutput,
+    _process_payload_identity,
     process_request_identity,
     remaining_phase_wall_seconds,
     start_phase_deadline,
 )
-from whetstone.envs.sampling import EnvSplitSampling
+from whetstone.envs.sampling import (
+    EnvSplitSampling,
+    validate_evaluation_role_for_split,
+)
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.call_support import CallTelemetry, call_telemetry
 from whetstone.execution.fanout import (
     DEFAULT_CONCURRENCY,
@@ -91,6 +102,10 @@ from whetstone.execution.prompt_cache import (
 )
 from whetstone.graph.character_budget import CharacterBudgetRule
 from whetstone.optimization.reward import Reward
+from whetstone.optimization.schema import (
+    EvaluationBinding,
+    eval_config_reference,
+)
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -293,6 +308,8 @@ class Ed1RowRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
+    _submitted_request_identity: str | None = PrivateAttr(default=None)
+
     schema_name: Literal["whetstone.envs.ed1_row_request/v1"] = (
         _ED1_ROW_REQUEST_SCHEMA
     )
@@ -334,12 +351,18 @@ class Ed1RowRequest(BaseModel):
 
     @property
     def request_identity(self) -> str:
-        return process_request_identity(self)
+        return self._submitted_request_identity or process_request_identity(
+            self
+        )
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> Ed1RowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
-        return cls.model_validate_json(json.dumps(payload))
+        request = cls.model_validate_json(json.dumps(payload))
+        request._submitted_request_identity = _process_payload_identity(
+            payload
+        )
+        return request
 
 
 class Ed1RowResult(BaseModel):
@@ -699,9 +722,9 @@ def run_ed1_eval(
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
     row_job_factory: Ed1RowJobFactory,
+    evaluation_binding: EvaluationBinding,
     concurrency: int = DEFAULT_CONCURRENCY,
     max_wall_seconds: float | None = None,
-    apply_reward: bool = True,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
 ) -> Ed1EvalResult:
@@ -727,7 +750,6 @@ def run_ed1_eval(
     instances = sampling.instances
     repeats = sampling.repeat_plan.repeat_count
     split_role = sampling.split_role
-    completeness = sampling.completeness_policy
     rd = experiment.encdec_rollout
     assert rd is not None
     graph_hash = rd.graph_hash
@@ -739,7 +761,16 @@ def run_ed1_eval(
         raise ValueError(
             "sampling EvalConfig procedure does not match the experiment"
         )
-    eval_config_hash = sampling.eval_config.config_identity_hash
+    if evaluation_binding.eval_config != eval_config_reference(
+        sampling.eval_config
+    ):
+        raise ValueError(
+            "evaluation binding must name the exact sampling Eval Config"
+        )
+    validate_evaluation_role_for_split(
+        split_role=split_role,
+        evaluation_role=evaluation_binding.role,
+    )
     restored = _restore_ed1_recorded(partial_log, split_role, candidate_id)
 
     def _persist(
@@ -1004,34 +1035,28 @@ def run_ed1_eval(
     primary_aggregate = unweighted_task_mean(
         aggregate_name=primary_metric_name,
         graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=eval_config_hash,
+        evaluation_context_id=evaluation_binding.identity_hash(),
         task_rows=tuple(
             TaskRows(
                 task_identity=task_identity,
-                expected_repeats=repeats,
                 rows=tuple(rows),
             )
             for task_identity, rows in primary_rows
         ),
-        repeat_count=repeats,
-        policy=completeness,
+        plan=sampling.evaluation_matrix_plan,
     )
     compression_aggregate = unweighted_task_mean(
         aggregate_name=ED1_COMPRESSION_NAME,
         graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=eval_config_hash,
+        evaluation_context_id=evaluation_binding.identity_hash(),
         task_rows=tuple(
             TaskRows(
                 task_identity=task_identity,
-                expected_repeats=repeats,
                 rows=tuple(rows),
             )
             for task_identity, rows in comp_rows
         ),
-        repeat_count=repeats,
-        policy=completeness,
+        plan=sampling.evaluation_matrix_plan,
     )
 
     # Task 22: the weighted-blend reward. When a blend config is set, the
@@ -1049,7 +1074,7 @@ def run_ed1_eval(
     else:
         reward_scores = primary_scores
 
-    if apply_reward:
+    if evaluation_binding.role is EvaluationRole.INTERNAL:
         if blend_config is not None:
             # The aggregate blended reward = MEAN over tasks of the per-task
             # blended rewards (unweighted mean over the tasks with a present
@@ -1064,11 +1089,16 @@ def run_ed1_eval(
                 blend_config,
                 env_name=experiment.env_name,
                 blended=mean_blended,
+                evidence_refs=(
+                    primary_aggregate.record_ref(),
+                    compression_aggregate.record_ref(),
+                ),
             )
         else:
             reward = reward_from_primary_score(
                 experiment.reward_policy,
                 primary_score=primary_aggregate.aggregation_output.value,
+                evidence_refs=(primary_aggregate.record_ref(),),
             )
     else:
         reward = None

@@ -25,7 +25,13 @@ from pydantic import BaseModel, JsonValue
 from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import Ed1Instance, ed1_instance_from_task
+from whetstone.envs.sampling import EnvSplitSampling
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import ProcessJob
+from whetstone.optimization.schema import (
+    EvaluationBinding,
+    eval_config_reference,
+)
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 API_KEY_ENV = "OPENROUTER_API_KEY"
@@ -107,6 +113,18 @@ def process_row_job_factory(
         )
 
     return build
+
+
+def evaluation_binding(
+    sampling: EnvSplitSampling, *, official: bool = False
+) -> EvaluationBinding:
+    role = EvaluationRole.OFFICIAL if official else EvaluationRole.INTERNAL
+    return EvaluationBinding(
+        eval_config=eval_config_reference(sampling.eval_config),
+        role=role,
+        authority_principal="test-authority" if official else None,
+        campaign="env-test",
+    )
 
 
 def transport_policy() -> ProviderTransportPolicy:

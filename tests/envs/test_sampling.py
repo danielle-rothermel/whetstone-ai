@@ -20,12 +20,41 @@ from whetstone.envs.sampling import (
     build_aggregation_config,
     build_eval_configs,
     derive_split_sampling,
+    validate_evaluation_role_for_split,
 )
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.graph.eval_config import validate_eval_identity_partition
 
 _MODEL = "openai/gpt-5-nano"
 # Tiny pools: c22 has 6 strata, the others 4-26; keep splits inside each pool.
 _SPLIT = (1, 1, 1)
+
+
+@pytest.mark.parametrize(
+    ("split_role", "evaluation_role", "valid"),
+    [
+        (INTERNAL_EVAL, EvaluationRole.INTERNAL, True),
+        (INTERNAL_EVAL, EvaluationRole.OFFICIAL, False),
+        (OFFICIAL, EvaluationRole.INTERNAL, False),
+        (OFFICIAL, EvaluationRole.OFFICIAL, True),
+    ],
+)
+def test_evaluation_role_mapping_is_exact(
+    split_role: str,
+    evaluation_role: EvaluationRole,
+    valid: bool,
+) -> None:
+    if valid:
+        validate_evaluation_role_for_split(
+            split_role=split_role,
+            evaluation_role=evaluation_role,
+        )
+        return
+    with pytest.raises(ValueError, match="does not match split role"):
+        validate_evaluation_role_for_split(
+            split_role=split_role,
+            evaluation_role=evaluation_role,
+        )
 
 
 def _eval_configs(
@@ -157,7 +186,7 @@ def test_skip_tolerance_is_identity_bearing() -> None:
     skip_5 = build_aggregation_config(
         env, completeness=Completeness.SKIP, max_skip_fraction=0.05
     )
-    assert dict(skip_2.assignment)["max_skip_fraction"] == "0.0200"
+    assert dict(skip_2.assignment)["max_skip_fraction"] == "0.02"
     hashes = {
         skip_0.config_identity_hash,
         skip_2.config_identity_hash,

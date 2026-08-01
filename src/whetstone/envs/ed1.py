@@ -63,6 +63,7 @@ from whetstone.envs.encdec_rollout import (
     build_encdec_rollout_definition,
 )
 from whetstone.envs.factory import EnvExperiment
+from whetstone.envs.rollout_definition import env_candidate_base_ref
 from whetstone.envs.sampling import (
     Completeness,
     EnvEvalConfigs,
@@ -73,11 +74,9 @@ from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
 )
-from whetstone.graph.rollout import EvaluationRole
-from whetstone.optimization.mutation import (
-    MUTATION_FIELD,
-    template_placeholder_fields,
-)
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.reward import (
     MissingDataPolicy,
     Reward,
@@ -85,7 +84,11 @@ from whetstone.optimization.reward import (
     RewardTerm,
     apply_reward_policy,
 )
-from whetstone.optimization.schema import Candidate
+from whetstone.optimization.schema import (
+    Candidate,
+    TemplateRenderContract,
+    TemplateRenderKind,
+)
 
 #: The ed1 env id.
 ED1_ENV_NAME = "ed1"
@@ -185,6 +188,11 @@ def render_encoder_frame(
 #: surface (carries a ``{placeholder}`` the frame owns, or a code fence).
 ED1_INVALID_BODY = "ed1_invalid_encoder_body"
 
+_ED1_BODY_RENDER_CONTRACT = TemplateRenderContract(
+    kind=TemplateRenderKind.PYTHON_FORMAT_V1,
+    available_fields=(),
+)
+
 
 class Ed1BodyError(ValueError):
     """A mutable ED1/D1 body violated the environment-owned frame contract."""
@@ -210,7 +218,7 @@ def ed1_body_rejection(body: str) -> tuple[str, ...]:
     """
     offending: list[str] = []
     seen: set[str] = set()
-    for field_name in template_placeholder_fields(body):
+    for field_name in _ED1_BODY_RENDER_CONTRACT.placeholder_fields(body):
         token = "{" + field_name + "}"
         if token not in seen:
             seen.add(token)
@@ -450,7 +458,7 @@ def _ed1_candidate(*, candidate_id: str, body: str) -> Candidate:
     # budget clause + code block are the immutable frame composed at render.
     return Candidate(
         candidate_id=candidate_id,
-        base_ref=f"whetstone.env.{ED1_ENV_NAME}.base",
+        base_ref=env_candidate_base_ref(ED1_ENV_NAME),
         payload={MUTATION_FIELD: body},
     )
 
@@ -489,7 +497,10 @@ def build_ed1_reward_policy() -> RewardPolicy:
 
 
 def reward_from_primary_score(
-    policy: RewardPolicy, *, primary_score: float | None
+    policy: RewardPolicy,
+    *,
+    primary_score: float | None,
+    evidence_refs: tuple[TypedRef, ...],
 ) -> Reward:
     """Apply a one-term environment policy to its internal primary score."""
     from whetstone.envs.reward import CandidateEvaluationFailure
@@ -504,6 +515,7 @@ def reward_from_primary_score(
             policy,
             aggregates={metric_name: primary_score},
             evidence_role=EvaluationRole.INTERNAL,
+            evidence_refs=evidence_refs,
         )
     except ValueError as exc:
         raise CandidateEvaluationFailure(
@@ -545,6 +557,7 @@ def ed1_reward_from_blended(
     *,
     env_name: str,
     blended: float | None,
+    evidence_refs: tuple[TypedRef, ...],
 ) -> Reward:
     """Apply the blended Reward Policy to the mean per-task blended reward.
 
@@ -563,6 +576,7 @@ def ed1_reward_from_blended(
             policy,
             aggregates={ED1_BLENDED_REWARD_NAME: blended},
             evidence_role=EvaluationRole.INTERNAL,
+            evidence_refs=evidence_refs,
         )
     except ValueError as exc:
         raise CandidateEvaluationFailure(

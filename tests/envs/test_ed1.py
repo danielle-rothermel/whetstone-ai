@@ -9,6 +9,7 @@ from dr_code.execution import SubprocessStartError
 from dr_code.humaneval import STRICT_FIELD_MARKER_PARSER_PROFILE
 
 from tests.envs.support import (
+    evaluation_binding,
     execution_policy,
     process_row_job_factory,
     row_job_factory,
@@ -87,14 +88,21 @@ def _evaluate(
     active_outcome = outcome_for or (
         lambda instance, _repeat, _drive: _successful_outcome(instance)
     )
+    sampling = (
+        experiment.eval_configs.internal
+        if apply_reward
+        else experiment.eval_configs.official
+    )
     result = run_ed1_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
-        sampling=experiment.eval_configs.internal,
+        sampling=sampling,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=row_job_factory(active_outcome),
-        apply_reward=apply_reward,
+        evaluation_binding=evaluation_binding(
+            sampling, official=not apply_reward
+        ),
         partial_log=partial_log,
     )
     return experiment, result
@@ -217,7 +225,9 @@ def test_body_validation_rejects_before_transport() -> None:
             sampling=experiment.eval_configs.internal,
             execution_policy=execution_policy(max_attempts=1),
             row_job_factory=row_job_factory(outcome),
-            apply_reward=False,
+            evaluation_binding=evaluation_binding(
+                experiment.eval_configs.internal
+            ),
         )
 
     assert error.value.code == ED1_INVALID_BODY
@@ -275,12 +285,49 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
         row_job_factory=process_row_job_factory(
             "tests.envs.process_workers:drive_ed1_success"
         ),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
     )
 
     assert result.primary_aggregate.rows_failed == 0
     assert result.primary_aggregate.aggregation_output.value == 1.0
     assert result.outputs[0].output_text is not None
+
+
+@pytest.mark.parametrize(
+    ("split_name", "official_binding"),
+    [("official", False), ("internal", True)],
+)
+def test_ed1_rejects_binding_role_mismatch_before_restore(
+    monkeypatch, split_name: str, official_binding: bool
+) -> None:
+    experiment = build_ed1_experiment(tasks=_tasks(), repeats=1)
+    sampling = getattr(experiment.eval_configs, split_name)
+    candidate = ed1_initial_candidate()
+
+    def should_not_restore(*_args, **_kwargs):
+        raise AssertionError("role mismatch must fail before partial restore")
+
+    def should_not_build(_request):
+        raise AssertionError("role mismatch must fail before job construction")
+
+    monkeypatch.setattr(
+        "whetstone.envs.ed1_eval._restore_ed1_recorded",
+        should_not_restore,
+    )
+    with pytest.raises(ValueError, match="does not match split role"):
+        run_ed1_eval(
+            experiment,
+            candidate_template=str(candidate.payload[MUTATION_FIELD]),
+            candidate_id="ed1-role-mismatch",
+            sampling=sampling,
+            execution_policy=execution_policy(max_attempts=1),
+            row_job_factory=should_not_build,
+            evaluation_binding=evaluation_binding(
+                sampling, official=official_binding
+            ),
+        )
 
 
 def test_budget_and_healthy_diagnostics_are_explicit() -> None:
@@ -376,10 +423,12 @@ def test_streaming_resume_restores_rows_without_transport(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=row_job_factory(boom),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
         partial_log=log,
     )
     assert resumed.primary_aggregate == first.primary_aggregate
@@ -420,19 +469,21 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-timeout",
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=row_job_factory(
             lambda instance, _repeat, _drive: _successful_outcome(instance)
         ),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
         partial_log=log,
     )
 
     records = log.load()
     assert len(records) == 1
     assert records[0].failure_code == "runner_timeout"
-    assert records[0].split_role == experiment.eval_configs.internal.split_role
+    assert records[0].split_role == experiment.eval_configs.official.split_role
 
     def boom(_request):
         raise AssertionError("terminal timeout must restore without repayment")
@@ -441,10 +492,12 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-timeout",
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=boom,
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
         partial_log=log,
     )
     assert resumed.primary_aggregate.rows_failed == 1
@@ -473,12 +526,14 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-deadline",
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=row_job_factory(
             lambda instance, _repeat, _drive: _successful_outcome(instance)
         ),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
         partial_log=fresh_log,
     )
     assert missing.primary_aggregate.rows_missing == 1
@@ -512,7 +567,9 @@ def test_process_job_cache_hit_and_provenance_are_persisted(
             sampling=experiment.eval_configs.internal,
             execution_policy=execution_policy(max_attempts=1),
             row_job_factory=job_factory,
-            apply_reward=False,
+            evaluation_binding=evaluation_binding(
+                experiment.eval_configs.internal
+            ),
             partial_log=log,
             cache=cache,
         )
@@ -546,7 +603,9 @@ def test_transient_encoder_failure_is_redriven_to_success() -> None:
         row_job_factory=process_row_job_factory(
             "tests.envs.process_workers:drive_ed1_transient_then_success"
         ),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
     )
     assert result.primary_aggregate.rows_failed == 0
     assert result.primary_aggregate.aggregation_output.value == pytest.approx(

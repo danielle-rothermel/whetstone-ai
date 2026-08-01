@@ -64,6 +64,7 @@ from whetstone.envs.rollout_definition import (
     LLM_NODE_ID,
     PROMPT_EXTERNAL_INPUT,
     PROVIDER_CALL_CONFIG_SCHEMA,
+    env_candidate_base_ref,
 )
 from whetstone.envs.sampling import (
     Completeness,
@@ -167,7 +168,7 @@ def _d1_candidate(*, candidate_id: str, body: str) -> Candidate:
     # frozen input arm are composed at render.
     return Candidate(
         candidate_id=candidate_id,
-        base_ref=f"whetstone.env.{D1_ENV_NAME}.base",
+        base_ref=env_candidate_base_ref(D1_ENV_NAME),
         payload={MUTATION_FIELD: body},
     )
 

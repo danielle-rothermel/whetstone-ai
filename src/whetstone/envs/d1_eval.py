@@ -33,7 +33,13 @@ from dr_providers import (
     ProviderCallRequest,
     Transcript,
 )
-from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    PrivateAttr,
+    model_validator,
+)
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
@@ -60,11 +66,16 @@ from whetstone.envs.input_transform import (
 from whetstone.envs.internal_eval import (
     ProcessInstance,
     RolloutOutput,
+    _process_payload_identity,
     process_request_identity,
     remaining_phase_wall_seconds,
     start_phase_deadline,
 )
-from whetstone.envs.sampling import EnvSplitSampling
+from whetstone.envs.sampling import (
+    EnvSplitSampling,
+    validate_evaluation_role_for_split,
+)
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.call_support import (
     failure_code_of,
     is_transient_transport_failure,
@@ -82,6 +93,10 @@ from whetstone.execution.prompt_cache import (
     execute_call,
 )
 from whetstone.optimization.reward import Reward
+from whetstone.optimization.schema import (
+    EvaluationBinding,
+    eval_config_reference,
+)
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -91,7 +106,8 @@ class D1EvalResult:
     """One candidate's D1 evaluation over a split.
 
     ``submission_score_aggregate`` is the reward-bearing HumanEval Submission
-    Score. ``reward`` is derived from it when requested. Per-task vectors and
+    Score. ``reward`` is derived for an internal Evaluation Binding. Per-task
+    vectors and
     outputs feed the CI, ledger, and sidecar.
     """
 
@@ -194,6 +210,8 @@ class D1RowRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
+    _submitted_request_identity: str | None = PrivateAttr(default=None)
+
     schema_name: Literal["whetstone.envs.d1_row_request/v1"] = (
         _D1_ROW_REQUEST_SCHEMA
     )
@@ -215,12 +233,18 @@ class D1RowRequest(BaseModel):
 
     @property
     def request_identity(self) -> str:
-        return process_request_identity(self)
+        return self._submitted_request_identity or process_request_identity(
+            self
+        )
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> D1RowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
-        return cls.model_validate_json(json.dumps(payload))
+        request = cls.model_validate_json(json.dumps(payload))
+        request._submitted_request_identity = _process_payload_identity(
+            payload
+        )
+        return request
 
 
 class D1RowResult(BaseModel):
@@ -410,9 +434,9 @@ def run_d1_eval(
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
     row_job_factory: D1RowJobFactory,
+    evaluation_binding: EvaluationBinding,
     concurrency: int = DEFAULT_CONCURRENCY,
     max_wall_seconds: float | None = None,
-    apply_reward: bool = True,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
 ) -> D1EvalResult:
@@ -420,7 +444,8 @@ def run_d1_eval(
 
     Fans out one serializable direct generate->score process job per (task,
     repeat), reduces to the HumanEval Submission Score aggregate, derives its
-    Reward when requested, and collects per-row outputs. Incremental
+    Reward for an internal Evaluation Binding, and collects per-row outputs.
+    Incremental
     persistence + resume mirror the ED1 drive: each completed row appends its
     record when it finishes; a resumed drive restores already-recorded rows
     instead of re-paying.
@@ -433,7 +458,6 @@ def run_d1_eval(
     instances = sampling.instances
     repeats = sampling.repeat_plan.repeat_count
     split_role = sampling.split_role
-    completeness = sampling.completeness_policy
     rd = experiment.rollout_definition
     graph_hash = rd.graph_hash
     if (
@@ -443,7 +467,16 @@ def run_d1_eval(
         raise ValueError(
             "sampling EvalConfig procedure does not match the experiment"
         )
-    eval_config_hash = sampling.eval_config.config_identity_hash
+    if evaluation_binding.eval_config != eval_config_reference(
+        sampling.eval_config
+    ):
+        raise ValueError(
+            "evaluation binding must name the exact sampling Eval Config"
+        )
+    validate_evaluation_role_for_split(
+        split_role=split_role,
+        evaluation_role=evaluation_binding.role,
+    )
     restored = _restore_recorded(partial_log, split_role, candidate_id)
 
     def _persist(
@@ -633,26 +666,24 @@ def run_d1_eval(
     submission_score_aggregate = unweighted_task_mean(
         aggregate_name=D1_SUBMISSION_SCORE_NAME,
         graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=eval_config_hash,
+        evaluation_context_id=evaluation_binding.identity_hash(),
         task_rows=tuple(
             TaskRows(
                 task_identity=task_identity,
-                expected_repeats=repeats,
                 rows=tuple(rows),
             )
             for task_identity, rows in submission_rows
         ),
-        repeat_count=repeats,
-        policy=completeness,
+        plan=sampling.evaluation_matrix_plan,
     )
     reward: Reward | None = None
-    if apply_reward:
+    if evaluation_binding.role is EvaluationRole.INTERNAL:
         reward = reward_from_primary_score(
             experiment.reward_policy,
             primary_score=(
                 submission_score_aggregate.aggregation_output.value
             ),
+            evidence_refs=(submission_score_aggregate.record_ref(),),
         )
     return D1EvalResult(
         submission_score_aggregate=submission_score_aggregate,

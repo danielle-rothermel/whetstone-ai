@@ -48,16 +48,19 @@ from whetstone.graph.nodes import (
     llm_call_node_definition,
     llm_call_variable_assignment,
 )
+from whetstone.optimization.identity import TypedRef, typed_ref_for_record
 from whetstone.optimization.mutation import (
     MUTATION_FIELD,
-    invalid_template_placeholders,
-    template_placeholder_fields,
 )
 from whetstone.optimization.schema import Candidate
 
 #: The Provider Call Config schema name (referenced by the LLM Call Node's
 #: static Variable typed reference).
 PROVIDER_CALL_CONFIG_SCHEMA = "dr_providers.provider_call_config"
+
+# Persisted-format contract for the synthetic env base binding. Exact wire
+# fields are pinned by a golden test; never derive them from model fields.
+ENV_CANDIDATE_BASE_SCHEMA = "whetstone.env_candidate_base"
 
 #: The single Graph External Input the LLM Call Node's prompt binds to: the
 #: rendered prompt for the selected candidate against a task's external
@@ -190,8 +193,16 @@ def _probe_candidate(
     """
     return Candidate(
         candidate_id=candidate_id,
-        base_ref=f"whetstone.env.{env.name}.base",
+        base_ref=env_candidate_base_ref(env.name),
         payload={MUTATION_FIELD: template},
+    )
+
+
+def env_candidate_base_ref(env_name: str) -> TypedRef:
+    """Address the immutable synthetic base binding for one environment."""
+    return typed_ref_for_record(
+        ENV_CANDIDATE_BASE_SCHEMA,
+        {"env_name": env_name},
     )
 
 
@@ -225,46 +236,35 @@ def render_prompt(
     can never be interpolated -- so a mutated or JSON-round-tripped template
     still renders (the c19 fidelity fix).
     """
-    template = str(candidate.payload[MUTATION_FIELD])
+    template = candidate.payload[MUTATION_FIELD]
+    if type(template) is not str:
+        raise ValueError(f"{MUTATION_FIELD} must be a strict string")
     return env.surface.render(template, instance)
 
 
-def valid_prompt_input_keys(
-    env: EnvSpec, instance: Instance
-) -> frozenset[str]:
+def valid_prompt_input_keys(env: EnvSpec) -> frozenset[str]:
     """The keyword fields a candidate template may reference for ``env``.
 
-    Derived (never hardcoded per-env) from two authoritative sources already
-    available at the optimizer seam:
-
-    * ``instance.prompt_inputs`` keys -- the exact keyword inputs the render
-      binds (``env.surface.render`` formats against these), and
-    * the placeholder fields of the env's OWN naive/ceiling probe templates --
-      known-good renders. This covers envs whose render translates keys (c19's
-      surface renders ``{fact_line}`` from the public ``fact_type`` input, and
-      c11's ceiling template carries example-JSON braces its literal-replace
-      render tolerates), so a legitimate candidate mimicking the env's own
-      templates is never spuriously rejected.
-
-    A candidate placeholder outside this set (e.g. c22's ``{question}``) cannot
-    be filled by the render and would raise the probe surface's loud
-    ``KeyError`` -- so the intake validator rejects it before any eval spend.
+    The environment's frozen :class:`TemplateRenderContract` is the sole
+    authority for both accepted placeholders and rendering semantics.
     """
-    keys: set[str] = set(dict(instance.prompt_inputs).keys())
-    keys.update(template_placeholder_fields(env.surface.naive_template))
-    keys.update(template_placeholder_fields(env.surface.ceiling_template))
-    return frozenset(keys)
+    return frozenset(env.surface.template_render_contract.available_fields)
 
 
 class PromptInputError(ValueError):
     """A QA candidate references prompt inputs unavailable to its tasks."""
 
-    def __init__(self, offending: tuple[str, ...]) -> None:
+    def __init__(
+        self, offending: tuple[str, ...], *, reason: str | None = None
+    ) -> None:
         self.offending = offending
-        super().__init__(
+        message = (
             "candidate template contains unavailable placeholders: "
             + ", ".join(offending)
+            if offending
+            else f"candidate template violates its render contract: {reason}"
         )
+        super().__init__(message)
 
 
 def validate_candidate_prompt(
@@ -272,21 +272,24 @@ def validate_candidate_prompt(
     candidate: Candidate,
     instances: tuple[Instance, ...],
 ) -> None:
-    """Validate all placeholders before any provider call can be made."""
-    template = str(candidate.payload[MUTATION_FIELD])
-    offending: list[str] = []
-    seen: set[str] = set()
-    for instance in instances:
-        invalid = invalid_template_placeholders(
-            template,
-            valid_prompt_input_keys(env, instance),
-        )
-        for field_name in invalid:
-            if field_name not in seen:
-                seen.add(field_name)
-                offending.append(field_name)
+    """Validate the candidate before any provider call can be made."""
+    del instances
+    template = candidate.payload.get(MUTATION_FIELD)
+    contract = env.surface.template_render_contract
+    try:
+        observed = contract.placeholder_fields(template)
+    except ValueError as error:
+        raise PromptInputError((), reason=str(error)) from error
+    valid = valid_prompt_input_keys(env)
+    offending = tuple(
+        dict.fromkeys(field for field in observed if field not in valid)
+    )
     if offending:
-        raise PromptInputError(tuple(offending))
+        raise PromptInputError(offending)
+    try:
+        contract.validate_template(template)
+    except ValueError as error:
+        raise PromptInputError((), reason=str(error)) from error
 
 
 def env_task_for(env: EnvSpec, instance: Instance) -> EnvTask:
@@ -296,6 +299,7 @@ def env_task_for(env: EnvSpec, instance: Instance) -> EnvTask:
 
 
 __all__ = [
+    "ENV_CANDIDATE_BASE_SCHEMA",
     "EVAL_NODE_ID",
     "LLM_NODE_ID",
     "PROMPT_EXTERNAL_INPUT",
@@ -306,6 +310,7 @@ __all__ = [
     "build_provider_call_config",
     "build_rollout_definition",
     "ceiling_candidate",
+    "env_candidate_base_ref",
     "env_task_for",
     "initial_candidate",
     "llm_eval_graph_definition",

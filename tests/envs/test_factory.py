@@ -31,16 +31,20 @@ from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.rollout_definition import PromptInputError
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
     PoolOutcome,
     ProcessJob,
 )
-from whetstone.graph.rollout import EvaluationRole
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.reward import Reward
-from whetstone.optimization.schema import Candidate
+from whetstone.optimization.schema import (
+    Candidate,
+    EvaluationBinding,
+    eval_config_reference,
+)
 
 _MODEL = "openai/gpt-5-nano"
 _SPLIT = (2, 2, 2)
@@ -63,6 +67,26 @@ def _tiny_experiment(env_name: str) -> EnvExperiment:
         pool_n_per_stratum=n,
         split_sizes=_SPLIT,
         repeats=2,
+    )
+
+
+def _binding(
+    exp: EnvExperiment,
+    *,
+    role: EvaluationRole = EvaluationRole.INTERNAL,
+) -> EvaluationBinding:
+    sampling = (
+        exp.eval_configs.internal
+        if role is EvaluationRole.INTERNAL
+        else exp.eval_configs.official
+    )
+    return EvaluationBinding(
+        eval_config=eval_config_reference(sampling.eval_config),
+        role=role,
+        authority_principal=(
+            "test-authority" if role is EvaluationRole.OFFICIAL else None
+        ),
+        campaign="env-test",
     )
 
 
@@ -286,7 +310,11 @@ def test_process_row_wire_schemas_are_pinned() -> None:
     )
 
 
-@pytest.mark.parametrize("value", [True, -1.0, float("nan"), "1", 10**10_000])
+@pytest.mark.parametrize(
+    "value",
+    [True, -1.0, float("nan"), "1", 10**10_000],
+    ids=("bool", "negative", "nan", "string", "huge-int"),
+)
 def test_phase_wall_uses_strict_fanout_duration_contract(value) -> None:
     with pytest.raises(ValueError, match="finite nonnegative real number"):
         start_phase_deadline(value)
@@ -304,6 +332,7 @@ def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
         row_job_factory=_internal_jobs(
             exp, _correct_reply(env_name, internal_insts)
         ),
+        evaluation_binding=_binding(exp),
     )
     agg = result.aggregate
     assert agg.name == "env_exact_match"
@@ -334,6 +363,7 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
         row_job_factory=_internal_jobs(
             exp, constant_reply("plain, comma-laden text")
         ),
+        evaluation_binding=_binding(exp),
     )
     agg = result.aggregate
     assert agg.name == "env_exact_match"
@@ -357,6 +387,7 @@ def test_internal_eval_wrong_answers_score_zero() -> None:
         row_job_factory=_internal_jobs(
             exp, constant_reply("definitely-not-a-label")
         ),
+        evaluation_binding=_binding(exp),
     )
     assert result.aggregate.aggregation_output.value == pytest.approx(0.0)
     assert isinstance(result.reward, Reward)
@@ -373,6 +404,7 @@ def test_internal_process_job_runs_real_row_driver() -> None:
         row_job_factory=process_row_job_factory(
             "tests.envs.process_workers:drive_internal_success"
         ),
+        evaluation_binding=_binding(exp),
     )
 
     assert result.aggregate.rows_failed == 0
@@ -399,6 +431,53 @@ def test_internal_result_for_different_request_is_rejected() -> None:
             sampling=exp.eval_configs.internal,
             execution_policy=execution_policy(),
             row_job_factory=mismatched,
+            evaluation_binding=_binding(exp),
+        )
+
+
+@pytest.mark.parametrize(
+    ("split_name", "evaluation_role"),
+    [
+        ("official", EvaluationRole.INTERNAL),
+        ("internal", EvaluationRole.OFFICIAL),
+    ],
+)
+def test_internal_eval_rejects_binding_role_mismatch_before_restore(
+    monkeypatch,
+    split_name: str,
+    evaluation_role: EvaluationRole,
+) -> None:
+    exp = _tiny_experiment("c18")
+    sampling = getattr(exp.eval_configs, split_name)
+    binding = EvaluationBinding(
+        eval_config=eval_config_reference(sampling.eval_config),
+        role=evaluation_role,
+        authority_principal=(
+            "test-authority"
+            if evaluation_role is EvaluationRole.OFFICIAL
+            else None
+        ),
+        campaign="env-test",
+    )
+
+    def should_not_restore(*_args, **_kwargs):
+        raise AssertionError("role mismatch must fail before partial restore")
+
+    def should_not_build(_request: InternalRowRequest) -> ProcessJob:
+        raise AssertionError("role mismatch must fail before job construction")
+
+    monkeypatch.setattr(
+        "whetstone.envs.internal_eval._restore_recorded",
+        should_not_restore,
+    )
+    with pytest.raises(ValueError, match="does not match split role"):
+        run_internal_eval(
+            exp,
+            candidate=exp.initial_candidate,
+            sampling=sampling,
+            execution_policy=execution_policy(),
+            row_job_factory=should_not_build,
+            evaluation_binding=binding,
         )
 
 
@@ -441,6 +520,7 @@ def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
         row_job_factory=row_job_factory(
             lambda _instance, _repeat, _drive: InternalRowOutcome(score=1.0)
         ),
+        evaluation_binding=_binding(exp),
         concurrency=4,
         max_wall_seconds=10.0,
     )
@@ -474,6 +554,7 @@ def test_invalid_prompt_is_rejected_before_transport() -> None:
                 candidate=invalid,
                 served=served,
             ),
+            evaluation_binding=_binding(exp),
         )
 
     assert error.value.offending == ("unavailable_gold",)
@@ -490,6 +571,7 @@ def test_internal_eval_is_deterministic() -> None:
         sampling=exp.eval_configs.internal,
         execution_policy=execution_policy(),
         row_job_factory=_internal_jobs(exp, reply),
+        evaluation_binding=_binding(exp),
     )
     b = run_internal_eval(
         exp,
@@ -497,6 +579,7 @@ def test_internal_eval_is_deterministic() -> None:
         sampling=exp.eval_configs.internal,
         execution_policy=execution_policy(),
         row_job_factory=_internal_jobs(exp, reply),
+        evaluation_binding=_binding(exp),
     )
     assert a.aggregate.aggregation_output.value == (
         b.aggregate.aggregation_output.value
@@ -522,11 +605,12 @@ def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
             sampling=exp.eval_configs.internal,
             execution_policy=execution_policy(),
             row_job_factory=_internal_jobs(exp, constant_reply("   ")),
+            evaluation_binding=_binding(exp),
         )
 
 
 def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
-    # FIX 1: an official-role evaluation (apply_reward=False) with incomplete
+    # An official-role binding with incomplete
     # evidence (all-blank -> failed rows -> aggregate None, PROPAGATE) must
     # NOT crash and must derive NO Reward -- visible incompleteness only.
     exp = _tiny_experiment("c18")
@@ -536,41 +620,39 @@ def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
         sampling=exp.eval_configs.official,
         execution_policy=execution_policy(),
         row_job_factory=_internal_jobs(exp, constant_reply("   ")),
-        apply_reward=False,
+        evaluation_binding=_binding(exp, role=EvaluationRole.OFFICIAL),
     )
     assert result.reward is None
     assert result.aggregate.aggregation_output.value is None
     assert result.aggregate.rows_failed > 0
 
 
-def test_failed_rows_under_skip_still_visible_in_provenance() -> None:
-    # Under SKIP, all-failed rows leave the reduction empty -> a non-OK
-    # status (never a fabricated zero); the failed rows remain counted in the
-    # aggregate provenance.
+def test_failed_rows_still_visible_in_provenance() -> None:
+    # All-failed rows leave the reduction non-OK (never a fabricated zero),
+    # while remaining counted in the aggregate provenance.
     from whetstone.code_eval.aggregate import (
-        CompletenessPolicy,
-        RowPolicy,
         RowValue,
         TaskRows,
+        unweighted_task_mean,
     )
-    from whetstone.envs.internal_eval import _env_exact_match_aggregate
 
-    task_rows = (
+    experiment = _tiny_experiment("c18")
+    sampling = experiment.eval_configs.internal
+    task_rows = tuple(
         TaskRows(
-            task_identity="t0",
-            expected_repeats=2,
+            task_identity=task_identity,
             rows=(RowValue(failed=True), RowValue(failed=True)),
-        ),
+        )
+        for task_identity in sampling.task_set.task_identities
     )
-    agg = _env_exact_match_aggregate(
-        graph_hash="a" * 64,
-        eval_config_hash="b" * 64,
+    agg = unweighted_task_mean(
+        aggregate_name="env_exact_match",
+        graph_hash=experiment.rollout_definition.graph_hash,
         evaluation_context_id="c" * 64,
         task_rows=task_rows,
-        repeat_count=2,
-        policy=CompletenessPolicy(row_policy=RowPolicy.SKIP),
+        plan=sampling.evaluation_matrix_plan,
     )
-    assert agg.rows_failed == 2
+    assert agg.rows_failed == len(task_rows) * 2
     assert agg.rows_present == 0
     assert agg.aggregation_output.status is not AggregationStatus.OK
 

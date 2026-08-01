@@ -19,7 +19,8 @@ from __future__ import annotations
 
 from whetstone.envs.oracle_operator import ENV_EXACT_MATCH_NAME
 from whetstone.envs.registry import EnvSpec
-from whetstone.graph.rollout import EvaluationRole
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.identity import TypedRef
 from whetstone.optimization.reward import (
     MissingDataPolicy,
     Reward,
@@ -73,7 +74,7 @@ def reward_from_internal_aggregate(
     policy: RewardPolicy,
     *,
     env_exact_match_value: float | None,
-    evidence_ref_content_hash: str | None = None,
+    evidence_refs: tuple[TypedRef, ...],
 ) -> Reward:
     """Apply ``policy`` to one internal ``env_exact_match`` aggregate value.
 
@@ -95,7 +96,7 @@ def reward_from_internal_aggregate(
                 ENV_EXACT_MATCH_AGGREGATE_NAME: env_exact_match_value,
             },
             evidence_role=EvaluationRole.INTERNAL,
-            evidence_ref_content_hash=evidence_ref_content_hash,
+            evidence_refs=evidence_refs,
         )
     except ValueError as exc:
         raise CandidateEvaluationFailure(

@@ -42,10 +42,15 @@ the structural-leak proof the other envs already satisfy.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from whetstone_envs.core import Instance, ProbePair
+
+from whetstone.optimization.schema import (
+    TemplateRenderContract,
+    TemplateRenderKind,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,10 +67,21 @@ class ProbeSurface:
 
     naive_template: str
     ceiling_template: str
+    template_render_contract: TemplateRenderContract
     render: Callable[[str, Instance], str]
 
 
-def _from_probe_pair(probes: ProbePair) -> ProbeSurface:
+def _render_with_contract(
+    contract: TemplateRenderContract,
+    values: Callable[[Instance], Mapping[str, object]],
+) -> Callable[[str, Instance], str]:
+    def render(template: str, instance: Instance) -> str:
+        return contract.render(template, values(instance))
+
+    return render
+
+
+def _from_probe_pair(env_name: str, probes: ProbePair) -> ProbeSurface:
     """Wrap an env's content-driven ``ProbePair`` verbatim.
 
     Used for c22/c11/c18/c23, whose ``ProbePair.render`` already keys off
@@ -73,10 +89,30 @@ def _from_probe_pair(probes: ProbePair) -> ProbeSurface:
     ``{input}`` replace), so the surfaced template is already mutable and
     serialization-stable.
     """
+    available_fields = {
+        "c22": ("constraints_block",),
+        "c22h": ("constraints_block",),
+        "c11": ("input",),
+        "c18": ("question", "query"),
+        "c18h": ("question", "query"),
+        "c23": ("demos_block", "query"),
+    }[env_name]
+    kind = (
+        TemplateRenderKind.LITERAL_REPLACE_V1
+        if env_name == "c11"
+        else TemplateRenderKind.PYTHON_FORMAT_V1
+    )
+    contract = TemplateRenderContract(
+        kind=kind,
+        available_fields=available_fields,
+    )
     return ProbeSurface(
         naive_template=probes.naive_template,
         ceiling_template=probes.ceiling_template,
-        render=probes.render,
+        template_render_contract=contract,
+        render=_render_with_contract(
+            contract, lambda instance: dict(instance.prompt_inputs)
+        ),
     )
 
 
@@ -118,17 +154,9 @@ def _c19_template(head: str) -> str:
 _C19_CEILING_MARKER = "Follow these rules EXACTLY"
 
 
-def _c19_render(template: str, instance: Instance) -> str:
-    """The content-driven c19 render for either probe template.
-
-    Selects the per-fact-type ``fact_line`` table by template *content* (the
-    ceiling marker), then formats ``template`` against the instance's public
-    ``grid`` / ``command`` inputs plus that ``fact_line``. Restricted to
-    public inputs: a ``{gold}`` (or any non-public) field raises ``KeyError``
-    rather than interpolating oracle-only state. Dispatch is by content
-    (``str.format`` + a substring marker), never object identity, so a mutated
-    or round-tripped template renders.
-    """
+def _c19_values_for_template(
+    template: str, instance: Instance
+) -> Mapping[str, object]:
     from whetstone_envs.c19 import prompts as c19_prompts
 
     fact_lines = (
@@ -141,12 +169,11 @@ def _c19_render(template: str, instance: Instance) -> str:
     if fact_type not in fact_lines:
         msg = f"no probe fact-line for fact type {fact_type!r}"
         raise KeyError(msg)
-    fields = {
+    return {
         "grid": inputs["grid"],
         "command": inputs["command"],
         "fact_line": fact_lines[fact_type],
     }
-    return template.format(**fields)
 
 
 def _c19_surface() -> ProbeSurface:
@@ -159,10 +186,21 @@ def _c19_surface() -> ProbeSurface:
     """
     from whetstone_envs.c19 import prompts as c19_prompts
 
+    contract = TemplateRenderContract(
+        kind=TemplateRenderKind.PYTHON_FORMAT_V1,
+        available_fields=("grid", "command", "fact_line"),
+    )
+
+    def render(template: str, instance: Instance) -> str:
+        return contract.render(
+            template, _c19_values_for_template(template, instance)
+        )
+
     return ProbeSurface(
         naive_template=_c19_template(c19_prompts._NAIVE_HEAD),
         ceiling_template=_c19_template(c19_prompts._CEILING_HEAD),
-        render=_c19_render,
+        template_render_contract=contract,
+        render=render,
     )
 
 
@@ -179,7 +217,7 @@ def probe_surface(env_name: str, probes: ProbePair) -> ProbeSurface:
     """
     if env_name == _C19_ENV:
         return _c19_surface()
-    return _from_probe_pair(probes)
+    return _from_probe_pair(env_name, probes)
 
 
 __all__ = [

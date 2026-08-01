@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from tests.envs.support import (
+    evaluation_binding,
     execution_policy,
     process_row_job_factory,
     row_job_factory,
@@ -131,7 +132,9 @@ def test_body_restrictions_are_preflight_safe() -> None:
             sampling=experiment.eval_configs.internal,
             execution_policy=execution_policy(max_attempts=1),
             row_job_factory=_passing_jobs(served=served),
-            apply_reward=False,
+            evaluation_binding=evaluation_binding(
+                experiment.eval_configs.internal
+            ),
         )
 
     assert error.value.code == ED1_INVALID_BODY
@@ -155,7 +158,9 @@ def test_direct_evaluator_records_exact_pass_rate(arm: str) -> None:
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=_passing_jobs(),
-        apply_reward=True,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
     )
     assert result.submission_score_aggregate.name == D1_SUBMISSION_SCORE_NAME
     assert (
@@ -189,11 +194,46 @@ def test_d1_process_job_runs_real_row_driver() -> None:
         row_job_factory=process_row_job_factory(
             "tests.envs.process_workers:drive_d1_success"
         ),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
     )
 
     assert result.submission_score_aggregate.rows_failed == 0
     assert result.submission_score_aggregate.aggregation_output.value == 1.0
+
+
+@pytest.mark.parametrize(
+    ("split_name", "official_binding"),
+    [("official", False), ("internal", True)],
+)
+def test_d1_rejects_binding_role_mismatch_before_restore(
+    monkeypatch, split_name: str, official_binding: bool
+) -> None:
+    experiment = build_d1_experiment(tasks=_tasks(), repeats=1)
+    sampling = getattr(experiment.eval_configs, split_name)
+
+    def should_not_restore(*_args, **_kwargs):
+        raise AssertionError("role mismatch must fail before partial restore")
+
+    def should_not_build(_request):
+        raise AssertionError("role mismatch must fail before job construction")
+
+    monkeypatch.setattr(
+        "whetstone.envs.d1_eval._restore_recorded", should_not_restore
+    )
+    with pytest.raises(ValueError, match="does not match split role"):
+        run_d1_eval(
+            experiment,
+            candidate_body=D1_WRAPPER_BODY_NAIVE,
+            candidate_id="d1-role-mismatch",
+            sampling=sampling,
+            execution_policy=execution_policy(max_attempts=1),
+            row_job_factory=should_not_build,
+            evaluation_binding=evaluation_binding(
+                sampling, official=official_binding
+            ),
+        )
 
 
 def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
@@ -207,7 +247,9 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=_passing_jobs(),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
         partial_log=log,
     )
 
@@ -221,7 +263,9 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=row_job_factory(boom),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
         partial_log=log,
     )
     assert (
@@ -265,18 +309,20 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,
         candidate_id="d1-timeout",
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=_passing_jobs(),
         max_wall_seconds=10.0,
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
         partial_log=log,
     )
 
     records = log.load()
     assert len(records) == 1
     assert records[0].failure_code == "runner_timeout"
-    assert records[0].split_role == experiment.eval_configs.internal.split_role
+    assert records[0].split_role == experiment.eval_configs.official.split_role
     assert len(walls) == 2
     assert walls[1] is not None and walls[0] is not None
     assert walls[1] <= walls[0]
@@ -289,10 +335,12 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,
         candidate_id="d1-timeout",
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=boom,
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
         partial_log=log,
     )
     assert resumed.submission_score_aggregate.rows_failed == 1
@@ -332,10 +380,12 @@ def test_d1_phase_deadline_is_missing_and_not_redriven(monkeypatch) -> None:
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,
         candidate_id="d1-deadline",
-        sampling=experiment.eval_configs.internal,
+        sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=_passing_jobs(),
-        apply_reward=False,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official, official=True
+        ),
     )
 
     assert calls == 1

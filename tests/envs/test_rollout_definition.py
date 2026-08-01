@@ -7,12 +7,14 @@ from dr_graph import graph_hash
 
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.rollout_definition import (
+    ENV_CANDIDATE_BASE_SCHEMA,
     EVAL_NODE_ID,
     LLM_NODE_ID,
     PROMPT_EXTERNAL_INPUT,
     build_provider_call_config,
     build_rollout_definition,
     ceiling_candidate,
+    env_candidate_base_ref,
     initial_candidate,
     render_prompt,
 )
@@ -21,10 +23,19 @@ from whetstone.graph.nodes import (
     LLM_CALL_NODE_TYPE,
     eval_node_procedure_hash,
 )
+from whetstone.optimization.identity import typed_ref_for_record
 from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.schema import Candidate
+from whetstone.optimization.schema import Candidate, TemplateRenderKind
 
 _MODEL = "openai/gpt-5-nano"
+
+
+def test_env_candidate_base_wire_contract_is_pinned() -> None:
+    expected = typed_ref_for_record(
+        "whetstone.env_candidate_base", {"env_name": "c22"}
+    )
+    assert ENV_CANDIDATE_BASE_SCHEMA == "whetstone.env_candidate_base"
+    assert env_candidate_base_ref("c22") == expected
 
 
 def test_graph_has_one_llm_call_and_one_terminal_eval_node() -> None:
@@ -98,12 +109,19 @@ def test_render_uses_public_inputs_and_never_leaks_gold(
     ceiling = render_prompt(env, ceiling_candidate(env), inst)
     assert naive
     assert ceiling
-    # Rendering is restricted to the instance's public prompt inputs: a
-    # template that referenced ``{gold}`` would raise KeyError rather than
-    # silently interpolate the oracle-only state. Prove that structurally by
-    # rendering a gold-referencing template and expecting a loud failure.
-    with pytest.raises(KeyError):
-        env.surface.render("{gold}", inst)
+    # Rendering is restricted to the contract's public fields. Python-format
+    # surfaces reject an unavailable oracle field, while literal-replace
+    # surfaces leave non-contract text untouched; neither can interpolate it.
+    if (
+        env.surface.template_render_contract.kind
+        is TemplateRenderKind.LITERAL_REPLACE_V1
+    ):
+        assert env.surface.render("{gold}", inst) == "{gold}"
+    else:
+        with pytest.raises(
+            ValueError, match="template contains unavailable fields: gold"
+        ):
+            env.surface.render("{gold}", inst)
 
 
 @pytest.mark.parametrize("env_name", ENV_NAMES)
@@ -140,7 +158,7 @@ def test_mutated_template_still_renders(env_name: str) -> None:
     mutated = Candidate(
         candidate_id=f"{env.name}-mutated",
         base_ref=naive.base_ref,
-        payload={MUTATION_FIELD: marker + naive.payload[MUTATION_FIELD]},
+        payload={MUTATION_FIELD: marker + str(naive.payload[MUTATION_FIELD])},
     )
     rendered = render_prompt(env, mutated, inst)
     assert marker.strip() in rendered

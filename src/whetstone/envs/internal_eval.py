@@ -30,12 +30,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from dr_code.eval import (
-    AggregationConfig,
-    AggregationInput,
-    AggregationStatus,
-    aggregate,
-)
 from dr_providers import (
     MessageRole,
     PromptMessage,
@@ -43,16 +37,20 @@ from dr_providers import (
     ProviderCallRequest,
     Transcript,
 )
-from pydantic import BaseModel, ConfigDict, JsonValue, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    PrivateAttr,
+    model_validator,
+)
 from whetstone_envs.core import Instance
 
 from whetstone.code_eval.aggregate import (
-    CompletenessPolicy,
     RolloutAggregate,
     RowValue,
     TaskRows,
-    aggregation_definition,
-    enforce_skip_tolerance,
+    unweighted_task_mean,
 )
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.oracle_operator import (
@@ -65,8 +63,12 @@ from whetstone.envs.rollout_definition import (
     render_prompt,
     validate_candidate_prompt,
 )
-from whetstone.envs.sampling import EnvSplitSampling
+from whetstone.envs.sampling import (
+    EnvSplitSampling,
+    validate_evaluation_role_for_split,
+)
 from whetstone.envs.task import EnvTask
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.call_support import (
     guard_deadline_seconds,
     is_rate_limit_failure,
@@ -85,7 +87,11 @@ from whetstone.execution.prompt_cache import (
     execute_call,
 )
 from whetstone.optimization.reward import Reward
-from whetstone.optimization.schema import Candidate
+from whetstone.optimization.schema import (
+    Candidate,
+    EvaluationBinding,
+    eval_config_reference,
+)
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -136,12 +142,10 @@ class RolloutOutput:
 class InternalEvalResult:
     """One candidate's evaluation outcome over a split.
 
-    Carries the provenance-bearing ``env_exact_match`` Rollout Aggregate. On an
-    internal/optimizer pass (``apply_reward=True``) it ALSO carries ``reward``,
-    the internal-role Reward the Reward Policy maps the aggregate to (which
-    refuses any official evidence). On an OFFICIAL pass
-    (``apply_reward=False``) ``reward`` is ``None``: an official evaluation
-    MUST derive no Reward -- it
+    Carries the provenance-bearing ``env_exact_match`` Rollout Aggregate. An
+    internal-role Evaluation Binding also produces the exact ``reward`` the
+    Reward Policy maps from the aggregate. An official-role binding produces
+    no Reward: official evaluation
     computes the aggregate + per-task vectors only, per the design vocabulary.
 
     ``per_task_scores`` is the aligned per-task mean 0/1 oracle score (one
@@ -170,43 +174,25 @@ class InternalEvalResult:
     outputs: tuple[RolloutOutput, ...] = ()
 
 
-def _per_task_score(task: TaskRows) -> float:
+def _per_task_score(task: TaskRows, repeat_count: int) -> float:
     """Mean 0/1 score over a task's planned repeats (absent rows count 0)."""
-    completed = task.completed_rows()
+    completed = task.completed_rows(repeat_count)
     if not completed:
         return 0.0
-    total = sum(row.value if row.is_present else 0.0 for row in completed)
+    total = sum(
+        float(row.value or 0.0) if row.is_present else 0.0 for row in completed
+    )
     return total / len(completed)
 
 
-def _per_task_count(task: TaskRows) -> int:
+def _per_task_count(task: TaskRows, repeat_count: int) -> int:
     """Count of completed (scored) repeats behind this task's mean.
 
     This is the observation weight the paired/pooled bootstrap needs to combine
     a task's mean with additional-repeat means exactly (a weighted mean by
     counts), so escalation pools new observations rather than discarding them.
     """
-    return len(task.completed_rows())
-
-
-def _mean_aggregation_config(policy: CompletenessPolicy) -> AggregationConfig:
-    """A ``mean`` Aggregation Config with the declared completeness policy.
-
-    Folds in the ``missing_data`` rule AND the identity-bearing bounded skip
-    tolerance (``max_skip_fraction``) so a tolerant config has a distinct
-    identity from an untolerant one. Kept local (public dr-code APIs only) so
-    the internal-eval loop owns its completeness policy.
-    """
-    return aggregation_definition(
-        "whetstone.env.internal_eval.aggregation"
-    ).materialize(
-        {
-            "reduction": "mean",
-            "missing_data": policy.missing_data,
-            "zero_denominator": "not_applicable",
-            "max_skip_fraction": policy.skip_fraction_token(),
-        }
-    )
+    return len(task.completed_rows(repeat_count))
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -307,15 +293,20 @@ class ProcessInstance(BaseModel):
         )
 
 
-def process_request_identity(model: BaseModel) -> str:
-    """Hash one strict row request's canonical JSON representation."""
-    payload = json.dumps(
-        model.model_dump(mode="json"),
+def _process_payload_identity(payload: JsonValue) -> str:
+    """Hash the exact finite JSON payload submitted to a process worker."""
+    encoded = json.dumps(
+        payload,
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode()
-    return hashlib.sha256(payload).hexdigest()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def process_request_identity(model: BaseModel) -> str:
+    """Hash one strict row request's submitted JSON representation."""
+    return _process_payload_identity(model.model_dump(mode="json"))
 
 
 def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
@@ -352,6 +343,8 @@ class InternalRowRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
+    _submitted_request_identity: str | None = PrivateAttr(default=None)
+
     schema_name: Literal["whetstone.envs.internal_row_request/v1"] = (
         _INTERNAL_ROW_REQUEST_SCHEMA
     )
@@ -371,12 +364,18 @@ class InternalRowRequest(BaseModel):
 
     @property
     def request_identity(self) -> str:
-        return process_request_identity(self)
+        return self._submitted_request_identity or process_request_identity(
+            self
+        )
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> InternalRowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
-        return cls.model_validate_json(json.dumps(payload))
+        request = cls.model_validate_json(json.dumps(payload))
+        request._submitted_request_identity = _process_payload_identity(
+            payload
+        )
+        return request
 
 
 class InternalRowResult(BaseModel):
@@ -492,66 +491,6 @@ def drive_internal_row(
     )
 
 
-def _env_exact_match_aggregate(
-    *,
-    graph_hash: str,
-    eval_config_hash: str,
-    evaluation_context_id: str,
-    task_rows: tuple[TaskRows, ...],
-    repeat_count: int,
-    policy: CompletenessPolicy,
-) -> RolloutAggregate:
-    """The ``env_exact_match`` internal Rollout Aggregate (two-stage mean)."""
-    per_task_config = _mean_aggregation_config(policy)
-    all_rows: list[RowValue] = []
-    per_task_inputs: list[AggregationInput] = []
-    for task in task_rows:
-        completed = task.completed_rows()
-        all_rows.extend(completed)
-        task_output = aggregate(
-            per_task_config,
-            tuple(row.to_aggregation_input() for row in completed),
-        )
-        if task_output.status is AggregationStatus.OK:
-            per_task_inputs.append(
-                AggregationInput(value=task_output.value, applicable=True)
-            )
-        elif task_output.status is AggregationStatus.NOT_APPLICABLE:
-            per_task_inputs.append(
-                AggregationInput(value=None, applicable=False)
-            )
-        else:
-            per_task_inputs.append(
-                AggregationInput(value=None, applicable=True)
-            )
-
-    cross_task_config = _mean_aggregation_config(policy)
-    output = aggregate(cross_task_config, tuple(per_task_inputs))
-    present = sum(1 for r in all_rows if r.is_present)
-    missing = sum(1 for r in all_rows if r.missing)
-    failed = sum(1 for r in all_rows if r.failed)
-    invalid = sum(1 for r in all_rows if r.invalid)
-    output = enforce_skip_tolerance(
-        output,
-        policy=policy,
-        skipped=missing + failed + invalid,
-        planned=len(all_rows),
-    )
-    return RolloutAggregate(
-        name=ENV_EXACT_MATCH_NAME,
-        graph_hash=graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=evaluation_context_id,
-        task_count=len(task_rows),
-        repeat_count=repeat_count,
-        aggregation_output=output,
-        rows_present=present,
-        rows_missing=missing,
-        rows_failed=failed,
-        rows_invalid=invalid,
-    )
-
-
 def run_internal_eval(
     experiment: EnvExperiment,
     *,
@@ -559,10 +498,10 @@ def run_internal_eval(
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
     row_job_factory: InternalRowJobFactory,
+    evaluation_binding: EvaluationBinding,
     concurrency: int = DEFAULT_CONCURRENCY,
     max_wall_seconds: float | None = None,
     partial_log: PartialLog | None = None,
-    apply_reward: bool = True,
     render_guard: bool = False,
     cache: PromptResultCache | None = None,
 ) -> InternalEvalResult:
@@ -577,14 +516,11 @@ def run_internal_eval(
     persistence, which prevents cross-row attribution but does not attest an
     arbitrary worker's scoring implementation.
 
-    **Reward application is caller-controlled.** When ``apply_reward`` is True
-    (the internal/optimizer path, the default) the Reward Policy maps the
-    aggregate value to an internal-role Reward; a missing aggregate under the
-    FAIL missing-data policy surfaces as a typed ``CandidateEvaluationFailure``
-    the optimizer loop handles (candidate marked failed), never a bare
-    ``ValueError``. When ``apply_reward`` is False (the OFFICIAL path) NO
-    Reward is derived: the result carries the aggregate + per-task vectors, so
-    an
+    Reward application follows the exact ``evaluation_binding`` role. The
+    internal role maps the aggregate through the Reward Policy; a missing
+    aggregate under FAIL surfaces as a typed ``CandidateEvaluationFailure``.
+    The official role derives no Reward: the result carries the aggregate and
+    per-task vectors, so an
     incomplete official aggregate (timed-out observations) is visible
     incompleteness, never a process crash.
 
@@ -604,16 +540,21 @@ def run_internal_eval(
     validate_candidate_prompt(env, candidate, instances)
     repeats = sampling.repeat_plan.repeat_count
     partial_phase = sampling.split_role
-    policy = sampling.completeness_policy
-    eval_config_hash = sampling.eval_config.config_identity_hash
+    if evaluation_binding.eval_config != eval_config_reference(
+        sampling.eval_config
+    ):
+        raise ValueError(
+            "evaluation binding must name the exact sampling Eval Config"
+        )
+    validate_evaluation_role_for_split(
+        split_role=partial_phase,
+        evaluation_role=evaluation_binding.role,
+    )
     if sampling.eval_config.evaluation_procedure_config_hash != procedure_hash:
         raise ValueError(
             "sampling EvalConfig procedure does not match the experiment"
         )
-    # The concrete internal Evaluation Context is minted by orchestration; the
-    # helper stamps a stable internal id derived from the internal Eval Config
-    # identity onto the aggregate provenance.
-    evaluation_context_id = eval_config_hash
+    evaluation_binding_id = evaluation_binding.identity_hash()
     unit = candidate.candidate_id
 
     recorded = _restore_recorded(
@@ -821,31 +762,34 @@ def run_internal_eval(
         task_rows.append(
             TaskRows(
                 task_identity=task.task_identity(),
-                expected_repeats=repeats,
                 rows=tuple(rows),
             )
         )
 
-    rollout_aggregate = _env_exact_match_aggregate(
+    rollout_aggregate = unweighted_task_mean(
+        aggregate_name=ENV_EXACT_MATCH_NAME,
         graph_hash=rd.graph_hash,
-        eval_config_hash=eval_config_hash,
-        evaluation_context_id=evaluation_context_id,
+        evaluation_context_id=evaluation_binding_id,
         task_rows=tuple(task_rows),
-        repeat_count=repeats,
-        policy=policy,
+        plan=sampling.evaluation_matrix_plan,
     )
-    # Reward is caller-controlled: internal/optimizer passes derive it; an
-    # official pass MUST derive no Reward (aggregate + per-task vectors only).
+    # The exact Evaluation Binding role controls Reward derivation. Official
+    # evaluation carries only aggregate and per-task evidence.
     reward = (
         reward_from_internal_aggregate(
             experiment.reward_policy,
             env_exact_match_value=rollout_aggregate.aggregation_output.value,
+            evidence_refs=(rollout_aggregate.record_ref(),),
         )
-        if apply_reward
+        if evaluation_binding.role is EvaluationRole.INTERNAL
         else None
     )
-    per_task_scores = tuple(_per_task_score(task) for task in task_rows)
-    per_task_counts = tuple(_per_task_count(task) for task in task_rows)
+    per_task_scores = tuple(
+        _per_task_score(task, repeats) for task in task_rows
+    )
+    per_task_counts = tuple(
+        _per_task_count(task, repeats) for task in task_rows
+    )
     return InternalEvalResult(
         aggregate=rollout_aggregate,
         reward=reward,

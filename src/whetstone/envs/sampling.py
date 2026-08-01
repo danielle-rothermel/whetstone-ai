@@ -44,11 +44,13 @@ from whetstone_envs.core import Instance, PoolSplit, TaskPool
 
 from whetstone.code_eval.aggregate import (
     CompletenessPolicy,
+    EvaluationMatrixPlan,
     RowPolicy,
     aggregation_definition,
 )
 from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
 from whetstone.envs.task import EnvTask
+from whetstone.evaluation_role import EvaluationRole
 
 _DEFINITION_VERSION = "1"
 
@@ -56,6 +58,23 @@ _DEFINITION_VERSION = "1"
 #: absent: no Sampling Config references it.
 INTERNAL_EVAL = "internal_eval"
 OFFICIAL = "official"
+
+
+def validate_evaluation_role_for_split(
+    *, split_role: str, evaluation_role: EvaluationRole
+) -> None:
+    """Require the exact evidence role owned by a sampling split."""
+    if split_role == INTERNAL_EVAL:
+        expected = EvaluationRole.INTERNAL
+    elif split_role == OFFICIAL:
+        expected = EvaluationRole.OFFICIAL
+    else:
+        raise ValueError(f"unknown evaluation split role {split_role!r}")
+    if evaluation_role is not expected:
+        raise ValueError(
+            f"evaluation binding role {evaluation_role.value!r} does not "
+            f"match split role {split_role!r}"
+        )
 
 
 class Completeness(StrEnum):
@@ -244,6 +263,17 @@ class EnvSplitSampling:
             max_skip_fraction=float(
                 str(assignment.get("max_skip_fraction", "0.0000"))
             ),
+        )
+
+    @property
+    def evaluation_matrix_plan(self) -> EvaluationMatrixPlan:
+        """The exact aggregate plan composed by this split binding."""
+        return EvaluationMatrixPlan(
+            eval_config=self.eval_config,
+            sampling_config=self.sampling_config,
+            task_set=self.task_set,
+            repeat_plan=self.repeat_plan,
+            aggregation_config=self.aggregation_config,
         )
 
 
@@ -522,4 +552,5 @@ __all__ = [
     "build_task_set",
     "derive_split_sampling",
     "task_identities",
+    "validate_evaluation_role_for_split",
 ]
