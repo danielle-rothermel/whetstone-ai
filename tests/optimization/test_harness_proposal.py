@@ -166,6 +166,10 @@ class PoisonThenValidAdapter:
     def mode(self) -> StepMode:
         return StepMode.PROPOSAL_ONLY
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request,

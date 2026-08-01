@@ -132,6 +132,7 @@ def make_harness(
     evaluation_service: Any | None = None,
     tool_executor: Any | None = None,
     owner_id: str = "optimization-test-owner",
+    adapter_replay_policy: ReplayPolicy = ReplayPolicy.IDEMPOTENT,
     lease_duration: timedelta = timedelta(seconds=1),
 ) -> OptimizationHarness:
     authority = effect_authority or EffectAuthority.memory()
@@ -142,7 +143,7 @@ def make_harness(
         tool_store=exact_tool_store,
         effect_authority=authority,
         owner_id=owner_id,
-        adapter_replay_policy=ReplayPolicy.IDEMPOTENT,
+        adapter_replay_policy=adapter_replay_policy,
         lease_duration=lease_duration,
         evaluation_service=evaluation_service,
         tool_executor=tool_executor,
@@ -623,6 +624,10 @@ class CountingProposalAdapter:
     def mode(self) -> StepMode:
         return StepMode.PROPOSAL_ONLY
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request: OptimizationStepRequest,
@@ -745,6 +750,10 @@ class ToolUsingAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,

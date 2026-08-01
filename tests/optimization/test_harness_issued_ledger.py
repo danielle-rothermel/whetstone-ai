@@ -13,6 +13,7 @@ from whetstone.optimization import (
     AdapterOutput,
     BudgetState,
     OptimizationStepRequest,
+    ReplayPolicy,
     RuntimeToolHandle,
     StepKind,
     StepMode,
@@ -127,6 +128,10 @@ class CrashAfterTerminalAdapter:
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request: OptimizationStepRequest,
@@ -158,6 +163,10 @@ class CrashThenReplayAdapter:
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request: OptimizationStepRequest,
@@ -187,6 +196,10 @@ class DivergentBeforeUnresolvedAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,
@@ -251,6 +264,10 @@ class FailedAfterTerminalAdapter:
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request: OptimizationStepRequest,
@@ -268,6 +285,10 @@ class SameCallEveryStepAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,
@@ -291,6 +312,10 @@ class SameIdAcrossConfigsAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,
@@ -346,6 +371,10 @@ class ConcurrentDuplicateAdapter:
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request: OptimizationStepRequest,
@@ -372,6 +401,10 @@ class SnapshotAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.PROPOSAL_ONLY
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,

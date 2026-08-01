@@ -8,6 +8,7 @@ from whetstone.optimization import (
     AdapterOutput,
     BudgetDelta,
     OptimizationStepResult,
+    ReplayPolicy,
     RuntimeToolHandle,
     StepMode,
     StepStatus,
@@ -51,6 +52,10 @@ class DuplicateIntentAdapter:
     def mode(self) -> StepMode:
         return StepMode.PROPOSAL_ONLY
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(self, request, handles) -> AdapterOutput:
         del handles
         self.invocations += 1
@@ -79,6 +84,10 @@ class RepeatedCandidateAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.PROPOSAL_ONLY
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(self, request, handles) -> AdapterOutput:
         del handles
@@ -113,6 +122,10 @@ class DuplicateRuntimeToolAdapter:
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
+
     def invoke(
         self,
         request,
@@ -141,6 +154,10 @@ class OmittingToolOutputAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,

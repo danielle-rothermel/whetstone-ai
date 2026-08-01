@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from whetstone.optimization.effect_authority import ReplayPolicy
 from whetstone.optimization.identity import (
     ImmutableJsonObject,
     OpaqueKey,
@@ -30,10 +31,31 @@ __all__ = [
     "AdapterCheckpoint",
     "AdapterOutput",
     "AdapterRegistry",
+    "AdapterReplayPolicyMismatchError",
     "IdentityOptimizerAdapter",
     "MappingAdapterRegistry",
     "OptimizerAdapter",
 ]
+
+
+class AdapterReplayPolicyMismatchError(ValueError):
+    """The host cannot safely run an adapter under its configured policy."""
+
+    def __init__(
+        self,
+        *,
+        adapter_key: str,
+        configured_policy: ReplayPolicy,
+        required_policy: ReplayPolicy,
+    ) -> None:
+        self.adapter_key = adapter_key
+        self.configured_policy = configured_policy
+        self.required_policy = required_policy
+        super().__init__(
+            f"adapter {adapter_key!r} requires replay policy "
+            f"{required_policy.value!r}; configured policy is "
+            f"{configured_policy.value!r}"
+        )
 
 
 class AdapterOutput(BaseModel):
@@ -99,6 +121,9 @@ class OptimizerAdapter(Protocol):
     @property
     def mode(self) -> StepMode: ...
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy: ...
+
     def invoke(
         self,
         request: OptimizationStepRequest,
@@ -149,6 +174,10 @@ class IdentityOptimizerAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.PURE
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.IDEMPOTENT
 
     def invoke(
         self,

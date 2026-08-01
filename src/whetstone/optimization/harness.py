@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any, Protocol
@@ -16,6 +17,7 @@ from whetstone.optimization.adapters import (
     AdapterCheckpoint,
     AdapterOutput,
     AdapterRegistry,
+    AdapterReplayPolicyMismatchError,
     OptimizerAdapter,
 )
 from whetstone.optimization.effect_authority import (
@@ -349,6 +351,12 @@ class ToolExecutor(Protocol):
         store: ToolCallStore,
         binding: ToolCapacityBinding,
     ) -> RuntimeToolHandle: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedAdapter:
+    adapter: OptimizerAdapter
+    replay_policy: ReplayPolicy
 
 
 class _IssuedToolCallLedger:
@@ -812,6 +820,10 @@ class OptimizationHarness:
         evaluation_service: EvaluationService | None = None,
         tool_executor: ToolExecutor | None = None,
     ) -> None:
+        if type(adapter_replay_policy) is not ReplayPolicy:
+            raise TypeError(
+                "adapter_replay_policy must be an actual ReplayPolicy enum"
+            )
         self._store = store
         self._adapter_registry = adapter_registry
         self._tool_store = tool_store
@@ -1066,7 +1078,46 @@ class OptimizationHarness:
 
     def resolve_adapter(self, adapter_key: str) -> OptimizerAdapter:
         """Resolve the exact configured adapter for controller validation."""
-        return self._adapter_registry.resolve(adapter_key)
+        return self._resolve_compatible_adapter(adapter_key).adapter
+
+    def _resolve_compatible_adapter(
+        self,
+        adapter_key: str,
+        *,
+        expected_mode: StepMode | None = None,
+    ) -> _ResolvedAdapter:
+        adapter = self._adapter_registry.resolve(adapter_key)
+        resolved_key = adapter.key
+        if type(resolved_key) is not str:
+            raise TypeError("adapter key must be an actual string")
+        if resolved_key != adapter_key:
+            raise ValueError(
+                "registry returned an adapter under the wrong key"
+            )
+        resolved_mode = adapter.mode
+        if type(resolved_mode) is not StepMode:
+            raise TypeError("adapter mode must be an actual StepMode enum")
+        if expected_mode is not None and resolved_mode is not expected_mode:
+            raise ValueError(
+                f"adapter mode {resolved_mode.value!r} does not match request "
+                f"mode {expected_mode.value!r}"
+            )
+        required_policy = adapter.required_replay_policy
+        if type(required_policy) is not ReplayPolicy:
+            raise TypeError(
+                "adapter required_replay_policy must be an actual "
+                "ReplayPolicy enum"
+            )
+        if required_policy is not self._adapter_replay_policy:
+            raise AdapterReplayPolicyMismatchError(
+                adapter_key=adapter_key,
+                configured_policy=self._adapter_replay_policy,
+                required_policy=required_policy,
+            )
+        return _ResolvedAdapter(
+            adapter=adapter,
+            replay_policy=required_policy,
+        )
 
     def _validate_prior_binding(
         self, request: OptimizationStepRequest
@@ -1135,13 +1186,8 @@ class OptimizationHarness:
         request = validated_request
         for candidate in request.candidates:
             validate_candidate_template(candidate=candidate, run=request.run)
-        request_ref = self._put_request(request)
         exact_request = step_request_reference(request)
-        if request_ref != exact_request.record_ref:
-            raise ValueError("persisted request ref failed content validation")
         self._validate_prior_binding(request)
-        for candidate in request.candidates:
-            self._persist_candidate(candidate)
 
         existing_ref = self._resolve_result_binding(
             request.run_id, request.step_index
@@ -1161,19 +1207,18 @@ class OptimizationHarness:
                 run_id=request.run_id,
                 step_index=request.step_index,
                 existing=existing_ref,
-                requested=request_ref,
+                requested=exact_request.record_ref,
             )
 
-        adapter = self._adapter_registry.resolve(request.adapter_key)
-        if adapter.key != request.adapter_key:
-            raise ValueError(
-                "registry returned an adapter under the wrong key"
-            )
-        if adapter.mode is not request.mode:
-            raise ValueError(
-                f"adapter mode {adapter.mode.value!r} does not match request "
-                f"mode {request.mode.value!r}"
-            )
+        resolved_adapter = self._resolve_compatible_adapter(
+            request.adapter_key,
+            expected_mode=request.mode,
+        )
+        request_ref = self._put_request(request)
+        if request_ref != exact_request.record_ref:
+            raise ValueError("persisted request ref failed content validation")
+        for candidate in request.candidates:
+            self._persist_candidate(candidate)
 
         ledger = (
             _IssuedToolCallLedger(
@@ -1194,12 +1239,12 @@ class OptimizationHarness:
             else ()
         )
         if request.mode is StepMode.PURE:
-            output = self._invoke_pure(request, adapter)
+            output = self._invoke_pure(request, resolved_adapter.adapter)
         else:
             output = self._effectful_output(
                 request,
                 request_ref,
-                adapter,
+                resolved_adapter,
                 ledger=ledger,
                 guarded_handles=guarded_handles,
             )
@@ -1292,12 +1337,14 @@ class OptimizationHarness:
         self,
         request: OptimizationStepRequest,
         request_ref: TypedRef,
-        adapter: OptimizerAdapter,
+        resolved_adapter: _ResolvedAdapter,
         ledger: _IssuedToolCallLedger | None,
         guarded_handles: tuple[RuntimeToolHandle, ...],
     ) -> AdapterOutput:
         effect_request = self._adapter_effect_request(
-            request, request_ref, adapter
+            request,
+            request_ref,
+            resolved_adapter.replay_policy,
         )
         acquisition = self._effect_authority.acquire(
             effect_request,
@@ -1342,7 +1389,7 @@ class OptimizationHarness:
             output, checkpoint_ref = self._invoke_and_persist_adapter(
                 request=request,
                 request_ref=request_ref,
-                adapter=adapter,
+                adapter=resolved_adapter.adapter,
                 ledger=ledger,
                 guarded_handles=guarded_handles,
             )
@@ -1473,13 +1520,13 @@ class OptimizationHarness:
         self,
         request: OptimizationStepRequest,
         request_ref: TypedRef,
-        adapter: OptimizerAdapter,
+        replay_policy: ReplayPolicy,
     ) -> EffectRequest:
         # Persisted-format contract: key schema, version, prefix, and payload
         # literals are pinned by golden tests.
         payload = {
             "step_request_ref": request_ref.model_dump(mode="json"),
-            "adapter_key": str(adapter.key),
+            "adapter_key": str(request.adapter_key),
         }
         semantic_key_hash = compute_identity_hash(
             schema=ADAPTER_EFFECT_KEY_SCHEMA,
@@ -1495,7 +1542,7 @@ class OptimizationHarness:
                 schema_version=ADAPTER_EFFECT_SCHEMA_VERSION,
                 payload=payload,
             ),
-            replay_policy=self._adapter_replay_policy,
+            replay_policy=replay_policy,
         )
 
     def _acquired_lease(self, acquisition: AcquireResult) -> EffectLease:

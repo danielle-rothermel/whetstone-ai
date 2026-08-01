@@ -58,6 +58,7 @@ _PUBLIC_API = {
     "AdapterCheckpoint",
     "AdapterOutput",
     "AdapterRegistry",
+    "AdapterReplayPolicyMismatchError",
     "BudgetDelta",
     "BudgetState",
     "Candidate",
