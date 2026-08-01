@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from inspect import signature
+from inspect import Parameter, signature
 from typing import cast
 
 import pytest
@@ -133,7 +133,7 @@ def _task_mean(
     return unweighted_task_mean(
         aggregate_name=aggregate_name,
         graph_hash=FULL_HASH,
-        evaluation_context_id=CTX,
+        evaluation_binding_hash=CTX,
         task_rows=task_rows,
         plan=plan or _plan(),
     )
@@ -143,7 +143,7 @@ def _task(task_identity: str, *rows: RowValue) -> TaskRows:
     return TaskRows(task_identity=task_identity, rows=rows)
 
 
-def test_aggregate_derives_identity_context_and_shape_from_plan() -> None:
+def test_aggregate_derives_identity_binding_and_shape_from_plan() -> None:
     plan = _plan(("t1",), repeat_count=2)
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0), RowValue(value=0.0)),),
@@ -152,13 +152,24 @@ def test_aggregate_derives_identity_context_and_shape_from_plan() -> None:
 
     assert aggregate.graph_hash == FULL_HASH
     assert aggregate.eval_config_hash == plan.eval_config.config_identity_hash
-    assert aggregate.evaluation_context_id == CTX
+    assert aggregate.evaluation_binding_hash == CTX
     assert aggregate.task_count == 1
     assert aggregate.repeat_count == 2
     assert isinstance(aggregate.aggregation_output, AggregationOutput)
-    assert "eval_config_hash" not in signature(unweighted_task_mean).parameters
-    assert "repeat_count" not in signature(unweighted_task_mean).parameters
-    assert "policy" not in signature(unweighted_task_mean).parameters
+    parameters = tuple(signature(unweighted_task_mean).parameters.values())
+    assert tuple(parameter.name for parameter in parameters) == (
+        "aggregate_name",
+        "graph_hash",
+        "evaluation_binding_hash",
+        "task_rows",
+        "plan",
+    )
+    assert all(
+        parameter.kind is Parameter.KEYWORD_ONLY for parameter in parameters
+    )
+    assert all(
+        parameter.default is Parameter.empty for parameter in parameters
+    )
 
 
 def test_unweighted_task_mean_is_two_stage_not_row_weighted() -> None:
@@ -633,7 +644,7 @@ def test_aggregate_rejects_incomplete_accounting() -> None:
             name="x",
             graph_hash=FULL_HASH,
             eval_config_hash=FULL_HASH,
-            evaluation_context_id=CTX,
+            evaluation_binding_hash=CTX,
             task_count=2,
             repeat_count=3,
             aggregation_output=AggregationOutput(
@@ -650,24 +661,16 @@ def test_aggregate_rejects_incomplete_accounting() -> None:
         )
 
 
-def test_aggregate_reuses_canonical_hash_validation() -> None:
-    with pytest.raises(ValueError, match="graph_hash"):
-        RolloutAggregate(
-            name="x",
-            graph_hash="short",
-            eval_config_hash=FULL_HASH,
-            evaluation_context_id=CTX,
-            task_count=0,
-            repeat_count=1,
-            aggregation_output=AggregationOutput(
-                status=AggregationStatus.NOT_APPLICABLE,
-                value=None,
-                count_total=0,
-                count_applicable=0,
-                count_present=0,
-            ),
-            rows_present=0,
-            rows_missing=0,
-            rows_failed=0,
-            rows_invalid=0,
-        )
+@pytest.mark.parametrize(
+    "field",
+    [
+        "graph_hash",
+        "eval_config_hash",
+        "evaluation_binding_hash",
+    ],
+)
+def test_aggregate_reuses_canonical_hash_validation(field: str) -> None:
+    aggregate = _task_mean(())
+
+    with pytest.raises(ValueError, match=field):
+        replace(aggregate, **{field: "short"})

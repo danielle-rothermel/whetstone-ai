@@ -4,8 +4,8 @@ dr-code's :func:`~dr_code.eval.aggregate` is a pure, provenance-free function
 over an explicitly complete tuple of inputs. Whetstone binds that value into a
 **provenance-bearing** Rollout Aggregate: it attaches the identity
 ``(graph_hash, eval_config_hash)``, the complete planned Rollout Result matrix,
-and the stated Evaluation Context. Whetstone owns provenance/context; dr-code
-owns the numeric reduction.
+and the stated Evaluation Binding hash. Whetstone owns provenance and the
+binding; dr-code owns the numeric reduction.
 
 The canonical Rollout Aggregate is an **Unweighted Task Mean**: the mean
 caller-derived scalar across Repeat IDs *per Task*, followed by the configured
@@ -282,15 +282,15 @@ class RolloutAggregate:
 
     Binds a pure dr-code :class:`AggregationOutput` to the aggregate identity
     ``(graph_hash, eval_config_hash)``, the complete planned matrix
-    (``task_count`` by ``repeat_count``), and the stated Evaluation Context.
-    The numeric reduction stays in the pure ``aggregation_output``; provenance
-    is Whetstone's.
+    (``task_count`` by ``repeat_count``), and the stated Evaluation Binding
+    hash. The numeric reduction stays in the pure ``aggregation_output``;
+    provenance is Whetstone's.
     """
 
     name: str
     graph_hash: str
     eval_config_hash: str
-    evaluation_context_id: str
+    evaluation_binding_hash: str
     #: Complete planned matrix shape.
     task_count: int
     repeat_count: int
@@ -305,8 +305,9 @@ class RolloutAggregate:
     def __post_init__(self) -> None:
         require_full_hash(self.graph_hash, field="graph_hash")
         require_full_hash(self.eval_config_hash, field="eval_config_hash")
-        if not self.evaluation_context_id:
-            raise ValueError("evaluation_context_id must be non-empty")
+        require_full_hash(
+            self.evaluation_binding_hash, field="evaluation_binding_hash"
+        )
         if self.task_count < 0:
             raise ValueError("task_count cannot be negative")
         if self.repeat_count < 1:
@@ -444,7 +445,7 @@ def unweighted_task_mean(
     *,
     aggregate_name: str,
     graph_hash: str,
-    evaluation_context_id: str,
+    evaluation_binding_hash: str,
     task_rows: tuple[TaskRows, ...],
     plan: EvaluationMatrixPlan,
 ) -> RolloutAggregate:
@@ -539,7 +540,7 @@ def unweighted_task_mean(
         name=aggregate_name,
         graph_hash=graph_hash,
         eval_config_hash=plan.eval_config.config_identity_hash,
-        evaluation_context_id=evaluation_context_id,
+        evaluation_binding_hash=evaluation_binding_hash,
         task_count=len(planned_task_identities),
         repeat_count=repeat_count,
         aggregation_output=output,

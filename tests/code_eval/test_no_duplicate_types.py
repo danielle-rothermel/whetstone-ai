@@ -155,7 +155,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         name="x",
         graph_hash="0" * 64,
         eval_config_hash="1" * 64,
-        evaluation_context_id="2" * 64,
+        evaluation_binding_hash="2" * 64,
         task_count=0,
         repeat_count=1,
         aggregation_output=output,
