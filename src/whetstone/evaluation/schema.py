@@ -16,19 +16,31 @@ from pydantic import (
 )
 
 from whetstone.code_eval.aggregate import ROLLOUT_AGGREGATE_SCHEMA
-from whetstone.optimization.identity import ImmutableJsonObject, TypedRef
-from whetstone.optimization.reward import RewardRef
-from whetstone.optimization.schema import CandidateRef, EvaluationBinding
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.identity import (
+    IdentityHash,
+    ImmutableJsonObject,
+    TypedRef,
+    typed_ref_for_record,
+)
+from whetstone.optimization.reward import REWARD_SCHEMA, RewardRef
+from whetstone.optimization.schema import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_FAILURE_SCHEMA,
+    CandidateRef,
+    EvaluationBinding,
+    IntentOutcome,
+    IntentResolution,
+)
 
-EVALUATION_EVIDENCE_SCHEMA = "whetstone.evaluation_evidence"
 #: Persisted-format contract for EvaluationOutputsRecord. Exact wire fields
 #: are pinned by a golden test; never derive them from internal dataclass
 #: names.
 EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
-REWARD_SCHEMA = "whetstone.reward"
-EVALUATION_FAILURE_SCHEMA = "whetstone.evaluation_failure"
+EVALUATION_RESULT_ATTESTATION_SCHEMA = (
+    "whetstone.evaluation_result_attestation"
+)
 EVALUATION_INTENT_CLAIM_SCHEMA = "whetstone.evaluation_intent_claim"
-INTENT_RESOLUTION_SCHEMA = "whetstone.intent_resolution"
 
 
 class RowAccounting(BaseModel):
@@ -53,26 +65,6 @@ class CacheEvidence(BaseModel):
     source_call_ids: tuple[str, ...] = ()
 
 
-class EvaluationOutputComponentTraceStep(BaseModel):
-    """One ordered native component trace persisted with an output row."""
-
-    model_config = ConfigDict(
-        frozen=True,
-        extra="forbid",
-        allow_inf_nan=False,
-    )
-
-    component_id: StrictStr
-    inputs: ImmutableJsonObject
-    outputs: ImmutableJsonObject
-
-    @model_validator(mode="after")
-    def _validate_contract(self) -> EvaluationOutputComponentTraceStep:
-        if not self.component_id.strip():
-            raise ValueError("component_id must be non-empty")
-        return self
-
-
 class EvaluationOutputRow(BaseModel):
     """Stable serialized projection of one driven evaluation output row."""
 
@@ -89,8 +81,10 @@ class EvaluationOutputRow(BaseModel):
     rendered_prompt: StrictStr
     output_text: StrictStr | None
     score: StrictFloat | None
+    failed: StrictBool
+    missing: StrictBool
+    invalid: StrictBool
     failure_code: StrictStr
-    component_trace_steps: tuple[EvaluationOutputComponentTraceStep, ...]
     finish_reason: StrictStr | None
     provider_error: ImmutableJsonObject | None
     max_budget: StrictInt | None
@@ -105,6 +99,13 @@ class EvaluationOutputRow(BaseModel):
             raise ValueError("repeat must be non-negative")
         if self.max_budget is not None and self.max_budget < 0:
             raise ValueError("max_budget must be non-negative")
+        state_count = sum((self.failed, self.missing, self.invalid))
+        if self.score is not None and state_count:
+            raise ValueError("a scored output row must be present")
+        if self.score is None and state_count != 1:
+            raise ValueError(
+                "an unscored output row requires exactly one absent state"
+            )
         return self
 
 
@@ -117,22 +118,46 @@ class EvaluationOutputsRecord(BaseModel):
         allow_inf_nan=False,
     )
 
-    candidate_id: StrictStr
+    candidate: CandidateRef
+    evaluation_binding: EvaluationBinding
+    evaluation_role: EvaluationRole
+    graph_hash: IdentityHash
+    purpose: StrictStr
+    split_role: StrictStr
+    task_identities: tuple[StrictStr, ...]
+    repeat_count: StrictInt
     outputs: tuple[EvaluationOutputRow, ...]
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationOutputsRecord:
-        if not self.candidate_id.strip():
-            raise ValueError("candidate_id must be non-empty")
+        if self.evaluation_role is not self.evaluation_binding.role:
+            raise ValueError(
+                "evaluation_role must match the exact Evaluation Binding"
+            )
+        if not self.purpose.strip():
+            raise ValueError("purpose must be non-empty")
+        if not self.split_role.strip():
+            raise ValueError("split_role must be non-empty")
+        if self.repeat_count < 1:
+            raise ValueError("repeat_count must be at least 1")
+        if not self.task_identities:
+            raise ValueError("task_identities must be non-empty")
+        if any(not task.strip() for task in self.task_identities):
+            raise ValueError("task_identities must be non-empty")
+        if len(set(self.task_identities)) != len(self.task_identities):
+            raise ValueError("task_identities must be unique")
 
         task_to_instance: dict[str, str] = {}
         instance_to_task: dict[str, str] = {}
         seen_keys: set[tuple[str, int]] = set()
-        closed_tasks: set[str] = set()
-        current_task: str | None = None
-        prior_repeat = -1
+        planned_ordinal = {
+            (task_identity, repeat): task_index * self.repeat_count + repeat
+            for task_index, task_identity in enumerate(self.task_identities)
+            for repeat in range(self.repeat_count)
+        }
+        prior_ordinal = -1
         for row in self.outputs:
-            if row.candidate_id != self.candidate_id:
+            if row.candidate_id != self.candidate.record.candidate_id:
                 raise ValueError(
                     "every output row candidate_id must match the record"
                 )
@@ -156,21 +181,20 @@ class EvaluationOutputsRecord(BaseModel):
                     "output rows must have unique task_identity/repeat keys"
                 )
             seen_keys.add(key)
-
-            if row.task_identity != current_task:
-                if row.task_identity in closed_tasks:
-                    raise ValueError(
-                        "output rows for one task_identity must be contiguous"
-                    )
-                if current_task is not None:
-                    closed_tasks.add(current_task)
-                current_task = row.task_identity
-                prior_repeat = -1
-            if row.repeat <= prior_repeat:
+            ordinal = planned_ordinal.get(key)
+            if ordinal is None:
                 raise ValueError(
-                    "output repeats must be strictly increasing within a task"
+                    "output row is outside the exact task/repeat plan"
                 )
-            prior_repeat = row.repeat
+            if ordinal <= prior_ordinal:
+                raise ValueError(
+                    "output rows must follow exact task/repeat order"
+                )
+            prior_ordinal = ordinal
+        if seen_keys != set(planned_ordinal):
+            raise ValueError(
+                "output rows must cover the exact task/repeat plan"
+            )
         return self
 
     def record_content(self) -> dict[str, Any]:
@@ -216,6 +240,26 @@ class EvaluationEvidence(BaseModel):
         return self.model_dump(mode="json")
 
 
+class EvaluationEvidenceRef(BaseModel):
+    """An exact persisted Evaluation Evidence record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record: EvaluationEvidence
+    record_ref: TypedRef
+
+    @model_validator(mode="after")
+    def _validate(self) -> EvaluationEvidenceRef:
+        expected = typed_ref_for_record(
+            EVALUATION_EVIDENCE_SCHEMA, self.record.record_content()
+        )
+        if self.record_ref != expected:
+            raise ValueError(
+                "Evaluation Evidence record_ref must address the exact record"
+            )
+        return self
+
+
 class EvaluationFailureEvidence(BaseModel):
     """Typed terminal evidence when execution started but did not score."""
 
@@ -231,6 +275,26 @@ class EvaluationFailureEvidence(BaseModel):
         return self.model_dump(mode="json")
 
 
+class EvaluationFailureEvidenceRef(BaseModel):
+    """An exact persisted Evaluation Failure record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record: EvaluationFailureEvidence
+    record_ref: TypedRef
+
+    @model_validator(mode="after")
+    def _validate(self) -> EvaluationFailureEvidenceRef:
+        expected = typed_ref_for_record(
+            EVALUATION_FAILURE_SCHEMA, self.record.record_content()
+        )
+        if self.record_ref != expected:
+            raise ValueError(
+                "Evaluation Failure record_ref must address the exact record"
+            )
+        return self
+
+
 class EvaluationIntentClaim(BaseModel):
     """One event in an intent's globally ordered lease stream."""
 
@@ -242,6 +306,31 @@ class EvaluationIntentClaim(BaseModel):
     generation: StrictInt
     heartbeat_ordinal: StrictInt
     expires_at: StrictFloat
+    result_attestation_ref: TypedRef | None = None
+
+
+class EvaluationResultAttestation(BaseModel):
+    """The exact terminal evaluator result won through claim arbitration."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    graph_hash: IdentityHash
+    resolution: IntentResolution
+
+    @model_validator(mode="after")
+    def _validate(self) -> EvaluationResultAttestation:
+        if self.resolution.outcome not in {
+            IntentOutcome.COMPLETED,
+            IntentOutcome.FAILED,
+        }:
+            raise ValueError(
+                "an Evaluation Result Attestation requires a terminal "
+                "executed outcome"
+            )
+        return self
+
+    def record_content(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
 
 
 __all__ = [
@@ -249,15 +338,17 @@ __all__ = [
     "EVALUATION_FAILURE_SCHEMA",
     "EVALUATION_INTENT_CLAIM_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA",
-    "INTENT_RESOLUTION_SCHEMA",
+    "EVALUATION_RESULT_ATTESTATION_SCHEMA",
     "REWARD_SCHEMA",
     "ROLLOUT_AGGREGATE_SCHEMA",
     "CacheEvidence",
     "EvaluationEvidence",
+    "EvaluationEvidenceRef",
     "EvaluationFailureEvidence",
+    "EvaluationFailureEvidenceRef",
     "EvaluationIntentClaim",
-    "EvaluationOutputComponentTraceStep",
     "EvaluationOutputRow",
     "EvaluationOutputsRecord",
+    "EvaluationResultAttestation",
     "RowAccounting",
 ]

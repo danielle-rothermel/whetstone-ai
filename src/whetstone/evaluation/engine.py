@@ -26,7 +26,7 @@ from whetstone.evaluation.schema import (
     ROLLOUT_AGGREGATE_SCHEMA,
     CacheEvidence,
     EvaluationEvidence,
-    EvaluationOutputComponentTraceStep,
+    EvaluationEvidenceRef,
     EvaluationOutputRow,
     EvaluationOutputsRecord,
     RowAccounting,
@@ -34,7 +34,11 @@ from whetstone.evaluation.schema import (
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.identity import (
+    IdentityRef,
+    TypedRef,
+    typed_ref_for_record,
+)
 from whetstone.optimization.reward import reward_reference
 from whetstone.optimization.schema import (
     CANDIDATE_RECORD_SCHEMA,
@@ -45,7 +49,10 @@ from whetstone.optimization.schema import (
     candidate_reference,
     eval_config_reference,
 )
-from whetstone.provider.policy import ProviderExecutionPolicy
+from whetstone.provider.policy import (
+    PROVIDER_EXECUTION_POLICY_SCHEMA,
+    ProviderExecutionPolicy,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +71,12 @@ class EngineEvaluation:
     evidence: EvaluationEvidence
     evidence_ref: TypedRef
 
+    def __post_init__(self) -> None:
+        EvaluationEvidenceRef(
+            record=self.evidence,
+            record_ref=self.evidence_ref,
+        )
+
     @property
     def reward_value(self) -> float | None:
         if self.evidence.reward_ref is None:
@@ -74,7 +87,7 @@ class EngineEvaluation:
 class EvaluationEngine:
     """Render, execute, aggregate, and persist one exact sampling binding.
 
-    The PR6 :func:`run_internal_eval` kernel is the only row-driving loop.
+    :func:`run_internal_eval` is the only row-driving loop.
     This engine owns its external contract: exact Config validation, candidate
     preflight, content-addressed evidence, and optimizer-facing references.
     """
@@ -115,6 +128,21 @@ class EvaluationEngine:
     def prompt_cache(self) -> PromptResultCache | None:
         return self._prompt_cache
 
+    @property
+    def provider_execution_policy_ref(self) -> IdentityRef:
+        return IdentityRef(
+            record_ref=typed_ref_for_record(
+                PROVIDER_EXECUTION_POLICY_SCHEMA,
+                self._execution_policy.identity_payload(),
+            ),
+            identity_hash=self._execution_policy.identity_hash,
+        )
+
+    @property
+    def provider_execution_policy_record(self) -> dict[str, Any]:
+        """Return the canonical policy record advertised by the engine."""
+        return self._execution_policy.identity_payload()
+
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
         validate_candidate_prompt(
@@ -123,10 +151,23 @@ class EvaluationEngine:
             self.sampling.instances,
         )
 
+    def validate_request(self, request: EvaluationRequest) -> None:
+        """Validate the complete evaluation request before execution."""
+        self._validate_binding(request.evaluation_binding)
+        self.preflight(request.candidate)
+
     def _validate_binding(self, binding: EvaluationBinding) -> None:
         if binding.eval_config != self.eval_config_ref:
             raise ValueError(
                 "evaluation binding must name the engine's exact Eval Config"
+            )
+        if (
+            binding.provider_execution_policy_ref
+            != self.provider_execution_policy_ref
+        ):
+            raise ValueError(
+                "evaluation binding must name the engine's exact Provider "
+                "Execution Policy"
             )
 
     def _put(self, schema: str, content: dict[str, Any]) -> TypedRef:
@@ -201,15 +242,10 @@ class EvaluationEngine:
                     ),
                     output_text=output.output_text,
                     score=output.score,
+                    failed=output.failed,
+                    missing=output.missing,
+                    invalid=output.invalid,
                     failure_code=output.failure_code,
-                    component_trace_steps=tuple(
-                        EvaluationOutputComponentTraceStep(
-                            component_id=trace.component_id,
-                            inputs=trace.inputs,
-                            outputs=trace.outputs,
-                        )
-                        for trace in output.component_trace_steps
-                    ),
                     finish_reason=output.finish_reason,
                     provider_error=output.provider_error,
                     max_budget=output.max_budget,
@@ -217,13 +253,19 @@ class EvaluationEngine:
                 )
             )
         return EvaluationOutputsRecord(
-            candidate_id=request.candidate.candidate_id,
+            candidate=candidate_reference(request.candidate),
+            evaluation_binding=request.evaluation_binding,
+            evaluation_role=request.evaluation_binding.role,
+            graph_hash=self.experiment.rollout_definition.graph_hash,
+            purpose=request.purpose,
+            split_role=self.sampling.split_role,
+            task_identities=task_identities,
+            repeat_count=repeat_count,
             outputs=tuple(rows),
         )
 
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
-        self._validate_binding(request.evaluation_binding)
-        self.preflight(request.candidate)
+        self.validate_request(request)
         result = run_internal_eval(
             self.experiment,
             candidate=request.candidate,

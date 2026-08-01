@@ -1,11 +1,15 @@
-"""PR4 ToolEvaluator projection onto the canonical evaluation engine."""
+"""Tool evaluator projection onto the canonical evaluation engine."""
 
 from __future__ import annotations
 
 from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.identity import ImmutableJsonObject, TypedRef
-from whetstone.optimization.schema import Candidate, EvaluationBinding
+from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
+    Candidate,
+    EvaluationBinding,
+)
 from whetstone.optimization.tool_eval import (
     ToolEvaluation,
     ToolValidationError,
@@ -45,9 +49,13 @@ class EngineToolEvaluator:
             EvaluationRequest(
                 candidate=candidate,
                 evaluation_binding=EvaluationBinding(
+                    schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
                     eval_config=self._engine.eval_config_ref,
                     role=EvaluationRole.INTERNAL,
                     campaign=config.store_namespace_key,
+                    provider_execution_policy_ref=(
+                        self._engine.provider_execution_policy_ref
+                    ),
                 ),
                 purpose=config.tool_name,
             )

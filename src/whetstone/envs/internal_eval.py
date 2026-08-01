@@ -434,6 +434,21 @@ class RolloutOutput:
     max_budget: int | None = None
     over_budget: bool | None = None
 
+    @property
+    def failed(self) -> bool:
+        """Whether the authoritative execution state is failed."""
+        return self.row_state is ExecutedRowState.FAILED
+
+    @property
+    def missing(self) -> bool:
+        """Whether the authoritative execution state is missing."""
+        return self.row_state is ExecutedRowState.MISSING
+
+    @property
+    def invalid(self) -> bool:
+        """Whether the row is invalid in the current execution state model."""
+        return False
+
 
 @dataclass(frozen=True, slots=True)
 class InternalEvalResult:
@@ -1134,8 +1149,9 @@ def run_internal_eval(
     deadline_reached = deadline_1 or deadline_2
     guard_timeouts = guard_1 + guard_2
 
-    # Assemble per-task rows and exact traces in instance/repeat order.
-    # Restored rows carry the same persisted trace as their fresh execution.
+    # Assemble one complete per-task matrix with exact traces in
+    # instance/repeat order. Restored rows retain their persisted output and
+    # trace; deadline-stopped rows remain explicit missing outcomes.
     task_rows: list[TaskRows] = []
     outputs: list[RolloutOutput] = []
     for instance, task in tasks:
