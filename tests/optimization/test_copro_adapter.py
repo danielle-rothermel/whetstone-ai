@@ -18,6 +18,7 @@ from whetstone.lm.boundary import PlainPromptAdapter
 from whetstone.optimization import (
     EVALUATION_EVIDENCE_SCHEMA,
     INTENT_RESOLUTION_SCHEMA_VERSION,
+    AdapterReplayPolicyMismatchError,
     BudgetState,
     Candidate,
     CoproAdapter,
@@ -33,6 +34,7 @@ from whetstone.optimization import (
     OptimizationStepRequest,
     OutputContract,
     ProposerConfig,
+    ReplayPolicy,
     ResolutionClass,
     ResolutionDetail,
     StepKind,
@@ -266,8 +268,16 @@ def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
     assert transport.calls[0][2] == 2
 
 
-def test_seed_round_passes_hardened_harness_contract(tmp_path) -> None:
-    adapter, _, control = _adapter(
+def test_adapter_requires_no_redrive_replay() -> None:
+    adapter, _, _ = _adapter({})
+
+    assert adapter.required_replay_policy is ReplayPolicy.NO_REDRIVE
+
+
+def test_idempotent_harness_rejects_before_copro_effects(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, transport, control = _adapter(
         {(SEED_PROPOSAL, 0): ("new {input}", "other {input}")}
     )
     store = make_store(tmp_path)
@@ -279,13 +289,60 @@ def test_seed_round_passes_hardened_harness_contract(tmp_path) -> None:
         adapter_registry=MappingAdapterRegistry({"copro": adapter}),
         run=_run(control),
         evaluation_service=service,
+        adapter_replay_policy=ReplayPolicy.IDEMPOTENT,
     )
+    puts = 0
+    real_put = harness._put
 
-    result, _ = harness.run_step(_request(control))
+    def record_put(*args, **kwargs):
+        nonlocal puts
+        puts += 1
+        return real_put(*args, **kwargs)
+
+    monkeypatch.setattr(harness, "_put", record_put)
+
+    with pytest.raises(AdapterReplayPolicyMismatchError) as caught:
+        harness.run_step(_request(control))
+
+    assert caught.value.configured_policy is ReplayPolicy.IDEMPOTENT
+    assert caught.value.required_policy is ReplayPolicy.NO_REDRIVE
+    assert adapter.invocations == 0
+    assert transport.calls == []
+    assert service.calls == []
+    assert puts == 0
+
+
+def test_no_redrive_harness_reaches_copro_and_replays_completed_result(
+    tmp_path,
+) -> None:
+    adapter, transport, control = _adapter(
+        {(SEED_PROPOSAL, 0): ("new {input}", "other {input}")}
+    )
+    store = make_store(tmp_path)
+    service = RecordingEvaluationService(
+        store, reward_policy=internal_reward_policy()
+    )
+    harness = make_harness(
+        store=store,
+        adapter_registry=MappingAdapterRegistry({"copro": adapter}),
+        run=_run(control),
+        evaluation_service=service,
+        adapter_replay_policy=ReplayPolicy.NO_REDRIVE,
+    )
+    request = _request(control)
+
+    result, result_ref = harness.run_step(request)
 
     assert len(result.proposed_candidates) == 2
     assert len(result.accepted_candidates) == 2
     assert len(result.resolved_intents) == 3
+    assert len(service.calls) == 3
+    assert adapter.invocations == 1
+    assert len(transport.calls) == 1
+
+    assert harness.run_step(request) == (result, result_ref)
+    assert adapter.invocations == 1
+    assert len(transport.calls) == 1
     assert len(service.calls) == 3
 
 

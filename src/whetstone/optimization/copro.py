@@ -21,6 +21,7 @@ from pydantic import (
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.adapters import AdapterOutput
 from whetstone.optimization.copro_control import CoproControl
+from whetstone.optimization.effect_authority import ReplayPolicy
 from whetstone.optimization.identity import (
     ImmutableJsonObject,
     TerminalFailure,
@@ -687,6 +688,10 @@ class CoproAdapter:
     @property
     def mode(self) -> StepMode:
         return StepMode.PROPOSAL_ONLY
+
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.NO_REDRIVE
 
     @property
     def proposer_config(self) -> ProposerConfig:
