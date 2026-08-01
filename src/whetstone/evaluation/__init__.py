@@ -7,6 +7,9 @@ from whetstone.evaluation.engine import (
 )
 from whetstone.evaluation.schema import (
     CacheEvidence,
+    EvaluationComponentTraceRow,
+    EvaluationComponentTraces,
+    EvaluationComponentTracesRef,
     EvaluationEvidence,
     EvaluationEvidenceRef,
     EvaluationFailureEvidence,
@@ -23,6 +26,9 @@ __all__ = [
     "EngineEvaluation",
     "EngineEvaluationService",
     "EngineToolEvaluator",
+    "EvaluationComponentTraceRow",
+    "EvaluationComponentTraces",
+    "EvaluationComponentTracesRef",
     "EvaluationEngine",
     "EvaluationEvidence",
     "EvaluationEvidenceRef",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from collections.abc import Callable
@@ -37,20 +38,31 @@ from whetstone.code_eval.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
+from whetstone.envs.ed1 import DECODER_TEMPLATE
+from whetstone.envs.encdec_rollout import (
+    DECODER_NODE_ID,
+    ENCODER_NODE_ID,
+    build_encdec_rollout_definition,
+)
 from whetstone.envs.factory import build_env_experiment
 from whetstone.envs.internal_eval import (
+    ExecutedRowState,
     InternalRowJobFactory,
     InternalRowOutcome,
     InternalRowRequest,
     InternalRowResult,
+    _llm_component_step,
 )
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
+from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
 from whetstone.evaluation import (
     EngineEvaluation,
     EngineEvaluationService,
     EngineToolEvaluator,
+    EvaluationComponentTraces,
+    EvaluationComponentTracesRef,
     EvaluationEngine,
     EvaluationEvidence,
     EvaluationEvidenceRef,
@@ -62,8 +74,15 @@ from whetstone.evaluation import (
 )
 from whetstone.evaluation import engine as evaluation_engine_module
 from whetstone.evaluation.schema import (
+    EVALUATION_COMPONENT_TRACES_SCHEMA,
+    EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
+    EVALUATION_EVIDENCE_SCHEMA_VERSION,
+    EVALUATION_INTENT_CLAIM_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
+    EVALUATION_OUTPUTS_SCHEMA_VERSION,
+    EVALUATION_RESULT_ATTESTATION_SCHEMA,
     EvaluationIntentClaim,
+    EvaluationResultAttestation,
 )
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import ProcessJob
@@ -130,6 +149,7 @@ def _engine(
     cache: bool = False,
     role: EvaluationRole = EvaluationRole.INTERNAL,
     provider_policy: ProviderExecutionPolicy | None = None,
+    max_wall_seconds: float | None = None,
 ) -> EvaluationEngine:
     experiment = _experiment(repeats=repeats)
     sampling = (
@@ -143,10 +163,33 @@ def _engine(
         sampling=sampling,
         execution_policy=provider_policy or execution_policy(),
         row_job_factory=row_job_factory,
+        max_wall_seconds=max_wall_seconds,
         partial_log=PartialLog(tmp_path / "partials.jsonl")
         if partial
         else None,
         prompt_cache=PromptResultCache(tmp_path / "cache") if cache else None,
+    )
+
+
+def _ed1_graph_engine(*, store: ObjectStore) -> EvaluationEngine:
+    base_experiment = _experiment()
+    experiment = replace(
+        base_experiment,
+        rollout_definition=build_encdec_rollout_definition(
+            "ed1",
+            model="openai/test",
+            procedure_config_hash=(
+                base_experiment.rollout_definition.procedure_config_hash
+            ),
+            budget_ratio=None,
+        ),
+    )
+    return EvaluationEngine(
+        store=store,
+        experiment=experiment,
+        sampling=experiment.eval_configs.official,
+        execution_policy=execution_policy(),
+        row_job_factory=_DEFAULT_ROW_JOB_FACTORY,
     )
 
 
@@ -230,6 +273,44 @@ def _bind_without_validation(
     store.bind(service._key(intent), reference)
 
 
+def _bind_with_forged_terminal_attestation(
+    *,
+    store: ObjectStore,
+    service: EngineEvaluationService,
+    intent: EvaluationIntent,
+    resolution: IntentResolution,
+) -> None:
+    attestation = EvaluationResultAttestation(
+        graph_hash=service._engine.experiment.rollout_definition.graph_hash,
+        resolution=resolution,
+    )
+    attestation_ref = _put_typed(
+        store,
+        EVALUATION_RESULT_ATTESTATION_SCHEMA,
+        attestation.record_content(),
+    )
+    claim = EvaluationIntentClaim(
+        intent_ref=service._intent_ref(intent),
+        owner_id="forged-restart-fixture",
+        event_ordinal=0,
+        generation=0,
+        heartbeat_ordinal=0,
+        expires_at=0.0,
+        result_attestation_ref=attestation_ref,
+    )
+    claim_reference, _ = store.put(
+        EVALUATION_INTENT_CLAIM_SCHEMA,
+        claim.model_dump(mode="json"),
+    )
+    store.bind(service._claim_key(intent, 0), claim_reference)
+    _bind_without_validation(
+        store=store,
+        service=service,
+        intent=intent,
+        resolution=resolution,
+    )
+
+
 def _publish_attestation(
     *,
     service: EngineEvaluationService,
@@ -258,6 +339,15 @@ def _put_typed(
     )
 
 
+def _load_component_traces(
+    store: ObjectStore,
+    evidence: EvaluationEvidence,
+) -> EvaluationComponentTraces:
+    return EvaluationComponentTraces.model_validate_json(
+        json.dumps(store.get(evidence.component_traces_ref.reference))
+    )
+
+
 def _blocking_evaluate(
     *,
     result: EngineEvaluation,
@@ -279,6 +369,31 @@ def _fail_unexpected_evaluate(
     _request: EvaluationRequest,
 ) -> EngineEvaluation:
     raise AssertionError("waiting resolver must not evaluate")
+
+
+def _successful_internal_outcome(
+    request: InternalRowRequest,
+) -> InternalRowOutcome:
+    output_text = request.instance.gold
+    prompt = render_prompt(
+        env_spec(request.env_name),
+        request.candidate,
+        request.instance.to_instance(),
+    )
+    return InternalRowOutcome(
+        score=1.0,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=LLM_NODE_ID,
+                prompt=prompt,
+                generation=output_text,
+            ),
+        ),
+        output_text=output_text,
+        finish_reason="stop",
+    )
 
 
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
@@ -304,11 +419,41 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     output_record = EvaluationOutputsRecord.model_validate(
         store.get(evidence.outputs_ref.reference)
     )
+    component_traces = _load_component_traces(store, evidence)
     assert output_record.record_content() == store.get(
         evidence.outputs_ref.reference
     )
     assert output_record.candidate.record.candidate_id == (
         engine.experiment.initial_candidate.candidate_id
+    )
+    assert output_record.component_traces_ref == (
+        evidence.component_traces_ref
+    )
+    assert component_traces.candidate == evidence.candidate
+    assert component_traces.evaluation_binding == evidence.evaluation_binding
+    assert component_traces.graph_hash == evidence.graph_hash
+    assert tuple(
+        (
+            row.instance_id,
+            row.task_identity,
+            row.repeat,
+            row.executed_component_trace.row_state.value,
+        )
+        for row in component_traces.rows
+    ) == tuple(
+        (
+            row.instance_id,
+            row.task_identity,
+            row.repeat,
+            "success",
+        )
+        for row in output_record.outputs
+    )
+    assert (
+        component_traces.rows[0]
+        .executed_component_trace.executed_component_steps[0]
+        .outputs["generation"]
+        == output_record.outputs[0].output_text
     )
     assert tuple(row.task_identity for row in output_record.outputs) == (
         engine.sampling.task_set.task_identities
@@ -327,6 +472,481 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     assert evidence.dataset_identity == (
         engine.sampling.task_set.dataset_revision
     )
+
+
+def test_engine_persists_missing_row_state_without_fabricated_steps(
+    tmp_path,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "missing-trace.sqlite"))
+    engine = _engine(
+        tmp_path,
+        store=store,
+        role=EvaluationRole.OFFICIAL,
+        max_wall_seconds=0.0,
+    )
+
+    evaluated = engine.evaluate(
+        EvaluationRequest(
+            candidate=engine.experiment.initial_candidate,
+            evaluation_binding=_binding(engine, role=EvaluationRole.OFFICIAL),
+            purpose="missing-trace",
+        )
+    )
+
+    outputs = EvaluationOutputsRecord.model_validate(
+        store.get(evaluated.evidence.outputs_ref.reference)
+    )
+    trace = (
+        _load_component_traces(store, evaluated.evidence)
+        .rows[0]
+        .executed_component_trace
+    )
+    assert outputs.outputs[0].missing
+    assert trace.row_state is ExecutedRowState.MISSING
+    assert trace.executed_component_steps == ()
+
+
+def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "ed1-traces.sqlite"))
+    engine = _ed1_graph_engine(store=store)
+    experiment = engine.experiment
+    canonical_run = evaluation_engine_module.run_internal_eval
+    run_count = 0
+    encoder_text = "compressed description distinct from final code"
+
+    def ed1_traced_run(*args, **kwargs):
+        nonlocal run_count
+        result = canonical_run(*args, **kwargs)
+        original = result.outputs[0]
+        instance = engine.sampling.instances[0]
+        encoder_prompt = render_prompt(
+            env_spec(experiment.env_name),
+            kwargs["candidate"],
+            instance,
+        )
+        encode_step = _llm_component_step(
+            trace_index=0,
+            component_id=ENCODER_NODE_ID,
+            prompt=encoder_prompt,
+            generation=encoder_text,
+        )
+        decoder_text = instance.gold
+        decode_step = _llm_component_step(
+            trace_index=1,
+            component_id=DECODER_NODE_ID,
+            prompt=DECODER_TEMPLATE.format(encoder_output=encoder_text),
+            generation=decoder_text,
+        )
+        if run_count == 0:
+            output = replace(
+                original,
+                executed_component_steps=(encode_step, decode_step),
+                output_text=decoder_text,
+            )
+            rewritten = replace(result, outputs=(output,))
+        else:
+            output = replace(
+                original,
+                row_state=ExecutedRowState.FAILED,
+                executed_component_steps=(
+                    (encode_step,)
+                    if run_count == 1
+                    else (encode_step, decode_step)
+                ),
+                output_text=None if run_count == 1 else decoder_text,
+                score=None,
+                failure_code=(
+                    "decoder_provider_failure"
+                    if run_count == 1
+                    else "scoring_infrastructure_failure"
+                ),
+                finish_reason=None,
+                provider_error={"type": "provider_unavailable"},
+            )
+            aggregate = unweighted_task_mean(
+                aggregate_name=result.aggregate.name,
+                graph_hash=experiment.rollout_definition.graph_hash,
+                evaluation_binding_hash=(
+                    kwargs["evaluation_binding"].identity_hash()
+                ),
+                task_rows=(
+                    TaskRows(
+                        task_identity=(
+                            engine.sampling.task_set.task_identities[0]
+                        ),
+                        rows=(RowValue(failed=True),),
+                    ),
+                ),
+                plan=engine.sampling.evaluation_matrix_plan,
+            )
+            rewritten = replace(
+                result,
+                aggregate=aggregate,
+                reward=None,
+                per_task_scores=(0.0,),
+                per_task_counts=(1,),
+                outputs=(output,),
+            )
+        run_count += 1
+        return rewritten
+
+    monkeypatch.setattr(
+        evaluation_engine_module,
+        "run_internal_eval",
+        ed1_traced_run,
+    )
+    service = EngineEvaluationService(store=store, engine=engine)
+    successful_intent = _intent(
+        engine,
+        intent_id="ed1-success",
+        purpose="ed1-trace",
+        role=EvaluationRole.OFFICIAL,
+    )
+    failed_intent = _intent(
+        engine,
+        intent_id="ed1-decoder-failure",
+        purpose="ed1-trace",
+        role=EvaluationRole.OFFICIAL,
+    )
+    post_score_failure_intent = _intent(
+        engine,
+        intent_id="ed1-post-score-failure",
+        purpose="ed1-trace",
+        role=EvaluationRole.OFFICIAL,
+    )
+
+    successful = service.resolve_evaluation_intent(successful_intent)
+    failed = service.resolve_evaluation_intent(failed_intent)
+    post_score_failure = service.resolve_evaluation_intent(
+        post_score_failure_intent
+    )
+
+    assert successful.evaluation_result_ref is not None
+    successful_evidence = EvaluationEvidence.model_validate(
+        store.get(successful.evaluation_result_ref.reference)
+    )
+    successful_trace = (
+        _load_component_traces(store, successful_evidence)
+        .rows[0]
+        .executed_component_trace
+    )
+    assert (
+        successful_trace.executed_component_steps[0].outputs["generation"]
+        == encoder_text
+    )
+    assert (
+        successful_trace.executed_component_steps[1].outputs["generation"]
+        != encoder_text
+    )
+
+    assert failed.evaluation_result_ref is not None
+    failed_evidence = EvaluationEvidence.model_validate(
+        store.get(failed.evaluation_result_ref.reference)
+    )
+    failed_outputs = EvaluationOutputsRecord.model_validate(
+        store.get(failed_evidence.outputs_ref.reference)
+    )
+    failed_trace = (
+        _load_component_traces(store, failed_evidence)
+        .rows[0]
+        .executed_component_trace
+    )
+    assert failed_trace.row_state is ExecutedRowState.FAILED
+    assert tuple(
+        step.component_id for step in failed_trace.executed_component_steps
+    ) == (ENCODER_NODE_ID,)
+    assert (
+        failed_trace.executed_component_steps[0].outputs["generation"]
+        == encoder_text
+    )
+    assert failed_outputs.outputs[0].failed
+    assert failed_outputs.outputs[0].output_text is None
+    assert failed_outputs.outputs[0].score is None
+
+    assert post_score_failure.evaluation_result_ref is not None
+    post_score_evidence = EvaluationEvidence.model_validate(
+        store.get(post_score_failure.evaluation_result_ref.reference)
+    )
+    post_score_outputs = EvaluationOutputsRecord.model_validate(
+        store.get(post_score_evidence.outputs_ref.reference)
+    )
+    post_score_trace = (
+        _load_component_traces(store, post_score_evidence)
+        .rows[0]
+        .executed_component_trace
+    )
+    assert post_score_trace.row_state is ExecutedRowState.FAILED
+    assert tuple(
+        step.component_id for step in post_score_trace.executed_component_steps
+    ) == (ENCODER_NODE_ID, DECODER_NODE_ID)
+    assert post_score_outputs.outputs[0].failed
+    assert post_score_outputs.outputs[0].output_text == (
+        engine.sampling.instances[0].gold
+    )
+    assert (
+        post_score_trace.executed_component_steps[-1].outputs["generation"]
+        == post_score_outputs.outputs[0].output_text
+    )
+
+
+@pytest.mark.parametrize(
+    ("forgery", "expected_error"),
+    (
+        ("decoder_prompt", "canonical encoder-output frame"),
+        ("failed_terminal_mismatch", "final output"),
+        ("failed_prefix_nonnull", "nonterminal component prefix"),
+    ),
+)
+def test_ed1_trace_relationship_forgery_fails_prebind_and_restart(
+    tmp_path,
+    monkeypatch,
+    forgery: str,
+    expected_error: str,
+) -> None:
+    database = tmp_path / f"ed1-{forgery}.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    engine = _ed1_graph_engine(store=store)
+    canonical_run = evaluation_engine_module.run_internal_eval
+    encoder_text = "canonical encoder output"
+
+    def ed1_success(*args, **kwargs):
+        result = canonical_run(*args, **kwargs)
+        original = result.outputs[0]
+        instance = engine.sampling.instances[0]
+        encode_step = _llm_component_step(
+            trace_index=0,
+            component_id=ENCODER_NODE_ID,
+            prompt=render_prompt(
+                env_spec(engine.experiment.env_name),
+                kwargs["candidate"],
+                instance,
+            ),
+            generation=encoder_text,
+        )
+        decode_step = _llm_component_step(
+            trace_index=1,
+            component_id=DECODER_NODE_ID,
+            prompt=DECODER_TEMPLATE.format(encoder_output=encoder_text),
+            generation=instance.gold,
+        )
+        return replace(
+            result,
+            outputs=(
+                replace(
+                    original,
+                    executed_component_steps=(encode_step, decode_step),
+                    output_text=instance.gold,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        evaluation_engine_module,
+        "run_internal_eval",
+        ed1_success,
+    )
+    intent = _intent(
+        engine,
+        intent_id=f"ed1-{forgery}",
+        purpose="ed1-relationship-forgery",
+        role=EvaluationRole.OFFICIAL,
+    )
+    evaluated = engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    trace_content = _load_component_traces(
+        store, evaluated.evidence
+    ).record_content()
+    trace_payload = trace_content["rows"][0]["executed_component_trace"]
+    output_content = store.get(evaluated.evidence.outputs_ref.reference)
+    assert isinstance(output_content, dict)
+    output_rows = output_content["outputs"]
+    assert isinstance(output_rows, list)
+    output_row = output_rows[0]
+    assert isinstance(output_row, dict)
+    if forgery == "decoder_prompt":
+        trace_payload["executed_component_steps"][1]["inputs"]["prompt"] = (
+            "forged decoder frame"
+        )
+    else:
+        trace_payload["row_state"] = "failed"
+        output_row.update(
+            {
+                "score": None,
+                "failed": True,
+                "failure_code": "post_execution_failure",
+                "provider_error": {"type": "infrastructure"},
+            }
+        )
+        if forgery == "failed_terminal_mismatch":
+            output_row["output_text"] = "not the accepted decoder generation"
+        else:
+            trace_payload["executed_component_steps"] = trace_payload[
+                "executed_component_steps"
+            ][:1]
+            output_row["output_text"] = "fabricated final output"
+
+    trace_ref = _put_typed(
+        store,
+        EVALUATION_COMPONENT_TRACES_SCHEMA,
+        trace_content,
+    )
+    output_content["component_traces_ref"] = trace_ref.model_dump(mode="json")
+    outputs_ref = _put_typed(
+        store,
+        EVALUATION_OUTPUTS_SCHEMA,
+        output_content,
+    )
+    forged_evidence = evaluated.evidence.model_copy(
+        update={
+            "component_traces_ref": trace_ref,
+            "outputs_ref": outputs_ref,
+        }
+    )
+    evidence_ref = _put_typed(
+        store,
+        EVALUATION_EVIDENCE_SCHEMA,
+        forged_evidence.record_content(),
+    )
+    forged_resolution = _completed_resolution(intent, evaluated).model_copy(
+        update={"evaluation_result_ref": evidence_ref}
+    )
+    service = EngineEvaluationService(store=store, engine=engine)
+    service._persist_intent_targets(intent)
+
+    with pytest.raises(ValueError, match=expected_error):
+        service._validate_result_graph(
+            forged_resolution,
+            expected_intent=intent,
+            require_attestation=False,
+        )
+
+    _bind_with_forged_terminal_attestation(
+        store=store,
+        service=service,
+        intent=intent,
+        resolution=forged_resolution,
+    )
+    restart_store = ObjectStore(SqliteBackend(database))
+    restart_engine = _ed1_graph_engine(store=restart_store)
+    with pytest.raises(ValueError, match=expected_error):
+        EngineEvaluationService(
+            store=restart_store,
+            engine=restart_engine,
+        ).resolve_evaluation_intent(intent)
+
+
+@pytest.mark.parametrize(
+    ("forgery", "expected_error"),
+    (
+        ("failed_terminal_mismatch", "final output"),
+        ("failed_prefix_nonnull", "nonterminal component prefix"),
+    ),
+)
+def test_one_step_trace_relationship_forgery_fails_prebind_and_restart(
+    tmp_path,
+    forgery: str,
+    expected_error: str,
+) -> None:
+    database = tmp_path / f"one-step-{forgery}.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    engine = _engine(tmp_path, store=store, role=EvaluationRole.OFFICIAL)
+    intent = _intent(
+        engine,
+        intent_id=f"one-step-{forgery}",
+        purpose="one-step-relationship-forgery",
+        role=EvaluationRole.OFFICIAL,
+    )
+    evaluated = engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    trace_content = _load_component_traces(
+        store, evaluated.evidence
+    ).record_content()
+    trace_payload = trace_content["rows"][0]["executed_component_trace"]
+    trace_payload["row_state"] = "failed"
+    output_content = store.get(evaluated.evidence.outputs_ref.reference)
+    assert isinstance(output_content, dict)
+    output_rows = output_content["outputs"]
+    assert isinstance(output_rows, list)
+    output_row = output_rows[0]
+    assert isinstance(output_row, dict)
+    output_row.update(
+        {
+            "score": None,
+            "failed": True,
+            "failure_code": "post_execution_failure",
+            "provider_error": {"type": "infrastructure"},
+        }
+    )
+    if forgery == "failed_terminal_mismatch":
+        output_row["output_text"] = "not the accepted generation"
+    else:
+        trace_payload["executed_component_steps"] = []
+        output_row["output_text"] = "fabricated final output"
+
+    trace_ref = _put_typed(
+        store,
+        EVALUATION_COMPONENT_TRACES_SCHEMA,
+        trace_content,
+    )
+    output_content["component_traces_ref"] = trace_ref.model_dump(mode="json")
+    outputs_ref = _put_typed(
+        store,
+        EVALUATION_OUTPUTS_SCHEMA,
+        output_content,
+    )
+    forged_evidence = evaluated.evidence.model_copy(
+        update={
+            "component_traces_ref": trace_ref,
+            "outputs_ref": outputs_ref,
+        }
+    )
+    evidence_ref = _put_typed(
+        store,
+        EVALUATION_EVIDENCE_SCHEMA,
+        forged_evidence.record_content(),
+    )
+    forged_resolution = _completed_resolution(intent, evaluated).model_copy(
+        update={"evaluation_result_ref": evidence_ref}
+    )
+    service = EngineEvaluationService(store=store, engine=engine)
+    service._persist_intent_targets(intent)
+    with pytest.raises(ValueError, match=expected_error):
+        service._validate_result_graph(
+            forged_resolution,
+            expected_intent=intent,
+            require_attestation=False,
+        )
+
+    _bind_with_forged_terminal_attestation(
+        store=store,
+        service=service,
+        intent=intent,
+        resolution=forged_resolution,
+    )
+    restart_store = ObjectStore(SqliteBackend(database))
+    restart_engine = _engine(
+        tmp_path,
+        store=restart_store,
+        role=EvaluationRole.OFFICIAL,
+    )
+    with pytest.raises(ValueError, match=expected_error):
+        EngineEvaluationService(
+            store=restart_store,
+            engine=restart_engine,
+        ).resolve_evaluation_intent(intent)
 
 
 def test_engine_passes_exact_canonical_row_job_factory(
@@ -377,7 +997,7 @@ def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
     def mismatched(request: InternalRowRequest) -> ProcessJob:
         result = InternalRowResult(
             request_identity=f"mismatched-{request.request_identity}",
-            outcome=InternalRowOutcome(score=1.0),
+            outcome=_successful_internal_outcome(request),
         )
         return ProcessJob(
             entrypoint="tests.envs.process_workers:return_payload",
@@ -503,7 +1123,12 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
     candidate = engine.experiment.initial_candidate
     candidate_ref = candidate_reference(candidate)
     binding = _binding(engine)
+    component_traces_ref = TypedRef(
+        schema_name=EVALUATION_COMPONENT_TRACES_SCHEMA,
+        content_hash="a" * 64,
+    )
     record = EvaluationOutputsRecord(
+        schema_version=EVALUATION_OUTPUTS_SCHEMA_VERSION,
         candidate=candidate_ref,
         evaluation_binding=binding,
         evaluation_role=EvaluationRole.INTERNAL,
@@ -512,6 +1137,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
         split_role=engine.sampling.split_role,
         task_identities=("task-1",),
         repeat_count=1,
+        component_traces_ref=component_traces_ref,
         outputs=(
             EvaluationOutputRow(
                 candidate_id=candidate.candidate_id,
@@ -534,6 +1160,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
     )
 
     assert record.record_content() == {
+        "schema_version": 2,
         "candidate": candidate_ref.model_dump(mode="json"),
         "evaluation_binding": binding.model_dump(mode="json"),
         "evaluation_role": "internal",
@@ -542,6 +1169,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
         "split_role": "internal_eval",
         "task_identities": ["task-1"],
         "repeat_count": 1,
+        "component_traces_ref": component_traces_ref.model_dump(mode="json"),
         "outputs": [
             {
                 "candidate_id": candidate.candidate_id,
@@ -562,6 +1190,118 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
             }
         ],
     }
+
+
+def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "trace-wire.sqlite"))
+    engine = _engine(tmp_path, store=store)
+    evaluated = engine.evaluate(
+        EvaluationRequest(
+            candidate=engine.experiment.initial_candidate,
+            evaluation_binding=_binding(engine),
+            purpose="trace-wire",
+        )
+    )
+    evidence = evaluated.evidence
+    outputs = EvaluationOutputsRecord.model_validate(
+        store.get(evidence.outputs_ref.reference)
+    )
+    traces = _load_component_traces(store, evidence)
+    trace_content = traces.record_content()
+
+    assert EVALUATION_COMPONENT_TRACES_SCHEMA == (
+        "whetstone.evaluation_component_traces"
+    )
+    assert EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION == 1
+    assert EVALUATION_OUTPUTS_SCHEMA_VERSION == 2
+    assert EVALUATION_EVIDENCE_SCHEMA_VERSION == 2
+    assert traces.schema_version == 1
+    assert outputs.schema_version == 2
+    assert evidence.schema_version == 2
+    assert evidence.component_traces_ref.content_hash == (
+        "42b08acde3e5aa8a0923e960d5db91fffee150cf2fbc0331d9522747af708942"
+    )
+    assert evidence.outputs_ref.content_hash == (
+        "19ff32c9d9b7ed8d6c70d2d14a725c6887a38f57393f9e8338d3109d3994fc14"
+    )
+    assert evaluated.evidence_ref.content_hash == (
+        "211c24740d389e1a13e8b720cb2e56c8a422c9bf0b8c1827a7f59adc53e82fa9"
+    )
+    with pytest.raises(ValueError, match="address the exact record"):
+        EvaluationComponentTracesRef(
+            record=traces,
+            record_ref=TypedRef(
+                schema_name=EVALUATION_COMPONENT_TRACES_SCHEMA,
+                content_hash="f" * 64,
+            ),
+        )
+    assert tuple(trace_content) == (
+        "schema_version",
+        "candidate",
+        "evaluation_binding",
+        "evaluation_role",
+        "graph_hash",
+        "purpose",
+        "split_role",
+        "task_identities",
+        "repeat_count",
+        "rows",
+    )
+    assert tuple(trace_content["rows"][0]) == (
+        "instance_id",
+        "task_identity",
+        "repeat",
+        "executed_component_trace",
+    )
+    assert traces.rows[0].executed_component_trace.model_dump(mode="json") == {
+        "row_state": "success",
+        "executed_component_steps": [
+            traces.rows[0]
+            .executed_component_trace.executed_component_steps[0]
+            .model_dump(mode="json")
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("record_name", "wrong_version"),
+    (
+        ("traces", 0),
+        ("outputs", 1),
+        ("evidence", 1),
+    ),
+)
+def test_evaluation_artifacts_reject_prior_wire_versions(
+    tmp_path,
+    record_name: str,
+    wrong_version: int,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / f"{record_name}-v1.sqlite"))
+    engine = _engine(tmp_path, store=store)
+    evidence = engine.evaluate(
+        EvaluationRequest(
+            candidate=engine.experiment.initial_candidate,
+            evaluation_binding=_binding(engine),
+            purpose="hard-cut",
+        )
+    ).evidence
+    if record_name == "traces":
+        content = store.get(evidence.component_traces_ref.reference)
+        model = EvaluationComponentTraces
+    elif record_name == "outputs":
+        content = store.get(evidence.outputs_ref.reference)
+        model = EvaluationOutputsRecord
+    else:
+        content = evidence.record_content()
+        model = EvaluationEvidence
+    assert isinstance(content, dict)
+    content["schema_version"] = wrong_version
+
+    with pytest.raises(ValueError, match="schema_version"):
+        if model is EvaluationComponentTraces:
+            model.model_validate_json(json.dumps(content))
+        else:
+            model.model_validate(content)
 
 
 def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
@@ -587,6 +1327,7 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="candidate_id must match"):
         EvaluationOutputsRecord(
+            schema_version=EVALUATION_OUTPUTS_SCHEMA_VERSION,
             candidate=candidate_reference(engine.experiment.initial_candidate),
             evaluation_binding=_binding(engine),
             evaluation_role=EvaluationRole.INTERNAL,
@@ -595,11 +1336,151 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
             split_role=engine.sampling.split_role,
             task_identities=("task-1",),
             repeat_count=1,
+            component_traces_ref=TypedRef(
+                schema_name=EVALUATION_COMPONENT_TRACES_SCHEMA,
+                content_hash="a" * 64,
+            ),
             outputs=(row,),
         )
 
 
-def test_evaluator_uses_exact_v2_resolution_wire_and_namespace(
+@pytest.mark.parametrize(
+    "forgery",
+    (
+        "missing_object",
+        "candidate",
+        "binding",
+        "graph",
+        "task",
+        "row_reorder",
+        "row_state",
+        "labeled_input",
+        "step",
+        "output",
+        "model_copy_dump",
+    ),
+)
+def test_claim_attestation_rejects_forged_component_traces(
+    tmp_path,
+    forgery: str,
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / f"trace-{forgery}.sqlite"))
+    engine = _engine(tmp_path, store=store, repeats=2)
+    intent = _intent(
+        engine,
+        intent_id=f"trace-{forgery}",
+        purpose="trace-validation",
+    )
+    evaluated = engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    traces = _load_component_traces(store, evaluated.evidence)
+    trace_content = traces.record_content()
+    if forgery == "candidate":
+        trace_content["candidate"] = candidate_reference(
+            engine.experiment.ceiling_candidate
+        ).model_dump(mode="json")
+    elif forgery == "binding":
+        trace_content["evaluation_binding"] = _binding(
+            engine,
+            campaign="forged-trace-binding",
+        ).model_dump(mode="json")
+    elif forgery == "graph":
+        trace_content["graph_hash"] = "f" * 64
+    elif forgery == "task":
+        trace_content["task_identities"] = ["forged-task"]
+        for row in trace_content["rows"]:
+            row["task_identity"] = "forged-task"
+    elif forgery == "row_reorder":
+        trace_content["rows"] = list(reversed(trace_content["rows"]))
+    elif forgery == "row_state":
+        trace_content["rows"][0]["executed_component_trace"]["row_state"] = (
+            "failed"
+        )
+    elif forgery == "labeled_input":
+        trace_content["rows"][0]["executed_component_trace"][
+            "executed_component_steps"
+        ][0]["inputs"]["prompt"] = "forged prompt"
+    elif forgery == "step":
+        trace_content["rows"][0]["executed_component_trace"][
+            "executed_component_steps"
+        ][0]["component_id"] = "forged-step"
+    elif forgery == "output":
+        trace_content["rows"][0]["executed_component_trace"][
+            "executed_component_steps"
+        ][0]["outputs"]["generation"] = "forged output"
+    elif forgery == "model_copy_dump":
+        original_row = traces.rows[0]
+        original_trace = original_row.executed_component_trace
+        original_step = original_trace.executed_component_steps[0]
+        bypassed_step = original_step.model_copy(
+            update={"component_id": "copy-bypassed-step"}
+        )
+        bypassed_trace = original_trace.model_copy(
+            update={"executed_component_steps": (bypassed_step,)}
+        )
+        bypassed_row = original_row.model_copy(
+            update={"executed_component_trace": bypassed_trace}
+        )
+        traces = traces.model_copy(
+            update={"rows": (bypassed_row, *traces.rows[1:])}
+        )
+        trace_content = traces.model_dump(mode="json")
+    elif forgery != "missing_object":
+        raise AssertionError(f"unhandled forgery {forgery}")
+
+    component_traces_ref = (
+        TypedRef(
+            schema_name=EVALUATION_COMPONENT_TRACES_SCHEMA,
+            content_hash="f" * 64,
+        )
+        if forgery == "missing_object"
+        else _put_typed(
+            store,
+            EVALUATION_COMPONENT_TRACES_SCHEMA,
+            trace_content,
+        )
+    )
+    outputs_content = store.get(evaluated.evidence.outputs_ref.reference)
+    assert isinstance(outputs_content, dict)
+    outputs_content["component_traces_ref"] = component_traces_ref.model_dump(
+        mode="json"
+    )
+    outputs_ref = _put_typed(
+        store,
+        EVALUATION_OUTPUTS_SCHEMA,
+        outputs_content,
+    )
+    forged_evidence = evaluated.evidence.model_copy(
+        update={
+            "component_traces_ref": component_traces_ref,
+            "outputs_ref": outputs_ref,
+        }
+    )
+    forged_evidence_ref = _put_typed(
+        store,
+        EVALUATION_EVIDENCE_SCHEMA,
+        forged_evidence.record_content(),
+    )
+    forged_resolution = _completed_resolution(intent, evaluated).model_copy(
+        update={"evaluation_result_ref": forged_evidence_ref}
+    )
+    service = EngineEvaluationService(store=store, engine=engine)
+    service._persist_intent_targets(intent)
+
+    with pytest.raises((ObjectNotFoundError, ValueError)):
+        service._validate_result_graph(
+            forged_resolution,
+            expected_intent=intent,
+            require_attestation=False,
+        )
+
+
+def test_evaluator_uses_exact_v2_resolution_wire_and_v3_namespace(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "resolution-wire.sqlite"))
@@ -620,10 +1501,10 @@ def test_evaluator_uses_exact_v2_resolution_wire_and_namespace(
 
     assert bound.schema == "whetstone.optimization_intent_resolution"
     assert service._key(intent).startswith(
-        "whetstone.evaluation_service.v2.intent_resolution:"
+        "whetstone.evaluation_service.v3.intent_resolution:"
     )
     assert service._claim_key(intent, 0).startswith(
-        "whetstone.evaluation_service.v2.intent_claim:"
+        "whetstone.evaluation_service.v3.intent_claim:"
     )
     latest_claim = service._latest_claim(intent)
     assert latest_claim is not None
@@ -960,6 +1841,17 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
     assert len(submitted) == 1
     assert first.reward_ref is not None
     assert first.reward_evidence_refs == first.reward_ref.record.evidence_refs
+    assert first.evaluation_result_ref is not None
+    first_evidence = EvaluationEvidence.model_validate(
+        store.get(first.evaluation_result_ref.reference)
+    )
+    first_outputs = EvaluationOutputsRecord.model_validate(
+        store.get(first_evidence.outputs_ref.reference)
+    )
+    assert first_outputs.component_traces_ref == (
+        first_evidence.component_traces_ref
+    )
+    assert _load_component_traces(store, first_evidence).rows
 
     fresh_store = ObjectStore(SqliteBackend(database))
 
@@ -1423,15 +2315,12 @@ def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
 
     def one_success_one_failure(request: InternalRowRequest) -> ProcessJob:
         outcome = (
-            InternalRowOutcome(
-                score=1.0,
-                output_text=request.instance.gold,
-                finish_reason="stop",
-            )
+            _successful_internal_outcome(request)
             if request.repeat_index == 0
             else InternalRowOutcome(
                 score=None,
-                failed=True,
+                row_state=ExecutedRowState.FAILED,
+                executed_component_steps=(),
                 failure_code="provider_unavailable",
                 provider_error={"type": "provider_unavailable"},
             )
@@ -1599,6 +2488,62 @@ def test_restart_rejects_unresolvable_provider_execution_policy(
         store=restart_store,
         row_job_factory=reject_submission,
     )
+    with pytest.raises(expected_error):
+        EngineEvaluationService(
+            store=restart_store,
+            engine=restart_engine,
+        ).resolve_evaluation_intent(intent)
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_error"),
+    (
+        ("missing", ObjectNotFoundError),
+        ("corrupt", ContentHashMismatchError),
+    ),
+)
+def test_restart_rejects_unresolvable_component_trace_artifact(
+    tmp_path,
+    corruption: str,
+    expected_error: type[Exception],
+) -> None:
+    database = tmp_path / f"component-trace-{corruption}.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    engine = _engine(tmp_path, store=store)
+    intent = _intent(
+        engine,
+        intent_id=f"component-trace-{corruption}",
+        purpose="component-trace-restart",
+    )
+    resolution = EngineEvaluationService(
+        store=store,
+        engine=engine,
+    ).resolve_evaluation_intent(intent)
+    assert resolution.evaluation_result_ref is not None
+    evidence = EvaluationEvidence.model_validate(
+        store.get(resolution.evaluation_result_ref.reference)
+    )
+    trace_ref = evidence.component_traces_ref
+
+    with sqlite3.connect(database) as connection:
+        if corruption == "missing":
+            connection.execute(
+                "DELETE FROM objects WHERE schema = ? AND content_hash = ?",
+                (trace_ref.schema_name, trace_ref.content_hash),
+            )
+        else:
+            connection.execute(
+                "UPDATE objects SET canonical = ? "
+                "WHERE schema = ? AND content_hash = ?",
+                (
+                    '{"corrupt":true}',
+                    trace_ref.schema_name,
+                    trace_ref.content_hash,
+                ),
+            )
+
+    restart_store = ObjectStore(SqliteBackend(database))
+    restart_engine = _engine(tmp_path, store=restart_store)
     with pytest.raises(expected_error):
         EngineEvaluationService(
             store=restart_store,
@@ -2442,6 +3387,17 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     assert len(submitted) == 2
     assert result.evidence.cache.cache_hit_count == 1
     assert result.evidence.cache.source_call_ids
+    cached_outputs = EvaluationOutputsRecord.model_validate(
+        store.get(result.evidence.outputs_ref.reference)
+    )
+    assert cached_outputs.component_traces_ref == (
+        result.evidence.component_traces_ref
+    )
+    assert (
+        _load_component_traces(store, result.evidence)
+        .rows[0]
+        .executed_component_trace.executed_component_steps
+    )
 
 
 def test_sampling_repeat_change_changes_exact_eval_identity(tmp_path) -> None:

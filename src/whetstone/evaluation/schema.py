@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from whetstone.code_eval.aggregate import ROLLOUT_AGGREGATE_SCHEMA
+from whetstone.envs.internal_eval import ExecutedComponentTracePayload
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.identity import (
     IdentityHash,
@@ -33,10 +34,13 @@ from whetstone.optimization.schema import (
     IntentResolution,
 )
 
-#: Persisted-format contract for EvaluationOutputsRecord. Exact wire fields
-#: are pinned by a golden test; never derive them from internal dataclass
-#: names.
+#: Persisted-format contracts. Exact wire fields and versions are pinned by
+#: golden tests; never derive them from internal dataclass names.
+EVALUATION_COMPONENT_TRACES_SCHEMA = "whetstone.evaluation_component_traces"
+EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION = 1
 EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
+EVALUATION_OUTPUTS_SCHEMA_VERSION = 2
+EVALUATION_EVIDENCE_SCHEMA_VERSION = 2
 EVALUATION_RESULT_ATTESTATION_SCHEMA = (
     "whetstone.evaluation_result_attestation"
 )
@@ -109,6 +113,136 @@ class EvaluationOutputRow(BaseModel):
         return self
 
 
+class EvaluationComponentTraceRow(BaseModel):
+    """Exact executed-component observation for one planned row."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    instance_id: StrictStr
+    task_identity: StrictStr
+    repeat: StrictInt
+    executed_component_trace: ExecutedComponentTracePayload
+
+    @model_validator(mode="after")
+    def _validate_contract(self) -> EvaluationComponentTraceRow:
+        for field_name in ("instance_id", "task_identity"):
+            if not getattr(self, field_name).strip():
+                raise ValueError(f"{field_name} must be non-empty")
+        if self.repeat < 0:
+            raise ValueError("repeat must be non-negative")
+        return self
+
+
+class EvaluationComponentTraces(BaseModel):
+    """Ordered authoritative component traces for one evaluation matrix."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: Literal[1]
+    candidate: CandidateRef
+    evaluation_binding: EvaluationBinding
+    evaluation_role: EvaluationRole
+    graph_hash: IdentityHash
+    purpose: StrictStr
+    split_role: StrictStr
+    task_identities: tuple[StrictStr, ...]
+    repeat_count: StrictInt
+    rows: tuple[EvaluationComponentTraceRow, ...]
+
+    @model_validator(mode="after")
+    def _validate_contract(self) -> EvaluationComponentTraces:
+        if self.evaluation_role is not self.evaluation_binding.role:
+            raise ValueError(
+                "evaluation_role must match the exact Evaluation Binding"
+            )
+        if not self.purpose.strip():
+            raise ValueError("purpose must be non-empty")
+        if not self.split_role.strip():
+            raise ValueError("split_role must be non-empty")
+        if self.repeat_count < 1:
+            raise ValueError("repeat_count must be at least 1")
+        if not self.task_identities:
+            raise ValueError("task_identities must be non-empty")
+        if any(not task.strip() for task in self.task_identities):
+            raise ValueError("task_identities must be non-empty")
+        if len(set(self.task_identities)) != len(self.task_identities):
+            raise ValueError("task_identities must be unique")
+
+        task_to_instance: dict[str, str] = {}
+        instance_to_task: dict[str, str] = {}
+        planned_ordinal = {
+            (task_identity, repeat): task_index * self.repeat_count + repeat
+            for task_index, task_identity in enumerate(self.task_identities)
+            for repeat in range(self.repeat_count)
+        }
+        seen_keys: set[tuple[str, int]] = set()
+        prior_ordinal = -1
+        for row in self.rows:
+            if (
+                task_to_instance.setdefault(row.task_identity, row.instance_id)
+                != row.instance_id
+            ):
+                raise ValueError(
+                    "one task_identity cannot name multiple instance_ids"
+                )
+            if (
+                instance_to_task.setdefault(row.instance_id, row.task_identity)
+                != row.task_identity
+            ):
+                raise ValueError(
+                    "one instance_id cannot name multiple task_identities"
+                )
+            key = (row.task_identity, row.repeat)
+            if key in seen_keys:
+                raise ValueError(
+                    "trace rows must have unique task_identity/repeat keys"
+                )
+            seen_keys.add(key)
+            ordinal = planned_ordinal.get(key)
+            if ordinal is None:
+                raise ValueError(
+                    "trace row is outside the exact task/repeat plan"
+                )
+            if ordinal <= prior_ordinal:
+                raise ValueError(
+                    "trace rows must follow exact task/repeat order"
+                )
+            prior_ordinal = ordinal
+        if seen_keys != set(planned_ordinal):
+            raise ValueError(
+                "trace rows must cover the exact task/repeat plan"
+            )
+        return self
+
+    def record_content(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+class EvaluationComponentTracesRef(BaseModel):
+    """An exact persisted executed-component trace artifact."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    record: EvaluationComponentTraces
+    record_ref: TypedRef
+
+    @model_validator(mode="after")
+    def _validate(self) -> EvaluationComponentTracesRef:
+        if self.record_ref.schema_name != EVALUATION_COMPONENT_TRACES_SCHEMA:
+            raise ValueError(
+                "component trace record_ref must use the exact trace schema"
+            )
+        expected = typed_ref_for_record(
+            EVALUATION_COMPONENT_TRACES_SCHEMA,
+            self.record.record_content(),
+        )
+        if self.record_ref != expected:
+            raise ValueError(
+                "component trace record_ref must address the exact record"
+            )
+        return self
+
+
 class EvaluationOutputsRecord(BaseModel):
     """Exact ordered output rows persisted at EVALUATION_OUTPUTS_SCHEMA."""
 
@@ -118,6 +252,7 @@ class EvaluationOutputsRecord(BaseModel):
         allow_inf_nan=False,
     )
 
+    schema_version: Literal[2]
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     evaluation_role: EvaluationRole
@@ -126,10 +261,18 @@ class EvaluationOutputsRecord(BaseModel):
     split_role: StrictStr
     task_identities: tuple[StrictStr, ...]
     repeat_count: StrictInt
+    component_traces_ref: TypedRef
     outputs: tuple[EvaluationOutputRow, ...]
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationOutputsRecord:
+        if (
+            self.component_traces_ref.schema_name
+            != EVALUATION_COMPONENT_TRACES_SCHEMA
+        ):
+            raise ValueError(
+                "component_traces_ref must use the exact trace schema"
+            )
         if self.evaluation_role is not self.evaluation_binding.role:
             raise ValueError(
                 "evaluation_role must match the exact Evaluation Binding"
@@ -206,6 +349,7 @@ class EvaluationEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    schema_version: Literal[2]
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     graph_hash: StrictStr
@@ -219,6 +363,7 @@ class EvaluationEvidence(BaseModel):
     per_task_values: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     row_accounting: RowAccounting
+    component_traces_ref: TypedRef
     outputs_ref: TypedRef
     aggregate_ref: TypedRef
     aggregate_name: StrictStr
@@ -234,6 +379,13 @@ class EvaluationEvidence(BaseModel):
     def _validate_dataset_identity(self) -> EvaluationEvidence:
         if not self.dataset_identity.strip():
             raise ValueError("dataset_identity must be non-empty")
+        if (
+            self.component_traces_ref.schema_name
+            != EVALUATION_COMPONENT_TRACES_SCHEMA
+        ):
+            raise ValueError(
+                "component_traces_ref must use the exact trace schema"
+            )
         return self
 
     def record_content(self) -> dict[str, Any]:
@@ -334,14 +486,21 @@ class EvaluationResultAttestation(BaseModel):
 
 
 __all__ = [
+    "EVALUATION_COMPONENT_TRACES_SCHEMA",
+    "EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION",
     "EVALUATION_EVIDENCE_SCHEMA",
+    "EVALUATION_EVIDENCE_SCHEMA_VERSION",
     "EVALUATION_FAILURE_SCHEMA",
     "EVALUATION_INTENT_CLAIM_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA",
+    "EVALUATION_OUTPUTS_SCHEMA_VERSION",
     "EVALUATION_RESULT_ATTESTATION_SCHEMA",
     "REWARD_SCHEMA",
     "ROLLOUT_AGGREGATE_SCHEMA",
     "CacheEvidence",
+    "EvaluationComponentTraceRow",
+    "EvaluationComponentTraces",
+    "EvaluationComponentTracesRef",
     "EvaluationEvidence",
     "EvaluationEvidenceRef",
     "EvaluationFailureEvidence",

@@ -9,6 +9,7 @@ from dr_store import ObjectStore
 
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.internal_eval import (
+    ExecutedComponentTracePayload,
     InternalEvalResult,
     InternalRowJobFactory,
     run_internal_eval,
@@ -20,11 +21,18 @@ from whetstone.envs.rollout_definition import (
 )
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.evaluation.schema import (
+    EVALUATION_COMPONENT_TRACES_SCHEMA,
+    EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
     EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_EVIDENCE_SCHEMA_VERSION,
     EVALUATION_OUTPUTS_SCHEMA,
+    EVALUATION_OUTPUTS_SCHEMA_VERSION,
     REWARD_SCHEMA,
     ROLLOUT_AGGREGATE_SCHEMA,
     CacheEvidence,
+    EvaluationComponentTraceRow,
+    EvaluationComponentTraces,
+    EvaluationComponentTracesRef,
     EvaluationEvidence,
     EvaluationEvidenceRef,
     EvaluationOutputRow,
@@ -180,8 +188,29 @@ class EvaluationEngine:
     def _evaluation_outputs_record(
         self,
         request: EvaluationRequest,
-        result: InternalEvalResult,
+        rows: tuple[EvaluationOutputRow, ...],
+        *,
+        component_traces_ref: TypedRef,
     ) -> EvaluationOutputsRecord:
+        return EvaluationOutputsRecord(
+            schema_version=EVALUATION_OUTPUTS_SCHEMA_VERSION,
+            candidate=candidate_reference(request.candidate),
+            evaluation_binding=request.evaluation_binding,
+            evaluation_role=request.evaluation_binding.role,
+            graph_hash=self.experiment.rollout_definition.graph_hash,
+            purpose=request.purpose,
+            split_role=self.sampling.split_role,
+            task_identities=self.sampling.task_set.task_identities,
+            repeat_count=self.sampling.repeat_plan.repeat_count,
+            component_traces_ref=component_traces_ref,
+            outputs=rows,
+        )
+
+    def _evaluation_records(
+        self,
+        request: EvaluationRequest,
+        result: InternalEvalResult,
+    ) -> tuple[EvaluationComponentTraces, tuple[EvaluationOutputRow, ...]]:
         instance_ids = tuple(
             str(instance.id) for instance in self.sampling.instances
         )
@@ -207,33 +236,45 @@ class EvaluationEngine:
             for instance_index, instance_id in enumerate(instance_ids)
             for repeat in range(repeat_count)
         }
-
-        rows: list[EvaluationOutputRow] = []
+        trace_rows: list[EvaluationComponentTraceRow] = []
+        output_rows: list[EvaluationOutputRow] = []
         prior_ordinal = -1
         for output in result.outputs:
             if output.candidate_id != request.candidate.candidate_id:
                 raise ValueError(
-                    "evaluation output candidate_id does not match request"
+                    "evaluation trace candidate_id does not match request"
                 )
             key = (output.instance_id, output.repeat)
             ordinal = planned_ordinal.get(key)
             if ordinal is None:
                 raise ValueError(
-                    "evaluation output row is outside the exact sampling plan"
+                    "evaluation trace row is outside the exact sampling plan"
                 )
             if ordinal <= prior_ordinal:
                 raise ValueError(
-                    "evaluation output rows must follow sampling instance/"
+                    "evaluation trace rows must follow sampling instance/"
                     "repeat order"
                 )
             prior_ordinal = ordinal
-            rows.append(
+            task_identity = task_identity_by_instance[output.instance_id]
+            trace_rows.append(
+                EvaluationComponentTraceRow(
+                    instance_id=output.instance_id,
+                    task_identity=task_identity,
+                    repeat=output.repeat,
+                    executed_component_trace=ExecutedComponentTracePayload(
+                        row_state=output.row_state,
+                        executed_component_steps=(
+                            output.executed_component_steps
+                        ),
+                    ),
+                )
+            )
+            output_rows.append(
                 EvaluationOutputRow(
                     candidate_id=output.candidate_id,
                     instance_id=output.instance_id,
-                    task_identity=task_identity_by_instance[
-                        output.instance_id
-                    ],
+                    task_identity=task_identity,
                     repeat=output.repeat,
                     rendered_prompt=render_prompt(
                         env_spec(self.experiment.env_name),
@@ -252,16 +293,20 @@ class EvaluationEngine:
                     over_budget=output.over_budget,
                 )
             )
-        return EvaluationOutputsRecord(
-            candidate=candidate_reference(request.candidate),
-            evaluation_binding=request.evaluation_binding,
-            evaluation_role=request.evaluation_binding.role,
-            graph_hash=self.experiment.rollout_definition.graph_hash,
-            purpose=request.purpose,
-            split_role=self.sampling.split_role,
-            task_identities=task_identities,
-            repeat_count=repeat_count,
-            outputs=tuple(rows),
+        return (
+            EvaluationComponentTraces(
+                schema_version=EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
+                candidate=candidate_reference(request.candidate),
+                evaluation_binding=request.evaluation_binding,
+                evaluation_role=request.evaluation_binding.role,
+                graph_hash=self.experiment.rollout_definition.graph_hash,
+                purpose=request.purpose,
+                split_role=self.sampling.split_role,
+                task_identities=task_identities,
+                repeat_count=repeat_count,
+                rows=tuple(trace_rows),
+            ),
+            tuple(output_rows),
         )
 
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
@@ -298,7 +343,22 @@ class EvaluationEngine:
         if persisted_eval != eval_ref.record_ref:
             raise ValueError("persisted Eval Config reference diverged")
         aggregate = result.aggregate
-        output_record = self._evaluation_outputs_record(request, result)
+        component_traces, output_rows = self._evaluation_records(
+            request, result
+        )
+        component_traces_ref = self._put(
+            EVALUATION_COMPONENT_TRACES_SCHEMA,
+            component_traces.record_content(),
+        )
+        EvaluationComponentTracesRef(
+            record=component_traces,
+            record_ref=component_traces_ref,
+        )
+        output_record = self._evaluation_outputs_record(
+            request,
+            output_rows,
+            component_traces_ref=component_traces_ref,
+        )
         outputs_ref = self._put(
             EVALUATION_OUTPUTS_SCHEMA, output_record.record_content()
         )
@@ -317,6 +377,7 @@ class EvaluationEngine:
                 raise ValueError("persisted Reward reference diverged")
         cache = self._cache_evidence(request.candidate.candidate_id)
         evidence = EvaluationEvidence(
+            schema_version=EVALUATION_EVIDENCE_SCHEMA_VERSION,
             candidate=candidate_ref,
             evaluation_binding=request.evaluation_binding,
             graph_hash=aggregate.graph_hash,
@@ -334,6 +395,7 @@ class EvaluationEngine:
                 failed=aggregate.rows_failed,
                 invalid=aggregate.rows_invalid,
             ),
+            component_traces_ref=component_traces_ref,
             outputs_ref=outputs_ref,
             aggregate_ref=aggregate_ref,
             aggregate_name=aggregate.name,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 import uuid
@@ -19,15 +20,21 @@ from whetstone.code_eval.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
+from whetstone.envs.ed1 import DECODER_TEMPLATE
+from whetstone.envs.encdec_rollout import DECODER_NODE_ID, ENCODER_NODE_ID
+from whetstone.envs.internal_eval import ExecutedRowState
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import render_prompt
+from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
 from whetstone.envs.sampling import validate_evaluation_role_for_split
 from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 from whetstone.evaluation.schema import (
+    EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_INTENT_CLAIM_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
     EVALUATION_RESULT_ATTESTATION_SCHEMA,
+    EvaluationComponentTraces,
+    EvaluationComponentTracesRef,
     EvaluationEvidence,
     EvaluationEvidenceRef,
     EvaluationFailureEvidence,
@@ -61,7 +68,7 @@ from whetstone.provider.policy import (
     ProviderExecutionPolicy,
 )
 
-_EVALUATION_SERVICE_NAMESPACE = "whetstone.evaluation_service.v2"
+_EVALUATION_SERVICE_NAMESPACE = "whetstone.evaluation_service.v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -281,6 +288,10 @@ class EngineEvaluationService:
             expected_schema=EVALUATION_OUTPUTS_SCHEMA,
         )
         outputs = EvaluationOutputsRecord.model_validate(content)
+        if outputs.component_traces_ref != evidence.component_traces_ref:
+            raise ValueError(
+                "evaluation outputs and evidence disagree on component traces"
+            )
         if outputs.candidate != intent.candidate:
             raise ValueError("evaluation outputs belong to another candidate")
         if outputs.evaluation_binding != intent.evaluation_binding:
@@ -344,11 +355,7 @@ class EngineEvaluationService:
                     "generic evaluation outputs cannot be invalid rows"
                 )
             if row.failed:
-                if (
-                    row.output_text is not None
-                    or row.finish_reason is not None
-                    or not row.failure_code
-                ):
+                if not row.failure_code:
                     raise ValueError(
                         "failed evaluation output has inconsistent failure "
                         "accounting"
@@ -387,6 +394,207 @@ class EngineEvaluationService:
                     "local oracle"
                 )
         return outputs
+
+    def _load_component_traces(
+        self,
+        evidence: EvaluationEvidence,
+        intent: EvaluationIntent,
+        outputs: EvaluationOutputsRecord,
+    ) -> EvaluationComponentTraces:
+        traces_ref, content = self._load_exact(
+            evidence.component_traces_ref,
+            expected_schema=EVALUATION_COMPONENT_TRACES_SCHEMA,
+        )
+        traces = EvaluationComponentTraces.model_validate_json(
+            json.dumps(content)
+        )
+        if traces.record_content() != content:
+            raise ValueError("component trace content is not canonical")
+        EvaluationComponentTracesRef(record=traces, record_ref=traces_ref)
+        if traces.candidate != intent.candidate:
+            raise ValueError("component traces belong to another candidate")
+        if traces.evaluation_binding != intent.evaluation_binding:
+            raise ValueError("component traces use another Evaluation Binding")
+        if traces.evaluation_role is not intent.evaluation_binding.role:
+            raise ValueError("component traces use another Evaluation Role")
+        if (
+            traces.graph_hash
+            != self._engine.experiment.rollout_definition.graph_hash
+        ):
+            raise ValueError("component traces use another rollout graph")
+        if traces.purpose != intent.purpose:
+            raise ValueError("component traces use another purpose")
+        if traces.split_role != self._engine.sampling.split_role:
+            raise ValueError("component traces use another sampling split")
+        validate_evaluation_role_for_split(
+            split_role=traces.split_role,
+            evaluation_role=traces.evaluation_role,
+        )
+        expected_tasks = self._engine.sampling.task_set.task_identities
+        expected_repeats = self._engine.sampling.repeat_plan.repeat_count
+        if traces.task_identities != expected_tasks:
+            raise ValueError("component traces use another ordered Task Set")
+        if traces.repeat_count != expected_repeats:
+            raise ValueError("component traces use another Repeat Plan")
+        if len(traces.rows) != len(outputs.outputs):
+            raise ValueError(
+                "component traces and outputs must cover the same rows"
+            )
+
+        rollout_definition = getattr(
+            self._engine.experiment.rollout_definition,
+            "definition",
+            None,
+        )
+        if rollout_definition is None:
+            raise ValueError(
+                "rollout graph must expose its exact Node Definition"
+            )
+        llm_nodes = tuple(
+            node
+            for node in rollout_definition.nodes
+            if node.node_type == "whetstone.llm-call/v1"
+        )
+        if not llm_nodes:
+            raise ValueError(
+                "rollout graph must declare an executed LLM component"
+            )
+        component_ids = tuple(node.node_id for node in llm_nodes)
+        if component_ids not in {
+            (LLM_NODE_ID,),
+            (ENCODER_NODE_ID, DECODER_NODE_ID),
+        }:
+            raise ValueError(
+                "rollout graph uses an unsupported LLM component transition"
+            )
+
+        expected_instance_by_task = {
+            task_identity: str(instance.id)
+            for task_identity, instance in zip(
+                expected_tasks,
+                self._engine.sampling.instances,
+                strict=True,
+            )
+        }
+        for trace_row, output_row in zip(
+            traces.rows, outputs.outputs, strict=True
+        ):
+            if (
+                trace_row.instance_id != output_row.instance_id
+                or trace_row.task_identity != output_row.task_identity
+                or trace_row.repeat != output_row.repeat
+            ):
+                raise ValueError(
+                    "component trace row identity/order disagrees with outputs"
+                )
+            if (
+                trace_row.instance_id
+                != expected_instance_by_task[trace_row.task_identity]
+            ):
+                raise ValueError(
+                    "component trace task and instance do not align"
+                )
+            trace = trace_row.executed_component_trace
+            if trace.row_state is ExecutedRowState.SUCCESS:
+                if (
+                    output_row.failed
+                    or output_row.missing
+                    or output_row.invalid
+                ):
+                    raise ValueError(
+                        "successful component trace disagrees with output "
+                        "state"
+                    )
+                if len(trace.executed_component_steps) != len(llm_nodes):
+                    raise ValueError(
+                        "successful row must trace every declared LLM "
+                        "component"
+                    )
+            elif trace.row_state is ExecutedRowState.FAILED:
+                if not output_row.failed:
+                    raise ValueError(
+                        "failed component trace disagrees with output state"
+                    )
+            else:
+                if not output_row.missing:
+                    raise ValueError(
+                        "missing component trace disagrees with output state"
+                    )
+
+            if len(trace.executed_component_steps) > len(llm_nodes):
+                raise ValueError(
+                    "component trace exceeds the declared LLM graph"
+                )
+            for step, node in zip(
+                trace.executed_component_steps, llm_nodes, strict=False
+            ):
+                expected_inputs = tuple(
+                    field.name
+                    for field in node.fields
+                    if field.role.value == "input"
+                )
+                expected_outputs = tuple(
+                    field.name
+                    for field in node.fields
+                    if field.role.value == "output"
+                )
+                if step.component_id != node.node_id:
+                    raise ValueError(
+                        "component trace is not the declared LLM-node prefix"
+                    )
+                if (
+                    step.input_field_names != expected_inputs
+                    or step.output_field_names != expected_outputs
+                ):
+                    raise ValueError(
+                        "component trace fields do not match the Node "
+                        "Definition"
+                    )
+
+            if trace.executed_component_steps:
+                first_step = trace.executed_component_steps[0]
+                if first_step.inputs[first_step.input_field_names[0]] != (
+                    output_row.rendered_prompt
+                ):
+                    raise ValueError(
+                        "component trace input does not match the rendered "
+                        "prompt"
+                    )
+            if (
+                component_ids == (ENCODER_NODE_ID, DECODER_NODE_ID)
+                and len(trace.executed_component_steps) == 2
+            ):
+                encode_step, decode_step = trace.executed_component_steps
+                encoder_generation = encode_step.outputs["generation"]
+                if type(encoder_generation) is not str:
+                    raise ValueError(
+                        "ED1 encoder generation must be an exact string"
+                    )
+                expected_decoder_prompt = DECODER_TEMPLATE.format(
+                    encoder_output=encoder_generation
+                )
+                if decode_step.inputs["prompt"] != expected_decoder_prompt:
+                    raise ValueError(
+                        "ED1 decoder input does not match the canonical "
+                        "encoder-output frame"
+                    )
+
+            terminal_step_present = len(trace.executed_component_steps) == len(
+                llm_nodes
+            )
+            if terminal_step_present:
+                final_step = trace.executed_component_steps[-1]
+                output_field = final_step.output_field_names[0]
+                if final_step.outputs[output_field] != output_row.output_text:
+                    raise ValueError(
+                        "component trace output does not match the final "
+                        "output"
+                    )
+            elif output_row.output_text is not None:
+                raise ValueError(
+                    "a nonterminal component prefix cannot carry final output"
+                )
+        return traces
 
     def _load_aggregate(
         self,
@@ -644,6 +852,7 @@ class EngineEvaluationService:
         ):
             raise ValueError("Evaluation Evidence per-task count is invalid")
         outputs = self._load_outputs(evidence, intent)
+        self._load_component_traces(evidence, intent, outputs)
         aggregate = self._load_aggregate(evidence, intent)
         self._validate_row_derivation(
             outputs=outputs,
