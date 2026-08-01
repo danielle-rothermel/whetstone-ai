@@ -7,7 +7,7 @@ and carry typed **record-local** provenance fields — there is no universal
 Provenance class.
 
 :class:`OfficialEvaluationRecord`
-    Authority-issued certification naming the official Evaluation Context and
+    Authority-issued certification naming the official Evaluation Binding and
     the ordinary Eval Config, the planned Rollout Execution Keys, the ordinary
     Rollout Result references plus Content Hashes, the complete aggregate
     references, the completeness and certification decisions, the Objectives
@@ -38,6 +38,7 @@ from pydantic import (
 
 from whetstone.authority.mapping import SelectedRecordMapping
 from whetstone.optimization.identity import TypedRef, require_full_hash
+from whetstone.optimization.schema import EvalConfigRef
 
 __all__ = [
     "OFFICIAL_EVALUATION_RECORD_SCHEMA",
@@ -144,7 +145,7 @@ class RecordRevision(BaseModel):
 class OfficialEvaluationRecord(BaseModel):
     """Immutable authority-issued certification of ordinary Rollout Results.
 
-    Names the official Evaluation Context and ordinary Eval Config, the planned
+    Names the official Evaluation Binding and exact Eval Config, the planned
     keys with their ordinary Result references + Content Hashes, the complete
     aggregate references, the completeness/certification decision, the
     Objectives + official selection evidence reference, revisions, and the
@@ -159,9 +160,9 @@ class OfficialEvaluationRecord(BaseModel):
 
     # The named authority principal that issued this record.
     authority: StrictStr
-    # Official Evaluation Context id + the ordinary Eval Config hash it binds.
-    evaluation_context_id: StrictStr
-    eval_config_hash: StrictStr
+    # Official Evaluation Binding id + the exact Eval Config it binds.
+    evaluation_binding_id: StrictStr
+    eval_config: EvalConfigRef
 
     # Planned Rollout Execution Keys with their ordinary Result references.
     planned_results: tuple[PlannedKeyResult, ...]
@@ -193,15 +194,11 @@ class OfficialEvaluationRecord(BaseModel):
     def _validate(self) -> OfficialEvaluationRecord:
         if not self.authority:
             raise ValueError("an official record names its authority")
-        # The evaluation_context_id MUST be a full Evaluation Context Identity
-        # Hash (the value ``EvaluationContext.evaluation_context_id()``
-        # produces), not merely a non-empty string. A value that is not a
-        # 64-char lowercase SHA-256 hash cannot correspond to an issued
-        # official Evaluation Context.
+        # The evaluation_binding_id is the full canonical Evaluation Binding
+        # Identity Hash, not merely a non-empty label.
         require_full_hash(
-            self.evaluation_context_id, field="evaluation_context_id"
+            self.evaluation_binding_id, field="evaluation_binding_id"
         )
-        require_full_hash(self.eval_config_hash, field="eval_config_hash")
         if not self.planned_results:
             raise ValueError("an official record has >=1 planned key")
 

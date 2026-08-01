@@ -100,7 +100,7 @@ def test_account_feeds_certification_with_missing_visible() -> None:
     # stays a visible planned row and makes the record uncertified.
     from whetstone.authority import EvaluationAuthority
 
-    from .support import EVAL_HASH, aggregate_ref, single_entry_mapping
+    from .support import aggregate_ref, eval_config_ref, single_entry_mapping
 
     planned = ["k0", "k1"]
     account = account_planned_keys(
@@ -109,11 +109,11 @@ def test_account_feeds_certification_with_missing_visible() -> None:
         policy=OfficialFailurePolicy.RECORD_MISSING,
     )
     authority = EvaluationAuthority(name="whetstone-official")
-    context = authority.issue_official_context(
-        eval_config_hash=EVAL_HASH, campaign="camp-1"
+    binding = authority.issue_official_binding(
+        eval_config=eval_config_ref(), campaign="camp-1"
     )
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=account.planned_results,
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(

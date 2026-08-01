@@ -4,15 +4,16 @@ Per the vocabulary (*Evaluation Authority*, *Official Evaluation*, *Internal
 Evaluation*) and Workstream 9. An :class:`EvaluationAuthority` is the *named
 trusted principal and official write path* authorized to:
 
-* issue **official** Evaluation Contexts (role ``official``, authority set);
+* issue **official** Evaluation Bindings (role ``official``, principal set);
 * certify ordinary evaluation evidence and create immutable
   :class:`~whetstone.authority.records.OfficialEvaluationRecord` values;
 * publish immutable
   :class:`~whetstone.authority.records.OfficialPlotManifest` values.
 
 The official write path is the *authority-enforced* way official artifacts come
-to exist. Officialness is a plain data field (``role``/``authority`` on the
-Evaluation Context; ``authority``/``completeness.certified`` on the record),
+to exist. Officialness is plain data (``role`` / ``authority_principal`` on
+the Evaluation Binding; ``authority`` / ``completeness.certified`` on the
+record),
 not a capability or signature, so the ``EvaluationAuthority`` methods are an
 enforced funnel rather than an unforgeable cryptographic boundary. The
 authority-enforced guarantees are:
@@ -20,21 +21,20 @@ authority-enforced guarantees are:
 * the relabeling refusal (below) applies on every :meth:`certify` /
   :meth:`publish_plot` call — internal evidence is refused there;
 * an :class:`~whetstone.authority.records.OfficialEvaluationRecord` will only
-  accept an ``evaluation_context_id`` that is a full Evaluation Context
-  Identity Hash, so a record cannot name a context id that no
-  ``EvaluationContext`` could have produced (see ``records.py``).
+  accept an ``evaluation_binding_id`` that is the exact Evaluation Binding
+  Identity Hash (see ``records.py``).
 
 Callers with direct model access CAN still construct an official-role
-``EvaluationContext`` or an ``OfficialEvaluationRecord`` without going through
+``EvaluationBinding`` or an ``OfficialEvaluationRecord`` without going through
 an authority instance; the relabeling refusal is real only on the
-``certify()`` / ``issue_official_context()`` path. Treating officialness as an
+``certify()`` / ``issue_official_binding()`` path. Treating officialness as an
 unforgeable boundary would require a capability-held token or signing on
 construction, which this schema deliberately does not add.
 
 The load-bearing refusal — **internal evaluation can never be relabeled or
 copied to official merely because identities match** — is enforced here:
 :meth:`EvaluationAuthority.certify` refuses any evidence bearing an internal
-Evaluation Context, even when its config Identity Hashes are byte-identical to
+Evaluation Binding, even when its config Identity Hashes are byte-identical to
 an official run. Equal identities permit *comparison*, never *relabeling*.
 """
 
@@ -50,17 +50,18 @@ from whetstone.authority.records import (
     PlannedKeyResult,
     RecordRevision,
 )
-from whetstone.graph.rollout import (
-    EnvironmentAttestation,
-    EvaluationContext,
-    EvaluationRole,
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.schema import (
+    EvalConfigRef,
+    EvaluationBinding,
+    ExecutionEnvironmentFingerprint,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from whetstone.authority.mapping import SelectedRecordMapping
-    from whetstone.optimization.identity import TypedRef
 
 __all__ = [
     "EvaluationAuthority",
@@ -72,7 +73,7 @@ __all__ = [
 class RelabelingRefusedError(ValueError):
     """Internal evidence was offered for official certification/relabeling.
 
-    Raised whenever an internal-role Evaluation Context (or evidence bearing
+    Raised whenever an internal-role Evaluation Binding (or evidence bearing
     one) is presented on the official write path. Byte-identical config
     Identity Hashes between an internal and an official run do not make the
     internal evidence official: the refusal is by role, not by identity.
@@ -83,7 +84,7 @@ class UnauthorizedOfficialWriteError(ValueError):
     """An official artifact was requested with the wrong/absent authority.
 
     The official write path checks that the requesting authority principal
-    matches the authority named on the official Evaluation Context.
+    matches the authority named on the official Evaluation Binding.
     """
 
 
@@ -91,7 +92,7 @@ class UnauthorizedOfficialWriteError(ValueError):
 class EvaluationAuthority:
     """A named trusted principal and the official write path.
 
-    Instances are the only issuer of official Evaluation Contexts, Official
+    Instances are the only issuer of official Evaluation Bindings, Official
     Evaluation Records, and Official Plot Manifests. The ``name`` is the
     principal recorded on every artifact this authority issues.
     """
@@ -103,37 +104,40 @@ class EvaluationAuthority:
             raise ValueError("an Evaluation Authority must be named")
 
     # ------------------------------------------------------------------
-    # Official Evaluation Context issuance
+    # Official Evaluation Binding issuance
     # ------------------------------------------------------------------
 
-    def issue_official_context(
+    def issue_official_binding(
         self,
         *,
-        eval_config_hash: str,
+        eval_config: EvalConfigRef,
         campaign: str,
-        provider_execution_policy_ref: str | None = None,
-        retry_policy_ref: str | None = None,
-        operational_policy_refs: Sequence[str] = (),
-        environment: EnvironmentAttestation | None = None,
+        provider_execution_policy_ref: TypedRef | None = None,
+        retry_policy_ref: TypedRef | None = None,
+        operational_policy_refs: Sequence[TypedRef] = (),
+        environment_fingerprint: ExecutionEnvironmentFingerprint | None = None,
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
-    ) -> EvaluationContext:
-        """Issue an official Evaluation Context bound to this authority.
+    ) -> EvaluationBinding:
+        """Issue an official Evaluation Binding bound to this authority.
 
-        The returned Context has role ``official`` and ``authority`` set to
+        The returned Binding has role ``official`` and ``authority_principal``
+        set to
         this principal's name. Only an authority instance can mint an official
-        Context this way; the ordinary Eval Config it binds is unchanged (the
+        Binding this way; the ordinary Eval Config it binds is unchanged (the
         role qualifies its use, it is not a new Config type or identity).
         """
-        return EvaluationContext(
-            eval_config_hash=eval_config_hash,
+        return EvaluationBinding(
+            eval_config=eval_config,
             role=EvaluationRole.OFFICIAL,
-            authority=self.name,
+            authority_principal=self.name,
             campaign=campaign,
             provider_execution_policy_ref=provider_execution_policy_ref,
             retry_policy_ref=retry_policy_ref,
             operational_policy_refs=tuple(operational_policy_refs),
-            environment=environment or EnvironmentAttestation(),
+            environment_fingerprint=(
+                environment_fingerprint or ExecutionEnvironmentFingerprint()
+            ),
             provenance_note=provenance_note,
             provenance_ordinal=provenance_ordinal,
         )
@@ -142,27 +146,28 @@ class EvaluationAuthority:
     # Relabeling refusal
     # ------------------------------------------------------------------
 
-    def _require_official_context(self, context: EvaluationContext) -> None:
-        """Refuse any internal-role context on the official write path.
+    def _require_official_binding(self, binding: EvaluationBinding) -> None:
+        """Refuse any internal-role binding on the official write path.
 
         This is the seam that makes "internal can never be relabeled to
-        official" true *on the authority write path*: an internal-role Context
-        is rejected here regardless of whether its ``eval_config_hash`` matches
+        official" true *on the authority write path*: an internal-role Binding
+        is rejected here regardless of whether its Eval Config identity matches
         an official run byte for byte. This is an enforced funnel, not a
         cryptographic boundary — see the module docstring: direct model
-        construction of an official-role Context is not blocked here.
+        construction of an official-role Binding is not blocked here.
         """
-        if context.role is not EvaluationRole.OFFICIAL:
+        if binding.role is not EvaluationRole.OFFICIAL:
             raise RelabelingRefusedError(
                 "internal evaluation evidence can never be certified or "
                 "relabeled as official; matching config Identity Hashes "
                 "permit comparison, never relabeling. Present an official "
-                "Evaluation Context issued by the authority."
+                "Evaluation Binding issued by the authority."
             )
-        if context.authority != self.name:
+        if binding.authority_principal != self.name:
             raise UnauthorizedOfficialWriteError(
-                f"official Context names authority {context.authority!r}, not "
-                f"{self.name!r}; only the named authority may write it"
+                "official Binding names authority "
+                f"{binding.authority_principal!r}, not {self.name!r}; only "
+                "the named authority may write it"
             )
 
     # ------------------------------------------------------------------
@@ -172,7 +177,7 @@ class EvaluationAuthority:
     def certify(
         self,
         *,
-        context: EvaluationContext,
+        evaluation_binding: EvaluationBinding,
         planned_results: Sequence[PlannedKeyResult],
         aggregate_refs: Sequence[TypedRef],
         selected_record_mapping: SelectedRecordMapping,
@@ -194,7 +199,7 @@ class EvaluationAuthority:
         complete. The referenced ordinary Rollout Results become official by
         this certification; they are not copied or relabeled.
         """
-        self._require_official_context(context)
+        self._require_official_binding(evaluation_binding)
 
         planned = tuple(planned_results)
         present = sum(1 for p in planned if p.is_present)
@@ -211,8 +216,8 @@ class EvaluationAuthority:
         )
         return OfficialEvaluationRecord(
             authority=self.name,
-            evaluation_context_id=context.evaluation_context_id(),
-            eval_config_hash=context.eval_config_hash,
+            evaluation_binding_id=evaluation_binding.identity_hash(),
+            eval_config=evaluation_binding.eval_config,
             planned_results=planned,
             aggregate_refs=tuple(aggregate_refs),
             completeness=completeness,

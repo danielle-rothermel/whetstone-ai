@@ -11,7 +11,10 @@ from __future__ import annotations
 
 from dr_store import MemoryBackend, ObjectStore
 
-from tests.objectives.support import SELECTION_QUALITY_AGGREGATE_NAME
+from tests.objectives.support import (
+    SELECTION_QUALITY_AGGREGATE_NAME,
+    aggregate_plan,
+)
 from whetstone.authority import (
     EvaluationAuthority,
     PlannedKeyResult,
@@ -24,7 +27,6 @@ from whetstone.code_eval.aggregate import (
     RolloutAggregate,
     RowValue,
     TaskRows,
-    mean_compression_ratio,
     unweighted_task_mean,
 )
 from whetstone.objectives import (
@@ -34,10 +36,11 @@ from whetstone.objectives import (
     select_official,
 )
 
-EVAL_HASH = "c" * 64
+from .support import eval_config_ref
+
 GRAPH_A = "a" * 64
 GRAPH_B = "b" * 64
-CONTEXT_ID = "ctx"
+BINDING_ID = "binding"
 
 SPECS = (
     ObjectiveSpec(
@@ -57,27 +60,29 @@ def _quality(graph_hash: str, value: float) -> RolloutAggregate:
     return unweighted_task_mean(
         aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
-        eval_config_hash=EVAL_HASH,
-        evaluation_context_id=CONTEXT_ID,
+        evaluation_context_id=BINDING_ID,
         task_rows=(
             TaskRows(
-                task_identity="t0",
-                expected_repeats=1,
+                task_identity="task-0",
                 rows=(RowValue(value=value),),
             ),
         ),
-        repeat_count=1,
+        plan=aggregate_plan(tasks=1, repeats=1),
     )
 
 
 def _compression(graph_hash: str, value: float) -> RolloutAggregate:
-    return mean_compression_ratio(
+    return unweighted_task_mean(
+        aggregate_name="mean_compression_ratio",
         graph_hash=graph_hash,
-        eval_config_hash=EVAL_HASH,
-        evaluation_context_id=CONTEXT_ID,
-        rows=(RowValue(value=value),),
-        task_count=1,
-        repeat_count=1,
+        evaluation_context_id=BINDING_ID,
+        task_rows=(
+            TaskRows(
+                task_identity="task-0",
+                rows=(RowValue(value=value),),
+            ),
+        ),
+        plan=aggregate_plan(tasks=1, repeats=1),
     )
 
 
@@ -108,8 +113,8 @@ def test_selection_evidence_certified_and_persisted() -> None:
     evidence_ref = store_selection_evidence(store, evidence)
 
     authority = EvaluationAuthority(name="whetstone-official")
-    context = authority.issue_official_context(
-        eval_config_hash=EVAL_HASH, campaign="camp-1"
+    binding = authority.issue_official_binding(
+        eval_config=eval_config_ref(), campaign="camp-1"
     )
 
     mapping = SelectedRecordMapping(
@@ -131,7 +136,7 @@ def test_selection_evidence_certified_and_persisted() -> None:
     )
 
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=(
             PlannedKeyResult(
                 planned_key="k0",

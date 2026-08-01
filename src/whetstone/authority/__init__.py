@@ -1,7 +1,7 @@
 """Evaluation Authority, certification, and publication (Workstream 9).
 
 The Whetstone official write path: a named :class:`EvaluationAuthority`
-principal that is the only issuer of official Evaluation Contexts, immutable
+principal that is the only issuer of official Evaluation Bindings, immutable
 :class:`OfficialEvaluationRecord` certifications over ordinary Rollout Result
 references, and immutable :class:`OfficialPlotManifest` publications.
 
@@ -9,7 +9,7 @@ Load-bearing guarantees:
 
 * **No relabeling.** Internal evaluation evidence can never be relabeled or
   copied to official because its config Identity Hashes match an official run;
-  :meth:`EvaluationAuthority.certify` refuses internal-role Contexts
+  :meth:`EvaluationAuthority.certify` refuses internal-role Bindings
   (:class:`RelabelingRefusedError`).
 * **Every planned key accounted for.** :func:`account_planned_keys` produces a
   complete account where every planned Rollout Execution Key is present or an

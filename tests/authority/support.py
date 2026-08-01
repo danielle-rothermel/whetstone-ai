@@ -2,15 +2,35 @@
 
 from __future__ import annotations
 
+from dr_code.eval import DefinitionRef, EvalConfig
+
 from whetstone.authority import (
     SelectedRecordMapping,
     SelectedRecordMappingEntry,
     TypedRef,
 )
+from whetstone.optimization.schema import EvalConfigRef, eval_config_reference
 
 GRAPH_A = "a" * 64
 GRAPH_B = "b" * 64
 EVAL_HASH = "c" * 64
+
+
+def eval_config_ref() -> EvalConfigRef:
+    return eval_config_reference(
+        EvalConfig(
+            definition_ref=DefinitionRef(
+                definition_id="authority-test",
+                version="1",
+                schema_name="dr_code.eval_definition",
+                identity_hash="a" * 64,
+            ),
+            sampling_config_hash="b" * 64,
+            evaluation_procedure_config_hash="d" * 64,
+            aggregation_config_hash="e" * 64,
+            config_identity_hash=EVAL_HASH,
+        )
+    )
 
 
 def full_hash(char: str) -> str:

@@ -17,7 +17,7 @@ Running Example row require an official-selection procedure that:
 The selection input is a per-candidate bundle of certified aggregates. "One
 candidate" here is one admitted Graph Hash / curve slot; its aggregates are
 the Whetstone :class:`~whetstone.code_eval.RolloutAggregate` values already
-bound to ``(graph_hash, eval_config_hash)`` and a stated Evaluation Context.
+bound to ``(graph_hash, eval_config_hash)`` and a stated Evaluation Binding.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ from whetstone.objectives.objective import (
     objective_from_aggregate_value,
     pareto_front,
 )
-from whetstone.result.schema import require_full_hash
+from whetstone.optimization.identity import require_full_hash
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

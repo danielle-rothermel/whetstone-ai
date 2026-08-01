@@ -23,9 +23,9 @@ from whetstone.authority import (
 )
 
 from .support import (
-    EVAL_HASH,
     GRAPH_A,
     aggregate_ref,
+    eval_config_ref,
     mapping_entry,
     oer_ref,
     result_ref,
@@ -113,11 +113,11 @@ def test_manifest_aggregate_refs_must_cover_mapping() -> None:
 
 def test_official_record_persists_immutably() -> None:
     authority = _authority()
-    context = authority.issue_official_context(
-        eval_config_hash=EVAL_HASH, campaign="camp-1"
+    binding = authority.issue_official_binding(
+        eval_config=eval_config_ref(), campaign="camp-1"
     )
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=(
             PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         ),

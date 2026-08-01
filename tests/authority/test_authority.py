@@ -1,6 +1,6 @@
 """Evaluation Authority: the named principal and official write path.
 
-Proves that only an authority issues official Contexts / records / manifests,
+Proves that only an authority issues official Bindings / records / manifests,
 that internal evaluation can never be relabeled or copied to official even when
 identity hashes are byte-identical, and that certification computes the
 completeness decision from the planned/present accounting.
@@ -21,15 +21,13 @@ from whetstone.authority import (
     SelectedRecordMappingEntry,
     UnauthorizedOfficialWriteError,
 )
-from whetstone.graph.rollout import (
-    EvaluationContext,
-    EvaluationRole,
-)
+from whetstone.evaluation_role import EvaluationRole
+from whetstone.optimization.schema import EvaluationBinding
 
 from .support import (
-    EVAL_HASH,
     GRAPH_A,
     aggregate_ref,
+    eval_config_ref,
     record_ref,
     result_ref,
     single_entry_mapping,
@@ -40,35 +38,35 @@ def _authority(name: str = "whetstone-official") -> EvaluationAuthority:
     return EvaluationAuthority(name=name)
 
 
-def _official_context(
+def _official_binding(
     authority: EvaluationAuthority,
-) -> EvaluationContext:
-    return authority.issue_official_context(
-        eval_config_hash=EVAL_HASH,
+) -> EvaluationBinding:
+    return authority.issue_official_binding(
+        eval_config=eval_config_ref(),
         campaign="camp-1",
     )
 
 
-def _internal_context() -> EvaluationContext:
+def _internal_binding() -> EvaluationBinding:
     # Same ordinary Eval Config hash as the official run: identical config
     # identity, internal role.
-    return EvaluationContext(
-        eval_config_hash=EVAL_HASH,
+    return EvaluationBinding(
+        eval_config=eval_config_ref(),
         role=EvaluationRole.INTERNAL,
         campaign="camp-1",
     )
 
 
 # ---------------------------------------------------------------------------
-# Only the authority issues official Contexts
+# Only the authority issues official Bindings
 # ---------------------------------------------------------------------------
 
 
-def test_authority_issues_official_context() -> None:
+def test_authority_issues_official_binding() -> None:
     authority = _authority()
-    context = _official_context(authority)
-    assert context.role is EvaluationRole.OFFICIAL
-    assert context.authority == "whetstone-official"
+    binding = _official_binding(authority)
+    assert binding.role is EvaluationRole.OFFICIAL
+    assert binding.authority_principal == "whetstone-official"
 
 
 def test_authority_must_be_named() -> None:
@@ -83,11 +81,11 @@ def test_authority_must_be_named() -> None:
 
 def test_internal_evidence_is_refused_for_certification() -> None:
     authority = _authority()
-    internal = _internal_context()
+    internal = _internal_binding()
     planned = (PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),)
     with pytest.raises(RelabelingRefusedError):
         authority.certify(
-            context=internal,
+            evaluation_binding=internal,
             planned_results=planned,
             aggregate_refs=(aggregate_ref("9"),),
             selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
@@ -95,21 +93,21 @@ def test_internal_evidence_is_refused_for_certification() -> None:
 
 
 def test_identical_identity_hashes_still_refuse_relabeling() -> None:
-    # The internal and official Contexts share the SAME ordinary Eval Config
-    # hash; only the role and authority differ. The internal context's config
+    # The internal and official Bindings share the SAME ordinary Eval Config
+    # hash; only the role and authority differ. The internal binding's config
     # identity is byte-identical to the official one, but relabeling refused.
     authority = _authority()
-    official = _official_context(authority)
-    internal = _internal_context()
-    assert internal.eval_config_hash == official.eval_config_hash
+    official = _official_binding(authority)
+    internal = _internal_binding()
+    assert internal.eval_config == official.eval_config
     # A shared measurement cell produces the SAME Rollout Key encoding under
-    # each context except for the Evaluation Context id, proving identity
+    # each binding except for the Evaluation Binding id, proving identity
     # comparison is possible while relabeling is refused.
     assert internal.role is EvaluationRole.INTERNAL
 
     with pytest.raises(RelabelingRefusedError, match="never relabeling"):
         authority.certify(
-            context=internal,
+            evaluation_binding=internal,
             planned_results=(
                 PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
             ),
@@ -121,10 +119,10 @@ def test_identical_identity_hashes_still_refuse_relabeling() -> None:
 def test_wrong_authority_is_refused() -> None:
     minter = _authority("authority-A")
     other = _authority("authority-B")
-    context = _official_context(minter)  # names authority-A
+    binding = _official_binding(minter)  # names authority-A
     with pytest.raises(UnauthorizedOfficialWriteError):
         other.certify(
-            context=context,
+            evaluation_binding=binding,
             planned_results=(
                 PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
             ),
@@ -140,13 +138,13 @@ def test_wrong_authority_is_refused() -> None:
 
 def test_certify_complete_evidence() -> None:
     authority = _authority()
-    context = _official_context(authority)
+    binding = _official_binding(authority)
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         PlannedKeyResult(planned_key="k1", result_ref=result_ref("e")),
     )
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=planned,
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(
@@ -163,13 +161,13 @@ def test_certify_complete_evidence() -> None:
 
 def test_certify_refuses_when_incomplete() -> None:
     authority = _authority()
-    context = _official_context(authority)
+    binding = _official_binding(authority)
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         PlannedKeyResult(planned_key="k1", result_ref=None),  # missing
     )
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=planned,
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(
@@ -185,9 +183,9 @@ def test_certify_refuses_when_incomplete() -> None:
 
 def test_official_record_is_immutable() -> None:
     authority = _authority()
-    context = _official_context(authority)
+    binding = _official_binding(authority)
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=(
             PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         ),
@@ -203,9 +201,9 @@ def test_official_record_certifies_ordinary_results_no_new_role() -> None:
     # The record references ORDINARY Rollout Result refs (the whetstone
     # rollout_result schema); certification introduces no distinct result type.
     authority = _authority()
-    context = _official_context(authority)
+    binding = _official_binding(authority)
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=(
             PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         ),
@@ -223,9 +221,9 @@ def test_official_record_carries_immutable_revision_chain() -> None:
     # A record is immutable; a "revision" is a new record naming its
     # predecessor, captured as an auditable revision entry.
     authority = _authority()
-    context = _official_context(authority)
+    binding = _official_binding(authority)
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=(
             PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         ),
@@ -255,7 +253,7 @@ def _record(
     *,
     planned: tuple[PlannedKeyResult, ...],
     mapping: SelectedRecordMapping,
-    evaluation_context_id: str = "e" * 64,
+    evaluation_binding_id: str = "e" * 64,
     present_count: int | None = None,
     certified: bool = False,
 ) -> OfficialEvaluationRecord:
@@ -267,8 +265,8 @@ def _record(
     missing = len(planned) - present
     return OfficialEvaluationRecord(
         authority="whetstone-official",
-        evaluation_context_id=evaluation_context_id,
-        eval_config_hash=EVAL_HASH,
+        evaluation_binding_id=evaluation_binding_id,
+        eval_config=eval_config_ref(),
         planned_results=planned,
         aggregate_refs=(aggregate_ref("9"),),
         completeness=CompletenessDecision(
@@ -357,32 +355,32 @@ def test_converged_entries_agree_with_record_present_set() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The evaluation_context_id is validated as a full Identity Hash, so a forged
-# non-hash context id cannot be stamped onto an Official Evaluation Record via
+# The evaluation_binding_id is validated as a full Identity Hash, so a forged
+# non-hash binding id cannot be stamped onto an Official Evaluation Record via
 # the direct constructor path.
 # ---------------------------------------------------------------------------
 
 
-def test_forged_non_hash_context_id_is_refused() -> None:
+def test_forged_non_hash_binding_id_is_refused() -> None:
     planned = (PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),)
-    with pytest.raises(ValueError, match="context_id must be a full"):
+    with pytest.raises(ValueError, match="binding_id must be a full"):
         _record(
             planned=planned,
             mapping=single_entry_mapping(planned_keys=("k0",)),
-            evaluation_context_id="forged-ctx-id",
+            evaluation_binding_id="forged-binding-id",
         )
 
 
-def test_authority_issued_context_id_is_a_full_hash() -> None:
-    # The authority path produces a context id that is a full 64-char identity
+def test_authority_issued_binding_id_is_a_full_hash() -> None:
+    # The authority path produces a binding id that is a full 64-char identity
     # hash, so the record validator accepts it (the funnel and the validator
     # agree).
     authority = _authority()
-    context = _official_context(authority)
-    ctx_id = context.evaluation_context_id()
-    assert len(ctx_id) == 64
+    binding = _official_binding(authority)
+    binding_id = binding.identity_hash()
+    assert len(binding_id) == 64
     record = authority.certify(
-        context=context,
+        evaluation_binding=binding,
         planned_results=(
             PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         ),
@@ -390,4 +388,4 @@ def test_authority_issued_context_id_is_a_full_hash() -> None:
         selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
         selection_evidence_ref=result_ref("f"),
     )
-    assert record.evaluation_context_id == ctx_id
+    assert record.evaluation_binding_id == binding_id
