@@ -23,7 +23,12 @@ from whetstone.envs.d1 import (
     d1_initial_candidate,
     render_d1_frame,
 )
-from whetstone.envs.d1_eval import D1RowOutcome, _input_arm_text, run_d1_eval
+from whetstone.envs.d1_eval import (
+    D1RowOutcome,
+    D1RowRequest,
+    _input_arm_text,
+    run_d1_eval,
+)
 from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
     ED1_INVALID_BODY,
@@ -203,6 +208,34 @@ def test_d1_process_job_runs_real_row_driver() -> None:
     assert result.submission_score_aggregate.aggregation_output.value == 1.0
 
 
+def test_d1_v2_request_hash_is_pinned() -> None:
+    experiment = build_d1_experiment(
+        tasks=_tasks(1), repeats=1, internal_n=1, official_n=1
+    )
+    requests: list[D1RowRequest] = []
+    base = _passing_jobs()
+
+    def capture(request: D1RowRequest):
+        requests.append(request)
+        return base(request)
+
+    run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-golden",
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=capture,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
+    )
+
+    assert requests[0].request_identity == (
+        "f36012b2d65a5aef1850e873cb81501564be63bffef105fe36338c7ddd4c2c8e"
+    )
+
+
 @pytest.mark.parametrize(
     ("split_name", "official_binding"),
     [("official", False), ("internal", True)],
@@ -220,7 +253,7 @@ def test_d1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.d1_eval._restore_recorded", should_not_restore
+        "whetstone.envs.d1_eval.index_partial_records", should_not_restore
     )
     with pytest.raises(ValueError, match="does not match split role"):
         run_d1_eval(
@@ -273,6 +306,129 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
     )
 
 
+def test_d1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
+    experiment = build_d1_experiment(tasks=_tasks(2), repeats=1)
+    sampling = experiment.eval_configs.internal
+    binding_a = evaluation_binding(sampling)
+    binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
+    log = PartialLog(path=tmp_path / "d1-binding.partial")
+
+    run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-binding",
+        sampling=sampling,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=_passing_jobs(),
+        evaluation_binding=binding_a,
+        partial_log=log,
+    )
+    identities_a = {record.request_identity for record in log.load()}
+
+    served_b: list[str] = []
+    run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-binding",
+        sampling=sampling,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=_passing_jobs(served=served_b),
+        evaluation_binding=binding_b,
+        partial_log=log,
+    )
+
+    assert len(served_b) == len(sampling.instances)
+    identities_b = {
+        record.request_identity
+        for record in log.load()
+        if record.request_identity not in identities_a
+    }
+    assert len(identities_b) == len(identities_a)
+
+
+def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
+    tmp_path: Path, monkeypatch
+) -> None:
+    experiment = build_d1_experiment(
+        tasks=_tasks(1), repeats=1, internal_n=1, official_n=1
+    )
+    sampling = experiment.eval_configs.internal
+    log = PartialLog(path=tmp_path / "d1-redrive.partial")
+    pending = D1RowOutcome(
+        submission_score=None,
+        output_text=None,
+        failed=True,
+        failure_code="transport_error",
+        redrivable=True,
+    )
+    pool_calls = 0
+
+    def crash_after_ordinal_zero(
+        specs, *, concurrency, is_rate_limited, max_wall_seconds
+    ):
+        nonlocal pool_calls
+        del is_rate_limited, max_wall_seconds
+        pool_calls += 1
+        if pool_calls == 2:
+            raise RuntimeError("simulated crash before ordinal one")
+        for spec in specs:
+            spec.commit(pending)
+        return PoolOutcome(
+            results=tuple(
+                FanoutResult(
+                    key=spec.key,
+                    status=FanoutStatus.COMPLETED,
+                    value=pending,
+                )
+                for spec in specs
+            ),
+            effective_concurrency=concurrency,
+            concurrency_halved=False,
+            deadline_reached=False,
+            guard_timeouts=0,
+        )
+
+    monkeypatch.setattr(
+        "whetstone.envs.d1_eval.run_call_pool", crash_after_ordinal_zero
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        run_d1_eval(
+            experiment,
+            candidate_body=D1_WRAPPER_BODY_NAIVE,
+            candidate_id="d1-redrive",
+            sampling=sampling,
+            execution_policy=execution_policy(max_attempts=1),
+            row_job_factory=row_job_factory(lambda *_args: pending),
+            evaluation_binding=evaluation_binding(sampling),
+            partial_log=log,
+        )
+    assert {record.redrive_pending for record in log.load()} == {True}
+
+    monkeypatch.undo()
+    resumed_ordinals: list[int] = []
+
+    def success(_instance, _repeat: int, drive_ordinal: int):
+        resumed_ordinals.append(drive_ordinal)
+        return D1RowOutcome(
+            submission_score=1.0,
+            output_text="def rebuilt():\n    return 1\n",
+            failed=False,
+        )
+
+    run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-redrive",
+        sampling=sampling,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=row_job_factory(success),
+        evaluation_binding=evaluation_binding(sampling),
+        partial_log=log,
+    )
+    assert resumed_ordinals == [1]
+    assert {record.redrive_pending for record in log.load()} == {False, True}
+
+
 def test_d1_terminal_timeout_is_persisted_and_not_repaid(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -320,9 +476,13 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
     )
 
     records = log.load()
-    assert len(records) == 1
-    assert records[0].failure_code == "runner_timeout"
-    assert records[0].split_role == experiment.eval_configs.official.split_role
+    assert len(records) == 2
+    assert {record.failure_code for record in records} == {"runner_timeout"}
+    assert {record.redrive_pending for record in records} == {False, True}
+    assert len({record.request_identity for record in records}) == 2
+    assert {record.split_role for record in records} == {
+        experiment.eval_configs.official.split_role
+    }
     assert len(walls) == 2
     assert walls[1] is not None and walls[0] is not None
     assert walls[1] <= walls[0]

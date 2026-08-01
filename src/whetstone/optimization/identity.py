@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterator, Mapping
 from types import MappingProxyType
-from typing import Any, ClassVar, Self, cast
+from typing import Any, ClassVar, Self
 
 from dr_serialize import (
     StrictJsonError,
@@ -61,7 +61,7 @@ class _ValidatedString(str):
         if not isinstance(value, str):
             raise TypeError(f"{cls._field_name} must be a string")
         cls._validate(value)
-        return cast(Self, str.__new__(cls, value))
+        return str.__new__(cls, value)
 
     @classmethod
     def _validate(cls, value: str) -> None:
@@ -128,7 +128,7 @@ class NonNegativeInt(int):
             raise TypeError("nonnegative integer must be a strict integer")
         if value < 0:
             raise ValueError("nonnegative integer cannot be negative")
-        return cast(Self, int.__new__(cls, value))
+        return int.__new__(cls, value)
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -151,7 +151,7 @@ class FiniteFloat(float):
             raise ValueError("finite float must be finite")
         if converted == 0.0:
             converted = 0.0
-        return cast(Self, float.__new__(cls, converted))
+        return float.__new__(cls, converted)
 
     @classmethod
     def __get_pydantic_core_schema__(

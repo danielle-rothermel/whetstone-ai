@@ -188,7 +188,7 @@ def test_rollout_aggregate_wire_contract_is_pinned() -> None:
         "name",
         "graph_hash",
         "eval_config_hash",
-        "evaluation_context_id",
+        "evaluation_binding_hash",
         "task_count",
         "repeat_count",
         "aggregation_output",

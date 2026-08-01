@@ -28,7 +28,12 @@ from whetstone.envs.ed1 import (
     ed1_initial_candidate,
     render_encoder_frame,
 )
-from whetstone.envs.ed1_eval import Ed1RowOutcome, run_ed1_eval
+from whetstone.envs.ed1_eval import (
+    Ed1PartialPayload,
+    Ed1RowOutcome,
+    Ed1RowRequest,
+    run_ed1_eval,
+)
 from whetstone.envs.ed1_scoring import score_ed1_submission
 from whetstone.envs.encdec_rollout import (
     DECODER_NODE_ID,
@@ -295,6 +300,38 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
     assert result.outputs[0].output_text is not None
 
 
+def test_ed1_v2_request_hash_is_pinned() -> None:
+    tasks = _tasks(1)
+    experiment = build_ed1_experiment(
+        tasks=tasks, repeats=1, internal_n=1, official_n=1
+    )
+    candidate = ed1_initial_candidate()
+    requests: list[Ed1RowRequest] = []
+    base = row_job_factory(
+        lambda instance, _repeat, _drive: _successful_outcome(instance)
+    )
+
+    def capture(request: Ed1RowRequest):
+        requests.append(request)
+        return base(request)
+
+    run_ed1_eval(
+        experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        candidate_id=candidate.candidate_id,
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=capture,
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
+    )
+
+    assert requests[0].request_identity == (
+        "2bf028f8828ae9ec3875c953fa6e63c1c607869b31ae21bb8eb5f92e8c2b2116"
+    )
+
+
 @pytest.mark.parametrize(
     ("split_name", "official_binding"),
     [("official", False), ("internal", True)],
@@ -313,7 +350,7 @@ def test_ed1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.ed1_eval._restore_ed1_recorded",
+        "whetstone.envs.ed1_eval.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
@@ -413,7 +450,11 @@ def test_streaming_resume_restores_rows_without_transport(
     tasks = _tasks(2)
     log = PartialLog(path=tmp_path / "ed1.partial.jsonl")
     experiment, first = _evaluate(tasks=tasks, partial_log=log)
-    assert len(log.load()) == 2
+    records = log.load()
+    assert len(records) == 2
+    assert {record.raw_response for record in records} == {""}
+    for record in records:
+        Ed1PartialPayload.model_validate(record.observation_payload)
 
     def boom(_instance, _repeat: int, _drive_ordinal: int):
         raise AssertionError("recorded rows must not be called again")
@@ -433,6 +474,155 @@ def test_streaming_resume_restores_rows_without_transport(
     )
     assert resumed.primary_aggregate == first.primary_aggregate
     assert resumed.compression_aggregate == first.compression_aggregate
+
+
+def test_ed1_partial_payload_rejects_shape_and_type_drift() -> None:
+    valid = {
+        "compression_value": 0.5,
+        "encoder_text": "compact",
+        "decoder_text": "def rebuilt():\n    return 1\n",
+        "attractor_pull": None,
+        "max_budget": 20,
+        "encoder_len": 7,
+    }
+    Ed1PartialPayload.model_validate(valid)
+
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        Ed1PartialPayload.model_validate({**valid, "unexpected": True})
+    with pytest.raises(ValueError, match="valid number"):
+        Ed1PartialPayload.model_validate({**valid, "compression_value": "0.5"})
+
+
+def test_ed1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
+    tasks = _tasks(2)
+    experiment = build_ed1_experiment(tasks=tasks, repeats=1)
+    sampling = experiment.eval_configs.internal
+    candidate = ed1_initial_candidate()
+    binding_a = evaluation_binding(sampling)
+    binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
+    log = PartialLog(path=tmp_path / "ed1-binding.partial")
+
+    run_ed1_eval(
+        experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        candidate_id=candidate.candidate_id,
+        sampling=sampling,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=row_job_factory(
+            lambda instance, _repeat, _drive: _successful_outcome(instance)
+        ),
+        evaluation_binding=binding_a,
+        partial_log=log,
+    )
+    identities_a = {record.request_identity for record in log.load()}
+
+    served_b: list[str] = []
+
+    def successful_b(instance, _repeat: int, _drive_ordinal: int):
+        served_b.append(str(instance.id))
+        return _successful_outcome(instance)
+
+    run_ed1_eval(
+        experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        candidate_id=candidate.candidate_id,
+        sampling=sampling,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=row_job_factory(successful_b),
+        evaluation_binding=binding_b,
+        partial_log=log,
+    )
+
+    assert len(served_b) == len(sampling.instances)
+    identities_b = {
+        record.request_identity
+        for record in log.load()
+        if record.request_identity not in identities_a
+    }
+    assert len(identities_b) == len(identities_a)
+
+
+def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
+    tmp_path: Path, monkeypatch
+) -> None:
+    tasks = _tasks(1)
+    experiment = build_ed1_experiment(
+        tasks=tasks, repeats=1, internal_n=1, official_n=1
+    )
+    sampling = experiment.eval_configs.internal
+    candidate = ed1_initial_candidate()
+    log = PartialLog(path=tmp_path / "ed1-redrive.partial")
+    pending = Ed1RowOutcome(
+        primary_value=None,
+        compression_value=None,
+        encoder_text=None,
+        decoder_text=None,
+        failed=True,
+        failure_code="transport_error",
+        redrivable=True,
+    )
+    pool_calls = 0
+
+    def crash_after_ordinal_zero(
+        specs, *, concurrency, is_rate_limited, max_wall_seconds
+    ):
+        nonlocal pool_calls
+        del is_rate_limited, max_wall_seconds
+        pool_calls += 1
+        if pool_calls == 2:
+            raise RuntimeError("simulated crash before ordinal one")
+        for spec in specs:
+            spec.commit(pending)
+        return PoolOutcome(
+            results=tuple(
+                FanoutResult(
+                    key=spec.key,
+                    status=FanoutStatus.COMPLETED,
+                    value=pending,
+                )
+                for spec in specs
+            ),
+            effective_concurrency=concurrency,
+            concurrency_halved=False,
+            deadline_reached=False,
+            guard_timeouts=0,
+        )
+
+    monkeypatch.setattr(
+        "whetstone.envs.ed1_eval.run_call_pool", crash_after_ordinal_zero
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        run_ed1_eval(
+            experiment,
+            candidate_template=str(candidate.payload[MUTATION_FIELD]),
+            candidate_id=candidate.candidate_id,
+            sampling=sampling,
+            execution_policy=execution_policy(max_attempts=1),
+            row_job_factory=row_job_factory(lambda *_args: pending),
+            evaluation_binding=evaluation_binding(sampling),
+            partial_log=log,
+        )
+    assert {record.redrive_pending for record in log.load()} == {True}
+
+    monkeypatch.undo()
+    resumed_ordinals: list[int] = []
+
+    def success(instance, _repeat: int, drive_ordinal: int):
+        resumed_ordinals.append(drive_ordinal)
+        return _successful_outcome(instance)
+
+    run_ed1_eval(
+        experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        candidate_id=candidate.candidate_id,
+        sampling=sampling,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=row_job_factory(success),
+        evaluation_binding=evaluation_binding(sampling),
+        partial_log=log,
+    )
+    assert resumed_ordinals == [1]
+    assert {record.redrive_pending for record in log.load()} == {False, True}
 
 
 def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
@@ -481,9 +671,13 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
     )
 
     records = log.load()
-    assert len(records) == 1
-    assert records[0].failure_code == "runner_timeout"
-    assert records[0].split_role == experiment.eval_configs.official.split_role
+    assert len(records) == 2
+    assert {record.failure_code for record in records} == {"runner_timeout"}
+    assert {record.redrive_pending for record in records} == {False, True}
+    assert len({record.request_identity for record in records}) == 2
+    assert {record.split_role for record in records} == {
+        experiment.eval_configs.official.split_role
+    }
 
     def boom(_request):
         raise AssertionError("terminal timeout must restore without repayment")

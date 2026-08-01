@@ -42,6 +42,7 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
+    field_serializer,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -56,6 +57,10 @@ from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.oracle_operator import (
     ENV_EXACT_MATCH_NAME,
     env_exact_match_score,
+)
+from whetstone.envs.partial_resume import (
+    index_partial_records,
+    resolve_exact_resume,
 )
 from whetstone.envs.registry import EnvSpec, env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
@@ -86,6 +91,7 @@ from whetstone.execution.prompt_cache import (
     PromptResultCache,
     execute_call,
 )
+from whetstone.optimization.identity import IdentityHash
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import (
     Candidate,
@@ -258,8 +264,8 @@ class InternalRowOutcome(BaseModel):
         return RowValue(value=self.score)
 
 
-_INTERNAL_ROW_REQUEST_SCHEMA = "whetstone.envs.internal_row_request/v1"
-_INTERNAL_ROW_RESULT_SCHEMA = "whetstone.envs.internal_row_result/v1"
+_INTERNAL_ROW_REQUEST_SCHEMA = "whetstone.envs.internal_row_request/v2"
+_INTERNAL_ROW_RESULT_SCHEMA = "whetstone.envs.internal_row_result/v2"
 
 
 class ProcessInstance(BaseModel):
@@ -309,6 +315,38 @@ def process_request_identity(model: BaseModel) -> str:
     return _process_payload_identity(model.model_dump(mode="json"))
 
 
+def _canonical_provider_call_config_payload(
+    config: ProviderCallConfig,
+) -> dict[str, object]:
+    """Serialize unordered provider-definition sets in canonical order.
+
+    The row identity binds the exact submitted JSON. ``dr_providers`` models
+    these three definition fields as frozensets, whose default JSON list order
+    varies with the interpreter hash seed. Sorting them here makes both the
+    submitted process payload and its identity stable across crash restarts.
+    """
+    payload = config.model_dump(mode="json")
+    definition = payload["definition"]
+    if not isinstance(definition, dict):
+        raise TypeError("provider definition payload must be an object")
+    constraints = definition["constraints"]
+    if not isinstance(constraints, dict):
+        raise TypeError("provider constraints payload must be an object")
+
+    for owner, field in (
+        (definition, "required_controls"),
+        (definition, "extension_keys"),
+        (constraints, "supported_controls"),
+    ):
+        values = owner[field]
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) for value in values
+        ):
+            raise TypeError(f"provider {field} payload must be a string list")
+        owner[field] = sorted(values)
+    return payload
+
+
 def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
     """Validate one phase wall and convert it to an absolute deadline."""
     if max_wall_seconds is None:
@@ -345,7 +383,7 @@ class InternalRowRequest(BaseModel):
 
     _submitted_request_identity: str | None = PrivateAttr(default=None)
 
-    schema_name: Literal["whetstone.envs.internal_row_request/v1"] = (
+    schema_name: Literal["whetstone.envs.internal_row_request/v2"] = (
         _INTERNAL_ROW_REQUEST_SCHEMA
     )
     env_name: str
@@ -354,6 +392,7 @@ class InternalRowRequest(BaseModel):
     provider_call_config: ProviderCallConfig
     execution_policy: ProviderExecutionPolicy
     procedure_config_hash: str
+    evaluation_binding_hash: IdentityHash
     logical_call_id: str
     repeat_index: int
     drive_ordinal: int
@@ -361,6 +400,12 @@ class InternalRowRequest(BaseModel):
     cache_unit: str
     cache_root: str | None
     render_guard: bool
+
+    @field_serializer("provider_call_config")
+    def _serialize_provider_call_config(
+        self, config: ProviderCallConfig
+    ) -> dict[str, object]:
+        return _canonical_provider_call_config_payload(config)
 
     @property
     def request_identity(self) -> str:
@@ -383,7 +428,7 @@ class InternalRowResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.internal_row_result/v1"] = (
+    schema_name: Literal["whetstone.envs.internal_row_result/v2"] = (
         _INTERNAL_ROW_RESULT_SCHEMA
     )
     request_identity: str
@@ -530,8 +575,9 @@ def run_internal_eval(
     ``(candidate, instance, repeat)`` key in instance/repeat order -- so the
     aggregate is byte-identical regardless of completion order. When a
     ``partial_log`` is given, each completed call is appended as it finishes
-    and any already-recorded ``(instance, candidate, repeat)`` observation is
-    RESTORED from disk instead of re-driven (cell resume).
+    and only an observation for the exact row-request identity is RESTORED
+    from disk instead of re-driven. A pending ordinal-0 observation resumes
+    at the exact ordinal-1 request.
     """
     env = env_spec(experiment.env_name)
     rd = experiment.rollout_definition
@@ -555,22 +601,21 @@ def run_internal_eval(
             "sampling EvalConfig procedure does not match the experiment"
         )
     evaluation_binding_id = evaluation_binding.identity_hash()
-    unit = candidate.candidate_id
+    unit = str(candidate.candidate_id)
 
-    recorded = _restore_recorded(
-        partial_log, partial_phase, unit, env, procedure_hash
-    )
-
-    # Build one keyed CallSpec per (instance, repeat) NOT already on disk.
     tasks = [
         (instance, EnvTask.from_instance(env.name, instance))
         for instance in instances
     ]
+    by_instance = {str(inst.id): (inst, tsk) for inst, tsk in tasks}
 
     def _persist(
         instance: Instance,
         index: int,
         outcome: InternalRowOutcome,
+        *,
+        request_identity: str,
+        redrive_pending: bool,
     ) -> None:
         if partial_log is None:
             return
@@ -580,6 +625,8 @@ def run_internal_eval(
                 instance_id=str(instance.id),
                 unit=unit,
                 repeat_id=index,
+                request_identity=request_identity,
+                redrive_pending=redrive_pending,
                 score=outcome.score,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
@@ -588,7 +635,7 @@ def run_internal_eval(
                 completion_tokens=outcome.completion_tokens,
                 total_tokens=outcome.total_tokens,
                 reasoning_tokens=outcome.reasoning_tokens,
-                latency_s=outcome.latency_s,
+                latency_s=None if outcome.cache_hit else outcome.latency_s,
                 output_text=outcome.output_text,
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
@@ -600,20 +647,20 @@ def run_internal_eval(
             )
         )
 
-    def _spec(
+    def _row_request(
         instance: Instance,
         index: int,
         *,
         drive_ordinal: int,
-    ) -> CallSpec[tuple[str, str, int], InternalRowOutcome]:
-        key = (unit, str(instance.id), index)
-        request = InternalRowRequest(
+    ) -> InternalRowRequest:
+        return InternalRowRequest(
             env_name=env.name,
             candidate=candidate,
             instance=ProcessInstance.from_instance(instance),
             provider_call_config=rd.provider_call_config,
             execution_policy=execution_policy,
             procedure_config_hash=procedure_hash,
+            evaluation_binding_hash=evaluation_binding_id,
             logical_call_id=(
                 f"{EnvTask.from_instance(env.name, instance).task_identity()}"
                 f"#{index}"
@@ -625,6 +672,48 @@ def run_internal_eval(
             cache_root=None if cache is None else str(cache.root),
             render_guard=render_guard,
         )
+
+    requests_by_key = {
+        (unit, str(instance.id), index): (
+            _row_request(instance, index, drive_ordinal=0),
+            _row_request(instance, index, drive_ordinal=1),
+        )
+        for instance, _task in tasks
+        for index in range(repeats)
+    }
+    partial_records = index_partial_records(
+        () if partial_log is None else partial_log.load(),
+        phase=partial_phase,
+        unit=unit,
+    )
+    recorded: dict[tuple[str, str, int], InternalRowOutcome] = {}
+    driven: dict[tuple[str, str, int], InternalRowOutcome] = {}
+    initial_requests: list[InternalRowRequest] = []
+    resumed_redrive_requests: list[InternalRowRequest] = []
+    for key, (ordinal_0, ordinal_1) in requests_by_key.items():
+        decision = resolve_exact_resume(
+            partial_records,
+            instance_id=key[1],
+            repeat_id=key[2],
+            ordinal_0_request_identity=ordinal_0.request_identity,
+            ordinal_1_request_identity=ordinal_1.request_identity,
+        )
+        if decision.record is not None:
+            restored = _internal_outcome_from_record(decision.record)
+            if decision.drive_ordinal is None:
+                recorded[key] = restored
+            else:
+                driven[key] = restored
+        if decision.drive_ordinal == 0:
+            initial_requests.append(ordinal_0)
+        elif decision.drive_ordinal == 1:
+            resumed_redrive_requests.append(ordinal_1)
+
+    def _spec(
+        request: InternalRowRequest,
+    ) -> CallSpec[tuple[str, str, int], InternalRowOutcome]:
+        key = (unit, request.instance.id, request.repeat_index)
+        instance = by_instance[request.instance.id][0]
 
         def _decode(value: JsonValue) -> InternalRowOutcome:
             result = InternalRowResult.from_process_payload(value)
@@ -639,30 +728,33 @@ def run_internal_eval(
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=guard_deadline_seconds(execution_policy),
-            commit=lambda outcome, inst=instance, i=index: _persist(
-                inst, i, outcome
+            commit=lambda outcome: _persist(
+                instance,
+                request.repeat_index,
+                outcome,
+                request_identity=request.request_identity,
+                redrive_pending=(
+                    request.drive_ordinal == 0 and _should_redrive(outcome)
+                ),
             ),
         )
 
-    by_instance = {str(inst.id): (inst, tsk) for inst, tsk in tasks}
     phase_deadline = start_phase_deadline(max_wall_seconds)
-    specs = [
-        _spec(instance, index, drive_ordinal=0)
-        for instance, task in tasks
-        for index in range(repeats)
-        if (unit, str(instance.id), index) not in recorded
-    ]
-
     effective_concurrency = concurrency
 
     def _drive(
-        pending: list[CallSpec[tuple[str, str, int], InternalRowOutcome]],
+        requests: list[InternalRowRequest],
     ) -> tuple[
         dict[tuple[str, str, int], InternalRowOutcome], bool, bool, int
     ]:
         nonlocal effective_concurrency
+        specs = [_spec(request) for request in requests]
+        request_by_key = {
+            (unit, request.instance.id, request.repeat_index): request
+            for request in requests
+        }
         pool = run_call_pool(
-            pending,
+            specs,
             concurrency=effective_concurrency,
             is_rate_limited=_row_is_rate_limited,
             max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
@@ -670,12 +762,21 @@ def run_internal_eval(
         effective_concurrency = pool.effective_concurrency
         driven: dict[tuple[str, str, int], InternalRowOutcome] = {}
         for res in pool.results:
+            request = request_by_key[res.key]
             if res.status is FanoutStatus.UNIT_TIMEOUT:
-                driven[res.key] = InternalRowOutcome(
+                outcome = InternalRowOutcome(
                     score=None,
                     failed=True,
                     failure_code=RUNNER_TIMEOUT_CODE,
                     redrivable=True,
+                )
+                driven[res.key] = outcome
+                _persist(
+                    by_instance[res.key[1]][0],
+                    res.key[2],
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=request.drive_ordinal == 0,
                 )
             elif res.status in {
                 FanoutStatus.NOT_DISPATCHED,
@@ -694,7 +795,8 @@ def run_internal_eval(
             pool.guard_timeouts,
         )
 
-    driven, halved_1, deadline_1, guard_1 = _drive(specs)
+    first_driven, halved_1, deadline_1, guard_1 = _drive(initial_requests)
+    driven.update(first_driven)
 
     # --- ONE bounded re-drive of timed-out / transient-transport failures. ---
     # A runner-guard timeout or a TERMINAL transient transport failure (the
@@ -705,28 +807,20 @@ def run_internal_eval(
     # failed row. A not-dispatched (deadline) row is NOT re-driven (a resume
     # handles it). This bounds one flaky observation without re-driving the
     # split.
-    redrive_specs = [
-        _spec(by_instance[key[1]][0], key[2], drive_ordinal=1)
-        for key, out in driven.items()
+    redrive_requests = resumed_redrive_requests + [
+        requests_by_key[key][1]
+        for key, out in first_driven.items()
         if _should_redrive(out)
     ]
     halved_2 = deadline_2 = False
     guard_2 = 0
-    if redrive_specs:
-        redriven, halved_2, deadline_2, guard_2 = _drive(redrive_specs)
+    if redrive_requests:
+        redriven, halved_2, deadline_2, guard_2 = _drive(redrive_requests)
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
             if not outcome.missing
         )
-
-    # A first-attempt timeout that was NOT re-driven (or a re-drive that also
-    # timed out) is a real failed observation: record it so a resume does not
-    # re-drive a call that already blew the deadline twice.
-    if partial_log is not None:
-        for key, out in driven.items():
-            if out.failure_code == RUNNER_TIMEOUT_CODE:
-                _persist(by_instance[key[1]][0], key[2], out)
 
     concurrency_halved = halved_1 or halved_2
     deadline_reached = deadline_1 or deadline_2
@@ -743,7 +837,7 @@ def run_internal_eval(
         for index in range(repeats):
             key = (unit, str(instance.id), index)
             if key in recorded:
-                rows.append(recorded[key])
+                rows.append(recorded[key].row)
             else:
                 outcome = driven[key]
                 rows.append(outcome.row)
@@ -769,7 +863,7 @@ def run_internal_eval(
     rollout_aggregate = unweighted_task_mean(
         aggregate_name=ENV_EXACT_MATCH_NAME,
         graph_hash=rd.graph_hash,
-        evaluation_context_id=evaluation_binding_id,
+        evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(task_rows),
         plan=sampling.evaluation_matrix_plan,
     )
@@ -822,31 +916,29 @@ def _should_redrive(outcome: InternalRowOutcome) -> bool:
     return outcome.redrivable
 
 
-def _restore_recorded(
-    partial_log: PartialLog | None,
-    phase: str,
-    unit: str,
-    env: EnvSpec,
-    procedure_hash: str,
-) -> dict[tuple[str, str, int], RowValue]:
-    """Rebuild RowValues for observations already on disk (resume skip).
-
-    A recorded failed observation restores a failed row; a recorded score
-    restores a value row. Only records for THIS phase+unit are restored, keyed
-    ``(unit, instance_id, repeat)`` to match the driven-call keys.
-    """
-    if partial_log is None:
-        return {}
-    restored: dict[tuple[str, str, int], RowValue] = {}
-    for record in partial_log.load():
-        if record.phase != phase or record.unit != unit:
-            continue
-        key = (unit, record.instance_id, record.repeat_id)
-        if record.failed or record.score is None:
-            restored[key] = RowValue(failed=True)
-        else:
-            restored[key] = RowValue(value=float(record.score))
-    return restored
+def _internal_outcome_from_record(
+    record: PartialCallRecord,
+) -> InternalRowOutcome:
+    """Rebuild the accepted outcome stored for one exact row request."""
+    return InternalRowOutcome(
+        score=None if record.score is None else float(record.score),
+        failed=record.failed,
+        failure_code=record.failure_code,
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        total_tokens=record.total_tokens,
+        reasoning_tokens=record.reasoning_tokens,
+        latency_s=record.latency_s,
+        output_text=record.output_text,
+        finish_reason=record.finish_reason,
+        provider_error=record.provider_error,
+        redrivable=record.redrive_pending,
+        cache_hit=record.cache_hit,
+        cache_source_phase=record.cache_source_phase,
+        cache_source_unit=record.cache_source_unit,
+        cache_source_call_id=record.cache_source_call_id,
+        cache_source_at=record.cache_source_at,
+    )
 
 
 __all__ = [

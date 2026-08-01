@@ -7,6 +7,8 @@ Reward -- per env, with no live paid call.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from dr_code.eval import AggregationStatus
 
@@ -211,22 +213,22 @@ def test_process_row_wire_schemas_are_pinned() -> None:
     from whetstone.envs.ed1_eval import Ed1RowRequest, Ed1RowResult
 
     assert InternalRowRequest.model_fields["schema_name"].default == (
-        "whetstone.envs.internal_row_request/v1"
+        "whetstone.envs.internal_row_request/v2"
     )
     assert InternalRowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.internal_row_result/v1"
+        "whetstone.envs.internal_row_result/v2"
     )
     assert D1RowRequest.model_fields["schema_name"].default == (
-        "whetstone.envs.d1_row_request/v1"
+        "whetstone.envs.d1_row_request/v2"
     )
     assert D1RowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.d1_row_result/v1"
+        "whetstone.envs.d1_row_result/v2"
     )
     assert Ed1RowRequest.model_fields["schema_name"].default == (
-        "whetstone.envs.ed1_row_request/v1"
+        "whetstone.envs.ed1_row_request/v2"
     )
     assert Ed1RowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.ed1_row_result/v1"
+        "whetstone.envs.ed1_row_result/v2"
     )
     assert tuple(InternalRowRequest.model_fields) == (
         "schema_name",
@@ -236,6 +238,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "provider_call_config",
         "execution_policy",
         "procedure_config_hash",
+        "evaluation_binding_hash",
         "logical_call_id",
         "repeat_index",
         "drive_ordinal",
@@ -255,6 +258,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "provider_call_config",
         "execution_policy",
         "procedure_config_hash",
+        "evaluation_binding_hash",
         "logical_call_id",
         "repeat_index",
         "drive_ordinal",
@@ -274,6 +278,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "provider_call_config",
         "execution_policy",
         "procedure_config_hash",
+        "evaluation_binding_hash",
         "budget_ratio",
         "logical_call_id",
         "repeat_index",
@@ -435,6 +440,40 @@ def test_internal_result_for_different_request_is_rejected() -> None:
         )
 
 
+def test_internal_v2_request_hash_is_pinned() -> None:
+    exp = _tiny_experiment("c18")
+    sampling = exp.eval_configs.internal
+    base = _internal_jobs(exp, _correct_reply("c18", sampling.instances))
+    requests: list[InternalRowRequest] = []
+
+    def capture(request: InternalRowRequest) -> ProcessJob:
+        requests.append(request)
+        return base(request)
+
+    run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=capture,
+        evaluation_binding=_binding(exp),
+    )
+
+    assert requests[0].request_identity == (
+        "eef8f26faafea014d191ae473eb01e098a98785d7302eb6a520ef569d984bb9a"
+    )
+    provider = requests[0].model_dump(mode="json")["provider_call_config"]
+    definition = provider["definition"]
+    constraints = definition["constraints"]
+    assert definition["required_controls"] == sorted(
+        definition["required_controls"]
+    )
+    assert definition["extension_keys"] == sorted(definition["extension_keys"])
+    assert constraints["supported_controls"] == sorted(
+        constraints["supported_controls"]
+    )
+
+
 @pytest.mark.parametrize(
     ("split_name", "evaluation_role"),
     [
@@ -467,7 +506,7 @@ def test_internal_eval_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.internal_eval._restore_recorded",
+        "whetstone.envs.internal_eval.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
@@ -531,6 +570,192 @@ def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
     assert calls[0][1] is not None
     assert calls[1][1] <= calls[0][1]
     assert result.aggregate.rows_failed == 0
+
+
+def test_internal_resume_requires_exact_evaluation_binding(
+    tmp_path: Path,
+) -> None:
+    from whetstone.execution.partials import PartialLog
+
+    exp = _tiny_experiment("c18")
+    sampling = exp.eval_configs.internal
+    binding_a = _binding(exp)
+    binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
+    log = PartialLog(path=tmp_path / "internal-binding.partial")
+    reply = _correct_reply("c18", sampling.instances)
+
+    run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=_internal_jobs(exp, reply),
+        evaluation_binding=binding_a,
+        partial_log=log,
+    )
+    identities_a = {record.request_identity for record in log.load()}
+
+    served_b: list[str] = []
+    run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=_internal_jobs(exp, reply, served=served_b),
+        evaluation_binding=binding_b,
+        partial_log=log,
+    )
+
+    assert len(served_b) == (
+        len(sampling.instances) * sampling.repeat_plan.repeat_count
+    )
+    identities_b = {
+        record.request_identity
+        for record in log.load()
+        if record.request_identity not in identities_a
+    }
+    assert len(identities_b) == len(identities_a)
+
+
+def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from whetstone.execution.partials import PartialLog
+
+    exp = _tiny_experiment("c18")
+    sampling = exp.eval_configs.internal
+    log = PartialLog(path=tmp_path / "internal-redrive.partial")
+    pending = InternalRowOutcome(
+        score=None,
+        failed=True,
+        failure_code="transport_error",
+        redrivable=True,
+    )
+    pool_calls = 0
+
+    def crash_after_ordinal_zero(
+        specs, *, concurrency, is_rate_limited, max_wall_seconds
+    ):
+        nonlocal pool_calls
+        del is_rate_limited, max_wall_seconds
+        pool_calls += 1
+        if pool_calls == 2:
+            raise RuntimeError("simulated crash before ordinal one")
+        for spec in specs:
+            spec.commit(pending)
+        return PoolOutcome(
+            results=tuple(
+                FanoutResult(
+                    key=spec.key,
+                    status=FanoutStatus.COMPLETED,
+                    value=pending,
+                )
+                for spec in specs
+            ),
+            effective_concurrency=concurrency,
+            concurrency_halved=False,
+            deadline_reached=False,
+            guard_timeouts=0,
+        )
+
+    monkeypatch.setattr(
+        "whetstone.envs.internal_eval.run_call_pool",
+        crash_after_ordinal_zero,
+    )
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        run_internal_eval(
+            exp,
+            candidate=exp.initial_candidate,
+            sampling=sampling,
+            execution_policy=execution_policy(),
+            row_job_factory=row_job_factory(lambda *_args: pending),
+            evaluation_binding=_binding(exp),
+            partial_log=log,
+        )
+    assert {record.redrive_pending for record in log.load()} == {True}
+
+    monkeypatch.undo()
+    resumed_ordinals: list[int] = []
+
+    def success(_instance, _repeat: int, drive_ordinal: int):
+        resumed_ordinals.append(drive_ordinal)
+        return InternalRowOutcome(score=1.0)
+
+    run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=row_job_factory(success),
+        evaluation_binding=_binding(exp),
+        partial_log=log,
+    )
+    assert resumed_ordinals
+    assert set(resumed_ordinals) == {1}
+    assert {record.redrive_pending for record in log.load()} == {False, True}
+
+
+def test_internal_terminal_timeout_persists_both_exact_requests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from whetstone.execution.partials import PartialLog
+
+    exp = _tiny_experiment("c18")
+    sampling = exp.eval_configs.official
+    log = PartialLog(path=tmp_path / "internal-timeout.partial")
+
+    def timeout_pool(specs, *, concurrency, is_rate_limited, max_wall_seconds):
+        del is_rate_limited, max_wall_seconds
+        return PoolOutcome(
+            results=tuple(
+                FanoutResult(key=spec.key, status=FanoutStatus.UNIT_TIMEOUT)
+                for spec in specs
+            ),
+            effective_concurrency=concurrency,
+            concurrency_halved=False,
+            deadline_reached=False,
+            guard_timeouts=len(specs),
+        )
+
+    monkeypatch.setattr(
+        "whetstone.envs.internal_eval.run_call_pool", timeout_pool
+    )
+    run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=row_job_factory(
+            lambda *_args: InternalRowOutcome(score=1.0)
+        ),
+        evaluation_binding=_binding(exp, role=EvaluationRole.OFFICIAL),
+        partial_log=log,
+    )
+
+    records = log.load()
+    expected_rows = len(sampling.instances) * sampling.repeat_plan.repeat_count
+    assert len(records) == expected_rows * 2
+    assert {record.failure_code for record in records} == {"runner_timeout"}
+    assert {record.redrive_pending for record in records} == {False, True}
+    assert len({record.request_identity for record in records}) == len(records)
+
+    monkeypatch.undo()
+
+    def boom(_request: InternalRowRequest) -> ProcessJob:
+        raise AssertionError(
+            "ordinal-one timeout must restore without repayment"
+        )
+
+    resumed = run_internal_eval(
+        exp,
+        candidate=exp.initial_candidate,
+        sampling=sampling,
+        execution_policy=execution_policy(),
+        row_job_factory=boom,
+        evaluation_binding=_binding(exp, role=EvaluationRole.OFFICIAL),
+        partial_log=log,
+    )
+    assert resumed.aggregate.rows_failed == expected_rows
 
 
 def test_invalid_prompt_is_rejected_before_transport() -> None:
@@ -648,7 +873,7 @@ def test_failed_rows_still_visible_in_provenance() -> None:
     agg = unweighted_task_mean(
         aggregate_name="env_exact_match",
         graph_hash=experiment.rollout_definition.graph_hash,
-        evaluation_context_id="c" * 64,
+        evaluation_binding_hash="c" * 64,
         task_rows=task_rows,
         plan=sampling.evaluation_matrix_plan,
     )

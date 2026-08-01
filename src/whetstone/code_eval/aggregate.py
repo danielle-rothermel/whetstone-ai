@@ -346,7 +346,7 @@ class RolloutAggregate:
             "name": self.name,
             "graph_hash": self.graph_hash,
             "eval_config_hash": self.eval_config_hash,
-            "evaluation_context_id": self.evaluation_context_id,
+            "evaluation_binding_hash": self.evaluation_binding_hash,
             "task_count": self.task_count,
             "repeat_count": self.repeat_count,
             "aggregation_output": self.aggregation_output.model_dump(

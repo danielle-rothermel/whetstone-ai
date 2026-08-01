@@ -14,7 +14,25 @@ from whetstone.provider.attempt import (
     ProviderCallAttempt,
     ProviderCallResult,
 )
-from whetstone.provider.classification import Generation, classify_outcome
+from whetstone.provider.classification import (
+    Generation,
+    ProviderSemanticFailure,
+    classify_outcome,
+)
+
+
+def _accepted_generation() -> Generation:
+    classification = classify_outcome(s.response_outcome(text="ok"))
+    assert isinstance(classification, Generation)
+    return classification
+
+
+def _transient_failure() -> ProviderSemanticFailure:
+    classification = classify_outcome(
+        s.failure_outcome(failure_class=FailureClass.TRANSIENT)
+    )
+    assert isinstance(classification, ProviderSemanticFailure)
+    return classification
 
 
 def _attempt(
@@ -33,9 +51,12 @@ def _attempt(
         outcome=outcome,
     )
     classification = classify_outcome(outcome)
-    is_gen = isinstance(classification, Generation)
-    generation = classification if is_gen else None
-    failure = None if is_gen else classification
+    if isinstance(classification, Generation):
+        generation = classification
+        failure = None
+    else:
+        generation = None
+        failure = classification
     return ProviderCallAttempt(
         logical_call_id=logical_call_id,
         attempt_number=number,
@@ -44,7 +65,7 @@ def _attempt(
         ended_at=0.25,
         evidence=evidence,
         generation=generation,
-        semantic_failure=failure,  # type: ignore[arg-type]
+        semantic_failure=failure,
     )
 
 
@@ -71,7 +92,7 @@ class TestProviderCallAttempt:
             policy=s.build_transport_policy(),
             outcome=s.response_outcome(text="ok"),
         )
-        gen = classify_outcome(s.response_outcome(text="ok"))
+        gen = _accepted_generation()
         with pytest.raises(ValueError, match="exactly one"):
             ProviderCallAttempt(
                 logical_call_id="lc-1",
@@ -81,9 +102,7 @@ class TestProviderCallAttempt:
                 ended_at=1.0,
                 evidence=evidence,
                 generation=gen,
-                semantic_failure=classify_outcome(
-                    s.failure_outcome(failure_class=FailureClass.TRANSIENT)
-                ),
+                semantic_failure=_transient_failure(),
             )
 
     def test_rejects_short_policy_hash(self) -> None:
@@ -121,7 +140,7 @@ class TestProviderCallAttempt:
                 started_at=2.0,
                 ended_at=1.0,
                 evidence=evidence,
-                generation=classify_outcome(s.response_outcome(text="ok")),
+                generation=_accepted_generation(),
             )
 
     @pytest.mark.parametrize(
@@ -138,7 +157,8 @@ class TestProviderCallAttempt:
     def test_rejects_nonfinite_timing(self, field: str, value: float) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         response = s.response_outcome(text="ok")
-        kwargs = {"started_at": 0.0, "ended_at": 1.0, field: value}
+        started_at = value if field == "started_at" else 0.0
+        ended_at = value if field == "ended_at" else 1.0
         with pytest.raises(ValueError, match=rf"{field} must be finite"):
             ProviderCallAttempt(
                 logical_call_id="lc-1",
@@ -149,16 +169,15 @@ class TestProviderCallAttempt:
                     policy=s.build_transport_policy(),
                     outcome=response,
                 ),
-                generation=classify_outcome(response),
-                **kwargs,
+                started_at=started_at,
+                ended_at=ended_at,
+                generation=_accepted_generation(),
             )
 
     def test_success_evidence_rejects_failure_classification(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         response = s.response_outcome(text="ok")
-        failure = classify_outcome(
-            s.failure_outcome(failure_class=FailureClass.TRANSIENT)
-        )
+        failure = _transient_failure()
         with pytest.raises(ValueError, match="exactly reclassify"):
             ProviderCallAttempt(
                 logical_call_id="lc-1",
@@ -171,13 +190,13 @@ class TestProviderCallAttempt:
                     policy=s.build_transport_policy(),
                     outcome=response,
                 ),
-                semantic_failure=failure,  # type: ignore[arg-type]
+                semantic_failure=failure,
             )
 
     def test_failure_evidence_rejects_generation(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         failure = s.failure_outcome(failure_class=FailureClass.TRANSIENT)
-        generation = classify_outcome(s.response_outcome(text="ok"))
+        generation = _accepted_generation()
         with pytest.raises(ValueError, match="exactly reclassify"):
             ProviderCallAttempt(
                 logical_call_id="lc-1",
@@ -190,7 +209,7 @@ class TestProviderCallAttempt:
                     policy=s.build_transport_policy(),
                     outcome=failure,
                 ),
-                generation=generation,  # type: ignore[arg-type]
+                generation=generation,
             )
 
 
@@ -257,7 +276,7 @@ class TestProviderCallResult:
                 execution_policy_hash=policy_hash,
                 attempts=(a1,),
                 # Wrong: terminal claims success while last attempt failed.
-                generation=classify_outcome(s.response_outcome(text="ok")),
+                generation=_accepted_generation(),
             )
 
     def test_requires_at_least_one_attempt(self) -> None:
@@ -268,9 +287,7 @@ class TestProviderCallResult:
                 request_identity={},
                 execution_policy_hash=policy_hash,
                 attempts=(),
-                semantic_failure=classify_outcome(
-                    s.failure_outcome(failure_class=FailureClass.TRANSIENT)
-                ),
+                semantic_failure=_transient_failure(),
             )
 
     def test_request_identity_must_match_every_attempt_evidence(self) -> None:

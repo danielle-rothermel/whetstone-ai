@@ -42,6 +42,7 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
+    field_serializer,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -75,10 +76,15 @@ from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.internal_eval import (
     ProcessInstance,
     RolloutOutput,
+    _canonical_provider_call_config_payload,
     _process_payload_identity,
     process_request_identity,
     remaining_phase_wall_seconds,
     start_phase_deadline,
+)
+from whetstone.envs.partial_resume import (
+    index_partial_records,
+    resolve_exact_resume,
 )
 from whetstone.envs.sampling import (
     EnvSplitSampling,
@@ -101,6 +107,7 @@ from whetstone.execution.prompt_cache import (
     partial_cache_marks,
 )
 from whetstone.graph.character_budget import CharacterBudgetRule
+from whetstone.optimization.identity import IdentityHash
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import (
     EvaluationBinding,
@@ -299,8 +306,26 @@ class Ed1RowOutcome(BaseModel):
         return self.encoder_len > self.max_budget
 
 
-_ED1_ROW_REQUEST_SCHEMA = "whetstone.envs.ed1_row_request/v1"
-_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.ed1_row_result/v1"
+class Ed1PartialPayload(BaseModel):
+    """Strict ED1-family state stored beside generic partial-call fields."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+    )
+
+    compression_value: float | None
+    encoder_text: str | None
+    decoder_text: str | None
+    attractor_pull: float | None
+    max_budget: int | None
+    encoder_len: int | None
+
+
+_ED1_ROW_REQUEST_SCHEMA = "whetstone.envs.ed1_row_request/v2"
+_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.ed1_row_result/v2"
 
 
 class Ed1RowRequest(BaseModel):
@@ -310,7 +335,7 @@ class Ed1RowRequest(BaseModel):
 
     _submitted_request_identity: str | None = PrivateAttr(default=None)
 
-    schema_name: Literal["whetstone.envs.ed1_row_request/v1"] = (
+    schema_name: Literal["whetstone.envs.ed1_row_request/v2"] = (
         _ED1_ROW_REQUEST_SCHEMA
     )
     env_name: str
@@ -323,6 +348,7 @@ class Ed1RowRequest(BaseModel):
     provider_call_config: ProviderCallConfig
     execution_policy: ProviderExecutionPolicy
     procedure_config_hash: str
+    evaluation_binding_hash: IdentityHash
     budget_ratio: float | None
     logical_call_id: str
     repeat_index: int
@@ -331,6 +357,12 @@ class Ed1RowRequest(BaseModel):
     cache_unit: str
     cache_root: str | None
     mutant_record: MutantRecord | None = None
+
+    @field_serializer("provider_call_config")
+    def _serialize_provider_call_config(
+        self, config: ProviderCallConfig
+    ) -> dict[str, object]:
+        return _canonical_provider_call_config_payload(config)
 
     @model_validator(mode="after")
     def _valid_mutant_binding(self) -> Ed1RowRequest:
@@ -370,7 +402,7 @@ class Ed1RowResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.ed1_row_result/v1"] = (
+    schema_name: Literal["whetstone.envs.ed1_row_result/v2"] = (
         _ED1_ROW_RESULT_SCHEMA
     )
     request_identity: str
@@ -623,61 +655,49 @@ def _score_row(
     return scorer(raw_submission=decoder_text, task=task)
 
 
-def _encode_ed1_payload(outcome: Ed1RowOutcome) -> str:
-    """Compact JSON of the ed1 dual extras for a partial record's resume."""
-    return json.dumps(
-        {
-            "compression_value": outcome.compression_value,
-            "encoder_text": outcome.encoder_text,
-            "decoder_text": outcome.decoder_text,
-        }
+def _ed1_partial_payload(outcome: Ed1RowOutcome) -> Ed1PartialPayload:
+    """Extract the strict ED1-family portion of a partial observation."""
+    return Ed1PartialPayload(
+        compression_value=outcome.compression_value,
+        encoder_text=outcome.encoder_text,
+        decoder_text=outcome.decoder_text,
+        attractor_pull=outcome.attractor_pull,
+        max_budget=outcome.max_budget,
+        encoder_len=outcome.encoder_len,
     )
 
 
-def _restore_ed1_recorded(
-    partial_log: PartialLog | None,
-    split_role: str,
-    candidate_id: str,
-) -> dict[tuple[str, int], Ed1RowOutcome]:
-    """Rebuild ed1 row outcomes already durably recorded (resume skip).
-
-    Restores only records for THIS phase (``split_role``) + unit
-    (``candidate_id``), keyed ``(instance_id, repeat)`` to match the driven
-    keys. The dual extras are decoded from ``raw_response``; a record missing
-    that blob (e.g. a QA-shaped record) restores a primary failed/value row.
-    """
-    if partial_log is None:
-        return {}
-    restored: dict[tuple[str, int], Ed1RowOutcome] = {}
-    for record in partial_log.load():
-        if record.phase != split_role or record.unit != candidate_id:
-            continue
-        extras: dict[str, object] = {}
-        if record.raw_response:
-            try:
-                loaded = json.loads(record.raw_response)
-                if isinstance(loaded, dict):
-                    extras = loaded
-            except json.JSONDecodeError:
-                extras = {}
-        comp = extras.get("compression_value")
-        comp_value = float(comp) if isinstance(comp, int | float) else None
-        restored[(record.instance_id, record.repeat_id)] = Ed1RowOutcome(
-            primary_value=record.score,
-            compression_value=comp_value,
-            encoder_text=_opt_str(extras.get("encoder_text")),
-            decoder_text=_opt_str(extras.get("decoder_text")),
-            failed=record.failed,
-            failure_code=record.failure_code,
-            prompt_tokens=record.prompt_tokens,
-            completion_tokens=record.completion_tokens,
-            total_tokens=record.total_tokens,
+def _ed1_outcome_from_record(record: PartialCallRecord) -> Ed1RowOutcome:
+    """Rebuild the accepted outcome stored for one exact ED1 request."""
+    payload = Ed1PartialPayload.model_validate(record.observation_payload)
+    if record.output_text != payload.decoder_text:
+        raise ValueError(
+            "ED1 partial output_text does not match its observation payload"
         )
-    return restored
+    return Ed1RowOutcome(
+        primary_value=None if record.score is None else float(record.score),
+        compression_value=payload.compression_value,
+        encoder_text=payload.encoder_text,
+        decoder_text=payload.decoder_text,
+        failed=record.failed,
+        failure_code=record.failure_code,
+        attractor_pull=payload.attractor_pull,
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        total_tokens=record.total_tokens,
+        reasoning_tokens=record.reasoning_tokens,
+        latency_s=record.latency_s,
+        max_budget=payload.max_budget,
+        encoder_len=payload.encoder_len,
+        finish_reason=record.finish_reason,
+        provider_error=record.provider_error,
+        redrivable=record.redrive_pending,
+    )
 
 
-def _opt_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
+def _should_redrive(outcome: Ed1RowOutcome) -> bool:
+    """Whether an ordinal-0 ED1 result requires the bounded second attempt."""
+    return outcome.failure_code == "runner_timeout" or outcome.redrivable
 
 
 def _compression_ratio(encoder_text: str, input_code: str) -> float | None:
@@ -738,9 +758,9 @@ def run_ed1_eval(
     Incremental persistence: when a ``partial_log`` is given, each (task,
     repeat) row is appended by its parent-owned commit the instant it
     completes, so a crash/interrupt mid-drive keeps every finished row on
-    disk. A resumed drive restores already-recorded rows (keyed by the
-    candidate ``unit`` = ``candidate_id`` and ``split_role`` phase) instead of
-    re-driving+re-paying for them.
+    disk. A resumed drive restores only an exact row-request identity instead
+    of re-driving and re-paying; a pending ordinal-0 record resumes at the
+    exact ordinal-1 request.
 
     ``row_job_factory`` is the trusted scoring authority. It must execute the
     exact :class:`Ed1RowRequest` under its declared procedure; the parent binds
@@ -771,12 +791,16 @@ def run_ed1_eval(
         split_role=split_role,
         evaluation_role=evaluation_binding.role,
     )
-    restored = _restore_ed1_recorded(partial_log, split_role, candidate_id)
+    evaluation_binding_id = evaluation_binding.identity_hash()
+    by_instance = {str(inst.id): inst for inst in instances}
 
     def _persist(
         instance: Instance,
         index: int,
         outcome: Ed1RowOutcome,
+        *,
+        request_identity: str,
+        redrive_pending: bool,
     ) -> None:
         if partial_log is None:
             return
@@ -789,6 +813,8 @@ def run_ed1_eval(
                 instance_id=str(instance.id),
                 unit=candidate_id,
                 repeat_id=index,
+                request_identity=request_identity,
+                redrive_pending=redrive_pending,
                 score=outcome.primary_value,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
@@ -796,8 +822,12 @@ def run_ed1_eval(
                 prompt_tokens=outcome.prompt_tokens,
                 completion_tokens=outcome.completion_tokens,
                 total_tokens=outcome.total_tokens,
-                raw_response=_encode_ed1_payload(outcome),
+                reasoning_tokens=outcome.reasoning_tokens,
+                latency_s=None if marks.cache_hit else outcome.latency_s,
                 output_text=outcome.decoder_text,
+                observation_payload=_ed1_partial_payload(outcome).model_dump(
+                    mode="json"
+                ),
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
                 cache_hit=marks.cache_hit,
@@ -808,12 +838,12 @@ def run_ed1_eval(
             )
         )
 
-    def _spec(
+    def _row_request(
         instance: Instance,
         index: int,
         *,
         drive_ordinal: int,
-    ) -> CallSpec[tuple[str, int], Ed1RowOutcome]:
+    ) -> Ed1RowRequest:
         from whetstone.envs.ed1m import Ed1mExperiment
 
         mutant_record = (
@@ -821,7 +851,7 @@ def run_ed1_eval(
             if isinstance(experiment, Ed1mExperiment)
             else None
         )
-        request = Ed1RowRequest(
+        return Ed1RowRequest(
             env_name=rd.env_name,
             dataset_revision=experiment.dataset_revision,
             primary_metric_name=primary_metric_name,
@@ -832,6 +862,7 @@ def run_ed1_eval(
             provider_call_config=rd.provider_call_config,
             execution_policy=execution_policy,
             procedure_config_hash=rd.procedure_config_hash,
+            evaluation_binding_hash=evaluation_binding_id,
             budget_ratio=rd.budget_ratio,
             logical_call_id=f"{candidate_id}:{instance.id}#{index}",
             repeat_index=index,
@@ -842,6 +873,42 @@ def run_ed1_eval(
             mutant_record=mutant_record,
         )
 
+    requests_by_key = {
+        (str(instance.id), index): (
+            _row_request(instance, index, drive_ordinal=0),
+            _row_request(instance, index, drive_ordinal=1),
+        )
+        for instance in instances
+        for index in range(repeats)
+    }
+    partial_records = index_partial_records(
+        () if partial_log is None else partial_log.load(),
+        phase=split_role,
+        unit=candidate_id,
+    )
+    driven: dict[tuple[str, int], Ed1RowOutcome] = {}
+    initial_requests: list[Ed1RowRequest] = []
+    resumed_redrive_requests: list[Ed1RowRequest] = []
+    for key, (ordinal_0, ordinal_1) in requests_by_key.items():
+        decision = resolve_exact_resume(
+            partial_records,
+            instance_id=key[0],
+            repeat_id=key[1],
+            ordinal_0_request_identity=ordinal_0.request_identity,
+            ordinal_1_request_identity=ordinal_1.request_identity,
+        )
+        if decision.record is not None:
+            driven[key] = _ed1_outcome_from_record(decision.record)
+        if decision.drive_ordinal == 0:
+            initial_requests.append(ordinal_0)
+        elif decision.drive_ordinal == 1:
+            resumed_redrive_requests.append(ordinal_1)
+
+    def _spec(
+        request: Ed1RowRequest,
+    ) -> CallSpec[tuple[str, int], Ed1RowOutcome]:
+        instance = by_instance[request.instance.id]
+
         def _decode(value: JsonValue) -> Ed1RowOutcome:
             result = Ed1RowResult.from_process_payload(value)
             if result.request_identity != request.request_identity:
@@ -851,27 +918,40 @@ def run_ed1_eval(
             return result.outcome
 
         return CallSpec(
-            key=(str(instance.id), index),
+            key=(request.instance.id, request.repeat_index),
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=_deadline(execution_policy),
-            commit=lambda outcome, inst=instance, i=index: _persist(
-                inst, i, outcome
+            commit=lambda outcome: _persist(
+                instance,
+                request.repeat_index,
+                outcome,
+                request_identity=request.request_identity,
+                redrive_pending=(
+                    request.drive_ordinal == 0 and _should_redrive(outcome)
+                ),
             ),
         )
 
-    by_instance = {str(inst.id): inst for inst in instances}
     phase_deadline = start_phase_deadline(max_wall_seconds)
+    effective_concurrency = concurrency
 
     def _drive(
-        pending: list[CallSpec[tuple[str, int], Ed1RowOutcome]],
+        requests: list[Ed1RowRequest],
     ) -> dict[tuple[str, int], Ed1RowOutcome]:
+        nonlocal effective_concurrency
+        specs = [_spec(request) for request in requests]
+        request_by_key = {
+            (request.instance.id, request.repeat_index): request
+            for request in requests
+        }
         pool = run_call_pool(
-            pending,
-            concurrency=concurrency,
+            specs,
+            concurrency=effective_concurrency,
             is_rate_limited=lambda _o: False,
             max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
+        effective_concurrency = pool.effective_concurrency
         out: dict[tuple[str, int], Ed1RowOutcome] = {}
         for res in pool.results:
             if res.status is FanoutStatus.COMPLETED and res.value is not None:
@@ -881,7 +961,8 @@ def run_ed1_eval(
                 # Marked redrivable so ONE bounded re-drive gets a fresh try
                 # before it lands as a failed row (a single hung row must not
                 # kill an anchor arm under the FAIL policy).
-                out[res.key] = Ed1RowOutcome(
+                request = request_by_key[res.key]
+                outcome = Ed1RowOutcome(
                     primary_value=None,
                     compression_value=None,
                     encoder_text=None,
@@ -889,6 +970,14 @@ def run_ed1_eval(
                     failed=True,
                     failure_code="runner_timeout",
                     redrivable=True,
+                )
+                out[res.key] = outcome
+                _persist(
+                    by_instance[res.key[0]],
+                    res.key[1],
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=request.drive_ordinal == 0,
                 )
             else:
                 out[res.key] = Ed1RowOutcome(
@@ -901,15 +990,8 @@ def run_ed1_eval(
                 )
         return out
 
-    # Only drive rows NOT already durably recorded (resume skip).
-    specs = [
-        _spec(instance, index, drive_ordinal=0)
-        for instance in instances
-        for index in range(repeats)
-        if (str(instance.id), index) not in restored
-    ]
-    driven: dict[tuple[str, int], Ed1RowOutcome] = dict(restored)
-    driven.update(_drive(specs))
+    first_driven = _drive(initial_requests)
+    driven.update(first_driven)
 
     # --- ONE bounded re-drive of timed-out / transient-transport rows. ---
     # A runner-guard timeout or a TERMINAL transient transport failure (enc or
@@ -918,23 +1000,18 @@ def run_ed1_eval(
     # (the eval:ed1:a1 kill). A deterministic failure (render error, provider
     # rejection, infra-unknown scoring) is NOT re-driven. Mirrors the QA arm's
     # bounded re-drive; the re-drive persists its own partial record.
-    redrive_specs = [
-        _spec(by_instance[key[0]], key[1], drive_ordinal=1)
-        for key, out in driven.items()
-        if out.redrivable
+    redrive_requests = resumed_redrive_requests + [
+        requests_by_key[key][1]
+        for key, outcome in first_driven.items()
+        if _should_redrive(outcome)
     ]
-    if redrive_specs:
-        redriven = _drive(redrive_specs)
+    if redrive_requests:
+        redriven = _drive(redrive_requests)
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
             if not outcome.missing
         )
-
-    if partial_log is not None:
-        for key, outcome in driven.items():
-            if outcome.failure_code == "runner_timeout":
-                _persist(by_instance[key[0]], key[1], outcome)
 
     # Assemble per-task rows (primary + compression) + outputs, instance/repeat
     # order.
@@ -1035,7 +1112,7 @@ def run_ed1_eval(
     primary_aggregate = unweighted_task_mean(
         aggregate_name=primary_metric_name,
         graph_hash=graph_hash,
-        evaluation_context_id=evaluation_binding.identity_hash(),
+        evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
             TaskRows(
                 task_identity=task_identity,
@@ -1048,7 +1125,7 @@ def run_ed1_eval(
     compression_aggregate = unweighted_task_mean(
         aggregate_name=ED1_COMPRESSION_NAME,
         graph_hash=graph_hash,
-        evaluation_context_id=evaluation_binding.identity_hash(),
+        evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
             TaskRows(
                 task_identity=task_identity,
@@ -1145,6 +1222,7 @@ def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
 __all__ = [
     "Ed1EvalDiagnostics",
     "Ed1EvalResult",
+    "Ed1PartialPayload",
     "Ed1RowDiag",
     "Ed1RowJobFactory",
     "Ed1RowOutcome",

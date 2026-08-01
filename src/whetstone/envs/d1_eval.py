@@ -38,6 +38,7 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
+    field_serializer,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -66,10 +67,15 @@ from whetstone.envs.input_transform import (
 from whetstone.envs.internal_eval import (
     ProcessInstance,
     RolloutOutput,
+    _canonical_provider_call_config_payload,
     _process_payload_identity,
     process_request_identity,
     remaining_phase_wall_seconds,
     start_phase_deadline,
+)
+from whetstone.envs.partial_resume import (
+    index_partial_records,
+    resolve_exact_resume,
 )
 from whetstone.envs.sampling import (
     EnvSplitSampling,
@@ -92,6 +98,7 @@ from whetstone.execution.prompt_cache import (
     PromptResultCache,
     execute_call,
 )
+from whetstone.optimization.identity import IdentityHash
 from whetstone.optimization.reward import Reward
 from whetstone.optimization.schema import (
     EvaluationBinding,
@@ -170,8 +177,8 @@ class D1RowOutcome(BaseModel):
         return self
 
 
-_D1_ROW_REQUEST_SCHEMA = "whetstone.envs.d1_row_request/v1"
-_D1_ROW_RESULT_SCHEMA = "whetstone.envs.d1_row_result/v1"
+_D1_ROW_REQUEST_SCHEMA = "whetstone.envs.d1_row_request/v2"
+_D1_ROW_RESULT_SCHEMA = "whetstone.envs.d1_row_result/v2"
 
 
 class HumanEvalTaskPayload(BaseModel):
@@ -212,7 +219,7 @@ class D1RowRequest(BaseModel):
 
     _submitted_request_identity: str | None = PrivateAttr(default=None)
 
-    schema_name: Literal["whetstone.envs.d1_row_request/v1"] = (
+    schema_name: Literal["whetstone.envs.d1_row_request/v2"] = (
         _D1_ROW_REQUEST_SCHEMA
     )
     candidate_body: str
@@ -224,12 +231,19 @@ class D1RowRequest(BaseModel):
     provider_call_config: ProviderCallConfig
     execution_policy: ProviderExecutionPolicy
     procedure_config_hash: str
+    evaluation_binding_hash: IdentityHash
     logical_call_id: str
     repeat_index: int
     drive_ordinal: int
     cache_phase: str
     cache_unit: str
     cache_root: str | None
+
+    @field_serializer("provider_call_config")
+    def _serialize_provider_call_config(
+        self, config: ProviderCallConfig
+    ) -> dict[str, object]:
+        return _canonical_provider_call_config_payload(config)
 
     @property
     def request_identity(self) -> str:
@@ -252,7 +266,7 @@ class D1RowResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.d1_row_result/v1"] = (
+    schema_name: Literal["whetstone.envs.d1_row_result/v2"] = (
         _D1_ROW_RESULT_SCHEMA
     )
     request_identity: str
@@ -392,30 +406,34 @@ def drive_d1_row(
     )
 
 
-def _restore_recorded(
-    partial_log: PartialLog | None,
-    split_role: str,
-    candidate_id: str,
-) -> dict[tuple[str, int], D1RowOutcome]:
-    """Rebuild d1 row outcomes already durably recorded (resume skip)."""
-    if partial_log is None:
-        return {}
-    restored: dict[tuple[str, int], D1RowOutcome] = {}
-    for record in partial_log.load():
-        if record.phase != split_role or record.unit != candidate_id:
-            continue
-        restored[(record.instance_id, record.repeat_id)] = D1RowOutcome(
-            submission_score=record.score,
-            output_text=None,
-            failed=record.failed,
-            failure_code=record.failure_code,
-            prompt_tokens=record.prompt_tokens,
-            completion_tokens=record.completion_tokens,
-            total_tokens=record.total_tokens,
-            reasoning_tokens=record.reasoning_tokens,
-            latency_s=record.latency_s,
-        )
-    return restored
+def _d1_outcome_from_record(record: PartialCallRecord) -> D1RowOutcome:
+    """Rebuild the accepted outcome stored for one exact D1 request."""
+    return D1RowOutcome(
+        submission_score=(
+            None if record.score is None else float(record.score)
+        ),
+        output_text=record.output_text,
+        failed=record.failed,
+        failure_code=record.failure_code,
+        prompt_tokens=record.prompt_tokens,
+        completion_tokens=record.completion_tokens,
+        total_tokens=record.total_tokens,
+        reasoning_tokens=record.reasoning_tokens,
+        latency_s=record.latency_s,
+        finish_reason=record.finish_reason,
+        provider_error=record.provider_error,
+        redrivable=record.redrive_pending,
+        cache_hit=record.cache_hit,
+        cache_source_phase=record.cache_source_phase,
+        cache_source_unit=record.cache_source_unit,
+        cache_source_call_id=record.cache_source_call_id,
+        cache_source_at=record.cache_source_at,
+    )
+
+
+def _should_redrive(outcome: D1RowOutcome) -> bool:
+    """Whether an ordinal-0 D1 result requires the bounded second attempt."""
+    return outcome.failure_code == "runner_timeout" or outcome.redrivable
 
 
 def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
@@ -447,8 +465,9 @@ def run_d1_eval(
     Reward for an internal Evaluation Binding, and collects per-row outputs.
     Incremental
     persistence + resume mirror the ED1 drive: each completed row appends its
-    record when it finishes; a resumed drive restores already-recorded rows
-    instead of re-paying.
+    record when it finishes; a resumed drive restores only an exact request
+    identity instead of re-paying. A pending ordinal-0 record resumes at the
+    exact ordinal-1 request.
 
     ``row_job_factory`` is the trusted scoring authority. It must execute the
     exact :class:`D1RowRequest` under its declared procedure; the parent binds
@@ -477,12 +496,16 @@ def run_d1_eval(
         split_role=split_role,
         evaluation_role=evaluation_binding.role,
     )
-    restored = _restore_recorded(partial_log, split_role, candidate_id)
+    evaluation_binding_id = evaluation_binding.identity_hash()
+    by_instance = {str(inst.id): inst for inst in instances}
 
     def _persist(
         instance: Instance,
         index: int,
         outcome: D1RowOutcome,
+        *,
+        request_identity: str,
+        redrive_pending: bool,
     ) -> None:
         if partial_log is None:
             return
@@ -492,6 +515,8 @@ def run_d1_eval(
                 instance_id=str(instance.id),
                 unit=candidate_id,
                 repeat_id=index,
+                request_identity=request_identity,
+                redrive_pending=redrive_pending,
                 score=outcome.submission_score,
                 failed=outcome.failed,
                 failure_code=outcome.failure_code,
@@ -500,7 +525,7 @@ def run_d1_eval(
                 completion_tokens=outcome.completion_tokens,
                 total_tokens=outcome.total_tokens,
                 reasoning_tokens=outcome.reasoning_tokens,
-                latency_s=outcome.latency_s,
+                latency_s=None if outcome.cache_hit else outcome.latency_s,
                 output_text=outcome.output_text,
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
@@ -512,13 +537,13 @@ def run_d1_eval(
             )
         )
 
-    def _spec(
+    def _row_request(
         instance: Instance,
         index: int,
         *,
         drive_ordinal: int,
-    ) -> CallSpec[tuple[str, int], D1RowOutcome]:
-        request = D1RowRequest(
+    ) -> D1RowRequest:
+        return D1RowRequest(
             candidate_body=candidate_body,
             candidate_id=candidate_id,
             instance=ProcessInstance.from_instance(instance),
@@ -530,6 +555,7 @@ def run_d1_eval(
             provider_call_config=rd.provider_call_config,
             execution_policy=execution_policy,
             procedure_config_hash=rd.procedure_config_hash,
+            evaluation_binding_hash=evaluation_binding_id,
             logical_call_id=f"{candidate_id}:{instance.id}#{index}",
             repeat_index=index,
             drive_ordinal=drive_ordinal,
@@ -537,6 +563,42 @@ def run_d1_eval(
             cache_unit=candidate_id,
             cache_root=None if cache is None else str(cache.root),
         )
+
+    requests_by_key = {
+        (str(instance.id), index): (
+            _row_request(instance, index, drive_ordinal=0),
+            _row_request(instance, index, drive_ordinal=1),
+        )
+        for instance in instances
+        for index in range(repeats)
+    }
+    partial_records = index_partial_records(
+        () if partial_log is None else partial_log.load(),
+        phase=split_role,
+        unit=candidate_id,
+    )
+    driven: dict[tuple[str, int], D1RowOutcome] = {}
+    initial_requests: list[D1RowRequest] = []
+    resumed_redrive_requests: list[D1RowRequest] = []
+    for key, (ordinal_0, ordinal_1) in requests_by_key.items():
+        decision = resolve_exact_resume(
+            partial_records,
+            instance_id=key[0],
+            repeat_id=key[1],
+            ordinal_0_request_identity=ordinal_0.request_identity,
+            ordinal_1_request_identity=ordinal_1.request_identity,
+        )
+        if decision.record is not None:
+            driven[key] = _d1_outcome_from_record(decision.record)
+        if decision.drive_ordinal == 0:
+            initial_requests.append(ordinal_0)
+        elif decision.drive_ordinal == 1:
+            resumed_redrive_requests.append(ordinal_1)
+
+    def _spec(
+        request: D1RowRequest,
+    ) -> CallSpec[tuple[str, int], D1RowOutcome]:
+        instance = by_instance[request.instance.id]
 
         def _decode(value: JsonValue) -> D1RowOutcome:
             result = D1RowResult.from_process_payload(value)
@@ -547,38 +609,60 @@ def run_d1_eval(
             return result.outcome
 
         return CallSpec(
-            key=(str(instance.id), index),
+            key=(request.instance.id, request.repeat_index),
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=_deadline(execution_policy),
-            commit=lambda outcome, inst=instance, i=index: _persist(
-                inst, i, outcome
+            commit=lambda outcome: _persist(
+                instance,
+                request.repeat_index,
+                outcome,
+                request_identity=request.request_identity,
+                redrive_pending=(
+                    request.drive_ordinal == 0 and _should_redrive(outcome)
+                ),
             ),
         )
 
-    by_instance = {str(inst.id): inst for inst in instances}
     phase_deadline = start_phase_deadline(max_wall_seconds)
+    effective_concurrency = concurrency
 
     def _drive(
-        pending: list[CallSpec[tuple[str, int], D1RowOutcome]],
+        requests: list[D1RowRequest],
     ) -> dict[tuple[str, int], D1RowOutcome]:
+        nonlocal effective_concurrency
+        specs = [_spec(request) for request in requests]
+        request_by_key = {
+            (request.instance.id, request.repeat_index): request
+            for request in requests
+        }
         pool = run_call_pool(
-            pending,
-            concurrency=concurrency,
+            specs,
+            concurrency=effective_concurrency,
             is_rate_limited=lambda _o: False,
             max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
+        effective_concurrency = pool.effective_concurrency
         out: dict[tuple[str, int], D1RowOutcome] = {}
         for res in pool.results:
             if res.status is FanoutStatus.COMPLETED and res.value is not None:
                 out[res.key] = res.value
             elif res.status is FanoutStatus.UNIT_TIMEOUT:
-                out[res.key] = D1RowOutcome(
+                request = request_by_key[res.key]
+                outcome = D1RowOutcome(
                     submission_score=None,
                     output_text=None,
                     failed=True,
                     failure_code="runner_timeout",
                     redrivable=True,
+                )
+                out[res.key] = outcome
+                _persist(
+                    by_instance[res.key[0]],
+                    res.key[1],
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=request.drive_ordinal == 0,
                 )
             else:
                 out[res.key] = D1RowOutcome(
@@ -589,34 +673,23 @@ def run_d1_eval(
                 )
         return out
 
-    specs = [
-        _spec(instance, index, drive_ordinal=0)
-        for instance in instances
-        for index in range(repeats)
-        if (str(instance.id), index) not in restored
-    ]
-    driven: dict[tuple[str, int], D1RowOutcome] = dict(restored)
-    driven.update(_drive(specs))
+    first_driven = _drive(initial_requests)
+    driven.update(first_driven)
 
     # ONE bounded re-drive of timed-out / transient-transport rows (a single
     # flaky observation must not fail the whole d1 arm under FAIL policy).
-    redrive_specs = [
-        _spec(by_instance[key[0]], key[1], drive_ordinal=1)
-        for key, out in driven.items()
-        if out.redrivable
+    redrive_requests = resumed_redrive_requests + [
+        requests_by_key[key][1]
+        for key, outcome in first_driven.items()
+        if _should_redrive(outcome)
     ]
-    if redrive_specs:
-        redriven = _drive(redrive_specs)
+    if redrive_requests:
+        redriven = _drive(redrive_requests)
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
             if not outcome.missing
         )
-
-    if partial_log is not None:
-        for key, outcome in driven.items():
-            if outcome.failure_code == "runner_timeout":
-                _persist(by_instance[key[0]], key[1], outcome)
 
     submission_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
@@ -666,7 +739,7 @@ def run_d1_eval(
     submission_score_aggregate = unweighted_task_mean(
         aggregate_name=D1_SUBMISSION_SCORE_NAME,
         graph_hash=graph_hash,
-        evaluation_context_id=evaluation_binding.identity_hash(),
+        evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
             TaskRows(
                 task_identity=task_identity,
