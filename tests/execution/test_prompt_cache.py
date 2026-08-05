@@ -24,6 +24,7 @@ from dr_providers import (
 from tests.execution.storage_workers import (
     cache_request,
     execute_cache_worker,
+    recover_cache_worker,
 )
 from tests.optimization.processes import join_processes, terminate_processes
 from tests.provider import support as s
@@ -118,6 +119,57 @@ def _start_cache_contenders(
         return reports
     finally:
         barrier.abort()
+        terminate_processes(started, timeout=20)
+
+
+def _run_expected_cache_crash(
+    *,
+    root: Path,
+    expected_exitcode: int,
+    **crash_window: bool,
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    process = context.Process(
+        target=execute_cache_worker,
+        args=(
+            str(root),
+            str(root / "invocations"),
+            0,
+            None,
+            output,
+        ),
+        kwargs=crash_window,
+    )
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        process.join(timeout=20)
+        assert process.exitcode == expected_exitcode
+    finally:
+        terminate_processes(started, timeout=20)
+
+
+def _recover_cache_in_fresh_process(
+    *,
+    root: Path,
+    key: str,
+) -> dict[str, object]:
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    process = context.Process(
+        target=recover_cache_worker,
+        args=(str(root), key, output),
+    )
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        report = output.get(timeout=20)
+        join_processes(started, timeout=20)
+        return report
+    finally:
         terminate_processes(started, timeout=20)
 
 
@@ -633,6 +685,78 @@ def test_restart_reconciles_kill_after_durable_entry_publication(
     assert restarted.get_result(key) is not None
     assert not pending_path.exists()
     assert not cache._applied_accounting_path_for(key).exists()
+
+
+def test_restart_reconciles_kill_after_stats_write_before_journal_rename(
+    tmp_path: Path,
+) -> None:
+    _run_expected_cache_crash(
+        root=tmp_path,
+        expected_exitcode=88,
+        crash_after_stats_write=True,
+    )
+
+    cache = PromptResultCache(root=tmp_path)
+    key = prompt_cache_key(
+        cache_request(),
+        s.build_execution_policy(max_attempts=1),
+        0,
+        0,
+    )
+    pending_path = cache._pending_accounting_path_for(key)
+    applied_path = cache._applied_accounting_path_for(key)
+    stats = json.loads(cache._stats_path.read_text())
+    assert cache._path_for(key).exists()
+    assert pending_path.exists()
+    assert not applied_path.exists()
+    assert stats["hits"] == 0
+    assert stats["misses"] == 1
+    assert stats["stores"] == 1
+    assert len(stats["inflight_publication_ids"]) == 1
+
+    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == {
+        "entry_readable": True,
+        "counters": {"hits": 0, "misses": 1, "stores": 1},
+        "inflight_publication_ids": [],
+        "pending_exists": False,
+        "applied_exists": False,
+    }
+
+
+def test_restart_reconciles_kill_after_applied_rename_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    _run_expected_cache_crash(
+        root=tmp_path,
+        expected_exitcode=89,
+        crash_after_applied_rename=True,
+    )
+
+    cache = PromptResultCache(root=tmp_path)
+    key = prompt_cache_key(
+        cache_request(),
+        s.build_execution_policy(max_attempts=1),
+        0,
+        0,
+    )
+    pending_path = cache._pending_accounting_path_for(key)
+    applied_path = cache._applied_accounting_path_for(key)
+    stats = json.loads(cache._stats_path.read_text())
+    assert cache._path_for(key).exists()
+    assert not pending_path.exists()
+    assert applied_path.exists()
+    assert stats["hits"] == 0
+    assert stats["misses"] == 1
+    assert stats["stores"] == 1
+    assert len(stats["inflight_publication_ids"]) == 1
+
+    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == {
+        "entry_readable": True,
+        "counters": {"hits": 0, "misses": 1, "stores": 1},
+        "inflight_publication_ids": [],
+        "pending_exists": False,
+        "applied_exists": False,
+    }
 
 
 def test_reconciliation_preserves_journal_and_reports_corrupt_entry(
