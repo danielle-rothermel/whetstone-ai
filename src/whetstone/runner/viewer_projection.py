@@ -40,19 +40,16 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone.core.identity import TypedRef, require_full_hash
+from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.engine import EngineEvaluation
 from whetstone.evaluation.schema import (
-    EVALUATION_EVIDENCE_SCHEMA,
     EvaluationEvidence,
     EvaluationOutputsRecord,
 )
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import TypedRef, require_full_hash
-from whetstone.optimization.schema import (
-    CandidateRef,
-    OptimizationResult,
-    StepStatus,
-)
+from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
+from whetstone.experiment.candidate import CandidateRef
+from whetstone.optimization.contracts import OptimizationResult, StepStatus
 
 __all__ = [
     "VIEWER_PROJECTION_SCHEMA",

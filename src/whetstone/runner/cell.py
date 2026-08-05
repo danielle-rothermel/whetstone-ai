@@ -55,30 +55,32 @@ from dr_serialize import Jsonable
 from dr_store import BindingConflictError, ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr
 
-from whetstone.code_eval.statistics import BootstrapCI, bootstrap_delta_ci
-from whetstone.code_eval.statistics import bootstrap_mean_ci as _mean_ci
-from whetstone.evaluation.engine import EngineEvaluation, EvaluationEngine
-from whetstone.evaluation.schema import (
-    EVALUATION_EVIDENCE_SCHEMA,
-    EvaluationEvidence,
-)
-from whetstone.evaluation.service import EngineEvaluationService
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import (
+from whetstone.coordination.evaluation_service import EngineEvaluationService
+from whetstone.core.identity import (
     TypedRef,
     compute_identity_hash,
     require_full_hash,
 )
-from whetstone.optimization.schema import (
+from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.code.statistics import (
+    BootstrapCI,
+    bootstrap_delta_ci,
+)
+from whetstone.evaluation.code.statistics import bootstrap_mean_ci as _mean_ci
+from whetstone.evaluation.engine import EngineEvaluation, EvaluationEngine
+from whetstone.evaluation.schema import EvaluationEvidence
+from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
+from whetstone.experiment.binding import EvalConfigRef, EvaluationBinding
+from whetstone.experiment.candidate import (
     Candidate,
     CandidateRef,
-    EvalConfigRef,
-    EvaluationBinding,
+    candidate_reference,
+)
+from whetstone.optimization.contracts import (
     EvaluationIntent,
     IntentOutcome,
     OptimizationResult,
     StepStatus,
-    candidate_reference,
 )
 from whetstone.runner.budget import BudgetGuard, CreditsSnapshot
 from whetstone.runner.events import (

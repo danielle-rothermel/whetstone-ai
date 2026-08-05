@@ -26,32 +26,33 @@ from tests.optimization.support import (
     python_format_contract,
     registry,
 )
+from whetstone.core.effects.authority import (
+    EffectAuthority,
+    ReplayPolicy,
+)
+from whetstone.core.identity import TypedRef
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.internal_eval import (
+from whetstone.envs.procedure import env_procedure_config
+from whetstone.envs.registry import env_spec
+from whetstone.evaluation.drivers.internal import (
     InternalRowRequest,
     InternalRowResult,
     drive_internal_row,
 )
-from whetstone.envs.procedure import env_procedure_config
-from whetstone.envs.registry import env_spec
 from whetstone.evaluation.engine import EvaluationEngine
-from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import ProcessJob
+from whetstone.experiment.binding import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
+    EvaluationBinding,
+)
+from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.adapters import (
     IdentityOptimizerAdapter,
     MappingAdapterRegistry,
 )
-from whetstone.optimization.effect_authority import (
-    EffectAuthority,
-    ReplayPolicy,
-)
-from whetstone.optimization.harness import OptimizationHarness
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.schema import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
+from whetstone.optimization.contracts import (
     BudgetState,
-    Candidate,
-    EvaluationBinding,
     OptimizationRun,
     OptimizationRunRef,
     OutputContract,
@@ -59,6 +60,7 @@ from whetstone.optimization.schema import (
     StepMode,
     optimization_run_reference,
 )
+from whetstone.optimization.harness import OptimizationHarness
 from whetstone.runner.cell import CellConfig
 from whetstone.runner.ledger import Ledger
 from whetstone.runner.optimization_run import (

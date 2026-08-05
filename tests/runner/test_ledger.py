@@ -9,8 +9,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from whetstone.evaluation.schema import EVALUATION_EVIDENCE_SCHEMA
-from whetstone.optimization.identity import TypedRef
+from whetstone.core.identity import TypedRef
+from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
 from whetstone.runner.ledger import (
     CELL_STATUSES,
     CELLS_SCHEMA,

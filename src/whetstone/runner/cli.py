@@ -37,15 +37,15 @@ from typing import Annotated, cast
 
 import typer
 
+from whetstone.coordination.run_workflow import RunController
+from whetstone.core.identity import compute_identity_hash
 from whetstone.envs.task_selection import (
     TaskSplitManifest,
     TaskSplitManifestError,
     parse_task_split_manifest,
 )
-from whetstone.optimization.identity import compute_identity_hash
-from whetstone.optimization.proposer import ProviderProposerTransport
-from whetstone.orchestration.gepa_factory import CanonicalGepaAdapterFactory
-from whetstone.orchestration.run_workflow import RunController
+from whetstone.optimization.gepa.factory import CanonicalGepaAdapterFactory
+from whetstone.optimization.proposal.proposer import ProviderProposerTransport
 from whetstone.runner.cell import (
     CellConfig,
     CellOutcome,

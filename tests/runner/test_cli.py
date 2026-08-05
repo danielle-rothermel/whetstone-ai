@@ -18,18 +18,15 @@ from typer.testing import CliRunner
 
 from tests.provider import support as provider_support
 from tests.runner.support import cell_config
-from whetstone.optimization.effect_authority import ReplayPolicy
-from whetstone.optimization.proposer import (
+from whetstone.coordination import proposal_provider, run_workflow
+from whetstone.coordination.proposal_provider import ProposalProviderError
+from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.optimization.gepa import factory as gepa_factory_module
+from whetstone.optimization.gepa import runner as gepa_runner
+from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
     ProviderProposerTransport,
 )
-from whetstone.orchestration import gepa_factory as gepa_factory_module
-from whetstone.orchestration import (
-    gepa_runner,
-    proposal_provider,
-    run_workflow,
-)
-from whetstone.orchestration.proposal_provider import ProposalProviderError
 from whetstone.runner import cli as cli_module
 from whetstone.runner.cell import run_cell
 from whetstone.runner.cli import (

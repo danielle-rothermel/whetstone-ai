@@ -33,6 +33,9 @@ these areas:
 - **[Coordination and authority](src/whetstone/coordination/)** arbitrate
   durable proposal and evaluation work, official selection, ownership claims,
   and terminal result binding across recovery.
+- **[Validation runner](src/whetstone/runner/)** drives
+  optimizer-environment cells, enforces budget guards, and publishes resumable
+  ledgers and viewer projections from durable evidence.
 
 The repository boundaries follow the same shape:
 
@@ -46,6 +49,7 @@ The repository boundaries follow the same shape:
 | Evaluation | `whetstone.evaluation` | Evaluation drivers, traces, evidence, scoring, and aggregates |
 | Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, Codex, and tool use |
 | Coordination | `whetstone.coordination` | Durable claims, official authority, and proposal/evaluation services |
+| Validation runner | `whetstone.runner` | Resumable validation cells, budgets, ledgers, and viewer projections |
 
 The excerpts below show stable contract shapes; validation and implementation
 details are omitted so this overview can remain useful as internals evolve.
@@ -443,8 +447,9 @@ The runner owns the DBOS workflow context. At startup, before `DBOS.launch()`,
 it builds persistence, registers the proposer transport, constructs the durable
 proposal executor from the returned registry key, builds the adapters against
 that one executor, and registers the run controller. Each run then executes
-inside exactly one parent workflow, keyed by the run request's identity hash,
-so a recovered process resumes that run rather than starting a second one.
+through `whetstone.coordination.run_workflow` inside exactly one parent
+workflow, keyed by the run request's identity hash, so a recovered process
+resumes that run rather than starting a second one.
 
 Two consequences are load-bearing. The proposal executor refuses to run outside
 a workflow body, so driving steps from the parent satisfies it by construction

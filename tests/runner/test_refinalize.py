@@ -164,8 +164,8 @@ def test_a_positive_delta_under_a_negative_interval_is_inconclusive() -> None:
 
 def test_refinalize_matches_the_live_cell_status_rule() -> None:
     """Refinalize duplicates the live rule, so the two may never disagree."""
-    from whetstone.code_eval.statistics import BootstrapCI
-    from whetstone.optimization.schema import StepStatus
+    from whetstone.evaluation.code.statistics import BootstrapCI
+    from whetstone.optimization.contracts import StepStatus
     from whetstone.runner.cell import _status_for
     from whetstone.runner.refinalize import _status_from
 

@@ -19,17 +19,16 @@ from tests.optimization.support import (
     pure_run,
     registry,
 )
+from whetstone.core.effects.authority import (
+    EffectAuthority,
+    ReplayPolicy,
+)
 from whetstone.optimization.adapters import (
     AdapterOutput,
     IdentityOptimizerAdapter,
     MappingAdapterRegistry,
 )
-from whetstone.optimization.effect_authority import (
-    EffectAuthority,
-    ReplayPolicy,
-)
-from whetstone.optimization.harness import OptimizationHarness
-from whetstone.optimization.schema import (
+from whetstone.optimization.contracts import (
     BudgetState,
     OptimizationStepRequest,
     OutputContract,
@@ -37,6 +36,7 @@ from whetstone.optimization.schema import (
     StepMode,
     StepStatus,
 )
+from whetstone.optimization.harness import OptimizationHarness
 from whetstone.runner.optimization_run import (
     RUN_CONTROL_SCHEMA,
     HarnessRunController,

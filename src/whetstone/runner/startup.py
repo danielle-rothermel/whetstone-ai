@@ -32,19 +32,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from whetstone.optimization.proposer import (
-    DurableProposalExecutor,
-    ProviderProposerTransport,
-)
-from whetstone.orchestration.gepa_factory import CanonicalGepaAdapterFactory
-from whetstone.orchestration.gepa_runner import register_gepa_adapter_factory
-from whetstone.orchestration.proposal_provider import (
+from whetstone.coordination.proposal_provider import (
     DbosProposalExecutor,
     register_proposal_transport,
 )
-from whetstone.orchestration.run_workflow import (
+from whetstone.coordination.run_workflow import (
     RunController,
     register_run_controller,
+)
+from whetstone.optimization.gepa.factory import CanonicalGepaAdapterFactory
+from whetstone.optimization.gepa.runner import register_gepa_adapter_factory
+from whetstone.optimization.proposal.proposer import (
+    DurableProposalExecutor,
+    ProviderProposerTransport,
 )
 
 __all__ = ["RegisteredRuntime", "register_runtime"]

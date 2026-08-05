@@ -394,7 +394,7 @@ def _clean_dbos():
 
     DBOS.destroy()
     importlib.reload(
-        importlib.import_module("whetstone.orchestration.run_workflow")
+        importlib.import_module("whetstone.coordination.run_workflow")
     )
     yield
     DBOS.destroy()

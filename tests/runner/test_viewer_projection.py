@@ -10,8 +10,8 @@ import pytest
 from pydantic import ValidationError
 
 from tests.runner.support import cell_config
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.schema import StepStatus
+from whetstone.core.identity import TypedRef
+from whetstone.optimization.contracts import StepStatus
 from whetstone.runner.cell import run_cell
 from whetstone.runner.viewer_projection import (
     VIEWER_PROJECTION_SCHEMA,

@@ -45,8 +45,8 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.evaluation.schema import EVALUATION_EVIDENCE_SCHEMA
-from whetstone.optimization.identity import TypedRef, require_full_hash
+from whetstone.core.identity import TypedRef, require_full_hash
+from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
 
 __all__ = [
     "BOUNDARY_SPEND_PHASES",

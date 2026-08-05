@@ -46,14 +46,14 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone.coordination.run_workflow import RunRequest
+from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.identity import TypedRef, compute_identity_hash
+from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.adapters import AdapterRegistry
-from whetstone.optimization.effect_authority import ReplayPolicy
-from whetstone.optimization.harness import OptimizationHarness
-from whetstone.optimization.identity import TypedRef, compute_identity_hash
-from whetstone.optimization.schema import (
+from whetstone.optimization.contracts import (
     OPTIMIZATION_RESULT_SCHEMA,
     BudgetState,
-    Candidate,
     OptimizationResult,
     OptimizationRunRef,
     OptimizationStepRequest,
@@ -64,7 +64,7 @@ from whetstone.optimization.schema import (
     StepStatus,
     step_result_reference,
 )
-from whetstone.coordination.run_workflow import RunRequest
+from whetstone.optimization.harness import OptimizationHarness
 
 __all__ = [
     "RUN_CONTROL_SCHEMA",
