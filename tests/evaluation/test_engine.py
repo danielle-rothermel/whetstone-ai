@@ -92,9 +92,12 @@ from whetstone.optimization import (
     AdapterOutput,
     BudgetDelta,
     Candidate,
+    EffectAuthority,
+    EvaluatingToolExecutor,
     EvaluationIntent,
     IntentOutcome,
     IntentResolution,
+    RefusalClass,
     ReplayPolicy,
     ResolutionClass,
     ResolutionDetail,
@@ -102,7 +105,9 @@ from whetstone.optimization import (
     StepMode,
     StepStatus,
     TerminalFailure,
+    ToolAdmissionAuthority,
     ToolCall,
+    ToolCallStore,
     ToolCapacity,
     ToolCapacityScope,
     ToolConfig,
@@ -2783,6 +2788,61 @@ def test_two_resolvers_share_one_durable_evaluation(
     assert len(evaluation_calls) == 1
 
 
+def _failing_renewal_wait(_interval: float, _stop: Event) -> bool:
+    raise sqlite3.OperationalError("transient store blip")
+
+
+def test_heartbeat_error_keeps_a_durably_bound_resolution(tmp_path) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "heartbeat-bound.sqlite"))
+    engine = _engine(tmp_path, store=store)
+    intent = _intent(
+        engine,
+        intent_id="heartbeat-bound",
+        purpose="heartbeat",
+    )
+    service = EngineEvaluationService(
+        store=store,
+        engine=engine,
+        _renewal_wait=_failing_renewal_wait,
+    )
+
+    resolution = service.resolve_evaluation_intent(intent)
+
+    assert resolution.outcome is IntentOutcome.COMPLETED
+    bound = store.resolve(service._key(intent))
+    assert bound is not None
+    assert service._load(bound, expected_intent=intent) == resolution
+
+
+def test_heartbeat_error_raises_when_nothing_was_bound(
+    tmp_path, monkeypatch
+) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "heartbeat-unbound.sqlite"))
+    engine = _engine(tmp_path, store=store)
+    intent = _intent(
+        engine,
+        intent_id="heartbeat-unbound",
+        purpose="heartbeat",
+    )
+    service = EngineEvaluationService(
+        store=store,
+        engine=engine,
+        _renewal_wait=_failing_renewal_wait,
+    )
+
+    def bind_without_durability(
+        _intent: EvaluationIntent, resolution: IntentResolution
+    ) -> IntentResolution:
+        return resolution
+
+    monkeypatch.setattr(service, "_bind", bind_without_durability)
+
+    with pytest.raises(RuntimeError, match="lease heartbeat failed"):
+        service.resolve_evaluation_intent(intent)
+
+    assert store.resolve(service._key(intent)) is None
+
+
 def test_slow_evaluation_renews_claim_on_scripted_tick(
     tmp_path, monkeypatch
 ) -> None:
@@ -3407,6 +3467,47 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     )
 
 
+def test_cache_evidence_excludes_another_bindings_partial_rows(
+    tmp_path,
+) -> None:
+    """Provenance is binding-scoped exactly as restoration is.
+
+    Both evaluations share one candidate, split, and partial log, so the rows
+    differ only in ``request_identity`` (via the Evaluation Binding hash).
+    Restoration refuses the first binding's rows, so the second evaluation's
+    ``CacheEvidence`` must not count them either.
+    """
+    store = ObjectStore(SqliteBackend(tmp_path / "binding-scope.sqlite"))
+    engine = _engine(tmp_path, store=store, partial=True)
+    partial_log = PartialLog(tmp_path / "partials.jsonl")
+    candidate = engine.experiment.initial_candidate
+
+    first = engine.evaluate(
+        EvaluationRequest(
+            candidate=candidate,
+            evaluation_binding=_binding(engine, campaign="first-binding"),
+            purpose="binding-scope",
+        )
+    )
+    second = engine.evaluate(
+        EvaluationRequest(
+            candidate=candidate,
+            evaluation_binding=_binding(engine, campaign="second-binding"),
+            purpose="binding-scope",
+        )
+    )
+
+    rows = partial_log.load()
+    assert {row.unit for row in rows} == {candidate.candidate_id}
+    assert len({row.request_identity for row in rows}) == len(rows)
+    assert len(rows) == first.evidence.cache.partial_row_count + (
+        second.evidence.cache.partial_row_count
+    )
+    assert second.evidence.cache.partial_row_count == (
+        first.evidence.cache.partial_row_count
+    )
+
+
 def test_sampling_repeat_change_changes_exact_eval_identity(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "identity.sqlite"))
     one = _engine(tmp_path, store=store, repeats=1)
@@ -3417,15 +3518,21 @@ def test_sampling_repeat_change_changes_exact_eval_identity(tmp_path) -> None:
     )
 
 
-def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
-    store = ObjectStore(SqliteBackend(tmp_path / "tool.sqlite"))
-    engine = _engine(tmp_path, store=store)
+def _tool_config(
+    engine: EvaluationEngine,
+    *,
+    store_namespace_key: str,
+    output_fields: tuple[str, ...] = (
+        "evaluation_evidence_ref",
+        "output_artifact_ref",
+    ),
+) -> ToolConfig:
     definition = ToolDefinition(
         tool_name="evaluate_candidate",
         input_fields=("base_ref", "model_route", "template"),
-        output_fields=("evaluation_evidence_ref", "output_artifact_ref"),
+        output_fields=output_fields,
     )
-    config = ToolConfig(
+    return ToolConfig(
         definition=tool_definition_reference(definition),
         endpoint_key="evaluate_candidate",
         eval_config=engine.sampling.eval_config,
@@ -3434,19 +3541,35 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
             max_accepted_calls=1,
             scope=ToolCapacityScope.GLOBAL,
         ),
-        store_namespace_key="tool-projection",
+        store_namespace_key=store_namespace_key,
     )
+
+
+def _tool_call(
+    engine: EvaluationEngine,
+    config: ToolConfig,
+    *,
+    call_id: str,
+    model_route: str = "openai/test",
+) -> ToolCall:
     base = engine.experiment.initial_candidate
-    call = ToolCall(
-        call_id="tool-call",
+    return ToolCall(
+        call_id=call_id,
         tool_config=tool_config_reference(config),
         capacity_binding=tool_capacity_binding(ToolCapacityScope.GLOBAL),
         args={
             "base_ref": base.base_ref.model_dump(mode="json"),
-            "model_route": "openai/test",
+            "model_route": model_route,
             "template": base.payload["user_prompt_template"],
         },
     )
+
+
+def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
+    store = ObjectStore(SqliteBackend(tmp_path / "tool.sqlite"))
+    engine = _engine(tmp_path, store=store)
+    config = _tool_config(engine, store_namespace_key="tool-projection")
+    call = _tool_call(engine, config, call_id="tool-call")
 
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
@@ -3457,3 +3580,84 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
     )
     artifact = TypedRef.model_validate(projected.output["output_artifact_ref"])
     assert store.get(artifact.reference)
+
+
+def test_engine_tool_evaluator_drives_a_call_through_the_executor(
+    tmp_path,
+) -> None:
+    """The engine evaluator satisfies the whole ToolEvaluator Protocol.
+
+    ``EvaluatingToolExecutor`` calls ``validate`` before admission, so a
+    projection missing it would fail on the paved path rather than in a
+    direct ``evaluate`` call.
+    """
+    database = tmp_path / "tool-executor.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    engine = _engine(tmp_path, store=store)
+    config = _tool_config(engine, store_namespace_key="tool-executor")
+    effect_authority = EffectAuthority.memory()
+    call_store = ToolCallStore(
+        ObjectStore(SqliteBackend(database)),
+        ToolAdmissionAuthority.sqlite(database),
+        effect_authority,
+    )
+    handle = EvaluatingToolExecutor(
+        EngineToolEvaluator(engine),
+        engine.experiment.reward_policy,
+        effect_authority,
+        owner_id="tool-executor-owner",
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    ).runtime_handle(
+        config,
+        call_store,
+        tool_capacity_binding(ToolCapacityScope.GLOBAL),
+    )
+
+    result = handle(_tool_call(engine, config, call_id="executed-call"))
+
+    assert result.refusal is None
+    assert result.terminal_failure is None
+    assert result.output is not None
+    assert result.reward is not None
+    assert len(result.evaluation_evidence_refs) == 1
+    evidence = EvaluationEvidence.model_validate(
+        store.get(result.evaluation_evidence_refs[0].reference)
+    )
+    assert evidence.evaluation_binding.eval_config == engine.eval_config_ref
+    assert evidence.evaluation_binding.role is EvaluationRole.INTERNAL
+
+
+def test_engine_tool_evaluator_refuses_a_foreign_route_before_admission(
+    tmp_path,
+) -> None:
+    database = tmp_path / "tool-refusal.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    engine = _engine(tmp_path, store=store)
+    config = _tool_config(engine, store_namespace_key="tool-refusal")
+    effect_authority = EffectAuthority.memory()
+    call_store = ToolCallStore(
+        ObjectStore(SqliteBackend(database)),
+        ToolAdmissionAuthority.sqlite(database),
+        effect_authority,
+    )
+    capacity_binding = tool_capacity_binding(ToolCapacityScope.GLOBAL)
+    handle = EvaluatingToolExecutor(
+        EngineToolEvaluator(engine),
+        engine.experiment.reward_policy,
+        effect_authority,
+        owner_id="tool-refusal-owner",
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    ).runtime_handle(config, call_store, capacity_binding)
+
+    result = handle(
+        _tool_call(
+            engine,
+            config,
+            call_id="foreign-route-call",
+            model_route="openai/other",
+        )
+    )
+
+    assert result.refusal is not None
+    assert result.refusal.refusal_class is RefusalClass.VALIDATION
+    assert call_store.accepted_count(config, capacity_binding) == 0

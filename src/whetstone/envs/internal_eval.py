@@ -480,6 +480,10 @@ class InternalEvalResult:
     #: Exact row state, trace, display output, and score for every planned row
     #: in instance/repeat order, including exact partial restores.
     outputs: tuple[RolloutOutput, ...]
+    #: Every planned row-request identity for this exact Evaluation Binding,
+    #: both drive ordinals. Restoration is strictly scoped to this set, so it
+    #: is also the only set a caller may attribute partial rows to.
+    request_identities: frozenset[str] = frozenset()
     concurrency_halved: bool = False
     deadline_reached: bool = False
     guard_timeouts: int = 0
@@ -999,6 +1003,11 @@ def run_internal_eval(
         for instance, _task in tasks
         for index in range(repeats)
     }
+    planned_request_identities = frozenset(
+        request.request_identity
+        for ordinals in requests_by_key.values()
+        for request in ordinals
+    )
     partial_records = index_partial_records(
         () if partial_log is None else partial_log.load(),
         phase=partial_phase,
@@ -1216,6 +1225,7 @@ def run_internal_eval(
         deadline_reached=deadline_reached,
         guard_timeouts=guard_timeouts,
         outputs=tuple(outputs),
+        request_identities=planned_request_identities,
     )
 
 

@@ -21,7 +21,13 @@ class EngineToolEvaluator:
     def __init__(self, engine: EvaluationEngine) -> None:
         self._engine = engine
 
-    def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
+    def validate(self, call: ToolCall, config: ToolConfig) -> None:
+        """Refuse an unevaluatable Call without consuming Tool Capacity."""
+        self._resolve_engine(call, config)
+
+    def _resolve_engine(
+        self, call: ToolCall, config: ToolConfig
+    ) -> EvaluationEngine:
         if config.eval_config_identity_hash != (
             self._engine.eval_config_ref.identity_hash
         ):
@@ -38,6 +44,10 @@ class EngineToolEvaluator:
                 "tool call model_route must match the engine's exact "
                 "Provider Call Config route"
             )
+        return self._engine
+
+    def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
+        engine = self._resolve_engine(call, config)
         candidate = Candidate(
             candidate_id=call.call_id,
             base_ref=TypedRef.model_validate(call.args["base_ref"]),
@@ -45,7 +55,7 @@ class EngineToolEvaluator:
                 "user_prompt_template": call.args.get("template"),
             },
         )
-        evaluated = self._engine.evaluate(
+        evaluated = engine.evaluate(
             EvaluationRequest(
                 candidate=candidate,
                 evaluation_binding=EvaluationBinding(
@@ -91,7 +101,9 @@ class EngineToolEvaluator:
             ),
             rollout_refs=(evaluated.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
-            eval_config_hash=evidence.evaluation_binding.eval_config.identity_hash,
+            eval_config_hash=(
+                evidence.evaluation_binding.eval_config.identity_hash
+            ),
         )
 
 

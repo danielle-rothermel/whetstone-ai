@@ -1284,6 +1284,13 @@ class EngineEvaluationService:
         intent: EvaluationIntent,
         owned: _OwnedClaim,
     ) -> IntentResolution:
+        """Evaluate under a renewed lease, keeping any durable binding.
+
+        A heartbeat failure only aborts when nothing was bound: once
+        :meth:`_evaluate_and_bind` has durably committed a resolution, that
+        paid evaluation is the answer and a transient renewal error must not
+        discard it.
+        """
         stop = threading.Event()
         heartbeat_errors: list[Exception] = []
 
@@ -1311,7 +1318,7 @@ class EngineEvaluationService:
         finally:
             stop.set()
             thread.join()
-        if heartbeat_errors:
+        if heartbeat_errors and self._store.resolve(self._key(intent)) is None:
             raise RuntimeError("evaluation lease heartbeat failed") from (
                 heartbeat_errors[0]
             )

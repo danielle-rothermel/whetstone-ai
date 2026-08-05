@@ -375,7 +375,9 @@ class EvaluationEngine:
             )
             if persisted_reward != reward_ref.record_ref:
                 raise ValueError("persisted Reward reference diverged")
-        cache = self._cache_evidence(request.candidate.candidate_id)
+        cache = self._cache_evidence(
+            request.candidate.candidate_id, result.request_identities
+        )
         evidence = EvaluationEvidence(
             schema_version=EVALUATION_EVIDENCE_SCHEMA_VERSION,
             candidate=candidate_ref,
@@ -412,7 +414,15 @@ class EvaluationEngine:
         )
         return EngineEvaluation(evidence=evidence, evidence_ref=evidence_ref)
 
-    def _cache_evidence(self, candidate_id: str) -> CacheEvidence:
+    def _cache_evidence(
+        self, candidate_id: str, request_identities: frozenset[str]
+    ) -> CacheEvidence:
+        """Summarize only the partial rows this exact binding could restore.
+
+        Restoration is strictly request-identity scoped, so provenance is too:
+        a row written by another Evaluation Binding of the same candidate and
+        split was never eligible here and is not this evaluation's evidence.
+        """
         if self._partial_log is None:
             return CacheEvidence()
         rows = [
@@ -420,6 +430,7 @@ class EvaluationEngine:
             for row in self._partial_log.load()
             if row.unit == candidate_id
             and row.phase == self.sampling.split_role
+            and row.request_identity in request_identities
         ]
         hits = [row for row in rows if row.cache_hit]
         return CacheEvidence(
