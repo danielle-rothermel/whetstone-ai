@@ -7,7 +7,9 @@ import json
 import os
 import sys
 import types
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Event, Lock, get_ident
 from typing import Any, ClassVar
 from uuid import uuid4
 
@@ -570,7 +572,9 @@ def test_unregistered_transport_instance_cannot_ride_a_bound_key() -> None:
     assert impostor_recording.served == []
 
 
-def test_identity_keyed_registry_keeps_concurrent_executors_separate() -> None:
+def test_identity_keyed_registry_keeps_sequential_executions_separate() -> (
+    None
+):
     _reset_replay_dbos()
     module = _load_boundary()
     first, config, first_recording = _provider_transport(
@@ -608,6 +612,95 @@ def test_identity_keyed_registry_keeps_concurrent_executors_separate() -> None:
     assert first_replay == first_result
     assert len(first_recording.served) == 1
     assert len(second_recording.served) == 1
+
+
+def test_concurrent_conflicting_transport_binding_is_atomic() -> None:
+    module = _load_boundary()
+    registry = module._ProposalTransportRegistry()
+    first, _config_value, _first_recording = _provider_transport(
+        provider_support.response_outcome(text="first"),
+    )
+    twin, _config_twin, _twin_recording = _provider_transport(
+        provider_support.response_outcome(text="twin"),
+    )
+    start = Barrier(3)
+
+    class _ObservedLock:
+        def __init__(self) -> None:
+            self._lock = Lock()
+            self._attempt_guard = Lock()
+            self._attempts = 0
+            self._owner: int | None = None
+            self.contended = Event()
+
+        def __enter__(self):
+            with self._attempt_guard:
+                self._attempts += 1
+                if self._attempts == 2:
+                    self.contended.set()
+            self._lock.acquire()
+            self._owner = get_ident()
+            return self
+
+        def __exit__(self, *_args) -> None:
+            assert self._owner == get_ident()
+            self._owner = None
+            self._lock.release()
+
+        def owned_by_current_thread(self) -> bool:
+            return self._owner == get_ident()
+
+    observed_lock = _ObservedLock()
+
+    class _LockCheckedTransports:
+        def __init__(self) -> None:
+            self._values: dict[str, ProviderProposerTransport] = {}
+
+        def get(self, registry_key: str):
+            assert observed_lock.owned_by_current_thread()
+            assert observed_lock.contended.wait(timeout=5)
+            return self._values.get(registry_key)
+
+        def __getitem__(self, registry_key: str):
+            assert observed_lock.owned_by_current_thread()
+            return self._values[registry_key]
+
+        def __setitem__(
+            self,
+            registry_key: str,
+            transport: ProviderProposerTransport,
+        ) -> None:
+            assert observed_lock.owned_by_current_thread()
+            self._values[registry_key] = transport
+
+    registry._lock = observed_lock
+    registry._transports = _LockCheckedTransports()
+
+    def bind(transport: ProviderProposerTransport):
+        start.wait(timeout=5)
+        try:
+            return registry.bind(transport)
+        except module.ProposalProviderError as error:
+            return error
+
+    assert first is not twin
+    assert first.durability_identity_hash == twin.durability_identity_hash
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(bind, transport) for transport in (first, twin)]
+        start.wait(timeout=5)
+        outcomes = [future.result(timeout=5) for future in futures]
+
+    successes = [outcome for outcome in outcomes if isinstance(outcome, str)]
+    conflicts = [
+        outcome
+        for outcome in outcomes
+        if isinstance(outcome, module.ProposalProviderError)
+    ]
+    assert successes == [first.durability_identity_hash]
+    assert len(conflicts) == 1
+    assert str(conflicts[0]) == "proposal transport key is already bound"
+    winner = first if isinstance(outcomes[0], str) else twin
+    assert registry.resolve(first.durability_identity_hash) is winner
 
 
 def test_conflicting_transport_under_one_key_is_rejected() -> None:

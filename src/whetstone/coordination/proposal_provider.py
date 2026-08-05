@@ -24,6 +24,7 @@ identity can never detach from the capability a recovered workflow invokes.
 
 from __future__ import annotations
 
+from threading import Lock
 from typing import NamedTuple
 
 from dbos import DBOS, SetWorkflowID
@@ -57,7 +58,58 @@ class ProposalProviderError(RuntimeError):
     """The configured physical proposal-provider boundary is invalid."""
 
 
-_TRANSPORTS: dict[str, ProviderProposerTransport] = {}
+class _ProposalTransportRegistry:
+    """Own atomic identity binding and resolution for proposal transports."""
+
+    __slots__ = ("_lock", "_transports")
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._transports: dict[str, ProviderProposerTransport] = {}
+
+    def bind(self, transport: ProviderProposerTransport) -> str:
+        if type(transport) is not ProviderProposerTransport:
+            raise ProposalProviderError(
+                "durable proposal registration requires "
+                "ProviderProposerTransport"
+            )
+
+        registry_key = transport.durability_identity_hash
+        require_full_hash(
+            registry_key,
+            field="transport_durability_identity_hash",
+        )
+        with self._lock:
+            existing = self._transports.get(registry_key)
+            if existing is not None and existing is not transport:
+                raise ProposalProviderError(
+                    "proposal transport key is already bound"
+                )
+            self._transports[registry_key] = transport
+        return registry_key
+
+    def resolve(self, registry_key: str) -> ProviderProposerTransport:
+        require_full_hash(registry_key, field="transport_registry_key")
+        with self._lock:
+            try:
+                transport = self._transports[registry_key]
+            except KeyError:
+                raise ProposalProviderError(
+                    "proposal transport is not registered before DBOS launch"
+                ) from None
+            current_identity = transport.durability_identity_hash
+            require_full_hash(
+                current_identity,
+                field="transport_durability_identity_hash",
+            )
+            if current_identity != registry_key:
+                raise ProposalProviderError(
+                    "registered proposal transport durability identity changed"
+                )
+            return transport
+
+
+_TRANSPORT_REGISTRY = _ProposalTransportRegistry()
 
 
 def register_proposal_transport(
@@ -65,38 +117,11 @@ def register_proposal_transport(
 ) -> str:
     """Bind one proposer transport under its exact durability identity."""
 
-    if type(transport) is not ProviderProposerTransport:
-        raise ProposalProviderError(
-            "durable proposal registration requires ProviderProposerTransport"
-        )
-
-    registry_key = transport.durability_identity_hash
-    require_full_hash(registry_key, field="transport_durability_identity_hash")
-    existing = _TRANSPORTS.get(registry_key)
-    if existing is not None and existing is not transport:
-        raise ProposalProviderError("proposal transport key is already bound")
-    _TRANSPORTS[registry_key] = transport
-    return registry_key
+    return _TRANSPORT_REGISTRY.bind(transport)
 
 
 def _registered_transport(registry_key: str) -> ProviderProposerTransport:
-    require_full_hash(registry_key, field="transport_registry_key")
-    try:
-        transport = _TRANSPORTS[registry_key]
-    except KeyError:
-        raise ProposalProviderError(
-            "proposal transport is not registered before DBOS launch"
-        ) from None
-    current_identity = transport.durability_identity_hash
-    require_full_hash(
-        current_identity,
-        field="transport_durability_identity_hash",
-    )
-    if current_identity != registry_key:
-        raise ProposalProviderError(
-            "registered proposal transport durability identity changed"
-        )
-    return transport
+    return _TRANSPORT_REGISTRY.resolve(registry_key)
 
 
 def _proposal_policy_identity_payload(
