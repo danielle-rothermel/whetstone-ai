@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import sys
 import types
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, Event, Lock, get_ident
@@ -46,6 +47,7 @@ class _ReplayDbos:
     events: ClassVar[list[str]] = []
     child_results: ClassVar[dict[str, Any]] = {}
     next_workflow_id: ClassVar[str | None] = None
+    before_checkpoint_publication: ClassVar[Callable[[], None] | None] = None
 
     @classmethod
     def step(cls, *, retries_allowed: bool):
@@ -69,6 +71,10 @@ class _ReplayDbos:
                         result = function(*args)
                     finally:
                         cls.step_id = prior_step_id
+                    gate = cls.before_checkpoint_publication
+                    cls.before_checkpoint_publication = None
+                    if gate is not None:
+                        gate()
                     cls.checkpoints[key] = result
                 return cls.checkpoints[key]
 
@@ -124,6 +130,7 @@ def _reset_replay_dbos() -> None:
     _ReplayDbos.child_results.clear()
     _ReplayDbos.next_workflow_id = None
     _ReplayDbos.step_id = None
+    _ReplayDbos.before_checkpoint_publication = None
 
 
 class _ReplayHandle:
@@ -179,6 +186,7 @@ def _provider_transport(
     *outcomes,
     max_attempts: int = 1,
     prompt_adapter: PlainPromptAdapter | None = None,
+    sleep: provider_support.SleepRecorder | None = None,
 ):
     provider_config = provider_support.openrouter_chat_config(
         model="proposal-model"
@@ -198,7 +206,7 @@ def _provider_transport(
         ),
         prompt_adapter=prompt_adapter,
         clock=provider_support.FakeClock(),
-        sleep=provider_support.SleepRecorder(),
+        sleep=sleep if sleep is not None else provider_support.SleepRecorder(),
     )
     return proposer, _config(provider_config), recording
 
@@ -336,10 +344,12 @@ def test_one_step_wraps_the_whole_logical_call_including_retries() -> None:
 
     _reset_replay_dbos()
     module = _load_boundary()
+    provider_sleep = provider_support.SleepRecorder()
     transport, config, recording = _provider_transport(
         provider_support.failure_outcome(failure_class=FailureClass.TRANSIENT),
         provider_support.response_outcome(text="after retry"),
         max_attempts=2,
+        sleep=provider_sleep,
     )
     executor = _executor(module, transport)
 
@@ -352,6 +362,7 @@ def test_one_step_wraps_the_whole_logical_call_including_retries() -> None:
 
     assert draft.template == "after retry"
     assert len(recording.served) == 2
+    assert provider_sleep.delays == [1.0]
     assert _ReplayDbos.retries_allowed == [False]
     assert _ReplayDbos.sleeps == []
     assert _ReplayDbos.events == [
@@ -367,6 +378,72 @@ def test_one_step_wraps_the_whole_logical_call_including_retries() -> None:
     )
     assert replay == (draft,)
     assert len(recording.served) == 2
+    assert provider_sleep.delays == [1.0]
+    assert _ReplayDbos.retries_allowed == [False]
+    assert _ReplayDbos.sleeps == []
+
+
+def test_accept_before_checkpoint_replays_at_least_once_effect() -> None:
+    """A lost step checkpoint re-executes the accepted provider effect."""
+
+    class _ProcessInterrupted(RuntimeError):
+        pass
+
+    def interrupt_before_checkpoint_publication() -> None:
+        raise _ProcessInterrupted
+
+    _reset_replay_dbos()
+    module = _load_boundary()
+    transport, config, recording = _provider_transport(
+        provider_support.response_outcome(text="stable result"),
+    )
+    executor = _executor(module, transport)
+    request = _request()
+    _ReplayDbos.before_checkpoint_publication = (
+        interrupt_before_checkpoint_publication
+    )
+
+    with pytest.raises(_ProcessInterrupted):
+        executor.execute(
+            config=config,
+            request=request,
+            transport=transport,
+            count=1,
+        )
+
+    assert len(recording.served) == 1
+    assert _ReplayDbos.checkpoints == {}
+    assert _ReplayDbos.child_results == {}
+
+    recovered = executor.execute(
+        config=config,
+        request=request,
+        transport=transport,
+        count=1,
+    )
+
+    assert recovered[0].template == "stable result"
+    assert len(recording.served) == 2
+    assert len(_ReplayDbos.checkpoints) == 1
+    assert len(_ReplayDbos.child_results) == 1
+
+    replay = executor.execute(
+        config=config,
+        request=request,
+        transport=transport,
+        count=1,
+    )
+
+    assert replay == recovered
+    assert len(recording.served) == 2
+    assert len(_ReplayDbos.checkpoints) == 1
+    started_children = [
+        event
+        for event in _ReplayDbos.events
+        if event.startswith("start_workflow:")
+    ]
+    assert len(started_children) == 3
+    assert len(set(started_children)) == 1
 
 
 def test_same_effect_has_same_child_identity_across_ambient_workflows() -> (
