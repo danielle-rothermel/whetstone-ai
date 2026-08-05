@@ -24,7 +24,7 @@ This module owns the ed1 experiment binding that plugs into the runner:
 * :func:`build_ed1_experiment`, an
 :class:`~whetstone.envs.factory.EnvExperiment`
   the runner cell consumes (its rollout is the enc-dec 3-node graph, its eval
-  path is the code-eval drive in :mod:`whetstone.envs.ed1_eval`).
+  path is the code-eval drive in :mod:`whetstone.evaluation.drivers.ed1`).
 
 The canonical enc/dec task model is ``deepseek/deepseek-v4-flash`` (same route
 plays BOTH encoder and decoder); ``--task-model`` overrides per cell and folds
@@ -55,7 +55,8 @@ from dr_code.humaneval import HumanEvalTask
 from dr_code.synthetic.humaneval_loader import HF_REVISION, load_humaneval_plus
 from whetstone_envs.core import Instance
 
-from whetstone.code_eval.aggregate import aggregation_definition
+from whetstone.core.identity import TypedRef
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import ED1_PARSER_PROFILE, CodeScore
 from whetstone.envs.encdec_rollout import (
@@ -74,21 +75,20 @@ from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
 )
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.reward import (
+from whetstone.evaluation.code.aggregate import aggregation_definition
+from whetstone.experiment.candidate import (
+    Candidate,
+    TemplateRenderContract,
+    TemplateRenderKind,
+)
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     Reward,
     RewardPolicy,
     RewardTerm,
     apply_reward_policy,
 )
-from whetstone.optimization.schema import (
-    Candidate,
-    TemplateRenderContract,
-    TemplateRenderKind,
-)
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 #: The ed1 env id.
 ED1_ENV_NAME = "ed1"

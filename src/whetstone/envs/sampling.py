@@ -42,15 +42,15 @@ from dr_code.eval import (
 )
 from whetstone_envs.core import Instance, PoolSplit, TaskPool
 
-from whetstone.code_eval.aggregate import (
+from whetstone.core.roles import EvaluationRole
+from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
+from whetstone.envs.task import EnvTask
+from whetstone.evaluation.code.aggregate import (
     CompletenessPolicy,
     EvaluationMatrixPlan,
     RowPolicy,
     aggregation_definition,
 )
-from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
-from whetstone.envs.task import EnvTask
-from whetstone.evaluation_role import EvaluationRole
 
 _DEFINITION_VERSION = "1"
 

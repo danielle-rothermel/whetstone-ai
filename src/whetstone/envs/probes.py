@@ -47,7 +47,7 @@ from dataclasses import dataclass
 
 from whetstone_envs.core import Instance, ProbePair
 
-from whetstone.optimization.schema import (
+from whetstone.experiment.candidate import (
     TemplateRenderContract,
     TemplateRenderKind,
 )

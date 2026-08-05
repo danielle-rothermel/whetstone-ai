@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.procedure import env_procedure_config
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.rollout_definition import build_rollout_definition
@@ -22,8 +23,9 @@ from whetstone.envs.sampling import (
     derive_split_sampling,
     validate_evaluation_role_for_split,
 )
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.graph.eval_config import validate_eval_identity_partition
+from whetstone.experiment.graph.eval_identity import (
+    validate_eval_identity_partition,
+)
 
 _MODEL = "openai/gpt-5-nano"
 # Tiny pools: c22 has 6 strata, the others 4-26; keep splits inside each pool.

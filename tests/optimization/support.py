@@ -10,75 +10,89 @@ from typing import Any
 from dr_code.eval import DefinitionRef, EvalConfig
 from dr_store import ObjectStore, SqliteBackend
 
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
+from whetstone.core.effects.authority import (
+    AcquireOutcome,
+    EffectAuthority,
+)
+from whetstone.core.effects.models import ReplayPolicy
+from whetstone.core.identity import (
+    IdentityRef,
+    TerminalFailure,
+    TypedRef,
+    compute_identity_hash,
+    typed_ref_for_record,
+)
+from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA_VERSION,
+)
+from whetstone.experiment.binding import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
+    EvalConfigRef,
+    EvaluationBinding,
+    eval_config_reference,
+)
+from whetstone.experiment.candidate import (
+    Candidate,
+    TemplateRenderContract,
+    TemplateRenderKind,
+    candidate_reference,
+)
+from whetstone.experiment.reward import (
+    MissingDataPolicy,
+    RewardPolicy,
+    RewardTerm,
+    apply_reward_policy,
+    reward_reference,
+)
+from whetstone.optimization.adapters import (
     AdapterOutput,
     AdapterRegistry,
+    IdentityOptimizerAdapter,
+    MappingAdapterRegistry,
+    OptimizerAdapter,
+)
+from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA_VERSION,
     BudgetDelta,
     BudgetState,
-    Candidate,
     EvaluationIntent,
-    IdentityOptimizerAdapter,
-    IdentityRef,
     IntentOutcome,
     IntentResolution,
-    MappingAdapterRegistry,
-    MissingDataPolicy,
-    OptimizationHarness,
     OptimizationRun,
     OptimizationRunRef,
     OptimizationStepRequest,
-    OptimizerAdapter,
     OutputContract,
-    ReplayPolicy,
     ResolutionClass,
     ResolutionDetail,
-    RewardPolicy,
-    RewardTerm,
-    RuntimeToolHandle,
     StepKind,
     StepMode,
     StepStatus,
-    TemplateRenderContract,
-    TemplateRenderKind,
-    TerminalFailure,
+    optimization_run_reference,
+)
+from whetstone.optimization.harness import OptimizationHarness
+from whetstone.optimization.tools.admission import (
+    ToolCallState,
+    tool_effect_request,
+)
+from whetstone.optimization.tools.contracts import (
+    RuntimeToolHandle,
     ToolCall,
     ToolCapacity,
+    ToolCapacityBinding,
     ToolCapacityScope,
     ToolConfig,
     ToolDefinition,
     ToolResult,
-    apply_reward_policy,
-    candidate_reference,
-    compute_identity_hash,
-    eval_config_reference,
-    optimization_run_reference,
-    reward_reference,
     tool_call_reference,
     tool_config_reference,
     tool_definition_reference,
-    typed_ref_for_record,
 )
-from whetstone.optimization.effect_authority import (
-    AcquireOutcome,
-    EffectAuthority,
-)
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.schema import (
-    EvalConfigRef,
-    EvaluationBinding,
-)
-from whetstone.optimization.tool_store import (
+from whetstone.optimization.tools.facade import (
     ToolAdmissionAuthority,
-    ToolCallState,
     ToolCallStore,
-    tool_effect_request,
 )
-from whetstone.optimization.tools import ToolCapacityBinding
 
 FULL_A = "a" * 64
 FULL_B = "b" * 64

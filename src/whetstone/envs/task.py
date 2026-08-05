@@ -32,7 +32,7 @@ from typing import Any
 
 from whetstone_envs.core import Instance, TaskPool, content_hash
 
-from whetstone.optimization.identity import compute_identity_hash
+from whetstone.core.identity import compute_identity_hash
 
 ENV_TASK_SCHEMA = "whetstone.env_task"
 ENV_TASK_SCHEMA_VERSION = 1

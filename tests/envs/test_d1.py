@@ -24,12 +24,6 @@ from whetstone.envs.d1 import (
     d1_initial_candidate,
     render_d1_frame,
 )
-from whetstone.envs.d1_eval import (
-    D1RowOutcome,
-    D1RowRequest,
-    _input_arm_text,
-    run_d1_eval,
-)
 from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
     ED1_INVALID_BODY,
@@ -41,18 +35,22 @@ from whetstone.envs.input_transform import (
     rename_identifier,
     split_prompt,
 )
-from whetstone.envs.internal_eval import (
-    ExecutedRowState,
-    _llm_component_step,
-)
 from whetstone.envs.rollout_definition import LLM_NODE_ID
+from whetstone.evaluation.drivers.d1 import (
+    D1RowOutcome,
+    D1RowRequest,
+    _input_arm_text,
+    run_d1_eval,
+)
+from whetstone.evaluation.drivers.internal import _llm_component_step
+from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
     PoolOutcome,
 )
 from whetstone.execution.partials import PartialLog
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
 def _tasks(limit: int = 3):
@@ -349,7 +347,8 @@ def test_d1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.d1_eval.index_partial_records", should_not_restore
+        "whetstone.evaluation.drivers.d1.index_partial_records",
+        should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
         run_d1_eval(
@@ -487,7 +486,8 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.envs.d1_eval.run_call_pool", crash_after_ordinal_zero
+        "whetstone.evaluation.drivers.d1.run_call_pool",
+        crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
         run_d1_eval(
@@ -554,7 +554,9 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
             guard_timeouts=len(specs),
         )
 
-    monkeypatch.setattr("whetstone.envs.d1_eval.run_call_pool", timed_out_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.run_call_pool", timed_out_pool
+    )
     run_d1_eval(
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,
@@ -629,7 +631,9 @@ def test_d1_phase_deadline_is_missing_and_not_redriven(monkeypatch) -> None:
             guard_timeouts=0,
         )
 
-    monkeypatch.setattr("whetstone.envs.d1_eval.run_call_pool", deadline_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.run_call_pool", deadline_pool
+    )
     result = run_d1_eval(
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,

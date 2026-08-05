@@ -24,30 +24,33 @@ from tests.envs.support import (
     process_row_job_factory,
     row_job_factory,
 )
+from whetstone.core.identity import ImmutableJsonObject
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
-from whetstone.envs.internal_eval import (
+from whetstone.envs.oracle_operator import env_exact_match_score
+from whetstone.envs.registry import ENV_NAMES, env_spec
+from whetstone.envs.reward import CandidateEvaluationFailure
+from whetstone.envs.rollout_definition import LLM_NODE_ID, PromptInputError
+from whetstone.evaluation.drivers.internal import (
+    InternalRowOutcome,
+    InternalRowRequest,
+    InternalRowResult,
+    ProcessInstance,
+    process_request_identity,
+    run_internal_eval,
+    start_phase_deadline,
+)
+from whetstone.evaluation.traces import (
     MAX_EXECUTED_COMPONENT_FIELDS,
     MAX_EXECUTED_COMPONENT_JSON_BYTES,
     MAX_EXECUTED_COMPONENT_STEPS,
     ExecutedComponentStep,
     ExecutedComponentTracePayload,
     ExecutedRowState,
-    InternalRowOutcome,
-    InternalRowRequest,
-    InternalRowResult,
-    ProcessInstance,
     _bounded_trace_json_size,
     _llm_component_step,
-    process_request_identity,
-    run_internal_eval,
-    start_phase_deadline,
     validate_executed_component_trace,
 )
-from whetstone.envs.oracle_operator import env_exact_match_score
-from whetstone.envs.registry import ENV_NAMES, env_spec
-from whetstone.envs.reward import CandidateEvaluationFailure
-from whetstone.envs.rollout_definition import LLM_NODE_ID, PromptInputError
-from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
@@ -55,15 +58,14 @@ from whetstone.execution.fanout import (
     ProcessJob,
 )
 from whetstone.execution.partials import PartialCallRecord, PartialLog
-from whetstone.optimization.identity import ImmutableJsonObject
-from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.reward import Reward
-from whetstone.optimization.schema import (
+from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
-    Candidate,
     EvaluationBinding,
     eval_config_reference,
 )
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.reward import Reward
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 _MODEL = "openai/gpt-5-nano"
 _SPLIT = (2, 2, 2)
@@ -511,8 +513,8 @@ def test_build_env_experiment_returns_all_five_deliverables(
 
 
 def test_process_row_wire_schemas_are_pinned() -> None:
-    from whetstone.envs.d1_eval import D1RowRequest, D1RowResult
-    from whetstone.envs.ed1_eval import Ed1RowRequest, Ed1RowResult
+    from whetstone.evaluation.drivers.d1 import D1RowRequest, D1RowResult
+    from whetstone.evaluation.drivers.ed1 import Ed1RowRequest, Ed1RowResult
 
     assert InternalRowRequest.model_fields["schema_name"].default == (
         "whetstone.envs.internal_row_request/v2"
@@ -785,7 +787,7 @@ from tests.envs.test_factory import (
     _internal_jobs,
     _tiny_experiment,
 )
-from whetstone.envs.internal_eval import run_internal_eval
+from whetstone.evaluation.drivers.internal import run_internal_eval
 
 experiment = _tiny_experiment("c18")
 sampling = experiment.eval_configs.internal
@@ -886,7 +888,7 @@ def test_internal_eval_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.internal_eval.index_partial_records",
+        "whetstone.evaluation.drivers.internal.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
@@ -938,7 +940,9 @@ def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
             guard_timeouts=0,
         )
 
-    monkeypatch.setattr("whetstone.envs.internal_eval.run_call_pool", pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.internal.run_call_pool", pool
+    )
     result = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,
@@ -1081,7 +1085,7 @@ def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.envs.internal_eval.run_call_pool",
+        "whetstone.evaluation.drivers.internal.run_call_pool",
         crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
@@ -1140,7 +1144,7 @@ def test_internal_terminal_timeout_persists_both_exact_requests(
         )
 
     monkeypatch.setattr(
-        "whetstone.envs.internal_eval.run_call_pool", timeout_pool
+        "whetstone.evaluation.drivers.internal.run_call_pool", timeout_pool
     )
     run_internal_eval(
         exp,
@@ -1277,7 +1281,7 @@ def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
 def test_failed_rows_still_visible_in_provenance() -> None:
     # All-failed rows leave the reduction non-OK (never a fabricated zero),
     # while remaining counted in the aggregate provenance.
-    from whetstone.code_eval.aggregate import (
+    from whetstone.evaluation.code.aggregate import (
         RowValue,
         TaskRows,
         unweighted_task_mean,

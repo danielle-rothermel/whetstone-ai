@@ -6,70 +6,80 @@ import pytest
 from dr_providers import ProviderTransportPolicy
 from pydantic import ValidationError
 
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization import (
+from whetstone.core.identity import (
+    IdentityRef,
+    TerminalFailure,
+    TypedRef,
+    canonical_json_equal,
+    compute_identity_hash,
+    typed_ref_for_record,
+)
+from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA_VERSION,
-    BudgetState,
+)
+from whetstone.experiment.binding import (
+    EVALUATION_BINDING_SCHEMA,
+    EVALUATION_BINDING_SCHEMA_VERSION,
+    EvalConfigRef,
+    EvaluationBinding,
+    ExecutionEnvironmentFingerprint,
+    eval_config_reference,
+)
+from whetstone.experiment.candidate import (
+    CANDIDATE_IDENTITY_SCHEMA,
+    CANDIDATE_IDENTITY_SCHEMA_VERSION,
     Candidate,
     CandidateRef,
-    EvalConfigRef,
-    EvaluationIntent,
-    IdentityRef,
-    IntentOutcome,
-    IntentResolution,
-    OptimizationRun,
-    OptimizationStepRequest,
-    OptimizationStepResult,
-    OutputContract,
-    ProposalDraft,
-    ResolutionClass,
-    ResolutionDetail,
+    TemplateRenderContract,
+    TemplateRenderKind,
+    candidate_reference,
+)
+from whetstone.experiment.reward import (
     RewardPolicy,
     RewardTerm,
+)
+from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
+    OPTIMIZATION_RUN_SCHEMA,
+    OPTIMIZATION_RUN_SCHEMA_VERSION,
+    STEP_RESULT_SCHEMA,
+    BudgetState,
+    EvaluationIntent,
+    IntentOutcome,
+    IntentResolution,
+    OptimizationProposal,
+    OptimizationResult,
+    OptimizationRun,
+    OptimizationStepRequest,
+    OptimizationStepRequestRef,
+    OptimizationStepResult,
+    OptimizationStepResultRef,
+    OutputContract,
+    ResolutionClass,
+    ResolutionDetail,
     StepKind,
     StepMode,
     StepStatus,
-    TemplateRenderContract,
-    TemplateRenderKind,
-    TerminalFailure,
+    optimization_run_reference,
+    step_request_reference,
+    step_result_reference,
+)
+from whetstone.optimization.proposal.mutation import candidate_from_draft
+from whetstone.optimization.proposal.proposer import ProposalDraft
+from whetstone.optimization.tools.contracts import (
     ToolCall,
     ToolCapacityScope,
     ToolDefinitionRef,
     ToolRefusal,
     ToolResult,
-    TypedRef,
-    candidate_from_draft,
-    candidate_reference,
-    canonical_json_equal,
-    compute_identity_hash,
-    eval_config_reference,
-    optimization_run_reference,
     tool_call_reference,
+    tool_capacity_binding,
     tool_config_reference,
     tool_result_reference,
-    typed_ref_for_record,
 )
-from whetstone.optimization.schema import (
-    CANDIDATE_IDENTITY_SCHEMA,
-    CANDIDATE_IDENTITY_SCHEMA_VERSION,
-    EVALUATION_BINDING_SCHEMA,
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    OPTIMIZATION_RUN_SCHEMA,
-    OPTIMIZATION_RUN_SCHEMA_VERSION,
-    STEP_RESULT_SCHEMA,
-    EvaluationBinding,
-    ExecutionEnvironmentFingerprint,
-    OptimizationProposal,
-    OptimizationResult,
-    OptimizationStepRequestRef,
-    OptimizationStepResultRef,
-    step_request_reference,
-    step_result_reference,
-)
-from whetstone.optimization.tools import tool_capacity_binding
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,

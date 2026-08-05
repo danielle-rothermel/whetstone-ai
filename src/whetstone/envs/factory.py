@@ -6,7 +6,7 @@ value: the Rollout Definition graph, the Initial (naive) and reference
 Evaluation Procedure Config identity), and the Reward Policy. It is the
 single entry point for constructing a family contract. The
 internal-eval loop that drives a candidate through an injected transport
-lives in :mod:`whetstone.envs.internal_eval`.
+lives in :mod:`whetstone.evaluation.drivers.internal`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import Protocol
 
 from dr_providers import ProviderCallConfig
 
-from whetstone.code_eval.aggregate import CompletenessPolicy
 from whetstone.envs.procedure import env_procedure_config
 from whetstone.envs.registry import DEFAULT_REPEATS, env_spec
 from whetstone.envs.reward import build_reward_policy
@@ -30,8 +29,9 @@ from whetstone.envs.sampling import (
     EnvEvalConfigs,
     build_eval_configs,
 )
-from whetstone.optimization.reward import RewardPolicy
-from whetstone.optimization.schema import Candidate
+from whetstone.evaluation.code.aggregate import CompletenessPolicy
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.reward import RewardPolicy
 
 
 class RolloutDefinitionLike(Protocol):

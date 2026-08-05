@@ -9,36 +9,38 @@ import pytest
 from dr_store import ObjectNotFoundError
 from pydantic import ValidationError
 
-from whetstone.optimization import (
-    EVALUATION_EVIDENCE_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA,
-    REWARD_SCHEMA,
-    AdapterOutput,
-    BudgetDelta,
-    Candidate,
-    EvaluationIntent,
-    IntentOutcome,
-    IntentResolution,
-    ReplayPolicy,
-    RuntimeToolHandle,
-    StepMode,
-    StepStatus,
-    TerminalFailure,
-    TypedRef,
-    candidate_reference,
-    step_result_reference,
-    typed_ref_for_record,
-)
-from whetstone.optimization.effect_authority import (
+from whetstone.core.effects.authority import (
     AcquireOutcome,
     EffectAuthority,
 )
-from whetstone.optimization.harness import (
-    ADAPTER_CHECKPOINT_SCHEMA,
-    INTENT_EFFECT_KEY_PREFIX,
+from whetstone.core.effects.models import ReplayPolicy
+from whetstone.core.identity import (
+    ImmutableJsonObject,
+    TerminalFailure,
+    TypedRef,
+    typed_ref_for_record,
 )
-from whetstone.optimization.identity import ImmutableJsonObject
-from whetstone.optimization.schema import eval_config_reference
+from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
+from whetstone.experiment.binding import eval_config_reference
+from whetstone.experiment.candidate import (
+    Candidate,
+    candidate_reference,
+)
+from whetstone.experiment.reward import REWARD_SCHEMA
+from whetstone.optimization.adapters import AdapterOutput
+from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA,
+    BudgetDelta,
+    EvaluationIntent,
+    IntentOutcome,
+    IntentResolution,
+    StepMode,
+    StepStatus,
+    step_result_reference,
+)
+from whetstone.optimization.harness import INTENT_EFFECT_KEY_PREFIX
+from whetstone.optimization.run_store import ADAPTER_CHECKPOINT_SCHEMA
+from whetstone.optimization.tools.contracts import RuntimeToolHandle
 
 from .sqlite_time import wait_for_sqlite_authority_after
 from .support import (

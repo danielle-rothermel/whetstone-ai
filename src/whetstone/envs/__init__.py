@@ -12,16 +12,12 @@ do not live in whetstone-envs.
 The single cross-env entry point is
 :func:`~whetstone.envs.factory.build_env_experiment`; the transport-injected
 internal-eval loop is
-:func:`~whetstone.envs.internal_eval.run_internal_eval`.
+:func:`~whetstone.evaluation.drivers.internal.run_internal_eval`.
 """
 
 from __future__ import annotations
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
-from whetstone.envs.internal_eval import (
-    InternalEvalResult,
-    run_internal_eval,
-)
 from whetstone.envs.oracle_operator import (
     ENV_EXACT_MATCH_NAME,
     ENV_EXACT_MATCH_UNIT,
@@ -48,6 +44,10 @@ from whetstone.envs.sampling import (
     build_eval_configs,
 )
 from whetstone.envs.task import EnvTask
+from whetstone.evaluation.drivers.internal import (
+    InternalEvalResult,
+    run_internal_eval,
+)
 
 __all__ = [
     "ENV_EXACT_MATCH_NAME",

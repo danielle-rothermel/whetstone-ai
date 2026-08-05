@@ -37,13 +37,6 @@ from whetstone.envs.ed1 import (
     validate_ed1_body,
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-from whetstone.envs.ed1_eval import (
-    Ed1PartialPayload,
-    Ed1RowOutcome,
-    Ed1RowRequest,
-    drive_ed1_row,
-    run_ed1_eval,
-)
 from whetstone.envs.ed1_scoring import score_ed1_submission
 from whetstone.envs.encdec_rollout import (
     DECODER_NODE_ID,
@@ -52,12 +45,17 @@ from whetstone.envs.encdec_rollout import (
     build_encdec_rollout_definition,
     encdec_graph_definition,
 )
-from whetstone.envs.internal_eval import (
-    ExecutedRowState,
-    _llm_component_step,
-)
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness
+from whetstone.evaluation.drivers.ed1 import (
+    Ed1PartialPayload,
+    Ed1RowOutcome,
+    Ed1RowRequest,
+    drive_ed1_row,
+    run_ed1_eval,
+)
+from whetstone.evaluation.drivers.internal import _llm_component_step
+from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
@@ -65,7 +63,7 @@ from whetstone.execution.fanout import (
 )
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
 def _tasks(limit: int = 3):
@@ -522,7 +520,7 @@ def test_ed1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.ed1_eval.index_partial_records",
+        "whetstone.evaluation.drivers.ed1.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
@@ -855,7 +853,8 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.envs.ed1_eval.run_call_pool", crash_after_ordinal_zero
+        "whetstone.evaluation.drivers.ed1.run_call_pool",
+        crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
         run_ed1_eval(
@@ -920,7 +919,9 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
             guard_timeouts=len(specs),
         )
 
-    monkeypatch.setattr("whetstone.envs.ed1_eval.run_call_pool", timeout_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.ed1.run_call_pool", timeout_pool
+    )
     run_ed1_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
@@ -981,7 +982,9 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
         )
 
     fresh_log = PartialLog(path=tmp_path / "ed1-deadline.partial.jsonl")
-    monkeypatch.setattr("whetstone.envs.ed1_eval.run_call_pool", deadline_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.ed1.run_call_pool", deadline_pool
+    )
     missing = run_ed1_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),

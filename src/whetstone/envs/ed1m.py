@@ -44,7 +44,7 @@ from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 from whetstone.envs.encdec_rollout import build_encdec_rollout_definition
 from whetstone.envs.factory import EnvEvalConfigs
 from whetstone.envs.sampling import Completeness
-from whetstone.optimization.reward import (
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     RewardPolicy,
     RewardTerm,

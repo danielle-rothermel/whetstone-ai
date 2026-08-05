@@ -296,12 +296,12 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
         process_row_job_factory,
     )
     from whetstone.envs.ed1 import ed1_initial_candidate
-    from whetstone.envs.ed1_eval import run_ed1_eval
     from whetstone.envs.ed1m import (
         ED1M_FIDELITY_NAME,
         build_ed1m_experiment,
     )
-    from whetstone.optimization.mutation import MUTATION_FIELD
+    from whetstone.evaluation.drivers.ed1 import run_ed1_eval
+    from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
     experiment = build_ed1m_experiment(
         artifact_dir=mutant_dataset_dir,
