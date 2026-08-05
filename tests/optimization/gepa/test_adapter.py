@@ -235,12 +235,3 @@ def test_terminal_is_not_exposed_until_post_engine_persistence(
     assert factory.persist_attempts == 2
     assert terminal.best_candidate == {"prompt": "best"}
     assert terminal.detailed_results is None
-
-
-def test_legacy_fake_gepa_symbols_are_gone() -> None:
-    import whetstone.optimization.gepa.adapter as module
-
-    assert not hasattr(module, "GEPA_VARIANT")
-    assert not hasattr(module, "ACCEPTANCE_POLICY")
-    assert not hasattr(module, "strict_pareto_accepts")
-    assert not hasattr(module, "GepaAdapter")

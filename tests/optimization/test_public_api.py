@@ -33,38 +33,112 @@ def test_cross_boundary_contracts_have_canonical_owners() -> None:
     )
 
 
-def test_former_cross_boundary_exports_are_absent() -> None:
-    assert (
-        not {
-            "Candidate",
-            "CandidateRef",
-            "EvalConfigRef",
-            "EvaluationBinding",
-            "TemplateRenderContract",
-            "candidate_reference",
-            "EVALUATION_EVIDENCE_SCHEMA",
-            "EVALUATION_FAILURE_SCHEMA",
-        }
-        & vars(contracts).keys()
-    )
-    assert (
-        not {
-            "EVALUATION_EVIDENCE_SCHEMA",
-            "EVALUATION_FAILURE_SCHEMA",
-            "REWARD_SCHEMA",
-            "ROLLOUT_AGGREGATE_SCHEMA",
-        }
-        & vars(evaluation_schema).keys()
-    )
-    assert not hasattr(official, "TypedRef")
-    assert (
-        not {
-            "EVALUATION_EVIDENCE_SCHEMA",
-            "EVALUATION_FAILURE_SCHEMA",
-            "REWARD_SCHEMA",
-        }
-        & vars(miprov2_study).keys()
-    )
+def test_boundary_modules_publish_exact_owned_exports() -> None:
+    assert set(contracts.__all__) == {
+        "INTENT_RESOLUTION_SCHEMA",
+        "INTENT_RESOLUTION_SCHEMA_VERSION",
+        "OPTIMIZATION_RESULT_SCHEMA",
+        "OPTIMIZATION_RUN_SCHEMA",
+        "OPTIMIZATION_RUN_SCHEMA_VERSION",
+        "STEP_REQUEST_SCHEMA",
+        "STEP_RESULT_SCHEMA",
+        "BudgetDelta",
+        "BudgetState",
+        "EvaluationIntent",
+        "IntentOutcome",
+        "IntentResolution",
+        "OptimizationProposal",
+        "OptimizationResult",
+        "OptimizationRun",
+        "OptimizationRunRef",
+        "OptimizationStepRequest",
+        "OptimizationStepRequestRef",
+        "OptimizationStepResult",
+        "OptimizationStepResultRef",
+        "OutputContract",
+        "ResolutionClass",
+        "ResolutionDetail",
+        "StepKind",
+        "StepMode",
+        "StepStatus",
+        "ToolEvidence",
+        "optimization_result_reference",
+        "optimization_run_reference",
+        "step_request_reference",
+        "step_result_reference",
+    }
+    assert set(evaluation_schema.__all__) == {
+        "EVALUATION_COMPONENT_TRACES_SCHEMA",
+        "EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION",
+        "EVALUATION_EVIDENCE_SCHEMA_VERSION",
+        "EVALUATION_OUTPUTS_SCHEMA",
+        "EVALUATION_OUTPUTS_SCHEMA_VERSION",
+        "CacheEvidence",
+        "EvaluationComponentTraceRow",
+        "EvaluationComponentTraces",
+        "EvaluationComponentTracesRef",
+        "EvaluationEvidence",
+        "EvaluationEvidenceRef",
+        "EvaluationFailureEvidence",
+        "EvaluationFailureEvidenceRef",
+        "EvaluationOutputRow",
+        "EvaluationOutputsRecord",
+        "RowAccounting",
+    }
+    assert set(official.__all__) == {
+        "OFFICIAL_EVALUATION_RECORD_SCHEMA",
+        "OFFICIAL_PLOT_MANIFEST_SCHEMA",
+        "SELECTION_EVIDENCE_SCHEMA",
+        "CompletenessDecision",
+        "EvaluationAuthority",
+        "MissingPlannedKeysError",
+        "OfficialAggregationAccount",
+        "OfficialEvaluationRecord",
+        "OfficialFailurePolicy",
+        "OfficialPlotManifest",
+        "PlannedKeyResult",
+        "RecordRevision",
+        "RelabelingRefusedError",
+        "SelectedRecordMapping",
+        "SelectedRecordMappingEntry",
+        "UnauthorizedOfficialWriteError",
+        "account_planned_keys",
+        "official_evaluation_record_reference",
+        "official_plot_manifest_reference",
+        "store_official_evaluation_record",
+        "store_official_plot_manifest",
+        "store_selection_evidence",
+    }
+    assert set(miprov2_study.__all__) == {
+        "MIPROV2_ALGORITHM_VERSION",
+        "MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA",
+        "MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION",
+        "MIPROV2_CANDIDATE_PROGRAM_SCHEMA",
+        "MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION",
+        "MIPROV2_CANDIDATE_RENDERING_SCHEMA",
+        "MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION",
+        "MIPROV2_REFERENCE_COMMIT",
+        "MIPROV2_STUDY_SCHEMA",
+        "MIPROV2_STUDY_SCHEMA_VERSION",
+        "OPTUNA_VERSION",
+        "BaselineObservation",
+        "FullEvaluation",
+        "Miprov2CandidateAssemblyBinding",
+        "Miprov2CandidateRendering",
+        "Miprov2ComponentSelection",
+        "Miprov2EvaluationObservation",
+        "Miprov2ParameterSpace",
+        "Miprov2Study",
+        "Miprov2StudySchedule",
+        "Promotion",
+        "PromotionCandidate",
+        "SampleObservation",
+        "StudySuggestion",
+        "StudyTranscript",
+        "StudyTranscriptMismatch",
+        "TrialParams",
+        "select_promotion",
+    }
 
 
 def test_graph_validation_protocol_stays_optimization_owned() -> None:

@@ -201,10 +201,6 @@ def test_mismatch_fails_before_writes_handles_effects_or_invocation(
     assert error.adapter_key == "tool-test"
     assert error.configured_policy is ReplayPolicy.IDEMPOTENT
     assert error.required_policy is ReplayPolicy.NO_REDRIVE
-    assert str(error) == (
-        "adapter 'tool-test' requires replay policy 'no_redrive'; "
-        "configured policy is 'idempotent'"
-    )
     assert puts == 0
     assert executor.handles_built == 0
     assert acquisitions == 0

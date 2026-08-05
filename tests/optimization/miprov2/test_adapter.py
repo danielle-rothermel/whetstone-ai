@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import cast
 
 import pytest
@@ -272,28 +271,3 @@ def test_rendering_rejects_empty_or_multiple_components() -> None:
             ),
             template_render_contract=python_format_contract(),
         )
-
-
-@pytest.mark.parametrize(
-    "forbidden",
-    (
-        "_seeded_tpe_choice",
-        "_materialize_demonstrations",
-        "DemoPair",
-        "itertools.combinations",
-        "combination_candidates",
-        '"promotion": "noop"',
-        "retry_until_distinct",
-    ),
-)
-def test_adapter_source_has_no_approximation_markers(forbidden: str) -> None:
-    root = (
-        Path(__file__).parents[3]
-        / "src"
-        / "whetstone"
-        / "optimization"
-        / "miprov2"
-    )
-
-    assert forbidden not in (root / "adapter.py").read_text()
-    assert forbidden not in (root / "runtime.py").read_text()

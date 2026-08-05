@@ -141,7 +141,9 @@ def test_parent_replay_recreates_adapter_at_ordinal_zero(
     assert observed_ordinals == [0, 0]
     assert factory.create_calls == factory.persist_calls == 2
     assert len(set(_ReplayDbos.workflow_ids)) == 1
-    assert _ReplayDbos.workflow_ids[0].endswith(request.identity_hash())
+    assert _ReplayDbos.workflow_ids[0] == (
+        f"whetstone-gepa-run-{request.identity_hash()}"
+    )
 
 
 def test_parent_refuses_registered_factory_identity_drift() -> None:

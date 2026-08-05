@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from dr_providers import FailureClass, ProviderTransportOutcome
 
+import whetstone.provider.driver as provider_driver
 from tests.provider import support as s
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.classification import (
@@ -145,7 +146,7 @@ class TestExhaustionIsExpectedOutput:
 
 
 class TestReplayDeterminism:
-    def test_same_recorded_outcomes_produce_identical_sequence(self) -> None:
+    def test_same_recorded_outcomes_produce_same_stable_payload(self) -> None:
         outcomes = [
             s.failure_outcome(failure_class=FailureClass.TRANSIENT),
             s.failure_outcome(failure_class=FailureClass.RATE_LIMITED),
@@ -153,10 +154,10 @@ class TestReplayDeterminism:
         ]
         first, _, _ = _run(outcomes=list(outcomes))
         second, _, _ = _run(outcomes=list(outcomes))
-        # Byte-identical stable serialization of the whole Result.
+        # Stable payload semantics for the complete Result mapping.
         assert first.to_stable_dict() == second.to_stable_dict()
 
-    def test_attempt_sequence_is_byte_identical(self) -> None:
+    def test_attempt_sequence_has_same_stable_payload(self) -> None:
         outcomes = [
             s.failure_outcome(failure_class=FailureClass.TRANSIENT),
             s.response_outcome(text="x"),
@@ -179,8 +180,9 @@ class TestReplayDeterminism:
 
 
 class TestInjectableHooks:
-    def test_default_sleep_is_noop_no_blocking(self) -> None:
-        # Without a sleep hook the pure driver never blocks (no wall clock).
+    def test_default_sleep_hook_receives_backoff(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         request = s.build_request()
         transport_policy = s.build_transport_policy()
         policy = s.build_execution_policy(
@@ -194,14 +196,20 @@ class TestInjectableHooks:
                 s.response_outcome(text="ok"),
             ],
         )
-        # No clock, no sleep injected -> uses real monotonic; must not hang.
-        result = run_provider_call(
+        default_sleep_delays: list[float] = []
+        monkeypatch.setattr(
+            provider_driver, "_no_sleep", default_sleep_delays.append
+        )
+
+        result = provider_driver.run_provider_call(
             request=request,
             policy=policy,
             transport=transport,
             logical_call_id="lc-x",
+            clock=s.FakeClock(),
         )
         assert result.succeeded
+        assert default_sleep_delays == [1.0]
 
     def test_timing_recorded_from_injected_clock(self) -> None:
         result, _, _ = _run(

@@ -8,11 +8,14 @@ key/artifact/resolver, Aggregation Output).
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
 from dataclasses import is_dataclass
 
 import dr_code.eval as dr_eval
 import dr_code.trace as dr_trace
 
+import whetstone.evaluation.code as code_package
 from whetstone.evaluation.code import (
     BootstrapCI,
     CompletenessPolicy,
@@ -27,13 +30,10 @@ from whetstone.evaluation.code import (
     VarianceDecomposition,
     compressed_description_length_fact,
     compression_ratio_score,
-    compression_selection,
-    scoring,
     select_compression_reference,
     submission,
     submission_text_artifact,
 )
-from whetstone.evaluation.code import aggregate as agg_module
 
 from .support import generation, operator_lineage
 
@@ -66,24 +66,31 @@ def test_compression_selection_returns_generic_types() -> None:
     assert type(artifact) is dr_eval.CompressionReferenceArtifact
 
 
-def test_no_module_redefines_a_dr_code_kernel_type() -> None:
-    dr_code_names = set(dr_eval.__all__) | {"TextArtifact"}
-    for module in (
-        submission,
-        scoring,
-        compression_selection,
-        agg_module,
-    ):
-        for name in getattr(module, "__all__", []):
-            # A Whetstone export may share a *concept* but must not shadow a
-            # dr-code kernel type name with a new class.
-            if name in dr_code_names:
-                exported = getattr(module, name)
-                # If the name collides, it must be the dr-code object itself
-                # (re-exported), not a Whetstone redefinition.
-                assert getattr(exported, "__module__", "").startswith(
-                    "dr_code"
-                ), f"{module.__name__}.{name} shadows a dr-code type"
+def test_no_package_module_defines_a_dr_code_kernel_type() -> None:
+    dr_code_type_names = {
+        name
+        for name in dr_eval.__all__
+        if isinstance(getattr(dr_eval, name), type)
+    } | {"TextArtifact"}
+    modules = (
+        code_package,
+        *(
+            importlib.import_module(module_info.name)
+            for module_info in pkgutil.walk_packages(
+                code_package.__path__, prefix=f"{code_package.__name__}."
+            )
+        ),
+    )
+    duplicate_definitions = {
+        f"{module.__name__}.{name}"
+        for module in modules
+        for name, value in vars(module).items()
+        if name in dr_code_type_names
+        and isinstance(value, type)
+        and value.__module__ == module.__name__
+    }
+
+    assert duplicate_definitions == set()
 
 
 def test_submission_generation_is_whetstone_owned() -> None:

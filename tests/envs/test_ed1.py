@@ -21,6 +21,7 @@ from tests.envs.support import (
 from tests.provider.support import build_evidence, failure_outcome
 from whetstone.envs.ed1 import (
     DECODER_TEMPLATE,
+    ED1_BLENDED_REWARD_NAME,
     ED1_CANONICAL_MODEL,
     ED1_DATASET_REVISION,
     ED1_ENV_NAME,
@@ -618,14 +619,39 @@ def test_unblended_and_blended_agree_on_refusing_incompleteness() -> None:
         _evaluate(outcome_for=_one_failed_row, apply_reward=True)
 
 
-def test_blended_reward_is_produced_when_the_evaluation_is_complete() -> None:
-    # The gate must not block the healthy path: every row present -> a Reward.
+def test_complete_evaluation_produces_exact_blended_reward() -> None:
+    blend = BoundedCompressionMetricConfig(weight=0.1)
     _, result = _evaluate(
         apply_reward=True,
-        blend_config=BoundedCompressionMetricConfig(weight=0.1),
+        blend_config=blend,
     )
-    assert result.reward is not None
-    assert result.primary_aggregate.aggregation_output.value is not None
+    primary = 1.0
+    compression_ratio = 0.5
+    compression_score = (blend.max_compression_ratio - compression_ratio) / (
+        blend.max_compression_ratio - blend.min_compression_ratio
+    )
+    expected_value = primary * (
+        (1.0 - blend.weight) + blend.weight * compression_score
+    )
+
+    reward = result.reward
+    assert reward is not None
+    assert result.per_task_primary == (1.0, 1.0, 1.0)
+    assert result.per_task_compression == (0.5, 0.5, 0.5)
+    assert reward.value == pytest.approx(expected_value)
+    assert reward.reward_name == "reward"
+    assert reward.reward_policy.policy_name == (
+        "whetstone.env.ed1.blended_reward|"
+        "primary_score_with_bounded_compression_penalty|"
+        "w=0.1|min=0.01|max=4"
+    )
+    assert [citation.name for citation in reward.input_citations] == [
+        ED1_BLENDED_REWARD_NAME
+    ]
+    assert reward.evidence_refs == (
+        result.primary_aggregate.record_ref(),
+        result.compression_aggregate.record_ref(),
+    )
 
 
 def test_advertised_reward_policy_matches_the_policy_applied() -> None:

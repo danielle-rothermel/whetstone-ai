@@ -301,7 +301,6 @@ def test_multi_component_registry_and_prompt_order_snapshot() -> None:
     assert services.binding.prompt_format_identity_hash == (
         descriptor.identity_hash()
     )
-    assert services.binding.identity_hash() == services.binding.identity_hash()
     assert "```\nBe concise.\n```" in rendered.text
     assert "- Component: system_instruction" in rendered.text
     assert "- Allowed placeholders: (none)" in rendered.text

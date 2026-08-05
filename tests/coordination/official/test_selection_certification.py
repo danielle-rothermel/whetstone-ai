@@ -9,7 +9,8 @@ on this path.
 
 from __future__ import annotations
 
-from dr_store import MemoryBackend, ObjectStore
+import pytest
+from dr_store import MemoryBackend, ObjectReference, ObjectStore, PutStatus
 
 from tests.experiment.support import (
     SELECTION_QUALITY_AGGREGATE_NAME,
@@ -25,6 +26,7 @@ from whetstone.coordination.official import (
 from whetstone.coordination.official.selection import (
     ObjectiveSpec,
     SelectionCandidate,
+    SelectionEvidence,
     select_official,
 )
 from whetstone.core.identity import TypedRef
@@ -86,7 +88,7 @@ def _compression(graph_hash: str, value: float) -> RolloutAggregate:
     )
 
 
-def test_selection_evidence_certified_and_persisted() -> None:
+def _selection_evidence() -> SelectionEvidence:
     candidates = [
         SelectionCandidate(
             candidate_id="graph-a",
@@ -105,12 +107,20 @@ def test_selection_evidence_certified_and_persisted() -> None:
             },
         ),
     ]
-    evidence = select_official(candidates, objective_specs=SPECS)
+    return select_official(candidates, objective_specs=SPECS)
+
+
+def test_selection_evidence_certified_and_persisted() -> None:
+    evidence = _selection_evidence()
     assert evidence.selected_candidate_id == "graph-a"
 
     # Persist the selection evidence immutably; reference it from the record.
     store = ObjectStore(MemoryBackend())
     evidence_ref = store_selection_evidence(store, evidence)
+    assert evidence_ref == ObjectReference.for_record(
+        "whetstone.selection_evidence", evidence.record_content()
+    )
+    assert store.get(evidence_ref) == evidence.record_content()
 
     authority = EvaluationAuthority(name="whetstone-official")
     binding = authority.issue_official_binding(
@@ -135,6 +145,10 @@ def test_selection_evidence_certified_and_persisted() -> None:
         )
     )
 
+    selection_evidence_ref = TypedRef(
+        schema_name=evidence_ref.schema,
+        content_hash=evidence_ref.content_hash,
+    )
     record = authority.certify(
         evaluation_binding=binding,
         planned_results=(
@@ -153,13 +167,30 @@ def test_selection_evidence_certified_and_persisted() -> None:
             ),
         ),
         selected_record_mapping=mapping,
-        selection_evidence_ref=TypedRef(
-            schema_name=evidence_ref.schema,
-            content_hash=evidence_ref.content_hash,
-        ),
+        selection_evidence_ref=selection_evidence_ref,
     )
     assert record.completeness.certified
-    assert record.selection_evidence_ref is not None
-    assert (
-        record.selection_evidence_ref.content_hash == evidence_ref.content_hash
-    )
+    assert record.selection_evidence_ref == selection_evidence_ref
+
+
+def test_selection_store_rejects_a_misreported_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence = _selection_evidence()
+    store = ObjectStore(MemoryBackend())
+
+    def misreport_reference(
+        schema: str, record: object
+    ) -> tuple[ObjectReference, PutStatus]:
+        del record
+        return ObjectReference(schema=schema, content_hash="0" * 64), (
+            PutStatus.STORED
+        )
+
+    monkeypatch.setattr(store, "put", misreport_reference)
+
+    with pytest.raises(
+        ValueError,
+        match="reference does not match the record's own content-addressed",
+    ):
+        store_selection_evidence(store, evidence)

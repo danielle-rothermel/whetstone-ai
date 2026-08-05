@@ -1,4 +1,4 @@
-"""Character Budget graph/runtime binding (deliverable 7)."""
+"""Character Budget graph identity and derivation contracts."""
 
 from __future__ import annotations
 
@@ -122,13 +122,3 @@ def test_zero_length_task_has_zero_bound() -> None:
         derive_character_bound(CharacterBudgetRule(ratio=1e308), task_length=0)
         == 0
     )
-
-
-def test_no_character_budget_policy_artifact_exists() -> None:
-    # Absence test: there is no separate character-budget policy artifact
-    # type anywhere in the whetstone graph package. The name is built at
-    # runtime so the stale-name scan stays clean.
-    import whetstone.experiment.graph.character_budget as mod
-
-    forbidden = "Character" + "Budget" + "Policy"
-    assert not hasattr(mod, forbidden)

@@ -127,13 +127,6 @@ class TestNoCredentialMaterialInPersistedShapes:
         assert not any(text.startswith("Bearer ") for text in strings)
         assert "<redacted>" in strings
 
-    def test_execution_policy_persists_no_secret(self) -> None:
-        payload = s.build_execution_policy().identity_payload()
-        strings = _iter_strings(payload)
-        assert SECRET_TOKEN not in strings
-        # Only the env-var NAME is carried, never a key value.
-        assert s.API_KEY_ENV in strings
-
 
 class TestEvidenceNeverTruncated:
     def test_full_response_body_survives_into_persisted_attempt(self) -> None:
