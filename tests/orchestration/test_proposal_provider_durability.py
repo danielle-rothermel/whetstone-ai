@@ -677,4 +677,4 @@ def test_real_dbos_workflow_replays_completed_proposal() -> None:
         assert first == replay == "durable improvement"
         assert len(recording.served) == 1
     finally:
-        DBOS.destroy(destroy_registry=True)
+        DBOS.destroy()

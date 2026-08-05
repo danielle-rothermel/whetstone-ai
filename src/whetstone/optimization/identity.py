@@ -244,6 +244,16 @@ class ImmutableJsonObject(Mapping[str, ImmutableJsonValue]):
     def __repr__(self) -> str:
         return f"{type(self).__name__}({dict(self)!r})"
 
+    def __reduce__(
+        self,
+    ) -> tuple[type[ImmutableJsonObject], tuple[dict[str, Any]]]:
+        """Pickle through the validating constructor.
+
+        Slot state holds a ``MappingProxyType`` that pickle cannot copy, and
+        ``__setattr__`` refuses restoration, so rebuild from ordinary JSON.
+        """
+        return (type(self), (self.to_json(),))
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, (dict, ImmutableJsonObject)):
             return False
