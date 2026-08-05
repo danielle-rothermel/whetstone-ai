@@ -760,6 +760,22 @@ def test_exact_control_and_transport_are_verified_before_effects() -> None:
     assert wrong_policy.calls == []
 
 
+def test_round_index_must_match_step_index_before_any_spend() -> None:
+    control = _control(depth=2)
+    adapter, transport, _ = _adapter(
+        {(SEED_PROPOSAL, 0): ("x {input}", "y {input}")},
+        control=control,
+    )
+    mismatched = _request(control, step_index=1).model_copy(
+        update={"hyperparameters": control.step_hyperparameters(iteration=0)}
+    )
+
+    with pytest.raises(ValueError, match="must match the durable step index"):
+        adapter.invoke(mismatched, ())
+
+    assert transport.calls == []
+
+
 def test_render_contract_rejection_and_underfill_are_terminal_failures() -> (
     None
 ):

@@ -524,7 +524,20 @@ class CoproDriver:
         initial_candidate: Candidate,
         attempts: tuple[CoproAttempt, ...],
     ) -> CoproState:
-        """Reconstruct state fail-closed for fresh or restarted controllers."""
+        """Rebuild state by folding whole rounds of measured occurrences.
+
+        Folding validates that the history is one exact run's contiguous
+        occurrence sequence: whole breadth-sized rounds, contiguous occurrence
+        ordinals in evaluation order, unique intent IDs, and one shared run,
+        Evaluation Binding, and Reward Policy. Each occurrence must also leave
+        every payload field outside ``user_prompt_template`` equal to the
+        supplied initial candidate.
+
+        The initial candidate itself is the controller's input, not an anchored
+        fact: this layer never checks it against the seed round's template or
+        base reference. A controller that owns restarts is responsible for
+        supplying the same initial candidate the run began with.
+        """
 
         if len(attempts) % self.config.breadth:
             raise ValueError(
@@ -801,6 +814,10 @@ class CoproAdapter:
             initial_candidate=initial,
             attempts=history,
         )
+        if iteration != request.step_index:
+            raise ValueError(
+                "COPRO round_index must match the durable step index"
+            )
         if iteration != state.completed_rounds:
             raise ValueError(
                 "COPRO round_index does not match durable measured history"
