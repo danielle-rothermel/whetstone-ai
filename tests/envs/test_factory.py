@@ -8,6 +8,9 @@ Reward -- per env, with no live paid call.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -767,16 +770,87 @@ def test_internal_v2_request_hash_is_pinned() -> None:
     assert requests[0].request_identity == (
         "f40bb1bb5488c3165fa714f87498291ab2a6abc487434a7d6b2967cc978ff583"
     )
-    provider = requests[0].model_dump(mode="json")["provider_call_config"]
-    definition = provider["definition"]
-    constraints = definition["constraints"]
-    assert definition["required_controls"] == sorted(
-        definition["required_controls"]
+
+
+_CROSS_SEED_REQUEST_SCRIPT = """
+import json
+import sys
+
+sys.path.insert(0, {repo_root!r})
+
+from tests.envs.support import execution_policy
+from tests.envs.test_factory import (
+    _binding,
+    _correct_reply,
+    _internal_jobs,
+    _tiny_experiment,
+)
+from whetstone.envs.internal_eval import run_internal_eval
+
+experiment = _tiny_experiment("c18")
+sampling = experiment.eval_configs.internal
+base = _internal_jobs(
+    experiment, _correct_reply("c18", sampling.instances)
+)
+captured = []
+
+
+def capture(request):
+    captured.append(request)
+    return base(request)
+
+
+run_internal_eval(
+    experiment,
+    candidate=experiment.initial_candidate,
+    sampling=sampling,
+    execution_policy=execution_policy(),
+    row_job_factory=capture,
+    evaluation_binding=_binding(experiment),
+)
+
+request = captured[0]
+sys.stdout.write(
+    json.dumps(
+        request.model_dump(mode="json"),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
-    assert definition["extension_keys"] == sorted(definition["extension_keys"])
-    assert constraints["supported_controls"] == sorted(
-        constraints["supported_controls"]
-    )
+)
+sys.stdout.write("\\n")
+sys.stdout.write(request.request_identity)
+"""
+
+
+def test_internal_row_request_json_is_stable_across_python_hash_seeds() -> (
+    None
+):
+    """The submitted row JSON and its identity must not vary with hash seed.
+
+    ``dr_providers`` models three provider-definition fields as frozensets and
+    serializes them in canonical order. This asserts the consumer boundary: a
+    complete row request submitted to a worker is byte-identical, and hashes
+    identically, under fresh interpreters with different hash seeds.
+    """
+    repo_root = str(Path(__file__).resolve().parents[2])
+    script = _CROSS_SEED_REQUEST_SCRIPT.format(repo_root=repo_root)
+    outputs: list[str] = []
+    for seed in ("0", "1", "42"):
+        environment = dict(os.environ)
+        environment["PYTHONHASHSEED"] = seed
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert completed.returncode == 0, completed.stderr
+        outputs.append(completed.stdout)
+
+    assert len(set(outputs)) == 1, outputs
 
 
 @pytest.mark.parametrize(

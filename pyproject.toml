@@ -9,8 +9,8 @@ requires-python = ">=3.13, <3.15"
 dependencies = [
     "dr-code",
     "dr-graph>=0.1.0,<0.2",
-    "dr-providers>=0.2.0,<0.3",
-    "dr-serialize>=0.1.0,<0.2",
+    "dr-providers>=0.2.1,<0.3",
+    "dr-serialize>=0.1.1,<0.2",
     "dr-store>=0.1.0,<0.2",
     "numpy>=2.5.1",
     "psycopg[binary]>=3.3.4",

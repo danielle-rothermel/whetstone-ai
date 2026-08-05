@@ -43,7 +43,6 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
-    field_serializer,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -642,38 +641,6 @@ def process_request_identity(model: BaseModel) -> str:
     return _process_payload_identity(model.model_dump(mode="json"))
 
 
-def _canonical_provider_call_config_payload(
-    config: ProviderCallConfig,
-) -> dict[str, object]:
-    """Serialize unordered provider-definition sets in canonical order.
-
-    The row identity binds the exact submitted JSON. ``dr_providers`` models
-    these three definition fields as frozensets, whose default JSON list order
-    varies with the interpreter hash seed. Sorting them here makes both the
-    submitted process payload and its identity stable across crash restarts.
-    """
-    payload = config.model_dump(mode="json")
-    definition = payload["definition"]
-    if not isinstance(definition, dict):
-        raise TypeError("provider definition payload must be an object")
-    constraints = definition["constraints"]
-    if not isinstance(constraints, dict):
-        raise TypeError("provider constraints payload must be an object")
-
-    for owner, field in (
-        (definition, "required_controls"),
-        (definition, "extension_keys"),
-        (constraints, "supported_controls"),
-    ):
-        values = owner[field]
-        if not isinstance(values, list) or not all(
-            isinstance(value, str) for value in values
-        ):
-            raise TypeError(f"provider {field} payload must be a string list")
-        owner[field] = sorted(values)
-    return payload
-
-
 def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
     """Validate one phase wall and convert it to an absolute deadline."""
     if max_wall_seconds is None:
@@ -727,12 +694,6 @@ class InternalRowRequest(BaseModel):
     cache_unit: str
     cache_root: str | None
     render_guard: bool
-
-    @field_serializer("provider_call_config")
-    def _serialize_provider_call_config(
-        self, config: ProviderCallConfig
-    ) -> dict[str, object]:
-        return _canonical_provider_call_config_payload(config)
 
     @property
     def request_identity(self) -> str:

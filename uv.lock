@@ -355,28 +355,28 @@ wheels = [
 
 [[package]]
 name = "dr-providers"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "httpx" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fd/74/1c3efe265811dbacde684c62be3d4d249f54662bc49af9fdb2bc3fc352db/dr_providers-0.2.0.tar.gz", hash = "sha256:840ccecb66c54c8023c1861a85e42a504b3f65fdc71e6dd84dbbfe4fc589817a", size = 39850, upload-time = "2026-07-24T10:12:17.47Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/d7/135cdac222dbe6832f1c3db0c3bd5223f0505dc90542db3602f672813c32/dr_providers-0.2.1.tar.gz", hash = "sha256:75c467cb2a55c3c08f898210b0e850ab38e8e106ebd2f71def7e837534ac2f78", size = 39936, upload-time = "2026-08-05T06:42:14.103Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/9b/fd7781b70d2120fc9cbd7d8e98d333c33c1117bdbc8c94aa514df7279534/dr_providers-0.2.0-py3-none-any.whl", hash = "sha256:f091fa76f98883ec42740d3fda3b3e77362c2047f0520aa68a8d150dea2203e9", size = 52571, upload-time = "2026-07-24T10:12:16.355Z" },
+    { url = "https://files.pythonhosted.org/packages/78/b5/1eced6614663d125d1c6a1854e7b068d1b23136da5647746f12319945171/dr_providers-0.2.1-py3-none-any.whl", hash = "sha256:16cb17eff0aa59583a08e483560b1419626e99b0366c838f01e061b3a474db60", size = 52766, upload-time = "2026-08-05T06:42:12.769Z" },
 ]
 
 [[package]]
 name = "dr-serialize"
-version = "0.1.0"
+version = "0.1.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/25/8d4cdf3d0cd3dc4f8540bef72ab853ef12d4e34536f3c6dbb5381d95fb54/dr_serialize-0.1.0.tar.gz", hash = "sha256:47863d076bc6a123dad5ff9f5e4005b5b69e2ddcc1824390bd71160d51d07bf5", size = 14532, upload-time = "2026-07-24T08:06:33.677Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/ef/973bda063b26269fcac29906a83ae02808bcc4a01ad5eb3a970b8ba2adf4/dr_serialize-0.1.1.tar.gz", hash = "sha256:4c718347a948023ceba5c1928db868616bd36254ae5d53d587eeb43304960cbd", size = 22095, upload-time = "2026-08-05T05:58:29.888Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/1d/a6faf68c5a93a332279cce55db5ce2f0aa992f7a4727541ef7f6204eaf9e/dr_serialize-0.1.0-py3-none-any.whl", hash = "sha256:b0e1110d5cf4fae346c04ad79b568c43c950e35cba71afb5af5f99f6262babc8", size = 18585, upload-time = "2026-07-24T08:06:32.512Z" },
+    { url = "https://files.pythonhosted.org/packages/13/3d/e4e82f30daec9f137fbe9349f66d271e6a919f07613b2e9dcd162f6d7e38/dr_serialize-0.1.1-py3-none-any.whl", hash = "sha256:3b9569cb6a304cde65b0a6c511a388229366b226b4110886c9fcef07993185ff", size = 27075, upload-time = "2026-08-05T05:58:28.558Z" },
 ]
 
 [[package]]
@@ -1924,8 +1924,8 @@ dev = [
 requires-dist = [
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=5810f30dede14094fcf1b8f1cce95d73a1055c84" },
     { name = "dr-graph", specifier = ">=0.1.0,<0.2" },
-    { name = "dr-providers", specifier = ">=0.2.0,<0.3" },
-    { name = "dr-serialize", specifier = ">=0.1.0,<0.2" },
+    { name = "dr-providers", specifier = ">=0.2.1,<0.3" },
+    { name = "dr-serialize", specifier = ">=0.1.1,<0.2" },
     { name = "dr-store", specifier = ">=0.1.0,<0.2" },
     { name = "numpy", specifier = ">=2.5.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },

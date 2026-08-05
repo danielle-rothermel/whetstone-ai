@@ -42,7 +42,6 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
-    field_serializer,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -79,7 +78,6 @@ from whetstone.envs.internal_eval import (
     ExecutedRowState,
     ProcessInstance,
     RolloutOutput,
-    _canonical_provider_call_config_payload,
     _llm_component_step,
     _llm_component_values,
     _process_payload_identity,
@@ -457,12 +455,6 @@ class Ed1RowRequest(BaseModel):
     cache_unit: str
     cache_root: str | None
     mutant_record: MutantRecord | None = None
-
-    @field_serializer("provider_call_config")
-    def _serialize_provider_call_config(
-        self, config: ProviderCallConfig
-    ) -> dict[str, object]:
-        return _canonical_provider_call_config_payload(config)
 
     @model_validator(mode="after")
     def _valid_mutant_binding(self) -> Ed1RowRequest:
