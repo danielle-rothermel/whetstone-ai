@@ -5,7 +5,7 @@ repos:
   - repo: local
     hooks:
       - id: ci-lint
-        name: CI lint (ruff + ty)
+        name: CI lint (ruff format + ruff check + ty)
         entry: bash scripts/ci/lint.sh
         language: system
         pass_filenames: false

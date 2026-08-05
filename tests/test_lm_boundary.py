@@ -2,8 +2,8 @@
 
 Wire mechanics (payload building, parsing, transport, classification)
 are tested in dr-providers; these cover whetstone's adapter surface:
-caller parameters → LlmRequest, LlmResponse → ProviderResult, and
-kernel failure translation.
+caller parameters -> Provider Call Request, Provider Transport Response ->
+ProviderResult, and kernel failure translation.
 """
 
 from __future__ import annotations
@@ -12,13 +12,14 @@ import pytest
 from dr_providers import (
     CostInfo,
     FailureClass,
-    LlmResponse,
-    LlmWarning,
     MessageRole,
     PromptMessage,
+    ProviderTransportResponse,
+    ProviderTransportWarning,
     RateLimitedProviderError,
     ReasoningEffort,
     ResponsesDiagnostics,
+    TokenUsage,
     build_payload,
     failure_record,
     openai_responses_config,
@@ -33,7 +34,7 @@ from whetstone.eval_failures import (
 )
 from whetstone.lm.boundary import (
     PlainPromptAdapter,
-    llm_request_from_parameters,
+    provider_call_request_from_parameters,
     provider_result_from_response,
     translate_provider_failure,
 )
@@ -56,51 +57,45 @@ class TestPlainPromptAdapter:
         assert messages[0].role is MessageRole.USER
 
 
-class TestLlmRequestFromParameters:
-    def test_maps_parameters(self) -> None:
-        request = llm_request_from_parameters(
+class TestProviderCallRequestFromParameters:
+    def test_maps_parameters_into_config_controls(self) -> None:
+        request = provider_call_request_from_parameters(
             config=openrouter_chat_config(model="m"),
-            messages=(
-                PromptMessage(role=MessageRole.USER, content="hi"),
-            ),
+            messages=(PromptMessage(role=MessageRole.USER, content="hi"),),
             parameters={
                 "temperature": 0.2,
                 "token_limit": 10,
                 "reasoning": "low",
                 "extra_body": {"a": 1},
             },
-            idempotency_key="attempt-1",
         )
-        assert request.temperature == 0.2
-        assert request.token_limit == 10
-        assert request.reasoning is ReasoningEffort.LOW
-        assert request.extra_body == {"a": 1}
-        assert request.idempotency_key == "attempt-1"
+        controls = request.config.controls
+        assert controls.temperature == 0.2
+        assert controls.token_limit == 10
+        assert controls.reasoning is ReasoningEffort.LOW
+        assert request.config.extensions.extra_body == {"a": 1}
         payload = build_payload(request)
         assert payload["max_completion_tokens"] == 10
         assert payload["a"] == 1
 
     def test_rejects_unrecognized_reasoning_effort(self) -> None:
         with pytest.raises(ValueError, match="invalid reasoning effort"):
-            llm_request_from_parameters(
+            provider_call_request_from_parameters(
                 config=openrouter_chat_config(model="m"),
-                messages=(
-                    PromptMessage(role=MessageRole.USER, content="hi"),
-                ),
+                messages=(PromptMessage(role=MessageRole.USER, content="hi"),),
                 parameters={"reasoning": {"effort": "low"}},
             )
 
     def test_absent_parameters_stay_unset(self) -> None:
-        request = llm_request_from_parameters(
+        request = provider_call_request_from_parameters(
             config=openai_responses_config(model="m"),
-            messages=(
-                PromptMessage(role=MessageRole.USER, content="hi"),
-            ),
+            messages=(PromptMessage(role=MessageRole.USER, content="hi"),),
             parameters={},
         )
-        assert request.temperature is None
-        assert request.token_limit is None
-        assert request.reasoning is None
+        controls = request.config.controls
+        assert controls.temperature is None
+        assert controls.token_limit is None
+        assert controls.reasoning is None
         payload = build_payload(request)
         assert "temperature" not in payload
         assert "max_output_tokens" not in payload
@@ -108,16 +103,14 @@ class TestLlmRequestFromParameters:
 
 class TestProviderResultFromResponse:
     def test_maps_parts_to_record_fields(self) -> None:
-        response = LlmResponse(
+        response = ProviderTransportResponse(
             text="hello",
             cost=CostInfo(total_cost=0.02),
             finish_reason="stop",
             response_id="resp-1",
             model="m-actual",
-            provider_metadata={
-                "id": "resp-1",
-                "usage": {"total_tokens": 3},
-            },
+            usage=TokenUsage(total_tokens=3),
+            raw_body={"id": "resp-1"},
         )
         result = provider_result_from_response(response)
         assert result.text == "hello"
@@ -129,10 +122,12 @@ class TestProviderResultFromResponse:
         assert result.response_metadata["id"] == "resp-1"
 
     def test_conformance_warnings_ride_in_metadata(self) -> None:
-        response = LlmResponse(
+        response = ProviderTransportResponse(
             text="hello",
             warnings=(
-                LlmWarning(code="model_substitution", message="swapped"),
+                ProviderTransportWarning(
+                    code="model_substitution", message="swapped"
+                ),
             ),
         )
         result = provider_result_from_response(response)
@@ -140,7 +135,7 @@ class TestProviderResultFromResponse:
         assert recorded[0]["code"] == "model_substitution"
 
     def test_response_diagnostics_ride_in_metadata(self) -> None:
-        response = LlmResponse(
+        response = ProviderTransportResponse(
             text="hello",
             diagnostics=ResponsesDiagnostics(
                 response_status="completed",
@@ -164,7 +159,7 @@ class TestProviderResultFromResponse:
         }
 
     def test_blank_text_raises_empty_generation(self) -> None:
-        response = LlmResponse(text="   ")
+        response = ProviderTransportResponse(text="   ")
         with pytest.raises(EmptyGenerationError):
             provider_result_from_response(response, output_field="code")
 
