@@ -1,29 +1,13 @@
 # Whetstone
 
-Whetstone is a typed experiment system for evaluating and optimizing prompt
-candidates with reproducible configuration, execution, and evidence.
+[![CI](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml)
 
-## At a Glance
+| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [dr-code v0.1.0](https://github.com/danielle-rothermel/dr-code) | [dr-graph v0.1.0](https://github.com/danielle-rothermel/dr-graph) | [dr-providers v0.2.1](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize v0.1.1](https://github.com/danielle-rothermel/dr-serialize) | [dr-store v0.1.0](https://github.com/danielle-rothermel/dr-store) | [whetstone-envs v0.1.0](https://github.com/danielle-rothermel/whetstone-envs) |
+| --- | --- | --- | --- | --- | --- | --- |
 
-- [Whetstone design reference](https://danielle-rothermel.github.io/whetstone-ai/)
-- First-party dependencies:
-  - [dr-code](https://github.com/danielle-rothermel/dr-code) — `0.1.0`, for
-    code-task datasets and records
-  - [dr-graph](https://github.com/danielle-rothermel/dr-graph) — `0.1.0`, for
-    typed computation graphs and deterministic interpretation
-  - [dr-providers](https://github.com/danielle-rothermel/dr-providers) —
-    `0.2.1`, for provider requests, responses, and transport
-  - [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) —
-    `0.1.1`, for canonical serialization and identity hashing
-  - [dr-store](https://github.com/danielle-rothermel/dr-store) — `0.1.0`, for
-    content-addressed and durable document storage
-  - [whetstone-envs](https://github.com/danielle-rothermel/whetstone-envs) —
-    `0.1.0`, for benchmark tasks and environment data
-
-## High-Level Design
-
-Whetstone connects experiment definitions to reproducible evaluation evidence
-and candidate optimization. Its functionality is organized into these areas:
+**Whetstone evaluates and optimizes prompt candidates through typed,
+reproducible experiment contracts.** Its functionality is organized into
+these areas:
 
 - **Experiment modeling and identity** bind candidates, computation graphs,
   objectives, task plans, and execution settings into typed,
@@ -46,14 +30,3 @@ and candidate optimization. Its functionality is organized into these areas:
 - **Authority and orchestration** coordinate durable proposal and evaluation
   effects, ownership claims, and terminal result binding across replay and
   recovery.
-
-## Development
-
-Whetstone supports Python 3.13 and 3.14. Install the locked environment and run
-the local checks with:
-
-```sh
-uv sync --all-groups
-./scripts/ci/lint.sh
-./scripts/ci/unit.sh
-```
