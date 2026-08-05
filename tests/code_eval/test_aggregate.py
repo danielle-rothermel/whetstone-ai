@@ -36,7 +36,11 @@ from whetstone.code_eval import (
     aggregation_definition,
     unweighted_task_mean,
 )
-from whetstone.code_eval.aggregate import SKIP_TOLERANCE_VARIABLE
+from whetstone.code_eval.aggregate import (
+    ROLLOUT_AGGREGATE_SCHEMA,
+    SKIP_TOLERANCE_VARIABLE,
+)
+from whetstone.optimization.identity import typed_ref_for_record
 
 from .support import FULL_HASH
 
@@ -169,6 +173,32 @@ def test_aggregate_derives_identity_binding_and_shape_from_plan() -> None:
     )
     assert all(
         parameter.default is Parameter.empty for parameter in parameters
+    )
+
+
+def test_rollout_aggregate_wire_contract_is_pinned() -> None:
+    aggregate = _task_mean(
+        (_task("t1", RowValue(value=1.0), RowValue(value=0.0)),),
+        plan=_plan(("t1",), repeat_count=2),
+    )
+    content = aggregate.record_content()
+
+    assert ROLLOUT_AGGREGATE_SCHEMA == "whetstone.rollout_aggregate"
+    assert tuple(content) == (
+        "name",
+        "graph_hash",
+        "eval_config_hash",
+        "evaluation_binding_hash",
+        "task_count",
+        "repeat_count",
+        "aggregation_output",
+        "rows_present",
+        "rows_missing",
+        "rows_failed",
+        "rows_invalid",
+    )
+    assert aggregate.record_ref() == typed_ref_for_record(
+        "whetstone.rollout_aggregate", content
     )
 
 

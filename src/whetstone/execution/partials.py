@@ -13,7 +13,7 @@ import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal, Self, cast
 
 from pydantic import (
     BaseModel,
@@ -367,6 +367,7 @@ def _decode_frame(
         raise ValueError(f"invalid partial JSON at {location}") from exc
     if not isinstance(decoded, dict):
         raise ValueError(f"partial frame must be an object at {location}")
+    decoded = cast(dict[str, object], decoded)
     fields = frozenset(decoded)
     if fields != _FRAME_FIELDS:
         missing = sorted(_FRAME_FIELDS - fields)
@@ -387,6 +388,7 @@ def _decode_frame(
         raise ValueError(
             f"partial frame checksum and record are invalid at {location}"
         )
+    record_body = cast(dict[str, object], record_body)
     expected = hashlib.sha256(_canonical_json_bytes(record_body)).hexdigest()
     if not hmac.compare_digest(checksum, expected):
         raise ValueError(f"partial frame checksum mismatch at {location}")

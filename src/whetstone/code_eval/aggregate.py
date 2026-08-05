@@ -42,7 +42,15 @@ from dr_code.eval import (
     aggregate,
 )
 
-from whetstone.identity import require_full_hash
+from whetstone.optimization.identity import (
+    TypedRef,
+    require_full_hash,
+    typed_ref_for_record,
+)
+
+# Persisted-format contract for RolloutAggregate. Exact wire fields are pinned
+# by a golden test; never derive them from dataclass fields.
+ROLLOUT_AGGREGATE_SCHEMA = "whetstone.rollout_aggregate"
 
 
 class RowPolicy(StrEnum):
@@ -333,6 +341,28 @@ class RolloutAggregate:
                 f"{accounted} != {planned}"
             )
 
+    def record_content(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "graph_hash": self.graph_hash,
+            "eval_config_hash": self.eval_config_hash,
+            "evaluation_binding_hash": self.evaluation_binding_hash,
+            "task_count": self.task_count,
+            "repeat_count": self.repeat_count,
+            "aggregation_output": self.aggregation_output.model_dump(
+                mode="json"
+            ),
+            "rows_present": self.rows_present,
+            "rows_missing": self.rows_missing,
+            "rows_failed": self.rows_failed,
+            "rows_invalid": self.rows_invalid,
+        }
+
+    def record_ref(self) -> TypedRef:
+        return typed_ref_for_record(
+            ROLLOUT_AGGREGATE_SCHEMA, self.record_content()
+        )
+
 
 def _row_counts(rows: tuple[RowValue, ...]) -> tuple[int, int, int, int]:
     present = sum(1 for r in rows if r.is_present)
@@ -552,6 +582,7 @@ def unweighted_task_mean(
 
 
 __all__ = [
+    "ROLLOUT_AGGREGATE_SCHEMA",
     "CompletenessPolicy",
     "EvaluationMatrixPlan",
     "RolloutAggregate",
