@@ -571,7 +571,8 @@ def test_subprocess_uses_typed_artifact_and_restricted_authority(
     outside_path = request.hyperparameters["adversarial_outside_path"]
     assert isinstance(outside_path, str)
     assert outside_path not in profile
-    source_root = Path(__file__).resolve().parents[2] / "src"
+    source_root = Path(__file__).resolve().parents[3] / "src"
+    assert source_root.is_dir()
     assert str(source_root) not in profile
     assert artifact.control_cost == {"agent_tokens": 7}
     assert output.proposed_status is StepStatus.COMPLETE
