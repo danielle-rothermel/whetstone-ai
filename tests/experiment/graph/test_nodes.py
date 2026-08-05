@@ -1,4 +1,4 @@
-"""Closed, versioned Node Definitions (deliverable 3)."""
+"""Closed, versioned Node Definition contracts."""
 
 from __future__ import annotations
 
@@ -22,25 +22,57 @@ from whetstone.experiment.graph.nodes import (
 
 def test_llm_call_node_uses_closed_versioned_type() -> None:
     node = llm_call_node_definition("generate", prompt_source="task.prompt")
-    assert node.node_type == LLM_CALL_NODE_TYPE == "whetstone.llm-call/v1"
-    assert node.output_field == GENERATION_OUTPUT_FIELD
-    # Provider Call Config is a declared static Variable, not an input source.
-    assert PROVIDER_CALL_CONFIG_VARIABLE in node.variable_names
-    assert "prompt" in node.input_sources
-    assert PROVIDER_CALL_CONFIG_VARIABLE not in node.input_sources
+
+    assert LLM_CALL_NODE_TYPE == "whetstone.llm-call/v1"
+    assert node.model_dump(mode="json") == {
+        "node_id": "generate",
+        "node_type": LLM_CALL_NODE_TYPE,
+        "fields": [
+            {
+                "name": "prompt",
+                "role": "input",
+                "type_name": "str",
+                "description": None,
+            },
+            {
+                "name": GENERATION_OUTPUT_FIELD,
+                "role": "output",
+                "type_name": "str",
+                "description": None,
+            },
+        ],
+        "input_sources": {"prompt": "task.prompt"},
+        "output_field": GENERATION_OUTPUT_FIELD,
+        "variable_names": [PROVIDER_CALL_CONFIG_VARIABLE],
+    }
 
 
 def test_eval_node_uses_closed_versioned_type() -> None:
     node = eval_node_definition(
         "evaluate", upstream_sources={"candidate": "generate"}
     )
-    assert node.node_type == EVAL_NODE_TYPE == "whetstone.eval/v1"
-    # Evaluation Procedure Config is a static Variable, never a Node Input
-    # Source.
-    assert EVALUATION_PROCEDURE_CONFIG_VARIABLE in node.variable_names
-    assert EVALUATION_PROCEDURE_CONFIG_VARIABLE not in node.input_sources
-    # It consumes a declared upstream Node Output.
-    assert node.input_sources["candidate"].dependency_node_id == "generate"
+    assert EVAL_NODE_TYPE == "whetstone.eval/v1"
+    assert node.model_dump(mode="json") == {
+        "node_id": "evaluate",
+        "node_type": EVAL_NODE_TYPE,
+        "fields": [
+            {
+                "name": "candidate",
+                "role": "input",
+                "type_name": "str",
+                "description": None,
+            },
+            {
+                "name": "evaluation",
+                "role": "output",
+                "type_name": "str",
+                "description": None,
+            },
+        ],
+        "input_sources": {"candidate": "generate"},
+        "output_field": "evaluation",
+        "variable_names": [EVALUATION_PROCEDURE_CONFIG_VARIABLE],
+    }
 
 
 def test_eval_node_requires_an_upstream_source() -> None:
@@ -124,6 +156,11 @@ def test_eval_procedure_hash_validates_deserialized_reference() -> None:
         }
     }
     assert eval_node_procedure_hash(variables) == identity_hash
+
+
+def test_eval_procedure_hash_requires_reference_variable() -> None:
+    with pytest.raises(KeyError, match=EVALUATION_PROCEDURE_CONFIG_VARIABLE):
+        eval_node_procedure_hash({})
 
 
 @pytest.mark.parametrize(

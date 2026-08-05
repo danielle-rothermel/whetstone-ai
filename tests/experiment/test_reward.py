@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from whetstone.core.identity import typed_ref_for_record
 from whetstone.core.roles import EvaluationRole
 from whetstone.experiment.reward import (
+    REWARD_POLICY_SCHEMA,
+    REWARD_POLICY_SCHEMA_VERSION,
     MissingDataPolicy,
     OfficialRewardError,
     Reward,
@@ -53,9 +56,74 @@ def test_reward_names_its_policy_and_cites_inputs() -> None:
     assert cited == {"pass_rate", "compression"}
 
 
-def test_reward_policy_usable_by_proposal_and_tool_configs() -> None:
+def test_reward_policy_identity_contract_is_exact() -> None:
     policy = _policy()
-    assert len(policy.identity_hash()) == 64
+
+    assert REWARD_POLICY_SCHEMA == "whetstone.reward_policy"
+    assert REWARD_POLICY_SCHEMA_VERSION == 1
+    assert policy.identity_payload() == {
+        "policy_name": "pass_up_compression_down/v1",
+        "reward_name": "reward",
+        "terms": [
+            {
+                "name": "pass_rate",
+                "weight": 1.0,
+                "maximize": True,
+                "worst_value": 0.0,
+            },
+            {
+                "name": "compression",
+                "weight": 0.5,
+                "maximize": False,
+                "worst_value": 0.0,
+            },
+        ],
+        "missing_data": "fail",
+    }
+    assert (
+        policy.identity_hash()
+        == "68a949e0ed2b767918e567319f9533f24c894392fcd351bdb73327024a8a0d36"
+    )
+    assert (
+        RewardPolicy.model_validate(policy.model_dump(mode="json")) == policy
+    )
+    assert RewardPolicy.model_validate_json(policy.model_dump_json()) == policy
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["term-order", "direction", "missing-data", "reward-name"],
+)
+def test_reward_policy_identity_changes_with_exact_content(
+    mutation: str,
+) -> None:
+    policy = _policy()
+    payload = policy.model_dump(mode="json")
+    if mutation == "term-order":
+        payload["terms"].reverse()
+    elif mutation == "direction":
+        payload["terms"][0]["maximize"] = False
+    elif mutation == "missing-data":
+        payload["missing_data"] = MissingDataPolicy.SKIP.value
+    else:
+        payload["reward_name"] = "proposal_reward"
+
+    assert RewardPolicy.model_validate(payload).identity_hash() != (
+        policy.identity_hash()
+    )
+
+
+@pytest.mark.parametrize("unordered", [set(), frozenset(), {}])
+def test_reward_policy_terms_reject_unordered_containers(
+    unordered: object,
+) -> None:
+    with pytest.raises(ValidationError, match="ordered tuple or JSON array"):
+        RewardPolicy.model_validate(
+            {
+                **_policy().model_dump(mode="json"),
+                "terms": unordered,
+            }
+        )
 
 
 def test_official_evaluation_computes_no_reward() -> None:
@@ -139,10 +207,6 @@ def test_missing_data_skip_drops_the_term() -> None:
     assert reward.value == pytest.approx(0.5)
     skipped = [c for c in reward.input_citations if c.was_missing]
     assert len(skipped) == 1
-
-
-def test_reward_policy_identity_is_stable() -> None:
-    assert _policy().identity_hash() == _policy().identity_hash()
 
 
 def test_reward_policy_requires_unique_terms() -> None:
@@ -273,6 +337,24 @@ def test_reward_rejects_citations_that_diverge_from_exact_policy() -> None:
 
     with pytest.raises(ValidationError, match="term names and order"):
         Reward.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("value", "was_missing"),
+    [(None, False), (1.0, True)],
+    ids=["missing-value-without-flag", "present-value-with-missing-flag"],
+)
+def test_reward_input_citation_rejects_value_missingness_disagreement(
+    value: float | None,
+    was_missing: bool,
+) -> None:
+    with pytest.raises(ValidationError, match="missingness must match"):
+        RewardInputCitation(
+            name="score",
+            value=value,
+            contributed=0.0,
+            was_missing=was_missing,
+        )
 
 
 def test_internal_reward_requires_ordered_nonempty_exact_evidence() -> None:

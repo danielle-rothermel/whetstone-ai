@@ -8,6 +8,8 @@ never accepted as an Objective.
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 
 from whetstone.experiment.objectives import (
@@ -92,10 +94,16 @@ def test_score_derived_objective_records_lineage() -> None:
     assert obj.derivation.source_name == "quality_score"
 
 
-def test_derivation_is_deterministic() -> None:
-    a = _obj("quality", 0.75, Direction.MAXIMIZE)
-    b = _obj("quality", 0.75, Direction.MAXIMIZE)
-    assert a == b
+@pytest.mark.parametrize("value", [True, False, "1.0", None])
+def test_objective_rejects_bool_and_non_numeric_values(value: object) -> None:
+    with pytest.raises(TypeError, match="must be numeric"):
+        _obj("quality", cast(float, value), Direction.MAXIMIZE)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_objective_rejects_nonfinite_values(value: float) -> None:
+    with pytest.raises(ValueError, match="must be finite"):
+        _obj("quality", value, Direction.MAXIMIZE)
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +170,18 @@ def test_dominance_requires_matching_shape() -> None:
         dominates(a, other)
 
 
+def test_dominance_rejects_opposite_directions() -> None:
+    maximize = ObjectiveVector(
+        objectives=(_obj("quality", 0.8, Direction.MAXIMIZE),)
+    )
+    minimize = ObjectiveVector(
+        objectives=(_obj("quality", 0.8, Direction.MINIMIZE),)
+    )
+
+    with pytest.raises(ValueError, match="identical objective directions"):
+        dominates(maximize, minimize)
+
+
 # ---------------------------------------------------------------------------
 # Pareto Front: determinism, stable order, explicit ties, direction
 # ---------------------------------------------------------------------------
@@ -203,17 +223,6 @@ def test_pareto_front_ties_keep_both_members() -> None:
     assert [m.candidate_id for m in front.members] == ["c0", "c1"]
 
 
-def test_pareto_front_is_deterministic() -> None:
-    candidates = [
-        ("c0", _vector(0.9, 2.0)),
-        ("c1", _vector(0.7, 1.0)),
-        ("c2", _vector(0.8, 2.5)),
-    ]
-    a = pareto_front(candidates)
-    b = pareto_front(candidates)
-    assert a == b
-
-
 def test_pareto_front_records_direction_per_objective() -> None:
     front = pareto_front([("c0", _vector(0.8, 3.0))])
     assert front.objective_names == ("quality", "compression")
@@ -235,6 +244,31 @@ def test_pareto_front_requires_matching_shapes() -> None:
     ]
     with pytest.raises(ValueError, match="same ordered objective names"):
         pareto_front(candidates)
+
+
+def test_pareto_front_rejects_opposite_directions() -> None:
+    candidates = [
+        (
+            "maximize",
+            ObjectiveVector(
+                objectives=(_obj("quality", 0.8, Direction.MAXIMIZE),)
+            ),
+        ),
+        (
+            "minimize",
+            ObjectiveVector(
+                objectives=(_obj("quality", 0.8, Direction.MINIMIZE),)
+            ),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="same objective directions"):
+        pareto_front(candidates)
+
+
+def test_pareto_front_rejects_empty_candidates() -> None:
+    with pytest.raises(ValueError, match="at least one candidate"):
+        pareto_front([])
 
 
 def test_direction_bearing_objective_has_direction() -> None:
