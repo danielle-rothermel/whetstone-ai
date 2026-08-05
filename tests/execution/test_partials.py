@@ -918,6 +918,28 @@ def test_invalid_at_is_rejected(value: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-31T12:00:00+01:00",
+        "2026-07-31T12:00:00Z",
+    ],
+)
+def test_at_requires_canonical_utc_isoformat(value: str) -> None:
+    with pytest.raises(ValueError, match="partial row at"):
+        _record(at=value)
+
+
+def test_load_orders_canonical_utc_timestamps_chronologically(
+    tmp_path: Path,
+) -> None:
+    log = PartialLog(path=tmp_path / "calls.partial")
+    log.append(_record(unit="later", at="2026-08-01T00:00:00+00:00"))
+    log.append(_record(unit="earlier", at="2026-07-31T23:59:59+00:00"))
+
+    assert [record.unit for record in log.load()] == ["earlier", "later"]
+
+
+@pytest.mark.parametrize(
     ("update", "match"),
     [
         ({"request_identity": "A" * 64}, "request_identity"),
