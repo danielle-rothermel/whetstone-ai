@@ -136,10 +136,16 @@ def _proposal_trace(
         rng_checkpoint=Miprov2RngCheckpoint.seeded(11),
     )
     trace: list[tuple[int | None, int | None, str]] = []
-    while True:
+    expected_effect_count = component_count * 2
+    for _transition in range(expected_effect_count + 1):
         planned = plan_next_proposal_request(state)
         state = planned.state
         if planned.request is None:
+            assert len(trace) == expected_effect_count, (
+                "proposal machine terminated before its exact predictor-major "
+                f"effect count; trace={trace!r}; "
+                f"state={state.model_dump_json()}"
+            )
             return tuple(trace), state.instruction_pools
         request: Miprov2ProposalRequest = planned.request
         trace.append(
@@ -161,6 +167,10 @@ def _proposal_trace(
                 evidence={"oracle": "scripted"},
             ),
         )
+    raise AssertionError(
+        "proposal machine did not terminate after its exact predictor-major "
+        f"effect count; trace={trace!r}; state={state.model_dump_json()}"
+    )
 
 
 @pytest.mark.parametrize("component_count", [1, 2])

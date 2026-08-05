@@ -137,10 +137,18 @@ def _finish_proposals(
     state: Miprov2ProposalState,
 ) -> tuple[Miprov2ProposalState, tuple[Miprov2ProposalRequest, ...]]:
     requests: list[Miprov2ProposalRequest] = []
-    while True:
+    effects_per_proposal = 3 if state.program_aware else 1
+    expected_effect_count = (
+        len(state.components) * state.proposal_count * effects_per_proposal
+    )
+    for _transition in range(expected_effect_count + 1):
         planned = plan_next_proposal_request(state)
         state = planned.state
         if planned.request is None:
+            assert len(requests) == expected_effect_count, (
+                "proposal machine terminated before its exact effect count; "
+                f"requests={requests!r}; state={state.model_dump_json()}"
+            )
             return state, tuple(requests)
         request = planned.request
         requests.append(request)
@@ -156,6 +164,10 @@ def _finish_proposals(
         else:
             raise AssertionError(f"unexpected effect {request.effect}")
         state = _fold(state, request, text)
+    raise AssertionError(
+        "proposal machine did not terminate after its exact effect count; "
+        f"requests={requests!r}; state={state.model_dump_json()}"
+    )
 
 
 def _demo(
@@ -370,12 +382,20 @@ def test_demo_rotation_uses_key_presence_and_reference_field_order() -> None:
         tip_aware=False,
     )
     seen: dict[int, str] = {}
-    while True:
+    trace: list[tuple[int | None, str]] = []
+    expected_effect_count = len(state.components) * state.proposal_count
+    for _transition in range(expected_effect_count + 1):
         planned = plan_next_proposal_request(state)
         state = planned.state
         if planned.request is None:
+            assert len(trace) == expected_effect_count, (
+                "demo-rotation proposal machine terminated before its exact "
+                f"effect count; trace={trace!r}; "
+                f"state={state.model_dump_json()}"
+            )
             break
         request = planned.request
+        trace.append((request.proposal_index, request.effect))
         assert request.effect == "instruction_proposal"
         field_map = {field.name: field.value for field in request.fields}
         assert request.proposal_index is not None
@@ -384,6 +404,11 @@ def test_demo_rotation_uses_key_presence_and_reference_field_order() -> None:
             state,
             request,
             f"generated-{request.proposal_index} {{input}}",
+        )
+    else:
+        raise AssertionError(
+            "demo-rotation proposal machine did not terminate after its exact "
+            f"effect count; trace={trace!r}; state={state.model_dump_json()}"
         )
 
     assert seen[0] == NO_TASK_DEMOS
@@ -648,7 +673,18 @@ def test_crash_roundtrip_after_every_proposal_effect() -> None:
         data_aware=True,
         batch_size=10,
     )
-    while True:
+    dataset_descriptor_count = min(
+        (len(state.trainset) + state.view_data_batch_size - 1)
+        // state.view_data_batch_size,
+        10,
+    )
+    expected_effect_count = (
+        dataset_descriptor_count
+        + 1
+        + len(state.components) * state.proposal_count * 3
+    )
+    trace: list[str] = []
+    for _transition in range(expected_effect_count + 1):
         planned = plan_next_proposal_request(state)
         state = Miprov2ProposalState.model_validate_json(
             planned.state.model_dump_json()
@@ -656,8 +692,14 @@ def test_crash_roundtrip_after_every_proposal_effect() -> None:
         replayed = plan_next_proposal_request(state)
         assert replayed.request == planned.request
         if replayed.request is None:
+            assert len(trace) == expected_effect_count, (
+                "crash-roundtrip proposal machine terminated before its exact "
+                f"effect count; trace={trace!r}; "
+                f"state={state.model_dump_json()}"
+            )
             break
         request = replayed.request
+        trace.append(request.effect)
         response_text = {
             "dataset_initial": "initial observation",
             "dataset_followup": "followup observation",
@@ -669,6 +711,12 @@ def test_crash_roundtrip_after_every_proposal_effect() -> None:
         state = _fold(state, request, response_text)
         state = Miprov2ProposalState.model_validate_json(
             state.model_dump_json()
+        )
+    else:
+        raise AssertionError(
+            "crash-roundtrip proposal machine did not terminate after its "
+            f"exact effect count; trace={trace!r}; "
+            f"state={state.model_dump_json()}"
         )
 
     assert state.stage == "complete"

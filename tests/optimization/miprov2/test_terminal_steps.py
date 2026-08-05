@@ -192,8 +192,16 @@ def _proposal_response(request) -> Miprov2ProposalResponse:
 def _state_pending_baseline_intent(driver, state) -> Miprov2State:
     """Advance the pure machine to its first pending Evaluation Intent."""
 
-    while True:
+    transition_budget = state.budget.proposal_calls + 2
+    trace: list[tuple[str, str, str | None]] = []
+    for _transition in range(transition_budget):
         plan = driver.plan(state)
+        proposal_stage = (
+            plan.state.proposal_state.stage
+            if plan.state.proposal_state is not None
+            else None
+        )
+        trace.append((plan.kind, plan.state.phase, proposal_stage))
         if plan.kind == "eval_config_binding":
             assert plan.eval_config_binding is not None
             state = driver.fold_eval_config_binding(
@@ -210,6 +218,11 @@ def _state_pending_baseline_intent(driver, state) -> Miprov2State:
             continue
         assert plan.kind == "baseline_evaluation"
         return plan.state
+    raise AssertionError(
+        "MIPROv2 did not reach its baseline intent within the proposal-call "
+        f"budget plus binding and terminal transitions; trace={trace!r}; "
+        f"state={state.model_dump_json()}"
+    )
 
 
 def _request_for(request, state: Miprov2State):

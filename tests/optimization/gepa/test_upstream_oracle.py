@@ -124,11 +124,12 @@ def _replay_to_completion(
     component_selector: str,
     merge: bool,
     hash_seed: int,
+    expected_effect_count: int,
 ) -> dict:
     root.mkdir(parents=True)
     effect_log = root / "effects.json"
     crashes = 0
-    while True:
+    for crash_index in range(expected_effect_count):
         before = (
             len(json.loads(effect_log.read_text()))
             if effect_log.exists()
@@ -141,19 +142,39 @@ def _replay_to_completion(
             effect_log=effect_log,
             crash_after=before,
         )
-        if completed.returncode == 86:
-            after = len(json.loads(effect_log.read_text()))
-            assert after == before + 1
-            crashes += 1
-            continue
-        assert completed.returncode == 0, completed.stderr
-        records = json.loads(effect_log.read_text())
-        assert crashes == len(records)
-        payload = json.loads(completed.stdout)
-        assert payload["effect_identities"] == [
-            record["identity"] for record in records
-        ]
-        return payload
+        assert completed.returncode == 86, (
+            "frozen GEPA oracle did not crash after the next expected effect "
+            f"({crash_index=}, {expected_effect_count=}, {before=}); "
+            f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+        )
+        after = len(json.loads(effect_log.read_text()))
+        assert after == before + 1, (
+            "frozen GEPA oracle crash did not record exactly one effect "
+            f"({crash_index=}, {expected_effect_count=}, {before=}, {after=})"
+        )
+        crashes += 1
+
+    before = len(json.loads(effect_log.read_text()))
+    assert before == expected_effect_count
+    completed = _invoke(
+        component_selector=component_selector,
+        merge=merge,
+        hash_seed=hash_seed,
+        effect_log=effect_log,
+        crash_after=before,
+    )
+    assert completed.returncode == 0, (
+        "frozen GEPA oracle did not terminate immediately after replaying its "
+        f"{expected_effect_count} frozen effects; "
+        f"stdout={completed.stdout!r}; stderr={completed.stderr!r}"
+    )
+    records = json.loads(effect_log.read_text())
+    assert crashes == len(records) == expected_effect_count
+    payload = json.loads(completed.stdout)
+    assert payload["effect_identities"] == [
+        record["identity"] for record in records
+    ]
+    return payload
 
 
 def _assert_merge_has_no_proposal(timeline: list[dict[str, Any]]) -> None:
@@ -478,12 +499,14 @@ def test_direct_upstream_oracle_matches_frozen_crash_fixture_across_hash_seeds(
         component_selector=component_selector,
         merge=merge,
         hash_seed=1,
+        expected_effect_count=expected["effect_count"],
     )
     seed_777 = _replay_to_completion(
         root=tmp_path / "777",
         component_selector=component_selector,
         merge=merge,
         hash_seed=777,
+        expected_effect_count=expected["effect_count"],
     )
 
     # Exact equality preserves every candidate component pair in upstream
