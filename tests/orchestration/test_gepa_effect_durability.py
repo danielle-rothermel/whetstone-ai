@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 import types
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 import pytest
 from dr_store import ObjectStore, SqliteBackend
@@ -20,7 +22,6 @@ from tests.optimization.test_gepa_effects import (
 )
 from tests.orchestration.test_proposal_provider_durability import (
     _executor,
-    _OrderedReplayDbos,
     _provider_transport,
 )
 from tests.orchestration.test_proposal_provider_durability import (
@@ -259,32 +260,110 @@ class _ProviderBackedProposalAuthority:
         )
 
 
-class _SynchronousChildOrderedDbos(_OrderedReplayDbos):
-    """Model the parent operation occupied by a synchronous child workflow."""
+class _NestedReplayDbos:
+    """Emulate GEPA's semantic child workflow wrapping the executor's own.
+
+    Both DBOS layers load against this one emulator: the outer GEPA effect
+    workflow (entered through ``SetWorkflowID``) and, inside it, the
+    executor's ``start_workflow`` child whose body is one retry-disabled
+    step.  Every operation is appended to ``events`` so a replay can be
+    checked for its exact operation sequence.
+    """
+
+    workflow_id: ClassVar[str | None] = None
+    step_id: ClassVar[int | None] = None
+    next_workflow_id: ClassVar[str | None] = None
+    retries_allowed: ClassVar[list[bool]] = []
+    checkpoints: ClassVar[dict[str, Any]] = {}
+    child_results: ClassVar[dict[str, Any]] = {}
+    events: ClassVar[list[str]] = []
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.workflow_id = None
+        cls.step_id = None
+        cls.next_workflow_id = None
+        cls.retries_allowed.clear()
+        cls.checkpoints.clear()
+        cls.child_results.clear()
+        cls.events.clear()
 
     @classmethod
     def workflow(cls):
         def decorate(function):
+            def wrapped(*args, **kwargs):
+                workflow_id = cls.workflow_id
+                assert workflow_id is not None
+                cls.events.append(f"workflow:{function.__name__}")
+                if workflow_id in cls.child_results:
+                    return cls.child_results[workflow_id]
+                prior_step_id = cls.step_id
+                cls.step_id = None
+                try:
+                    result = function(*args, **kwargs)
+                finally:
+                    cls.step_id = prior_step_id
+                cls.child_results[workflow_id] = result
+                return result
+
+            return wrapped
+
+        return decorate
+
+    @classmethod
+    def start_workflow(cls, function, *args):
+        if cls.workflow_id is None or cls.step_id is not None:
+            raise RuntimeError(
+                "DBOS.start_workflow requires a workflow body context"
+            )
+        child_id = cls.next_workflow_id
+        assert child_id is not None
+        cls.next_workflow_id = None
+        cls.events.append(f"start_workflow:{child_id}")
+        parent_id = cls.workflow_id
+        cls.workflow_id = child_id
+        try:
+            result = function(*args)
+        finally:
+            cls.workflow_id = parent_id
+        return _NestedReplayHandle(result)
+
+    @classmethod
+    def step(cls, *, retries_allowed: bool):
+        cls.retries_allowed.append(retries_allowed)
+
+        def decorate(function):
             def checkpointed(*args):
-                child_id = cls.workflow_id
-
-                def execute_child():
-                    prior_child = cls.current_child_id
-                    cls.current_child_id = child_id
-                    cls.child_cursors[child_id] = 0
-                    try:
-                        return function(*args)
-                    finally:
-                        cls.current_child_id = prior_child
-
-                return cls._operation(
-                    f"workflow:{function.__name__}:{child_id}",
-                    execute_child,
-                )
+                payload = [
+                    item.model_dump(mode="json")
+                    if hasattr(item, "model_dump")
+                    else item
+                    for item in args
+                ]
+                key = f"{function.__name__}:{json.dumps(payload)}"
+                cls.events.append(f"step:{function.__name__}")
+                if key in cls.checkpoints:
+                    return cls.checkpoints[key]
+                prior_step_id = cls.step_id
+                cls.step_id = 0
+                try:
+                    result = function(*args)
+                finally:
+                    cls.step_id = prior_step_id
+                cls.checkpoints[key] = result
+                return result
 
             return checkpointed
 
         return decorate
+
+
+class _NestedReplayHandle:
+    def __init__(self, result) -> None:
+        self._result = result
+
+    def get_result(self):
+        return self._result
 
 
 @pytest.mark.parametrize("effect_kind", ["evaluate", "propose"])
@@ -338,25 +417,41 @@ def test_child_completion_then_outer_result_bind_replays_without_authority(
     assert authority.calls == 1
 
 
-def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
-    tmp_path,
-) -> None:
-    """A draft bind cannot shorten the child replay transcript."""
+def _operation_shape(events: list[str]) -> list[str]:
+    """Erase the content-addressed child ID from a recorded event sequence."""
 
-    _OrderedReplayDbos.reset()
-    provider_module = _load_provider_boundary(_OrderedReplayDbos)
-    effect_module = _load_boundary(_OrderedReplayDbos)
+    return [
+        "start_workflow" if event.startswith("start_workflow:") else event
+        for event in events
+    ]
+
+
+#: The exact operation sequence one uncached GEPA reflection effect performs:
+#: the semantic child workflow starts the executor's own child workflow, whose
+#: body is the single retry-disabled whole-call step.
+_FULL_PROPOSAL_SHAPE = [
+    "workflow:_gepa_proposal_effect_workflow",
+    "start_workflow",
+    "workflow:_proposal_provider_workflow",
+    "step:_logical_proposal_step",
+]
+
+#: Replay of a completed effect stops at the GEPA semantic child.
+_REPLAYED_PROPOSAL_SHAPE = ["workflow:_gepa_proposal_effect_workflow"]
+
+
+def _nested_proposal_broker(tmp_path, name: str):
+    """Wire one GEPA broker over the executor on the nested DBOS emulator."""
+
+    _NestedReplayDbos.reset()
+    provider_module = _load_provider_boundary(_NestedReplayDbos)
+    effect_module = _load_boundary(_NestedReplayDbos)
     request = _proposal_request()
     transport, proposer_config, recording = _provider_transport(
         provider_support.response_outcome(text="alpha-improved"),
     )
-    executor = _executor(
-        provider_module,
-        transport,
-        registry_key="9" * 64,
-    )
-    database = tmp_path / "proposal-inner-replay.sqlite"
-    store = ObjectStore(SqliteBackend(database))
+    executor = _executor(provider_module, transport)
+    store = ObjectStore(SqliteBackend(tmp_path / f"{name}.sqlite"))
     authority = _ProviderBackedProposalAuthority(
         store=store,
         request=request,
@@ -368,7 +463,18 @@ def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
         authority.runtime_identity_hash,
         authority,
     )
-    broker = effect_module.DbosGepaEffectBroker(store)
+    return effect_module.DbosGepaEffectBroker(store), request, recording
+
+
+def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
+    tmp_path,
+) -> None:
+    """A crash before the outer bind never re-runs the paid proposal call."""
+
+    broker, request, recording = _nested_proposal_broker(
+        tmp_path,
+        "proposal-inner-replay",
+    )
     original_record = broker._recorder.record_proposal_result
 
     def crash_before_outer_bind(*_args, **_kwargs):
@@ -377,70 +483,53 @@ def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
     broker._recorder.record_proposal_result = crash_before_outer_bind
     with pytest.raises(RuntimeError, match="before GEPA child commit"):
         broker.propose(request)
+
     assert len(recording.served) == 1
+    assert _operation_shape(_NestedReplayDbos.events) == _FULL_PROPOSAL_SHAPE
+    assert _NestedReplayDbos.retries_allowed == [False]
 
     broker._recorder.record_proposal_result = original_record
-    _OrderedReplayDbos.begin_replay()
+    _NestedReplayDbos.events.clear()
     replay = broker.propose(request)
 
     assert replay.parsed_components[0].text == "alpha-improved"
     assert len(recording.served) == 1
-    assert _OrderedReplayDbos.cursor == 1
-    assert len(_OrderedReplayDbos.checkpoints) == 1
+    assert (
+        _operation_shape(_NestedReplayDbos.events) == _REPLAYED_PROPOSAL_SHAPE
+    )
 
 
 def test_parent_replay_always_consumes_stable_child_operation(
     tmp_path,
 ) -> None:
-    _SynchronousChildOrderedDbos.reset()
-    provider_module = _load_provider_boundary(_SynchronousChildOrderedDbos)
-    effect_module = _load_boundary(_SynchronousChildOrderedDbos)
-    request = _proposal_request()
-    transport, proposer_config, recording = _provider_transport(
-        provider_support.response_outcome(text="alpha-improved"),
+    """Replaying one effect reuses the child rather than re-proposing."""
+
+    broker, request, recording = _nested_proposal_broker(
+        tmp_path,
+        "parent-operation-replay",
     )
-    executor = _executor(
-        provider_module,
-        transport,
-        registry_key="8" * 64,
-    )
-    store = ObjectStore(
-        SqliteBackend(tmp_path / "parent-operation-replay.sqlite")
-    )
-    authority = _ProviderBackedProposalAuthority(
-        store=store,
-        request=request,
-        transport=transport,
-        executor=executor,
-        config=proposer_config,
-    )
-    effect_module.register_gepa_proposal_authority(
-        authority.runtime_identity_hash,
-        authority,
-    )
-    broker = effect_module.DbosGepaEffectBroker(store)
 
     first = broker.propose(request)
 
-    @_SynchronousChildOrderedDbos.step(retries_allowed=False)
-    def later_operation(value: str) -> str:
-        return f"later:{value}"
-
-    assert later_operation("safe") == "later:safe"
-    _SynchronousChildOrderedDbos.begin_replay()
+    assert _operation_shape(_NestedReplayDbos.events) == _FULL_PROPOSAL_SHAPE
+    _NestedReplayDbos.events.clear()
 
     replay = broker.propose(request)
-    assert later_operation("safe") == "later:safe"
 
     assert replay == first
     assert len(recording.served) == 1
-    assert _SynchronousChildOrderedDbos.cursor == 2
-    assert len(_SynchronousChildOrderedDbos.checkpoints) == 2
+    assert (
+        _operation_shape(_NestedReplayDbos.events) == _REPLAYED_PROPOSAL_SHAPE
+    )
+    assert _NestedReplayDbos.retries_allowed == [False]
 
 
+@pytest.mark.skipif(
+    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
+    reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
+)
 @pytest.mark.parametrize("effect_kind", ["evaluate", "propose"])
 def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
-    pg_engine,
     tmp_path,
     effect_kind: Literal["evaluate", "propose"],
 ) -> None:
@@ -455,7 +544,7 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
     )
 
     suffix = uuid4().hex[:10]
-    database_url = pg_engine.url.render_as_string(hide_password=False)
+    database_url = os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
     config: DBOSConfig = {
         "name": f"gepa-effect-{suffix}",
         "system_database_url": database_url,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
@@ -201,8 +202,11 @@ def test_parent_request_rejects_same_count_seed_reordering() -> None:
         )
 
 
+@pytest.mark.skipif(
+    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
+    reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
+)
 def test_real_dbos_parent_same_id_returns_checkpointed_result(
-    pg_engine,
     monkeypatch,
 ) -> None:
     from dbos import DBOS, DBOSConfig
@@ -214,7 +218,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
     )
 
     suffix = uuid4().hex[:10]
-    database_url = pg_engine.url.render_as_string(hide_password=False)
+    database_url = os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
     config: DBOSConfig = {
         "name": f"gepa-parent-{suffix}",
         "system_database_url": database_url,
@@ -267,8 +271,11 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
         DBOS.destroy()
 
 
+@pytest.mark.skipif(
+    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
+    reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
+)
 def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
-    pg_engine,
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -306,7 +313,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     )
 
     suffix = uuid4().hex[:10]
-    database_url = pg_engine.url.render_as_string(hide_password=False)
+    database_url = os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
     config: DBOSConfig = {
         "name": f"gepa-recovery-{suffix}",
         "system_database_url": database_url,

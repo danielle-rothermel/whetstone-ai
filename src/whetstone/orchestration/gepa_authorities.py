@@ -43,6 +43,7 @@ from whetstone.optimization.identity import (
 )
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.proposer import (
+    DurableProposalExecutor,
     ProposalRequest,
     ProposerTransport,
 )
@@ -55,7 +56,6 @@ from whetstone.optimization.schema import (
     IntentOutcome,
     candidate_reference,
 )
-from whetstone.orchestration.proposal_provider import DbosProposalExecutor
 
 GEPA_REFLECTION_BASE_SCHEMA = "whetstone.gepa.reflection_base"
 GEPA_CANDIDATE_ASSEMBLER_SCHEMA = "whetstone.gepa.candidate_assembler"
@@ -81,6 +81,9 @@ GEPA_EVALUATION_ROW_FAILURE_SCHEMA = "whetstone.gepa.evaluation_row_failure"
 GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA = (
     "whetstone.gepa.proposal_provider_attempt"
 )
+#: Persisted contract literal naming the coarsest evidence boundary GEPA
+#: records: one whole logical proposal call.
+GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY = "whole_call"
 GEPA_EVALUATION_RESPONSE_PARSER_IDENTITY_HASH = compute_identity_hash(
     schema="whetstone.gepa.evaluation_response_projection",
     schema_version=1,
@@ -740,7 +743,17 @@ class CanonicalGepaEvaluationAuthority:
 
 
 class CanonicalGepaProposalAuthority:
-    """Invoke the Whetstone proposer route with physical-attempt durability."""
+    """Invoke the Whetstone proposer route for one GEPA reflection effect.
+
+    The authority runs inside GEPA's semantic-effect child workflow, which
+    guarantees that one effect ordinal binds one semantic proposal request.
+    The paid reflection call itself is delegated to the injected
+    :class:`DurableProposalExecutor`, whose own durability contract is
+    best-effort ``at_least_once``.  Nesting the executor inside the semantic
+    workflow does not strengthen that guarantee: a crash between the provider
+    serving the call and the executor's checkpoint landing still re-executes
+    and re-pays for the whole logical call.
+    """
 
     def __init__(
         self,
@@ -749,8 +762,13 @@ class CanonicalGepaProposalAuthority:
         control: GepaControl,
         prompt_services: GepaPromptServices,
         transport: ProposerTransport,
-        executor: DbosProposalExecutor,
+        proposal_executor: DurableProposalExecutor,
     ) -> None:
+        if type(proposal_executor) is not DurableProposalExecutor:
+            raise TypeError(
+                "GEPA requires the canonical DurableProposalExecutor "
+                "capability for its paid reflection call"
+            )
         if (
             prompt_services.binding.identity_hash()
             != control.prompt_binding_identity_hash
@@ -768,7 +786,7 @@ class CanonicalGepaProposalAuthority:
         if (
             transport.prompt_adapter_identity_hash
             != control.proposal_prompt_adapter_identity_hash
-            or executor.policy_identity_hash
+            or proposal_executor.policy_identity_hash
             != control.proposal_durability_policy_identity_hash
         ):
             raise ValueError(
@@ -779,7 +797,7 @@ class CanonicalGepaProposalAuthority:
         self._control = control
         self._prompt_services = prompt_services
         self._transport = transport
-        self._executor = executor
+        self._proposal_executor = proposal_executor
         transport_identity = compute_identity_hash(
             schema="whetstone.gepa.proposer_transport",
             schema_version=1,
@@ -791,7 +809,7 @@ class CanonicalGepaProposalAuthority:
                     transport.prompt_adapter_identity_hash
                 ),
                 "durability_policy_identity_hash": (
-                    executor.policy_identity_hash
+                    proposal_executor.policy_identity_hash
                 ),
             },
         )
@@ -842,8 +860,8 @@ class CanonicalGepaProposalAuthority:
         return self._transport
 
     @property
-    def executor(self) -> DbosProposalExecutor:
-        return self._executor
+    def proposal_executor(self) -> DurableProposalExecutor:
+        return self._proposal_executor
 
     @staticmethod
     def _reflection_base_candidate(
@@ -908,7 +926,7 @@ class CanonicalGepaProposalAuthority:
                 ),
             },
         )
-        drafts = self._executor.execute(
+        drafts = self._proposal_executor.execute(
             config=self._binding.proposer_config,
             request=generic,
             transport=self._transport,
@@ -976,6 +994,14 @@ class CanonicalGepaProposalAuthority:
         self,
         response_evidence: dict[str, Any],
     ) -> tuple[TypedRef, ...]:
+        """Persist the provider attempts observed inside one logical call.
+
+        A transport that reports structured provider-call results yields one
+        record per physical provider attempt.  Otherwise the whole logical
+        call is the finest boundary the evidence supports, and one record is
+        persisted under :data:`GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY`.
+        """
+
         result = response_evidence.get("provider_call_result")
         if not isinstance(result, dict):
             if not response_evidence:
@@ -983,7 +1009,7 @@ class CanonicalGepaProposalAuthority:
             ref, _ = self._store.put(
                 GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA,
                 {
-                    "boundary": "whole_call_fallback",
+                    "boundary": GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY,
                     "response_evidence": response_evidence,
                 },
             )
@@ -1024,6 +1050,7 @@ __all__ = [
     "GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA",
     "GEPA_PROPOSAL_AUTHORITY_SCHEMA",
     "GEPA_PROPOSAL_AUTHORITY_SCHEMA_VERSION",
+    "GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY",
     "CanonicalGepaCandidateAssembler",
     "CanonicalGepaEvaluationAuthority",
     "CanonicalGepaProposalAuthority",
