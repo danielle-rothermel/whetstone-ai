@@ -2386,6 +2386,7 @@ dependencies = [
     { name = "numpy" },
     { name = "optuna" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "typer" },
     { name = "whetstone-envs" },
     { name = "zstandard" },
 ]
@@ -2412,6 +2413,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=2.5.1" },
     { name = "optuna", specifier = "==4.8.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "typer", specifier = ">=0.26.8" },
     { name = "whetstone-envs", git = "https://github.com/danielle-rothermel/whetstone-envs?rev=90729bda2b207a845b1b7e499754f9b913201a40" },
     { name = "zstandard", specifier = ">=0.25.0" },
 ]

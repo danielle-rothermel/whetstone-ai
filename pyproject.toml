@@ -19,9 +19,13 @@ dependencies = [
     "numpy>=2.5.1",
     "optuna==4.8.0",
     "psycopg[binary]>=3.3.4",
+    "typer>=0.26.8",
     "whetstone-envs",
     "zstandard>=0.25.0",
 ]
+
+[project.scripts]
+whetstone-validate = "whetstone.runner.cli:main"
 
 [dependency-groups]
 dev = [
