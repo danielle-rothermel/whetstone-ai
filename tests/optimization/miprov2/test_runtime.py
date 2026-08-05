@@ -1,205 +1,34 @@
 from __future__ import annotations
 
 import pytest
-from dr_code.eval import (
-    DefinitionRef,
-    EvalConfig,
-    RepeatPlan,
-    SamplingDefinition,
-    TaskSet,
-)
-from dr_code.eval.identity import SCHEMA_EVAL_CONFIG, identity_hash_for
 from pydantic import ValidationError
 
-from tests.optimization.miprov2.test_control import _configure, _defaults
-from tests.optimization.support import FULL_A, FULL_C, FULL_D
+from tests.optimization.miprov2.support import (
+    make_minimal_miprov2_runtime,
+    resolve_miprov2_eval_config_binding,
+)
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
-from whetstone.experiment.binding import (
-    EvaluationBinding,
-    eval_config_reference,
-)
+from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.experiment.reward import (
     apply_reward_policy,
     reward_reference,
-)
-from whetstone.optimization.miprov2.demo import LabeledTaskDemo
-from whetstone.optimization.miprov2.eval_config import (
-    Miprov2EvalConfigBinding,
-    Miprov2EvalConfigBindingRequest,
-    derive_eval_config_reference,
 )
 from whetstone.optimization.miprov2.evidence import (
     Miprov2IntentContext,
     Miprov2ResolvedEvaluation,
     Miprov2RowAccounting,
 )
-from whetstone.optimization.miprov2.proposal import (
-    Miprov2DatasetExample,
-    Miprov2PromptComponent,
-    Miprov2ProposalResponse,
-)
+from whetstone.optimization.miprov2.proposal import Miprov2ProposalResponse
 from whetstone.optimization.miprov2.rng import (
-    Miprov2DurableBindings,
     Miprov2RngCheckpoint,
 )
-from whetstone.optimization.miprov2.runtime import (
-    Miprov2Driver,
-    Miprov2EffectBudget,
-    Miprov2State,
-)
+from whetstone.optimization.miprov2.runtime import Miprov2Driver, Miprov2State
 from whetstone.optimization.miprov2.study import (
     Miprov2EvaluationObservation,
 )
-
-
-def _canonical_eval_source(sampling_hash: str):
-    definition = DefinitionRef(
-        definition_id="runtime-eval",
-        version="1",
-        schema_name="dr_code.eval_definition",
-        identity_hash=FULL_A,
-    )
-    identity = identity_hash_for(
-        schema=SCHEMA_EVAL_CONFIG,
-        payload={
-            "definition_identity": definition.identity_hash,
-            "sampling_config": sampling_hash,
-            "evaluation_procedure_config": FULL_C,
-            "aggregation_config": FULL_D,
-        },
-    )
-    return eval_config_reference(
-        EvalConfig(
-            definition_ref=definition,
-            sampling_config_hash=sampling_hash,
-            evaluation_procedure_config_hash=FULL_C,
-            aggregation_config_hash=FULL_D,
-            config_identity_hash=identity,
-        )
-    )
-
-
-def _runtime(*, proposal_calls: int = 2, track_stats: bool = True):
-    bootstrap_source = _canonical_eval_source("1" * 64)
-    validation_source = _canonical_eval_source("2" * 64)
-    defaults = _defaults().model_copy(
-        update={
-            "bootstrap_eval_source": bootstrap_source,
-            "validation_eval_source": validation_source,
-            "evaluation_binding": EvaluationBinding(
-                schema_version=2,
-                eval_config=validation_source,
-                role=EvaluationRole.INTERNAL,
-                campaign="miprov2-runtime-test",
-            ),
-        }
-    )
-    control = _configure(
-        max_bootstrapped_demos=0,
-        max_labeled_demos=1,
-        program_aware_proposer=False,
-        data_aware_proposer=False,
-        tip_aware_proposer=False,
-        fewshot_aware_proposer=False,
-        num_trials=1,
-        track_stats=track_stats,
-        defaults=defaults,
-    )
-    component_id = control.component_ids[0]
-    labeled = tuple(
-        LabeledTaskDemo(
-            source_task_identity=task_identity,
-            inputs_by_component={component_id: {"query": f"q-{index}"}},
-            outputs_by_component={component_id: {"answer": f"a-{index}"}},
-        )
-        for index, task_identity in enumerate(control.trainset_task_identities)
-    )
-    proposal_trainset = tuple(
-        Miprov2DatasetExample(
-            task_identity=task_identity,
-            rendered_record=f"query=q-{index}; answer=a-{index}",
-        )
-        for index, task_identity in enumerate(control.trainset_task_identities)
-    )
-    bindings = Miprov2DurableBindings(
-        control_identity_hash=control.identity_hash(),
-        prompt_route_identity_hash=control.prompt_model.identity_hash(),
-        task_route_identity_hash=control.task_model_identity_hash,
-        execution_policy_identity_hash=(
-            control.provider_execution_policy_hash
-        ),
-        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
-        base_candidate_identity_hash=control.base_candidate.identity_hash,
-        teacher_candidate_identity_hash=(
-            control.teacher_candidate.identity_hash
-        ),
-    )
-    driver = Miprov2Driver()
-    state = driver.start(
-        run_id="miprov2-runtime-test",
-        control=control,
-        bindings=bindings,
-        labeled_trainset=labeled,
-        proposal_components=(
-            Miprov2PromptComponent(
-                component_id=component_id,
-                template=control.base_candidate.record.payload[
-                    "user_prompt_template"
-                ],
-                allowed_placeholders=("query",),
-                rendering_rules="Substitute the native query field.",
-                example_execution="Answer q-0.",
-            ),
-        ),
-        proposal_trainset=proposal_trainset,
-        component_field_order={component_id: ("query", "answer")},
-        budget=Miprov2EffectBudget(
-            bootstrap_rollouts=0,
-            proposal_calls=proposal_calls,
-            evaluations=2,
-        ),
-    )
-    return driver, Miprov2State.model_validate_json(state.model_dump_json())
-
-
-def _resolve_binding(
-    request: Miprov2EvalConfigBindingRequest,
-) -> Miprov2EvalConfigBinding:
-    suffix = request.identity_hash()[:20]
-    task_set = TaskSet(
-        manifest_id=f"miprov2-runtime-tasks-{suffix}",
-        version="1",
-        dataset_revision="test",
-        task_identities=request.task_batch_identities,
-    )
-    repeat_plan = RepeatPlan(
-        plan_id=f"miprov2-runtime-repeats-{suffix}",
-        version="1",
-        task_identities=request.task_batch_identities,
-        repeat_count=request.repeat_count,
-    )
-    sampling = SamplingDefinition(
-        definition_id="miprov2-runtime-sampling",
-        version="1",
-    ).materialize(
-        {
-            "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
-        }
-    )
-    return Miprov2EvalConfigBinding(
-        request=request,
-        task_set=task_set,
-        repeat_plan=repeat_plan,
-        sampling_config=sampling,
-        eval_config=derive_eval_config_reference(
-            request.source_eval_config,
-            sampling,
-        ),
-    )
 
 
 def _resolved_evaluation(
@@ -300,14 +129,16 @@ def _fold_all_proposals(
 
 
 def _complete_runtime(*, track_stats: bool = True):
-    driver, state = _runtime(track_stats=track_stats)
+    driver, state = make_minimal_miprov2_runtime(track_stats=track_stats)
     state = _fold_all_proposals(driver, state)
 
     baseline_binding = driver.plan(state)
     assert baseline_binding.eval_config_binding is not None
     state = driver.fold_eval_config_binding(
         baseline_binding.state,
-        _resolve_binding(baseline_binding.eval_config_binding),
+        resolve_miprov2_eval_config_binding(
+            baseline_binding.eval_config_binding
+        ),
     )
     baseline = driver.plan(state)
     assert baseline.kind == "baseline_evaluation"
@@ -320,7 +151,9 @@ def _complete_runtime(*, track_stats: bool = True):
     assert sample_binding.eval_config_binding is not None
     state = driver.fold_eval_config_binding(
         sample_binding.state,
-        _resolve_binding(sample_binding.eval_config_binding),
+        resolve_miprov2_eval_config_binding(
+            sample_binding.eval_config_binding
+        ),
     )
     sample = driver.plan(state)
     assert sample.kind == "sample_evaluation"
@@ -334,7 +167,7 @@ def _complete_runtime(*, track_stats: bool = True):
 
 
 def test_runtime_input_binding_roundtrips_and_rejects_tamper() -> None:
-    _, state = _runtime()
+    _, state = make_minimal_miprov2_runtime()
 
     assert Miprov2State.model_validate_json(state.model_dump_json()) == state
     payload = state.model_dump(mode="json")
@@ -344,7 +177,7 @@ def test_runtime_input_binding_roundtrips_and_rejects_tamper() -> None:
 
 
 def test_runtime_rejects_noncanonical_rng_and_bootstrap_cursor() -> None:
-    driver, state = _runtime()
+    driver, state = make_minimal_miprov2_runtime()
     planned = driver.plan(state).state
 
     with pytest.raises(ValidationError, match="RNG checkpoint"):
@@ -366,7 +199,7 @@ def test_runtime_rejects_noncanonical_rng_and_bootstrap_cursor() -> None:
 
 
 def test_proposal_restart_reconstructs_exact_next_effect() -> None:
-    driver, state = _runtime()
+    driver, state = make_minimal_miprov2_runtime()
     first = driver.plan(state)
     assert first.proposal_request is not None
     restarted = Miprov2State.model_validate_json(first.state.model_dump_json())
@@ -378,7 +211,7 @@ def test_proposal_restart_reconstructs_exact_next_effect() -> None:
 
 
 def test_evaluation_binding_binds_exact_tasks_and_execution_policy() -> None:
-    driver, state = _runtime()
+    driver, state = make_minimal_miprov2_runtime()
     state = _fold_all_proposals(driver, state)
 
     plan = driver.plan(state)
@@ -409,7 +242,7 @@ def test_evaluation_binding_binds_exact_tasks_and_execution_policy() -> None:
 
 
 def test_proposal_budget_exhaustion_stops_before_next_effect() -> None:
-    driver, state = _runtime(proposal_calls=1)
+    driver, state = make_minimal_miprov2_runtime(proposal_calls=1)
     first = driver.plan(state)
     assert first.proposal_request is not None
     state = driver.fold_proposal(

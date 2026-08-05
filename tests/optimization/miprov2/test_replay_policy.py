@@ -4,7 +4,7 @@ from typing import cast
 
 import pytest
 
-from tests.optimization.miprov2.test_runtime import _runtime
+from tests.optimization.miprov2.support import make_minimal_miprov2_runtime
 from tests.optimization.support import make_harness, make_store, registry
 from whetstone.core.effects.authority import EffectAuthority
 from whetstone.core.effects.models import ReplayPolicy
@@ -62,7 +62,7 @@ def _recording_executor(
 
 
 def _case(tmp_path, *, replay_policy: ReplayPolicy):
-    driver, state = _runtime()
+    driver, state = make_minimal_miprov2_runtime()
     store = make_store(tmp_path)
     transport = FakeProposerTransport(
         {},

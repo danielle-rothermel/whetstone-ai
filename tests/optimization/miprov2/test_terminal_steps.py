@@ -13,10 +13,14 @@ from typing import cast
 
 import pytest
 
-from tests.optimization.miprov2.test_runtime import _resolve_binding, _runtime
+from tests.optimization.miprov2.support import (
+    make_minimal_miprov2_runtime,
+    resolve_miprov2_eval_config_binding,
+)
 from tests.optimization.support import make_harness, make_store, registry
 from whetstone.core.effects.authority import EffectAuthority
 from whetstone.core.effects.models import ReplayPolicy
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.contracts import (
     BudgetState,
     IntentOutcome,
@@ -59,7 +63,7 @@ class _StaticEvalConfigResolver:
         self,
         request: Miprov2EvalConfigBindingRequest,
     ) -> Miprov2EvalConfigBinding:
-        return _resolve_binding(request)
+        return resolve_miprov2_eval_config_binding(request)
 
 
 def _pass_through_executor() -> DurableProposalExecutor:
@@ -77,7 +81,7 @@ def _pass_through_executor() -> DurableProposalExecutor:
 def _adapter_case(tmp_path, *, templates: tuple[str, ...]):
     """Build one MIPROv2 adapter bound to a scripted proposer transport."""
 
-    driver, state = _runtime()
+    driver, state = make_minimal_miprov2_runtime()
     store = make_store(tmp_path)
     transport = FakeProposerTransport(
         {},
@@ -206,7 +210,7 @@ def _state_pending_baseline_intent(driver, state) -> Miprov2State:
             assert plan.eval_config_binding is not None
             state = driver.fold_eval_config_binding(
                 plan.state,
-                _resolve_binding(plan.eval_config_binding),
+                resolve_miprov2_eval_config_binding(plan.eval_config_binding),
             )
             continue
         if plan.kind == "proposal_model":
@@ -270,6 +274,28 @@ def _issue_baseline_intent(adapter, driver, request, state):
     assert len(output.evaluation_intents) == 1
     issued = Miprov2State.model_validate(output.state_delta[MIPROV2_STATE_KEY])
     return output.evaluation_intents[0], issued
+
+
+def test_baseline_intent_uses_exact_request_candidate_without_proposal(
+    tmp_path,
+) -> None:
+    _harness, request, adapter, _store, driver, state = _adapter_case(
+        tmp_path,
+        templates=("Instruction: durable {query}.",),
+    )
+    pending = _state_pending_baseline_intent(driver, state)
+    exact_request = _request_for(request, pending)
+
+    output = adapter.invoke(exact_request, ())
+
+    assert output.proposed_candidates == ()
+    assert len(output.evaluation_intents) == 1
+    intent = output.evaluation_intents[0]
+    assert intent.purpose == "miprov2_baseline"
+    assert intent.candidate == state.control.base_candidate
+    assert intent.candidate in tuple(
+        candidate_reference(item) for item in exact_request.candidates
+    )
 
 
 def test_rejected_resolution_folds_to_a_terminal_failed_step(

@@ -7,7 +7,7 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore
 
 import whetstone.optimization as optimization
-from tests.optimization.miprov2.test_control import _defaults
+from tests.optimization.miprov2.support import miprov2_injected_defaults
 from tests.optimization.support import candidate, python_format_contract
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.experiment.candidate import (
@@ -57,7 +57,7 @@ def _unused_executor() -> DurableProposalExecutor:
 
 
 def _adapter() -> Miprov2Adapter:
-    defaults = _defaults()
+    defaults = miprov2_injected_defaults()
     transport = FakeProposerTransport(
         {},
         execution_policy_hash="a" * 64,
@@ -100,7 +100,7 @@ def test_adapter_rejects_a_structural_proposal_executor() -> None:
         def execute(self, **_kwargs):
             raise AssertionError("test does not execute proposal effects")
 
-    defaults = _defaults()
+    defaults = miprov2_injected_defaults()
     transport = FakeProposerTransport(
         {},
         execution_policy_hash="a" * 64,

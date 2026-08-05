@@ -6,8 +6,11 @@ import pytest
 from dr_store import ObjectStore, SqliteBackend
 from pydantic import ValidationError
 
-from tests.optimization.miprov2.test_control import _configure
-from tests.optimization.miprov2.test_evidence import TASK, _fixture
+from tests.optimization.miprov2.support import (
+    MIPROV2_EVIDENCE_TASK_IDENTITY,
+    configure_test_miprov2,
+    make_miprov2_evidence_fixture,
+)
 from tests.optimization.support import candidate, internal_reward_policy
 from whetstone.core.identity import (
     TypedRef,
@@ -125,7 +128,10 @@ def test_minibatch_promotion_cadence_is_frozen(
 
 def test_failed_observation_is_zero_and_has_no_reward(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "study-observation.sqlite"))
-    intent, context = _fixture(store, reward_policy_hash=FULL_A)
+    intent, context = make_miprov2_evidence_fixture(
+        store,
+        reward_policy_hash=FULL_A,
+    )
 
     observation = Miprov2EvaluationObservation(
         run_id="run",
@@ -154,7 +160,10 @@ def test_failed_observation_rejects_score_or_reward_model_copy_bypass(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "study-bypass.sqlite"))
-    intent, context = _fixture(store, reward_policy_hash=FULL_A)
+    intent, context = make_miprov2_evidence_fixture(
+        store,
+        reward_policy_hash=FULL_A,
+    )
     payload = {
         "run_id": "run",
         "intent_id": "intent",
@@ -184,7 +193,10 @@ def test_failed_observation_rejects_score_or_reward_model_copy_bypass(
 
 def test_observation_candidate_is_an_exact_candidate_ref(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "study-candidate.sqlite"))
-    intent, context = _fixture(store, reward_policy_hash=FULL_A)
+    intent, context = make_miprov2_evidence_fixture(
+        store,
+        reward_policy_hash=FULL_A,
+    )
     other = candidate_reference(candidate("other", text="Other {query}."))
 
     with pytest.raises(ValidationError):
@@ -211,7 +223,7 @@ def test_observation_candidate_is_an_exact_candidate_ref(tmp_path) -> None:
 
 
 def test_candidate_assembly_recomputes_exact_native_candidate() -> None:
-    control = _configure()
+    control = configure_test_miprov2()
     instruction = "Improved {query}."
     instruction_hash = compute_identity_hash(
         schema="whetstone.miprov2_instruction",
@@ -335,7 +347,7 @@ def _study_observation(
         effect_identity_hash=effect_hash,
         purpose=purpose,
         candidate=candidate_ref,
-        task_batch_identities=(TASK,),
+        task_batch_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         eval_config=binding.eval_config,
         eval_config_binding=binding,
         evaluation_binding=evaluation_binding,
@@ -413,11 +425,11 @@ def _study_case(
     seed: int = 23,
 ):
     store = ObjectStore(SqliteBackend(tmp_path / "study-case.sqlite"))
-    _, context = _fixture(
+    _, context = make_miprov2_evidence_fixture(
         store,
         reward_policy_hash=internal_reward_policy().identity_hash(),
     )
-    control = _configure()
+    control = configure_test_miprov2()
     instructions = tuple(
         f"Instruction {index} {{query}}." for index in range(4)
     )
@@ -443,7 +455,7 @@ def _study_case(
             minibatch_full_eval_steps=steps,
         ),
         run_id="study-run",
-        validation_task_identities=(TASK,),
+        validation_task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         validation_eval_source=(
             context.eval_config_binding.request.source_eval_config
         ),
@@ -527,11 +539,11 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "study-flow.sqlite"))
-    _, context = _fixture(
+    _, context = make_miprov2_evidence_fixture(
         store,
         reward_policy_hash=internal_reward_policy().identity_hash(),
     )
-    control = _configure()
+    control = configure_test_miprov2()
     instruction_hashes = tuple(
         compute_identity_hash(
             schema="whetstone.miprov2_instruction",
@@ -554,7 +566,7 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
             minibatch_full_eval_steps=5,
         ),
         run_id="study-run",
-        validation_task_identities=(TASK,),
+        validation_task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         validation_eval_source=(
             context.eval_config_binding.request.source_eval_config
         ),

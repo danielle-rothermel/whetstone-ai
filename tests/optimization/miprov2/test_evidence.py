@@ -1,21 +1,17 @@
 from __future__ import annotations
 
-import hashlib
 from copy import deepcopy
 from typing import Any, cast
 
 import pytest
-from dr_code.eval import (
-    DefinitionRef,
-    EvalConfig,
-    RepeatPlan,
-    SamplingDefinition,
-    TaskSet,
-)
-from dr_code.eval.identity import SCHEMA_EVAL_CONFIG, identity_hash_for
 from dr_serialize import Jsonable
 from dr_store import ObjectStore, SqliteBackend
 
+from tests.optimization.miprov2.support import (
+    MIPROV2_EVIDENCE_TASK_IDENTITY,
+    make_miprov2_evidence_fixture,
+    persist_test_record,
+)
 from tests.optimization.support import candidate
 from whetstone.core.identity import (
     ImmutableJsonObject,
@@ -41,10 +37,6 @@ from whetstone.evaluation.traces import (
     ExecutedComponentTracePayload,
     ExecutedRowState,
 )
-from whetstone.experiment.binding import (
-    EvaluationBinding,
-    eval_config_reference,
-)
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.experiment.reward import (
     MissingDataPolicy,
@@ -54,173 +46,22 @@ from whetstone.experiment.reward import (
     reward_reference,
 )
 from whetstone.optimization.contracts import (
-    EvaluationIntent,
     IntentOutcome,
     IntentResolution,
     ResolutionClass,
     ResolutionDetail,
 )
-from whetstone.optimization.miprov2.bootstrap import BootstrapAttemptPlan
 from whetstone.optimization.miprov2.eval_config import (
-    Miprov2EvalConfigBinding,
-    Miprov2EvalConfigBindingRequest,
     Miprov2EvaluationExecutionPolicy,
-    derive_eval_config_reference,
 )
 from whetstone.optimization.miprov2.evidence import (
     Miprov2EvidenceResolver,
-    Miprov2IntentContext,
-    persist_miprov2_intent_context,
 )
-from whetstone.optimization.miprov2.rng import Miprov2DurableBindings
 
 FULL_A = "a" * 64
 FULL_B = "b" * 64
 FULL_C = "c" * 64
 FULL_D = "d" * 64
-TASK = hashlib.sha256(b"miprov2-evidence-task").hexdigest()
-
-
-def _put(store: ObjectStore, schema: str, record: Jsonable) -> TypedRef:
-    ref, _ = store.put(schema, record)
-    return TypedRef(schema_name=ref.schema, content_hash=ref.content_hash)
-
-
-def _source_eval_config():
-    definition = DefinitionRef(
-        definition_id="miprov2-evidence",
-        version="1",
-        schema_name="dr_code.eval_definition",
-        identity_hash=FULL_A,
-    )
-    identity = identity_hash_for(
-        schema=SCHEMA_EVAL_CONFIG,
-        payload={
-            "definition_identity": FULL_A,
-            "sampling_config": FULL_B,
-            "evaluation_procedure_config": FULL_C,
-            "aggregation_config": FULL_D,
-        },
-    )
-    return eval_config_reference(
-        EvalConfig(
-            definition_ref=definition,
-            sampling_config_hash=FULL_B,
-            evaluation_procedure_config_hash=FULL_C,
-            aggregation_config_hash=FULL_D,
-            config_identity_hash=identity,
-        )
-    )
-
-
-def _bindings() -> Miprov2DurableBindings:
-    return Miprov2DurableBindings(
-        control_identity_hash=FULL_A,
-        prompt_route_identity_hash=FULL_B,
-        task_route_identity_hash=FULL_C,
-        execution_policy_identity_hash=FULL_D,
-        prompt_adapter_identity_hash=FULL_A,
-        base_candidate_identity_hash=FULL_B,
-        teacher_candidate_identity_hash=FULL_C,
-    )
-
-
-def _fixture(store: ObjectStore, *, reward_policy_hash: str):
-    attempt = BootstrapAttemptPlan(
-        bindings=_bindings(),
-        plan_identity_hash=FULL_D,
-        task_index=0,
-        task_identity=TASK,
-        round_index=0,
-        copy_task_model=False,
-        rollout_id=None,
-        temperature=None,
-    )
-    policy = Miprov2EvaluationExecutionPolicy(
-        num_threads=1,
-        max_errors=1,
-        provide_traceback=None,
-        task_model_identity_hash=FULL_C,
-        provider_execution_policy_hash=FULL_D,
-    )
-    request = Miprov2EvalConfigBindingRequest(
-        control_identity_hash=FULL_A,
-        source_eval_config=_source_eval_config(),
-        purpose="bootstrap",
-        effect_identity_hash=attempt.identity_hash(),
-        execution_policy=policy,
-        task_batch_identities=(TASK,),
-    )
-    task_set = TaskSet(
-        manifest_id="miprov2-evidence-tasks",
-        version="1",
-        dataset_revision="test",
-        task_identities=(TASK,),
-    )
-    repeat_plan = RepeatPlan(
-        plan_id="miprov2-evidence-repeats",
-        version="1",
-        task_identities=(TASK,),
-        repeat_count=1,
-    )
-    sampling = SamplingDefinition(
-        definition_id="miprov2-evidence-sampling",
-        version="1",
-    ).materialize(
-        {
-            "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
-        }
-    )
-    eval_binding = Miprov2EvalConfigBinding(
-        request=request,
-        task_set=task_set,
-        repeat_plan=repeat_plan,
-        sampling_config=sampling,
-        eval_config=derive_eval_config_reference(
-            request.source_eval_config,
-            sampling,
-        ),
-    )
-    exact_binding = EvaluationBinding(
-        schema_version=2,
-        eval_config=eval_binding.eval_config,
-        role=EvaluationRole.INTERNAL,
-        campaign="miprov2-evidence",
-    )
-    candidate_ref = candidate_reference(
-        candidate("teacher", text="Encode {query}.")
-    )
-    intent = EvaluationIntent(
-        intent_id="run:miprov2:bootstrap:evidence",
-        candidate=candidate_ref,
-        target_eval_config=eval_binding.eval_config,
-        evaluation_binding=exact_binding,
-        purpose="miprov2_bootstrap",
-        run_id="run",
-        step_index=0,
-        expected_reward_policy_hash=reward_policy_hash,
-    )
-    context = Miprov2IntentContext(
-        control_identity_hash=FULL_A,
-        run_id="run",
-        effect_kind="bootstrap",
-        effect_identity_hash=attempt.identity_hash(),
-        intent_id=intent.intent_id,
-        candidate=candidate_ref,
-        task_batch_identities=(TASK,),
-        eval_config=eval_binding.eval_config,
-        eval_config_binding=eval_binding,
-        evaluation_binding=exact_binding,
-        execution_policy=policy,
-        reward_policy_hash=reward_policy_hash,
-        bootstrap_attempt=attempt,
-        optimizable_component_id="encode",
-        optimizable_trace_index=0,
-    )
-    persist_miprov2_intent_context(store, context)
-    assert context.schema_version == 2
-    return intent, context
 
 
 def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
@@ -230,7 +71,7 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         terms=(RewardTerm(name="score", weight=1.0),),
         missing_data=MissingDataPolicy.FAIL,
     )
-    intent, _ = _fixture(
+    intent, _ = make_miprov2_evidence_fixture(
         store,
         reward_policy_hash=policy.identity_hash(),
     )
@@ -262,12 +103,12 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         graph_hash=FULL_B,
         purpose=intent.purpose,
         split_role="internal",
-        task_identities=(TASK,),
+        task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         repeat_count=1,
         rows=(
             EvaluationComponentTraceRow(
                 instance_id="instance-1",
-                task_identity=TASK,
+                task_identity=MIPROV2_EVIDENCE_TASK_IDENTITY,
                 repeat=0,
                 executed_component_trace=ExecutedComponentTracePayload(
                     row_state=ExecutedRowState.SUCCESS,
@@ -276,15 +117,19 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
             ),
         ),
     )
-    traces_ref = _put(
+    traces_ref = persist_test_record(
         store,
         EVALUATION_COMPONENT_TRACES_SCHEMA,
         traces.record_content(),
     )
-    outputs_ref = _put(
+    outputs_ref = persist_test_record(
         store, EVALUATION_OUTPUTS_SCHEMA, {"display": final_text}
     )
-    aggregate_ref = _put(store, "whetstone.rollout_aggregate", {"score": 0.8})
+    aggregate_ref = persist_test_record(
+        store,
+        "whetstone.rollout_aggregate",
+        {"score": 0.8},
+    )
     reward = apply_reward_policy(
         policy,
         aggregates={"score": 0.8},
@@ -292,7 +137,11 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         evidence_refs=(aggregate_ref,),
     )
     reward_ref = reward_reference(reward)
-    _put(store, reward_ref.record_ref.schema_name, reward.record_content())
+    persist_test_record(
+        store,
+        reward_ref.record_ref.schema_name,
+        reward.record_content(),
+    )
     evidence = EvaluationEvidence(
         schema_version=2,
         candidate=intent.candidate,
@@ -301,7 +150,7 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         graph_config_ref="graph://miprov2-evidence",
         purpose=intent.purpose,
         dataset_identity="dataset-revision",
-        task_identities=(TASK,),
+        task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         repeat_count=1,
         per_task_values=(0.8,),
         per_task_counts=(1,),
@@ -320,7 +169,7 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         aggregate_status="ok",
         reward_ref=reward_ref,
     )
-    evidence_ref = _put(
+    evidence_ref = persist_test_record(
         store,
         EVALUATION_EVIDENCE_SCHEMA,
         evidence.record_content(),
@@ -349,7 +198,7 @@ def _failed_resolution(store: ObjectStore) -> IntentResolution:
         exception_type="ProviderError",
         message="provider failed",
     )
-    failure_ref = _put(
+    failure_ref = persist_test_record(
         store,
         EVALUATION_FAILURE_SCHEMA,
         failure.record_content(),
@@ -378,7 +227,7 @@ def _replace_trace(
     *,
     evidence_updates: dict[str, object] | None = None,
 ) -> IntentResolution:
-    trace_ref = _put(
+    trace_ref = persist_test_record(
         store,
         EVALUATION_COMPONENT_TRACES_SCHEMA,
         trace_record,
@@ -390,7 +239,11 @@ def _replace_trace(
     evidence["component_traces_ref"] = trace_ref.model_dump(mode="json")
     if evidence_updates:
         evidence.update(evidence_updates)
-    evidence_ref = _put(store, EVALUATION_EVIDENCE_SCHEMA, evidence)
+    evidence_ref = persist_test_record(
+        store,
+        EVALUATION_EVIDENCE_SCHEMA,
+        evidence,
+    )
     payload = resolution.model_dump(mode="json")
     payload["evaluation_result_ref"] = evidence_ref.model_dump(mode="json")
     return IntentResolution.model_validate(payload)

@@ -130,6 +130,10 @@ class Miprov2Adapter:
     :class:`DurableProposalExecutor`, so an interrupted Step recovers by
     replaying the executor's completed checkpoint instead of failing the run.
     The executor's own durability contract states the guarantee it delivers.
+
+    Current :class:`OptimizationHarness` terminalization supports a newly
+    derived accepted candidate. An unchanged base-candidate winner is not a
+    supported terminal output.
     """
 
     def __init__(
@@ -214,7 +218,10 @@ class Miprov2Adapter:
                 raise ValueError(
                     "continuation requires only exact prior result and ref"
                 )
-            if step_result_reference(prior_result) != prior_result_ref:
+            if (
+                step_result_reference(prior_result).record_ref
+                != prior_result_ref
+            ):
                 raise ValueError("prior result ref is not its exact record")
             state_ref = prior_result.state_ref
             if state_ref is None:
@@ -452,7 +459,9 @@ class Miprov2Adapter:
             ),
         )
         return AdapterOutput(
-            proposed_candidates=(effect.candidate,),
+            proposed_candidates=(
+                () if effect_kind == "baseline" else (effect.candidate,)
+            ),
             evaluation_intents=(intent,),
             budget_delta=BudgetDelta(
                 consumed={
@@ -640,7 +649,7 @@ class Miprov2Adapter:
         prior = OptimizationStepResult.model_validate(
             self._store.get(ref.reference)
         )
-        if step_result_reference(prior) != ref:
+        if step_result_reference(prior).record_ref != ref:
             raise ValueError("prior result ref is not its exact record")
         if (
             prior.run_id != request.run_id

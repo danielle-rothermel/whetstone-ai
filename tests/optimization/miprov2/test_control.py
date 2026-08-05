@@ -5,22 +5,15 @@ import math
 from typing import Any
 
 import pytest
-from dr_providers import openrouter_chat_config
 
+from tests.optimization.miprov2.support import (
+    MIPROV2_TASK_IDENTITIES,
+    configure_test_miprov2,
+    miprov2_injected_defaults,
+)
 from tests.optimization.support import (
     FULL_A,
-    FULL_B,
-    FULL_C,
     candidate,
-    eval_config,
-    internal_reward_policy,
-    python_format_contract,
-)
-from whetstone.core.identity import IdentityRef, typed_ref_for_record
-from whetstone.core.roles import EvaluationRole
-from whetstone.experiment.binding import (
-    EvaluationBinding,
-    eval_config_reference,
 )
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.miprov2.control import (
@@ -30,65 +23,13 @@ from whetstone.optimization.miprov2.control import (
     MIPROV2_REFERENCE_COMMIT,
     Miprov2AutoMode,
     Miprov2ComponentSpec,
-    Miprov2InjectedDefaults,
     Miprov2ProgramLayout,
     configure_miprov2,
 )
 from whetstone.optimization.proposal.proposer import (
-    ProposerConfig,
     prompt_adapter_identity_hash,
 )
 from whetstone.provider.language_model import PlainPromptAdapter
-
-TASKS = tuple(f"{index:064x}" for index in range(1, 8))
-
-
-def _defaults() -> Miprov2InjectedDefaults:
-    provider = openrouter_chat_config(model="proposal-model")
-    validation = eval_config_reference(eval_config(FULL_B))
-    return Miprov2InjectedDefaults(
-        prompt_model=ProposerConfig(
-            provider_call_config=IdentityRef(
-                record_ref=typed_ref_for_record(
-                    "dr_providers.provider_call_config",
-                    provider.model_dump(mode="json"),
-                ),
-                identity_hash=provider.identity_hash,
-            )
-        ),
-        bootstrap_eval_source=eval_config_reference(eval_config(FULL_A)),
-        validation_eval_source=validation,
-        reward_policy=internal_reward_policy(),
-        evaluation_binding=EvaluationBinding(
-            schema_version=2,
-            eval_config=validation,
-            role=EvaluationRole.INTERNAL,
-            campaign="miprov2-control-test",
-        ),
-        provider_execution_policy_hash=FULL_B,
-        task_model_identity_hash=FULL_C,
-        prompt_adapter=PlainPromptAdapter(),
-        template_render_contract=python_format_contract(),
-        max_errors=3,
-        validation_eval_source_is_metric_authority=True,
-    )
-
-
-def _configure(**updates):
-    values: dict[str, Any] = {
-        "base_candidate": candidate_reference(
-            candidate("base", text="Answer {query}.")
-        ),
-        "trainset": TASKS[:4],
-        "valset": TASKS[4:],
-        "auto": None,
-        "num_candidates": 2,
-        "num_trials": 2,
-        "minibatch": False,
-        "defaults": _defaults(),
-    }
-    values.update(updates)
-    return configure_miprov2(**values)
 
 
 def test_public_surface_keeps_frozen_versions() -> None:
@@ -101,7 +42,7 @@ def test_public_surface_keeps_frozen_versions() -> None:
 
 
 def test_default_layout_admits_one_generate_component() -> None:
-    control = _configure()
+    control = configure_test_miprov2()
 
     assert control.component_ids == ("generate",)
     assert control.base_candidate.record.payload["user_prompt_template"] == (
@@ -122,7 +63,9 @@ def test_ed1_layout_admits_exact_encoder_component() -> None:
         ),
     )
 
-    assert _configure(program_layout=layout).component_ids == ("encode",)
+    assert configure_test_miprov2(program_layout=layout).component_ids == (
+        "encode",
+    )
 
 
 @pytest.mark.parametrize(
@@ -160,7 +103,7 @@ def test_control_preserves_non_prompt_payload_data() -> None:
         }
     )
 
-    control = _configure(base_candidate=candidate_reference(base))
+    control = configure_test_miprov2(base_candidate=candidate_reference(base))
 
     assert control.base_candidate.record.payload["fixed"] == {
         "nested": [1, 2, 3]
@@ -168,7 +111,7 @@ def test_control_preserves_non_prompt_payload_data() -> None:
 
 
 def test_control_roundtrip_rejects_derived_identity_tampering() -> None:
-    control = _configure()
+    control = configure_test_miprov2()
     record = control.model_dump(mode="json")
     record["program_layout"]["component_specs"][0]["component_id"] = "decode"
 
@@ -190,7 +133,7 @@ def test_auto_modes_match_frozen_reference_settings(
     fewshot: int,
     trials: int,
 ) -> None:
-    control = _configure(
+    control = configure_test_miprov2(
         auto=mode,
         num_candidates=None,
         num_trials=None,
@@ -204,7 +147,7 @@ def test_auto_modes_match_frozen_reference_settings(
 
 
 def test_zeroshot_auto_uses_all_instruction_candidates() -> None:
-    control = _configure(
+    control = configure_test_miprov2(
         auto="light",
         num_candidates=None,
         num_trials=None,
@@ -218,22 +161,22 @@ def test_zeroshot_auto_uses_all_instruction_candidates() -> None:
 
 
 def test_default_dataset_split_and_seed_zero_match_reference() -> None:
-    control = _configure(valset=None, run_seed=0, seed=9)
+    control = configure_test_miprov2(valset=None, run_seed=0, seed=9)
 
-    assert control.trainset_task_identities == TASKS[:1]
-    assert control.valset_task_identities == TASKS[1:4]
+    assert control.trainset_task_identities == MIPROV2_TASK_IDENTITIES[:1]
+    assert control.valset_task_identities == MIPROV2_TASK_IDENTITIES[1:4]
     assert control.seed == 9
 
 
 def test_explicit_nonzero_run_seed_controls_auto_sampling() -> None:
-    first = _configure(
+    first = configure_test_miprov2(
         auto="light",
         num_candidates=None,
         num_trials=None,
         valset=None,
         run_seed=4,
     )
-    replay = _configure(
+    replay = configure_test_miprov2(
         auto="light",
         num_candidates=None,
         num_trials=None,
@@ -250,9 +193,9 @@ def test_explicit_nonzero_run_seed_controls_auto_sampling() -> None:
 
 def test_manual_recommendation_and_auto_conflicts_match_reference() -> None:
     with pytest.raises(ValueError, match="recommend setting"):
-        _configure(num_trials=None)
+        configure_test_miprov2(num_trials=None)
     with pytest.raises(ValueError, match="would be overridden"):
-        _configure(auto="light")
+        configure_test_miprov2(auto="light")
 
 
 @pytest.mark.parametrize(
@@ -291,7 +234,7 @@ def test_reference_argument_errors_precede_dataset_validation(
     updates: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        _configure(**updates)
+        configure_test_miprov2(**updates)
 
 
 @pytest.mark.parametrize(
@@ -308,17 +251,20 @@ def test_numeric_safety_boundaries_are_preserved(
     updates: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        _configure(**updates)
+        configure_test_miprov2(**updates)
 
 
 def test_task_identities_must_be_full_hashes() -> None:
     with pytest.raises(ValueError, match="trainset_task_identities"):
-        _configure(trainset=("not-a-hash",), valset=TASKS[4:])
+        configure_test_miprov2(
+            trainset=("not-a-hash",),
+            valset=MIPROV2_TASK_IDENTITIES[4:],
+        )
 
 
 def test_nested_settings_are_snapshotted_and_immutable() -> None:
     settings = {"nested": {"items": [1, 2]}}
-    control = _configure(teacher_settings=settings)
+    control = configure_test_miprov2(teacher_settings=settings)
     settings["nested"]["items"].append(3)
 
     assert control.teacher_settings == {"nested": {"items": [1, 2]}}
@@ -327,7 +273,7 @@ def test_nested_settings_are_snapshotted_and_immutable() -> None:
 
 
 def test_bootstrap_and_validation_sources_remain_independent() -> None:
-    control = _configure()
+    control = configure_test_miprov2()
 
     assert control.bootstrap_eval_source != control.validation_eval_source
     assert control.evaluation_binding.eval_config == (
@@ -336,12 +282,12 @@ def test_bootstrap_and_validation_sources_remain_independent() -> None:
 
 
 def test_metric_requires_explicit_or_injected_authority() -> None:
-    defaults = _defaults().model_copy(
+    defaults = miprov2_injected_defaults().model_copy(
         update={"validation_eval_source_is_metric_authority": False}
     )
 
     with pytest.raises(ValueError, match="metric is required"):
-        _configure(defaults=defaults)
+        configure_test_miprov2(defaults=defaults)
 
 
 def test_public_signature_preserves_dspy_defaults() -> None:
@@ -359,7 +305,7 @@ def test_public_signature_preserves_dspy_defaults() -> None:
     (
         ({"trainset": ()}, "Trainset cannot be empty"),
         (
-            {"trainset": (TASKS[0],), "valset": None},
+            {"trainset": (MIPROV2_TASK_IDENTITIES[0],), "valset": None},
             "at least 2 examples",
         ),
         ({"valset": ()}, "Validation set must have at least 1 example"),
@@ -369,22 +315,30 @@ def test_dataset_validation_matches_frozen_reference(
     updates: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        _configure(**updates)
+        configure_test_miprov2(**updates)
 
 
 def test_minibatch_size_is_checked_only_when_minibatching() -> None:
-    valset = (TASKS[4],)
+    valset = (MIPROV2_TASK_IDENTITIES[4],)
 
     with pytest.raises(ValueError, match="Minibatch size cannot exceed"):
-        _configure(valset=valset, minibatch=True, minibatch_size=2)
+        configure_test_miprov2(
+            valset=valset,
+            minibatch=True,
+            minibatch_size=2,
+        )
 
-    control = _configure(valset=valset, minibatch=False, minibatch_size=2)
+    control = configure_test_miprov2(
+        valset=valset,
+        minibatch=False,
+        minibatch_size=2,
+    )
     assert control.minibatch is False
     assert control.minibatch_size == 2
 
 
 def test_dataset_rng_replay_resumes_after_auto_sampling() -> None:
-    control = _configure(
+    control = configure_test_miprov2(
         auto="light",
         num_candidates=None,
         num_trials=None,
@@ -404,9 +358,12 @@ def test_dataset_rng_replay_resumes_after_auto_sampling() -> None:
 
 
 def test_teacher_defaults_and_explicit_compiled_state_are_bound() -> None:
-    default = _configure()
+    default = configure_test_miprov2()
     teacher = candidate_reference(candidate("teacher", text="Teach {query}."))
-    explicit = _configure(teacher=teacher, teacher_compiled=True)
+    explicit = configure_test_miprov2(
+        teacher=teacher,
+        teacher_compiled=True,
+    )
 
     assert default.teacher_candidate == default.base_candidate
     assert default.teacher_compiled is False
@@ -426,9 +383,9 @@ def test_teacher_requires_the_same_hard_cut_prompt_surface() -> None:
     )
 
     with pytest.raises(ValueError, match="teacher candidate component field"):
-        _configure(teacher=invalid_teacher)
+        configure_test_miprov2(teacher=invalid_teacher)
     with pytest.raises(ValueError, match="teacher_compiled must be a boolean"):
-        _configure(teacher_compiled=1)
+        configure_test_miprov2(teacher_compiled=1)
 
 
 def test_component_spec_binds_the_prompt_adapter_identity() -> None:
@@ -443,7 +400,7 @@ def test_component_spec_binds_the_prompt_adapter_identity() -> None:
     )
 
     with pytest.raises(ValueError, match="prompt format conflicts"):
-        _configure(program_layout=layout)
+        configure_test_miprov2(program_layout=layout)
 
 
 @pytest.mark.parametrize(
@@ -460,7 +417,7 @@ def test_integer_safety_boundaries_remain_strict(
     updates: dict[str, Any], message: str
 ) -> None:
     with pytest.raises(ValueError, match=message):
-        _configure(**updates)
+        configure_test_miprov2(**updates)
 
 
 @pytest.mark.parametrize(
@@ -482,7 +439,7 @@ def test_integer_safety_boundaries_remain_strict(
 def test_control_deserialization_rejects_schema_authority_drift(
     field: str, value: Any, message: str
 ) -> None:
-    control = _configure()
+    control = configure_test_miprov2()
     record = control.model_dump(mode="json")
     record[field] = value
 
@@ -491,7 +448,7 @@ def test_control_deserialization_rejects_schema_authority_drift(
 
 
 def test_persisted_optimizer_identity_conflict_is_rejected() -> None:
-    control = _configure()
+    control = configure_test_miprov2()
 
     control.require_identity_hash(control.identity_hash())
     with pytest.raises(ValueError, match="conflicts with resolved"):

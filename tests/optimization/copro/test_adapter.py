@@ -5,29 +5,28 @@ from typing import cast
 
 import pytest
 
+from tests.optimization.copro.support import (
+    configure_test_copro,
+    copro_candidate,
+    copro_run,
+    copro_step_request,
+    durable_copro_proposal_executor,
+    make_test_copro_adapter,
+)
 from tests.optimization.support import (
     FULL_A,
     FULL_B,
     FULL_C,
     RecordingEvaluationService,
-    evaluation_binding,
     internal_reward_policy,
     make_harness,
     make_store,
 )
 from whetstone.core.effects.models import ReplayPolicy
-from whetstone.core.identity import (
-    IdentityRef,
-    typed_ref_for_record,
-)
+from whetstone.core.identity import typed_ref_for_record
 from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
-from whetstone.experiment.candidate import (
-    Candidate,
-    TemplateRenderContract,
-    TemplateRenderKind,
-    candidate_reference,
-)
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.experiment.reward import (
     apply_reward_policy,
     reward_reference,
@@ -38,21 +37,13 @@ from whetstone.optimization.adapters import (
 )
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA_VERSION,
-    STEP_RESULT_SCHEMA,
-    BudgetState,
     EvaluationIntent,
     IntentOutcome,
     IntentResolution,
-    OptimizationRun,
-    OptimizationRunRef,
-    OptimizationStepRequest,
-    OutputContract,
     ResolutionClass,
     ResolutionDetail,
-    StepKind,
     StepMode,
     StepStatus,
-    optimization_run_reference,
 )
 from whetstone.optimization.copro.adapter import (
     HISTORY_PROPOSAL,
@@ -64,160 +55,10 @@ from whetstone.optimization.copro.adapter import (
     CoproState,
     rank_attempt_history,
 )
-from whetstone.optimization.copro.control import (
-    CoproInjectedDefaults,
-    configure_copro,
-)
 from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
     FakeProposerTransport,
-    ProposalExecutorDurabilityContract,
-    ProposerConfig,
-    _durable_proposal_executor,
 )
-from whetstone.provider.language_model import PlainPromptAdapter
-
-
-def _direct_executor(
-    *, policy_identity_hash: str = FULL_C
-) -> DurableProposalExecutor:
-    """Mint the canonical capability over an in-process pass-through."""
-
-    def execute(*, config, request, transport, count):
-        return transport.draft(config, request, count)
-
-    return _durable_proposal_executor(
-        durability_contract=ProposalExecutorDurabilityContract(
-            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
-            policy_identity_hash=policy_identity_hash,
-        ),
-        execute=execute,
-    )
-
-
-def _prompt_model(*, temperature: float = 1.4) -> ProposerConfig:
-    return ProposerConfig(
-        provider_call_config=IdentityRef(
-            record_ref=typed_ref_for_record(
-                "dr_providers.provider_call_config",
-                {"route": "copro-proposer"},
-            ),
-            identity_hash=FULL_A,
-        ),
-        temperature=temperature,
-    )
-
-
-def _control(
-    *,
-    breadth: int = 3,
-    depth: int = 1,
-    track_stats: bool = False,
-):
-    policy = internal_reward_policy()
-    return configure_copro(
-        breadth=breadth,
-        depth=depth,
-        track_stats=track_stats,
-        defaults=CoproInjectedDefaults(
-            prompt_model=_prompt_model(),
-            evaluation_binding=evaluation_binding(),
-            expected_reward_policy_hash=policy.identity_hash(),
-            provider_execution_policy_hash=FULL_A,
-            prompt_adapter=PlainPromptAdapter(),
-        ),
-    )
-
-
-def _adapter(
-    script: dict[tuple[str, int], tuple[str, ...]],
-    *,
-    control=None,
-):
-    exact_control = control or _control()
-    transport = FakeProposerTransport(
-        script,
-        execution_policy_hash=FULL_A,
-        prompt_adapter_identity_hash=exact_control.prompt_adapter_identity_hash,
-    )
-    return (
-        CoproAdapter(
-            control=exact_control,
-            transport=transport,
-            proposal_executor=_direct_executor(),
-        ),
-        transport,
-        exact_control,
-    )
-
-
-def _candidate(cid: str, text: str, *, parent: str = "root") -> Candidate:
-    return Candidate(
-        candidate_id=cid,
-        base_ref=typed_ref_for_record(
-            "test.copro_candidate_parent", {"id": parent}
-        ),
-        payload={"user_prompt_template": text, "fixed": "unchanged"},
-    )
-
-
-def _run(control) -> OptimizationRunRef:
-    return optimization_run_reference(
-        OptimizationRun(
-            run_id="copro-run",
-            optimizer_config=control.reference(),
-            adapter_key="copro",
-            mode=StepMode.PROPOSAL_ONLY,
-            terminal_output_contract=OutputContract(returned_proposal_count=1),
-            template_render_contract=TemplateRenderContract(
-                kind=TemplateRenderKind.PYTHON_FORMAT_V1,
-                available_fields=("input",),
-                required_fields=("input",),
-            ),
-            reward_policy=internal_reward_policy(),
-        )
-    )
-
-
-def _request(
-    control,
-    *,
-    step_index: int = 0,
-    candidates: tuple[Candidate, ...] | None = None,
-    history: list[dict[str, object]] | None = None,
-    proposal_budget: int | None = None,
-) -> OptimizationStepRequest:
-    accepted_count = (
-        control.breadth - 1 if step_index == 0 else control.breadth
-    )
-    return OptimizationStepRequest(
-        run=_run(control),
-        step_id=f"copro-{step_index}",
-        kind=StepKind.PROPOSAL,
-        step_index=step_index,
-        prior_step_result_ref=(
-            None
-            if step_index == 0
-            else typed_ref_for_record(
-                STEP_RESULT_SCHEMA, {"step": step_index - 1}
-            )
-        ),
-        candidates=candidates or (_candidate("baseline", "base {input}"),),
-        pools={"attempt_history": history or []},
-        hyperparameters=control.step_hyperparameters(iteration=step_index),
-        budget=BudgetState(
-            remaining={
-                "proposal_calls": (
-                    proposal_budget
-                    if proposal_budget is not None
-                    else control.breadth
-                )
-            }
-        ),
-        step_output_contract=OutputContract(
-            returned_proposal_count=accepted_count
-        ),
-    )
 
 
 def _entry(
@@ -249,7 +90,7 @@ def _entry(
         run_id="copro-run",
         step_index=occurrence_ordinal // control.breadth,
         intent_id=f"intent-{occurrence_ordinal}",
-        candidate=candidate_reference(_candidate(cid, template)),
+        candidate=candidate_reference(copro_candidate(cid, template)),
         evaluation_binding=control.evaluation_binding,
         reward=reward_value,
         expected_reward_policy_hash=control.expected_reward_policy_hash,
@@ -275,10 +116,10 @@ def test_public_hyperparameter_defaults_match_dspy() -> None:
 def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
     None
 ):
-    adapter, transport, control = _adapter(
+    adapter, transport, control = make_test_copro_adapter(
         {(SEED_PROPOSAL, 0): ('"new {input}"', "other {input}")}
     )
-    request = _request(control)
+    request = copro_step_request(control)
 
     output = adapter.invoke(request, ())
 
@@ -307,7 +148,7 @@ def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
 
 
 def test_adapter_requires_the_executor_durable_workflow_replay() -> None:
-    adapter, _, _ = _adapter({})
+    adapter, _, _ = make_test_copro_adapter({})
 
     assert adapter.required_replay_policy is ReplayPolicy.DURABLE_WORKFLOW
     assert (
@@ -325,7 +166,7 @@ def test_adapter_rejects_a_structural_proposal_executor() -> None:
         def execute(self, **_kwargs):
             raise AssertionError("test does not execute proposal effects")
 
-    control = _control()
+    control = configure_test_copro()
     transport = FakeProposerTransport(
         {},
         execution_policy_hash=FULL_A,
@@ -345,7 +186,7 @@ def test_adapter_rejects_a_structural_proposal_executor() -> None:
 def test_idempotent_harness_rejects_before_copro_effects(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    adapter, transport, control = _adapter(
+    adapter, transport, control = make_test_copro_adapter(
         {(SEED_PROPOSAL, 0): ("new {input}", "other {input}")}
     )
     store = make_store(tmp_path)
@@ -355,7 +196,7 @@ def test_idempotent_harness_rejects_before_copro_effects(
     harness = make_harness(
         store=store,
         adapter_registry=MappingAdapterRegistry({"copro": adapter}),
-        run=_run(control),
+        run=copro_run(control),
         evaluation_service=service,
         adapter_replay_policy=ReplayPolicy.IDEMPOTENT,
     )
@@ -370,7 +211,7 @@ def test_idempotent_harness_rejects_before_copro_effects(
     monkeypatch.setattr(harness, "_put", record_put)
 
     with pytest.raises(AdapterReplayPolicyMismatchError) as caught:
-        harness.run_step(_request(control))
+        harness.run_step(copro_step_request(control))
 
     assert caught.value.configured_policy is ReplayPolicy.IDEMPOTENT
     assert caught.value.required_policy is ReplayPolicy.DURABLE_WORKFLOW
@@ -383,7 +224,7 @@ def test_idempotent_harness_rejects_before_copro_effects(
 def test_durable_workflow_harness_reaches_copro_and_replays_result(
     tmp_path,
 ) -> None:
-    adapter, transport, control = _adapter(
+    adapter, transport, control = make_test_copro_adapter(
         {(SEED_PROPOSAL, 0): ("new {input}", "other {input}")}
     )
     store = make_store(tmp_path)
@@ -393,11 +234,11 @@ def test_durable_workflow_harness_reaches_copro_and_replays_result(
     harness = make_harness(
         store=store,
         adapter_registry=MappingAdapterRegistry({"copro": adapter}),
-        run=_run(control),
+        run=copro_run(control),
         evaluation_service=service,
         adapter_replay_policy=ReplayPolicy.DURABLE_WORKFLOW,
     )
-    request = _request(control)
+    request = copro_step_request(control)
 
     result, result_ref = harness.run_step(request)
 
@@ -417,7 +258,7 @@ def test_durable_workflow_harness_reaches_copro_and_replays_result(
 def test_history_uses_top_unique_attempts_and_immutable_prompt_context() -> (
     None
 ):
-    control = _control(depth=3)
+    control = configure_test_copro(depth=3)
     history = [
         _entry(control, 0, "a-old", "a {input}", 0.7),
         _entry(control, 1, "b", "b {input}", 0.9),
@@ -427,13 +268,13 @@ def test_history_uses_top_unique_attempts_and_immutable_prompt_context() -> (
         _entry(control, 5, "e", "e {input}", 0.1),
     ]
     original = deepcopy(history)
-    adapter, transport, _ = _adapter(
+    adapter, transport, _ = make_test_copro_adapter(
         {(HISTORY_PROPOSAL, 2): ("x {input}", "y {input}", "z {input}")},
         control=control,
     )
 
     output = adapter.invoke(
-        _request(control, step_index=2, history=history), ()
+        copro_step_request(control, step_index=2, history=history), ()
     )
 
     assert history == original
@@ -454,11 +295,11 @@ def test_history_uses_top_unique_attempts_and_immutable_prompt_context() -> (
 def test_duplicate_templates_are_evaluated_before_history_deduplication() -> (
     None
 ):
-    adapter, _, control = _adapter(
+    adapter, _, control = make_test_copro_adapter(
         {(SEED_PROPOSAL, 0): ("duplicate {input}", "duplicate {input}")}
     )
 
-    output = adapter.invoke(_request(control), ())
+    output = adapter.invoke(copro_step_request(control), ())
 
     assert len(output.evaluation_intents) == 3
     assert [
@@ -468,9 +309,9 @@ def test_duplicate_templates_are_evaluated_before_history_deduplication() -> (
 
 
 def test_driver_owns_round_counts_ranking_and_statistics() -> None:
-    control = _control(depth=2, track_stats=True)
+    control = configure_test_copro(depth=2, track_stats=True)
     driver = CoproDriver(CoproConfig(breadth=3, depth=2, track_stats=True))
-    initial = _candidate("baseline", "base {input}")
+    initial = copro_candidate("baseline", "base {input}")
     first = tuple(
         CoproAttempt.model_validate(item)
         for item in (
@@ -515,7 +356,7 @@ def test_driver_owns_round_counts_ranking_and_statistics() -> None:
 
 
 def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
-    control = _control()
+    control = configure_test_copro()
     evaluation_result_ref = typed_ref_for_record(
         EVALUATION_EVIDENCE_SCHEMA, {"candidate": "a"}
     )
@@ -533,7 +374,7 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
     )
     intent = EvaluationIntent(
         intent_id="copro-run:0:0",
-        candidate=candidate_reference(_candidate("a", "a {input}")),
+        candidate=candidate_reference(copro_candidate("a", "a {input}")),
         target_eval_config=control.evaluation_binding.eval_config,
         evaluation_binding=control.evaluation_binding,
         purpose=SEED_PROPOSAL,
@@ -617,7 +458,7 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
 
 
 def test_attempt_wire_pins_separate_result_and_ordered_reward_refs() -> None:
-    control = _control()
+    control = configure_test_copro()
     attempt = CoproAttempt.model_validate(
         _entry(control, 0, "a", "a {input}", 0.75)
     )
@@ -649,7 +490,7 @@ def test_attempt_wire_pins_separate_result_and_ordered_reward_refs() -> None:
 
 
 def test_attempt_replay_rejects_missing_or_mismatched_result_ref() -> None:
-    control = _control()
+    control = configure_test_copro()
     record = _entry(control, 0, "a", "a {input}", 0.75)
 
     missing = dict(record)
@@ -666,7 +507,7 @@ def test_attempt_replay_rejects_missing_or_mismatched_result_ref() -> None:
 
 
 def test_attempt_replay_preserves_reward_citation_order() -> None:
-    control = _control()
+    control = configure_test_copro()
     first = typed_ref_for_record("test.aggregate", {"name": "first"})
     second = typed_ref_for_record("test.aggregate", {"name": "second"})
     reward_ref = reward_reference(
@@ -696,10 +537,10 @@ def test_attempt_replay_preserves_reward_citation_order() -> None:
 
 
 def test_completed_resolution_requires_exact_primary_result() -> None:
-    control = _control()
+    control = configure_test_copro()
     intent = EvaluationIntent(
         intent_id="copro-run:0:0",
-        candidate=candidate_reference(_candidate("a", "a {input}")),
+        candidate=candidate_reference(copro_candidate("a", "a {input}")),
         target_eval_config=control.evaluation_binding.eval_config,
         evaluation_binding=control.evaluation_binding,
         purpose=SEED_PROPOSAL,
@@ -747,9 +588,11 @@ def test_completed_resolution_requires_exact_primary_result() -> None:
 
 
 def test_exact_control_and_transport_are_verified_before_effects() -> None:
-    adapter, transport, control = _adapter({})
-    other = _control(track_stats=True)
-    mismatched_run = _request(control).model_copy(update={"run": _run(other)})
+    adapter, transport, control = make_test_copro_adapter({})
+    other = configure_test_copro(track_stats=True)
+    mismatched_run = copro_step_request(control).model_copy(
+        update={"run": copro_run(other)}
+    )
 
     with pytest.raises(ValueError, match="exact control"):
         adapter.invoke(mismatched_run, ())
@@ -763,20 +606,20 @@ def test_exact_control_and_transport_are_verified_before_effects() -> None:
     wrong_adapter = CoproAdapter(
         control=control,
         transport=wrong_policy,
-        proposal_executor=_direct_executor(),
+        proposal_executor=durable_copro_proposal_executor(),
     )
     with pytest.raises(ValueError, match="execution policy"):
-        wrong_adapter.invoke(_request(control), ())
+        wrong_adapter.invoke(copro_step_request(control), ())
     assert wrong_policy.calls == []
 
 
 def test_round_index_must_match_step_index_before_any_spend() -> None:
-    control = _control(depth=2)
-    adapter, transport, _ = _adapter(
+    control = configure_test_copro(depth=2)
+    adapter, transport, _ = make_test_copro_adapter(
         {(SEED_PROPOSAL, 0): ("x {input}", "y {input}")},
         control=control,
     )
-    mismatched = _request(control, step_index=1).model_copy(
+    mismatched = copro_step_request(control, step_index=1).model_copy(
         update={"hyperparameters": control.step_hyperparameters(iteration=0)}
     )
 
@@ -789,11 +632,11 @@ def test_round_index_must_match_step_index_before_any_spend() -> None:
 def test_render_contract_rejection_and_underfill_are_terminal_failures() -> (
     None
 ):
-    adapter, _, control = _adapter(
+    adapter, _, control = make_test_copro_adapter(
         {(SEED_PROPOSAL, 0): ("missing field", "valid {input}")}
     )
 
-    output = adapter.invoke(_request(control), ())
+    output = adapter.invoke(copro_step_request(control), ())
 
     assert output.proposed_status is StepStatus.FAILED
     assert output.terminal_failure is not None
@@ -806,9 +649,9 @@ def test_render_contract_rejection_and_underfill_are_terminal_failures() -> (
 
 
 def test_budget_exhaustion_is_an_exact_terminal_failure() -> None:
-    adapter, transport, control = _adapter({})
+    adapter, transport, control = make_test_copro_adapter({})
 
-    output = adapter.invoke(_request(control, proposal_budget=1), ())
+    output = adapter.invoke(copro_step_request(control, proposal_budget=1), ())
 
     assert output.proposed_status is StepStatus.FAILED
     assert output.terminal_failure is not None
@@ -817,20 +660,20 @@ def test_budget_exhaustion_is_an_exact_terminal_failure() -> None:
 
 
 def test_history_lineage_uses_current_exact_request_base() -> None:
-    control = _control(depth=2)
+    control = configure_test_copro(depth=2)
     history = [
         _entry(control, 0, "a", "a {input}", 0.1),
         _entry(control, 1, "b", "b {input}", 0.2),
         _entry(control, 2, "c", "c {input}", 0.3),
     ]
-    current = _candidate("c", "c {input}", parent="prior-round")
-    adapter, _, _ = _adapter(
+    current = copro_candidate("c", "c {input}", parent="prior-round")
+    adapter, _, _ = make_test_copro_adapter(
         {(HISTORY_PROPOSAL, 1): ("x {input}", "y {input}", "z {input}")},
         control=control,
     )
 
     output = adapter.invoke(
-        _request(
+        copro_step_request(
             control,
             step_index=1,
             candidates=(current,),
@@ -846,7 +689,7 @@ def test_history_lineage_uses_current_exact_request_base() -> None:
 
 
 def test_registry_key_and_mode_conform() -> None:
-    adapter, _, _ = _adapter({})
+    adapter, _, _ = make_test_copro_adapter({})
 
     assert adapter.key == "copro"
     assert adapter.mode is StepMode.PROPOSAL_ONLY
