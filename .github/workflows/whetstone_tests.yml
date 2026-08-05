@@ -44,6 +44,20 @@ jobs:
     runs-on: depot-ubuntu-24.04
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: whetstone
+          POSTGRES_USER: whetstone
+          POSTGRES_DB: whetstone
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U whetstone"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
@@ -67,6 +81,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
       - name: Unit tests
+        env:
+          WHETSTONE_TEST_POSTGRES_DSN: postgresql://whetstone:whetstone@localhost:5432/whetstone
         run: ./scripts/ci/unit.sh
 
   process-integration:
