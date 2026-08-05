@@ -26,6 +26,7 @@ from dr_code.eval import (
 from pydantic import JsonValue
 
 import whetstone.evaluation.code as code_eval
+from tests.evaluation.drivers.support import _tiny_experiment
 from whetstone.core.identity import typed_ref_for_record
 from whetstone.evaluation.code import (
     CompletenessPolicy,
@@ -284,6 +285,30 @@ def test_failed_row_propagates_missing_data() -> None:
     assert (
         aggregate.aggregation_output.status is AggregationStatus.MISSING_DATA
     )
+
+
+def test_failed_rows_still_visible_in_provenance() -> None:
+    # All-failed rows leave the reduction non-OK (never a fabricated zero),
+    # while remaining counted in the aggregate provenance.
+    experiment = _tiny_experiment("c18")
+    sampling = experiment.eval_configs.internal
+    task_rows = tuple(
+        TaskRows(
+            task_identity=task_identity,
+            rows=(RowValue(failed=True), RowValue(failed=True)),
+        )
+        for task_identity in sampling.task_set.task_identities
+    )
+    agg = unweighted_task_mean(
+        aggregate_name="env_exact_match",
+        graph_hash=experiment.rollout_definition.graph_hash,
+        evaluation_binding_hash="c" * 64,
+        task_rows=task_rows,
+        plan=sampling.evaluation_matrix_plan,
+    )
+    assert agg.rows_failed == len(task_rows) * 2
+    assert agg.rows_present == 0
+    assert agg.aggregation_output.status is not AggregationStatus.OK
 
 
 def _rows_with_skips(n_tasks: int, skipped: int) -> tuple[TaskRows, ...]:
