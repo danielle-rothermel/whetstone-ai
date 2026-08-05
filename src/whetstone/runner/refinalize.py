@@ -41,12 +41,18 @@ class RefinalizeOutcome:
     reason: str
 
 
-def _ci_excludes_zero(pair: tuple[float, float] | None) -> bool:
-    """True when the persisted CI lies strictly on one side of 0."""
+def _ci_is_positive(pair: tuple[float, float] | None) -> bool:
+    """True when the persisted CI lies strictly *above* 0.
+
+    Only a wholly-positive interval certifies an improvement. An interval
+    wholly below 0 excludes 0 too, but it is evidence *against* improvement:
+    on a record whose ``delta`` is nonetheless positive the two disagree, and
+    such a record is skewed or internally inconsistent, never certifiable.
+    """
     if pair is None:
         return False
-    low, high = pair
-    return low > 0.0 or high < 0.0
+    low, _high = pair
+    return low > 0.0
 
 
 def _status_from(
@@ -54,15 +60,18 @@ def _status_from(
 ) -> str:
     """The status implied by a paired delta and its persisted interval.
 
-    ``improved`` requires ``delta > 0`` and the paired CI excluding 0; a
-    positive delta whose CI spans 0 is ``inconclusive``; a non-positive delta
-    is ``no-improvement``. The rule is duplicated from the cell path
-    deliberately -- it is a pure, stable function of persisted numbers -- so
-    refinalize imports no live cell machinery and can make no provider call.
+    ``improved`` requires ``delta > 0`` and a paired CI strictly above 0; a
+    positive delta whose CI does not clear 0 is ``inconclusive``; a
+    non-positive delta is ``no-improvement``. The rule is duplicated from the
+    cell path deliberately -- it is a pure, stable function of persisted
+    numbers -- so refinalize imports no live cell machinery and can make no
+    provider call. It must stay *exactly* the live rule in
+    ``whetstone.runner.cell._status_for``: a refinalized line and a freshly
+    finalized one carrying identical numbers may never disagree.
     """
     if delta is None or delta <= 0:
         return "no-improvement"
-    if _ci_excludes_zero(delta_ci95):
+    if _ci_is_positive(delta_ci95):
         return "improved"
     return "inconclusive"
 

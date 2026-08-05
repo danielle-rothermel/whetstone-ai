@@ -479,6 +479,37 @@ def test_completed_keys_drive_resumability(tmp_path: Path) -> None:
     assert not ledger.is_completed("copro", "c18", 1)
 
 
+def test_a_superseding_incomplete_line_reopens_the_key(
+    tmp_path: Path,
+) -> None:
+    """The latest line decides completion, so a correction reopens the cell.
+
+    A ``refinalize`` correction that demotes a certified line to a
+    non-terminal status exists precisely so the cell can be re-run and
+    repaired. Reading completion from any line rather than the latest would
+    keep the key skipped forever on the strength of the line just superseded.
+    """
+    ledger = Ledger(tmp_path / "run")
+    ledger.append_cell(_cell(status="improved"))
+    ledger.append_cell(_cell(status="incomplete-arm"))
+
+    assert ledger.completed_keys() == set()
+    assert not ledger.is_completed("copro", "c18", 0)
+    latest = ledger.for_attempt("copro", "c18", 0)
+    assert latest is not None
+    assert latest.status == "incomplete-arm"
+
+
+def test_a_superseding_completed_line_closes_the_key(tmp_path: Path) -> None:
+    """The latest line decides completion in the other direction too."""
+    ledger = Ledger(tmp_path / "run")
+    ledger.append_cell(_cell(status="plumbing-retry"))
+    ledger.append_cell(_cell(status="improved"))
+
+    assert ledger.completed_keys() == {("copro", "c18", 0)}
+    assert ledger.is_completed("copro", "c18", 0)
+
+
 def test_for_attempt_returns_the_latest_record(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "run")
     ledger.append_cell(_cell(status="plumbing-retry"))
@@ -796,6 +827,56 @@ def test_spend_pairs_by_cell_id_under_interleaving(tmp_path: Path) -> None:
 
     assert total == pytest.approx(10.0)
     assert gaps == []
+
+
+def test_spend_spans_the_cells_own_checkpoints_to_its_after(
+    tmp_path: Path,
+) -> None:
+    """Checkpoints sit inside the pair, so they never close it.
+
+    This is the shape every real cell writes: a ``before``, one
+    ``checkpoint:<boundary>`` per paid boundary, then the closing ``after``.
+    Reading the first checkpoint as the closing snapshot would stop the total
+    at the first boundary and silently omit every later one.
+    """
+    ledger = Ledger(tmp_path / "run")
+    ledger.append_spend(_spend("copro:c18:a0", "before", 100.0))
+    ledger.append_spend(
+        _spend("copro:c18:a0", "checkpoint:official:baseline", 99.0)
+    )
+    ledger.append_spend(
+        _spend("copro:c18:a0", "checkpoint:official:best", 95.0)
+    )
+    ledger.append_spend(_spend("copro:c18:a0", "after", 90.0))
+
+    total, gaps = ledger.spend_for_cell("copro:c18:a0")
+
+    assert total == pytest.approx(10.0)
+    assert gaps == []
+
+
+def test_a_crashed_attempt_with_checkpoints_reports_a_bounded_gap(
+    tmp_path: Path,
+) -> None:
+    """A crash with no ``after`` is a reported gap, not a silent total.
+
+    The crashed branch bounds by the next snapshot in file order, which for a
+    cell that wrote checkpoints is its own first checkpoint. That is a
+    documented lower bound, and it is reported as a gap rather than presented
+    as a settled total -- unlike the clean-pair path, which must be exact.
+    """
+    ledger = Ledger(tmp_path / "run")
+    ledger.append_spend(_spend("copro:c18:a0", "before", 100.0))
+    ledger.append_spend(
+        _spend("copro:c18:a0", "checkpoint:official:baseline", 96.0)
+    )
+    ledger.append_spend(_spend("gepa:c22:a0", "before", 94.0))
+
+    total, gaps = ledger.spend_for_cell("copro:c18:a0")
+
+    assert total == pytest.approx(4.0)
+    assert len(gaps) == 1
+    assert "crashed" in gaps[0]
 
 
 def test_a_crashed_attempt_is_bounded_by_the_next_snapshot(

@@ -1601,9 +1601,20 @@ class Ledger:
         return list(self._cells)
 
     def completed_keys(self) -> set[tuple[str, str, int]]:
-        """Keys of terminal-completed cells, which a resume skips."""
+        """Keys whose *latest* record is terminal-completed; a resume skips.
+
+        The ledger is append-only, so a key can carry several lines and the
+        last one wins: a ``refinalize`` correction supersedes the line it
+        corrects. Reading completion from any line rather than the latest one
+        would let a superseded certified status keep a cell skipped after a
+        correction demoted it to a non-terminal status, stranding the cell
+        exactly where a rerun is the intended repair.
+        """
         self._ensure_loaded()
-        return {cell.key() for cell in self._cells if cell.is_completed()}
+        latest: dict[tuple[str, str, int], CellRecord] = {}
+        for cell in self._cells:
+            latest[cell.key()] = cell
+        return {key for key, cell in latest.items() if cell.is_completed()}
 
     def is_completed(self, optimizer: str, env: str, attempt: int) -> bool:
         return cell_key(optimizer, env, attempt) in self.completed_keys()
@@ -1666,11 +1677,12 @@ class Ledger:
         non-increasing and the log is append-only chronological.
 
         A cleanly-completed attempt is bounded by this cell's own next
-        ``after`` snapshot, matched by ``cell_id``. Concurrent cells interleave
-        their snapshots into one shared ``spend.jsonl``, so the record
-        immediately following a cell's ``before`` is frequently a different
-        cell's; pairing by ``cell_id`` is the only correct rule under
-        interleaving.
+        ``after`` snapshot, matched by ``cell_id`` and by that exact phase.
+        Concurrent cells interleave their snapshots into one shared
+        ``spend.jsonl``, so the record immediately following a cell's
+        ``before`` is frequently a different cell's; pairing by ``cell_id`` is
+        the only correct rule under interleaving. The cell's own
+        ``checkpoint:<boundary>`` rows lie inside the pair and never close it.
 
         For a crashed attempt -- a ``before`` with no matching ``after`` before
         this cell's next ``before`` -- the spend is bounded by the next
@@ -1703,10 +1715,17 @@ class Ledger:
             matched_after: SpendRecord | None = None
             crashed = False
             for _, candidate in usable[position + 1 :]:
-                if candidate.cell_id == cell_id:
-                    if candidate.phase == "before":
-                        crashed = True
-                        break
+                if candidate.cell_id != cell_id:
+                    continue
+                if candidate.phase == "before":
+                    crashed = True
+                    break
+                # Only ``after`` closes the pair. This cell's own
+                # ``checkpoint:<boundary>`` rows sit *between* its before and
+                # its after by construction, so treating the first one as the
+                # closing snapshot would stop the total at the first paid
+                # boundary and silently omit every later one.
+                if candidate.phase == "after":
                     matched_after = candidate
                     break
             if matched_after is not None:

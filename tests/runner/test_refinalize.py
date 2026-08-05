@@ -147,6 +147,54 @@ def test_a_negative_interval_excluding_zero_still_needs_a_positive_delta() -> (
     assert status == "no-improvement"
 
 
+def test_a_positive_delta_under_a_negative_interval_is_inconclusive() -> None:
+    """An internally inconsistent record is never certified as improved.
+
+    ``delta > 0`` with an interval lying wholly below 0 is skewed or
+    inconsistent evidence. Certifying it would also let a refinalized line
+    disagree with the live rule, which requires the interval's low bound to
+    clear 0.
+    """
+    status, _ = recompute_status(
+        _cell(status="halted", delta=0.1, delta_ci95=(-0.3, -0.05))
+    )
+
+    assert status == "inconclusive"
+
+
+def test_refinalize_matches_the_live_cell_status_rule() -> None:
+    """Refinalize duplicates the live rule, so the two may never disagree."""
+    from whetstone.code_eval.statistics import BootstrapCI
+    from whetstone.optimization.schema import StepStatus
+    from whetstone.runner.cell import _status_for
+    from whetstone.runner.refinalize import _status_from
+
+    cases: list[tuple[float, tuple[float, float]]] = [
+        (0.1, (0.05, 0.2)),
+        (0.1, (-0.05, 0.2)),
+        (0.1, (-0.3, -0.05)),
+        (-0.1, (-0.3, -0.05)),
+        (0.1, (0.0, 0.2)),
+    ]
+    for delta, pair in cases:
+        low, high = pair
+        live = _status_for(
+            terminal_status=StepStatus.COMPLETE,
+            best_score=1.0,
+            ceiling_expected=False,
+            ceiling_score=None,
+            delta=delta,
+            delta_ci=BootstrapCI(
+                point=(low + high) / 2,
+                low=low,
+                high=high,
+                level=0.95,
+                resamples=1000,
+            ),
+        )
+        assert _status_from(delta, pair) == live, (delta, pair)
+
+
 @pytest.mark.parametrize(
     "status", ["improved", "inconclusive", "no-improvement"]
 )
