@@ -7,13 +7,13 @@ import sys
 import threading
 from pathlib import Path
 
-from tests.core.effects.test_authority import (
-    test_spawned_same_owner_different_attempts_arbitrate_once,
+from tests.core.effects.authority_sqlite_scenarios import (
+    run_spawned_same_owner_different_attempts_arbitrate_once,
 )
-from tests.optimization.tools.test_store import (
-    test_spawned_global_capacity_has_one_process_shared_bucket,
-    test_spawned_same_call_replay_has_one_ordinal,
-    test_spawned_sqlite_capacity_race_is_atomic,
+from tests.optimization.tools.sqlite_scenarios import (
+    run_sqlite_capacity_race,
+    run_sqlite_global_capacity,
+    run_sqlite_same_call_replay,
 )
 
 
@@ -29,19 +29,19 @@ def main(root: Path) -> None:
     if threading.active_count() != 1:
         raise RuntimeError("fork contention must run before threads exist")
 
-    test_spawned_same_owner_different_attempts_arbitrate_once(
+    run_spawned_same_owner_different_attempts_arbitrate_once(
         _directory(root, "effect"),
         "fork",
     )
-    test_spawned_sqlite_capacity_race_is_atomic(
+    run_sqlite_capacity_race(
         _directory(root, "capacity"),
         "fork",
     )
-    test_spawned_global_capacity_has_one_process_shared_bucket(
+    run_sqlite_global_capacity(
         _directory(root, "global"),
         "fork",
     )
-    test_spawned_same_call_replay_has_one_ordinal(
+    run_sqlite_same_call_replay(
         _directory(root, "replay"),
         "fork",
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
+from queue import Empty
 from typing import Any
 
 from tests.postgres import (
@@ -16,6 +17,16 @@ from whetstone.core.effects.authority import (
     EffectRequest,
 )
 from whetstone.core.identity import TypedRef
+
+
+def spawn_result(queue: Any, *, timeout: float = 10.0) -> dict[str, Any]:
+    """Read one spawned worker result with an assertion-oriented timeout."""
+    try:
+        return queue.get(timeout=timeout)
+    except Empty as exc:
+        raise AssertionError(
+            "spawned authority worker produced no result"
+        ) from exc
 
 
 class _TransactionSignals:
