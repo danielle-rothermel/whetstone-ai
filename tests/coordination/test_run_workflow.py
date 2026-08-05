@@ -371,10 +371,40 @@ def _identity_result():
 # --------------------------------------------------------------------------
 
 
+@pytest.fixture
+def _clean_dbos():
+    """Clear the DBOS singleton around a real-DBOS test, keeping the registry.
+
+    DBOS keeps a process-global singleton plus a decorator registry. The
+    parent workflow is registered by ``@DBOS.workflow()`` at module import,
+    which happens the first time anything imports the runner -- long before
+    any test constructs a DBOS instance. Destroying the *registry* would
+    therefore erase the parent workflow permanently for the rest of the
+    session, so this clears only the singleton and leaves the registry intact.
+
+    An earlier test in the session may nonetheless have cleared the registry
+    -- ``destroy(destroy_registry=True)`` is the correct teardown for a test
+    that declares its own inline decorators -- which would leave the parent
+    workflow unregistered here. Reloading the module re-runs its decorator, so
+    the workflow is registered again regardless of what ran before.
+    """
+    import importlib
+
+    from dbos import DBOS
+
+    DBOS.destroy()
+    importlib.reload(
+        importlib.import_module("whetstone.orchestration.run_workflow")
+    )
+    yield
+    DBOS.destroy()
+
+
 @pytest.mark.skipif(
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
 )
+@pytest.mark.usefixtures("_clean_dbos")
 def test_real_dbos_parent_replays_a_completed_run_without_redriving() -> None:
     from dbos import DBOS, DBOSConfig
 
@@ -421,6 +451,7 @@ def test_real_dbos_parent_replays_a_completed_run_without_redriving() -> None:
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
 )
+@pytest.mark.usefixtures("_clean_dbos")
 def test_real_dbos_parent_recovers_and_redrives_from_run_start() -> None:
     from dbos import DBOS, DBOSClient, DBOSConfig
     from dbos._error import (
@@ -499,4 +530,6 @@ def test_real_dbos_parent_recovers_and_redrives_from_run_start() -> None:
     finally:
         if client is not None:
             client.destroy()
+        # The registry is deliberately preserved: the parent workflow was
+        # registered at import time and must survive for later tests.
         DBOS.destroy()
