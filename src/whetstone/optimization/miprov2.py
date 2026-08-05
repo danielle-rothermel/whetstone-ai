@@ -36,7 +36,7 @@ from whetstone.optimization.miprov2_runtime import (
     Miprov2State,
 )
 from whetstone.optimization.proposer import (
-    ProposalExecutor,
+    DurableProposalExecutor,
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
@@ -78,6 +78,11 @@ class Miprov2Adapter:
     task evaluation remain Evaluation Intents owned by the harness.  Their
     normalized typed results are folded with ``Miprov2Driver.fold_bootstrap``
     and ``Miprov2Driver.fold_evaluation`` before the next adapter request.
+
+    The paid proposal call runs through one injected
+    :class:`DurableProposalExecutor`, so an interrupted Step recovers by
+    replaying the executor's completed checkpoint instead of failing the run.
+    The executor's own durability contract states the guarantee it delivers.
     """
 
     def __init__(
@@ -87,9 +92,14 @@ class Miprov2Adapter:
         proposer_config: ProposerConfig,
         transport: ProposerTransport,
         eval_config_resolver: Miprov2EvalConfigResolver,
-        proposal_executor: ProposalExecutor,
+        proposal_executor: DurableProposalExecutor,
         driver: Miprov2Driver | None = None,
     ) -> None:
+        if type(proposal_executor) is not DurableProposalExecutor:
+            raise TypeError(
+                "MIPROv2 requires the canonical DurableProposalExecutor "
+                "capability for its paid proposal call"
+            )
         self._proposer_config = proposer_config
         self._transport = transport
         self._store = store
@@ -108,7 +118,11 @@ class Miprov2Adapter:
 
     @property
     def required_replay_policy(self) -> ReplayPolicy:
-        return ReplayPolicy.DURABLE_WORKFLOW
+        return self._proposal_executor.recovery_policy
+
+    @property
+    def proposal_executor(self) -> DurableProposalExecutor:
+        return self._proposal_executor
 
     @property
     def proposer_config(self) -> ProposerConfig:

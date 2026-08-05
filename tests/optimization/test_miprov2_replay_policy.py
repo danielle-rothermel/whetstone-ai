@@ -22,8 +22,10 @@ from whetstone.optimization.miprov2_eval_config import (
     Miprov2EvalConfigResolver,
 )
 from whetstone.optimization.proposer import (
+    DurableProposalExecutor,
     FakeProposerTransport,
-    ProposalExecutor,
+    ProposalExecutorDurabilityContract,
+    _durable_proposal_executor,
 )
 from whetstone.optimization.schema import StepMode
 
@@ -36,13 +38,27 @@ class _UnusedEvalConfigResolver:
         raise AssertionError("proposal policy test must not reach evaluation")
 
 
-class _RecordingProposalExecutor:
+class _ExecutionRecorder:
+    """Count canonical-capability executions over a pass-through transport."""
+
     def __init__(self) -> None:
         self.calls = 0
 
-    def execute(self, *, config, request, transport, count):
+    def __call__(self, *, config, request, transport, count):
         self.calls += 1
         return transport.draft(config, request, count)
+
+
+def _recording_executor(
+    recorder: _ExecutionRecorder,
+) -> DurableProposalExecutor:
+    return _durable_proposal_executor(
+        durability_contract=ProposalExecutorDurabilityContract(
+            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
+            policy_identity_hash="c" * 64,
+        ),
+        execute=recorder,
+    )
 
 
 def _case(tmp_path, *, replay_policy: ReplayPolicy):
@@ -56,7 +72,7 @@ def _case(tmp_path, *, replay_policy: ReplayPolicy):
             state.control.prompt_adapter_identity_hash
         ),
     )
-    executor = _RecordingProposalExecutor()
+    recorder = _ExecutionRecorder()
     adapter = Miprov2Adapter(
         store=store,
         proposer_config=state.control.prompt_model,
@@ -65,7 +81,7 @@ def _case(tmp_path, *, replay_policy: ReplayPolicy):
             Miprov2EvalConfigResolver,
             _UnusedEvalConfigResolver(),
         ),
-        proposal_executor=cast(ProposalExecutor, executor),
+        proposal_executor=_recording_executor(recorder),
         driver=driver,
     )
     run = optimization_run_reference(
@@ -101,7 +117,7 @@ def _case(tmp_path, *, replay_policy: ReplayPolicy):
         effect_authority=authority,
         adapter_replay_policy=replay_policy,
     )
-    return harness, request, authority, adapter, executor, transport
+    return harness, request, authority, adapter, recorder, transport
 
 
 @pytest.mark.parametrize(
@@ -118,7 +134,7 @@ def test_miprov2_policy_mismatch_fails_before_any_effect(
         request,
         authority,
         adapter,
-        executor,
+        recorder,
         transport,
     ) = _case(tmp_path, replay_policy=configured_policy)
     writes = 0
@@ -147,7 +163,7 @@ def test_miprov2_policy_mismatch_fails_before_any_effect(
     assert caught.value.required_policy is ReplayPolicy.DURABLE_WORKFLOW
     assert writes == 0
     assert acquisitions == 0
-    assert executor.calls == 0
+    assert recorder.calls == 0
     assert transport.calls == []
 
 
@@ -155,7 +171,7 @@ def test_durable_workflow_reaches_executor_and_completed_replay_is_effect_free(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    harness, request, authority, _, executor, transport = _case(
+    harness, request, authority, _, recorder, transport = _case(
         tmp_path,
         replay_policy=ReplayPolicy.DURABLE_WORKFLOW,
     )
@@ -170,13 +186,13 @@ def test_durable_workflow_reaches_executor_and_completed_replay_is_effect_free(
     monkeypatch.setattr(authority, "acquire", record_acquire)
 
     first = harness.run_step(request)
-    assert executor.calls == 1
+    assert recorder.calls == 1
     assert len(transport.calls) == 1
     assert acquisitions == 1
 
     replayed = harness.run_step(request)
 
     assert replayed == first
-    assert executor.calls == 1
+    assert recorder.calls == 1
     assert len(transport.calls) == 1
     assert acquisitions == 1

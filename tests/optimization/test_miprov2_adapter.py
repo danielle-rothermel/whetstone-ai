@@ -20,7 +20,12 @@ from whetstone.optimization.miprov2_render import (
     candidate_from_components,
     compose_user_prompt_template,
 )
-from whetstone.optimization.proposer import FakeProposerTransport
+from whetstone.optimization.proposer import (
+    DurableProposalExecutor,
+    FakeProposerTransport,
+    ProposalExecutorDurabilityContract,
+    _durable_proposal_executor,
+)
 from whetstone.optimization.schema import StepMode, candidate_reference
 
 
@@ -31,9 +36,19 @@ class _UnusedResolver:
         raise AssertionError("test does not execute evaluation config effects")
 
 
-class _UnusedExecutor:
-    def execute(self, **_kwargs):
+def _unused_executor() -> DurableProposalExecutor:
+    """Mint the canonical capability over a never-invoked execution."""
+
+    def execute(*, config, request, transport, count):
         raise AssertionError("test does not execute proposal effects")
+
+    return _durable_proposal_executor(
+        durability_contract=ProposalExecutorDurabilityContract(
+            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
+            policy_identity_hash="c" * 64,
+        ),
+        execute=execute,
+    )
 
 
 def _adapter() -> Miprov2Adapter:
@@ -50,7 +65,7 @@ def _adapter() -> Miprov2Adapter:
         eval_config_resolver=cast(
             Miprov2EvalConfigResolver, _UnusedResolver()
         ),
-        proposal_executor=_UnusedExecutor(),
+        proposal_executor=_unused_executor(),
     )
 
 
@@ -60,6 +75,45 @@ def test_adapter_exposes_only_proposal_only_harness_contract() -> None:
     assert adapter.key == "miprov2"
     assert adapter.mode is StepMode.PROPOSAL_ONLY
     assert adapter.required_replay_policy is ReplayPolicy.DURABLE_WORKFLOW
+
+
+def test_adapter_requires_the_executor_durable_workflow_replay() -> None:
+    adapter = _adapter()
+
+    assert (
+        adapter.required_replay_policy
+        is adapter.proposal_executor.recovery_policy
+    )
+    assert adapter.proposal_executor.policy_identity_hash == "c" * 64
+
+
+def test_adapter_rejects_a_structural_proposal_executor() -> None:
+    class _StructuralExecutor:
+        policy_identity_hash = "c" * 64
+        recovery_policy = ReplayPolicy.DURABLE_WORKFLOW
+
+        def execute(self, **_kwargs):
+            raise AssertionError("test does not execute proposal effects")
+
+    defaults = _defaults()
+    transport = FakeProposerTransport(
+        {},
+        execution_policy_hash="a" * 64,
+        prompt_adapter_identity_hash="b" * 64,
+    )
+
+    with pytest.raises(TypeError, match="DurableProposalExecutor"):
+        Miprov2Adapter(
+            store=ObjectStore(MemoryBackend()),
+            proposer_config=defaults.prompt_model,
+            transport=transport,
+            eval_config_resolver=cast(
+                Miprov2EvalConfigResolver, _UnusedResolver()
+            ),
+            proposal_executor=cast(
+                DurableProposalExecutor, _StructuralExecutor()
+            ),
+        )
 
 
 def test_package_facade_is_minimal_and_current() -> None:
