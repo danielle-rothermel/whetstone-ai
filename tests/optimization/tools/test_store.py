@@ -9,6 +9,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, ClassVar, LiteralString, cast
 from uuid import uuid4
@@ -31,7 +32,15 @@ from tests.optimization.processes import (
 from tests.optimization.support import eval_config
 from tests.optimization.tools.store_spawn import (
     admit_once,
+    admit_postgresql_once,
+    load_postgresql_terminal_result_once,
     load_terminal_result_once,
+)
+from tests.postgres import (
+    PostgresTestSchema,
+    connect_in_postgres_schema,
+    isolated_postgres_schema,
+    require_postgres_lock_wait,
 )
 from whetstone.core.effects.authority import (
     EffectAuthority,
@@ -1912,43 +1921,208 @@ def test_postgresql_entry_lock_digest_is_pinned_and_unambiguous() -> None:
     ) != postgres_store_module._entry_lock_key(("ab", "c"))
 
 
-@pytest.mark.skipif(
-    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
-    reason=(
-        "WHETSTONE_TEST_POSTGRES_DSN is not configured; adapter SQL is "
-        "covered separately, but PostgreSQL integration did not run"
-    ),
-)
-def test_postgresql_configured_dsn_admits_with_global_capacity(
-    tmp_path,
+def _postgresql_store(
+    object_database: Path,
+    schema: PostgresTestSchema,
+) -> ToolCallStore:
+    connect_in_schema = partial(
+        connect_in_postgres_schema,
+        schema=schema.name,
+    )
+    return ToolCallStore(
+        ObjectStore(SqliteBackend(object_database)),
+        ToolAdmissionAuthority.postgresql(
+            schema.dsn,
+            _connect=connect_in_schema,
+        ),
+        EffectAuthority.postgresql(
+            schema.dsn,
+            _connect=connect_in_schema,
+        ),
+    )
+
+
+def _run_spawned_postgresql_admissions(
+    tmp_path: Path,
+    schema: PostgresTestSchema,
+    config: ToolConfig,
+    calls: tuple[tuple[str, str], ...],
+    *,
+    contender_role: str,
+) -> list[dict[str, Any]]:
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    release = context.Event()
+    starts = [context.Event() for _ in calls]
+    ready = [context.Event() for _ in calls]
+    query_reached = [context.Event() for _ in calls]
+    backend_pids = [context.Value("i", 0) for _ in calls]
+    roles = ("holder",) + (contender_role,) * (len(calls) - 1)
+    processes = [
+        context.Process(
+            target=admit_postgresql_once,
+            args=(
+                str(tmp_path / f"postgres-objects-{index}.sqlite"),
+                schema.dsn,
+                schema.name,
+                config.model_dump(mode="json"),
+                call_id,
+                template,
+                roles[index],
+                ready[index],
+                starts[index],
+                query_reached[index],
+                release,
+                backend_pids[index],
+                queue,
+            ),
+        )
+        for index, (call_id, template) in enumerate(calls)
+    ]
+    started: list[Any] = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        assert all(signal.wait(timeout=30) for signal in ready)
+        starts[0].set()
+        assert query_reached[0].wait(timeout=30)
+        for start in starts[1:]:
+            start.set()
+        assert all(signal.wait(timeout=30) for signal in query_reached[1:])
+        for backend_pid in backend_pids[1:]:
+            require_postgres_lock_wait(schema, backend_pid.value)
+        release.set()
+        records = [queue.get(timeout=30) for _ in processes]
+        join_processes(processes, timeout=30)
+        return records
+    finally:
+        for start in starts:
+            start.set()
+        release.set()
+        terminate_processes(started, timeout=30)
+
+
+def test_spawned_postgresql_global_capacity_race_accepts_once(
+    tmp_path: Path,
 ) -> None:
-    authority = ToolAdmissionAuthority.postgresql(
-        os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
-    )
-    namespace = f"tool-admission-test-{uuid4()}"
-    config = _config(
-        capacity=1,
-        namespace=namespace,
-        scope=ToolCapacityScope.GLOBAL,
-    )
-    store = ToolCallStore(
-        ObjectStore(SqliteBackend(Path(tmp_path) / "postgres-objects.sqlite")),
-        authority,
-        EffectAuthority.memory(),
-    )
+    with isolated_postgres_schema("tool_capacity") as schema:
+        config = _config(
+            capacity=1,
+            namespace=f"tool-{uuid4()}",
+            scope=ToolCapacityScope.GLOBAL,
+        )
+        records = _run_spawned_postgresql_admissions(
+            tmp_path,
+            schema,
+            config,
+            (("first", "template-1"), ("second", "template-2")),
+            contender_role="capacity-contender",
+        )
+        durable_count = _postgresql_store(
+            tmp_path / "capacity-count.sqlite",
+            schema,
+        ).accepted_count(
+            config,
+            _binding(ToolCapacityScope.GLOBAL),
+        )
 
-    first = store.admit(
-        _call(config, "first", scope_id=GLOBAL_CAPACITY_SCOPE_ID),
-        config,
+    assert not [record for record in records if "error" in record]
+    assert (
+        sum(
+            record["state"] == ToolCallState.ACCEPTED.value
+            for record in records
+        )
+        == 1
     )
-    second = store.admit(
-        _call(config, "second", scope_id=GLOBAL_CAPACITY_SCOPE_ID),
-        config,
+    assert (
+        sum(
+            record["state"] == ToolCallState.REFUSED.value
+            for record in records
+        )
+        == 1
     )
+    assert durable_count == 1
 
-    assert first.state is ToolCallState.ACCEPTED
-    assert first.capacity_debit_ordinal == 1
-    assert second.state is ToolCallState.REFUSED
+
+def test_spawned_postgresql_same_call_replay_has_one_ordinal(
+    tmp_path: Path,
+) -> None:
+    with isolated_postgres_schema("tool_replay") as schema:
+        config = _config(
+            capacity=4,
+            namespace=f"tool-{uuid4()}",
+        )
+        records = _run_spawned_postgresql_admissions(
+            tmp_path,
+            schema,
+            config,
+            (("same", "same-template"),) * 4,
+            contender_role="entry-contender",
+        )
+        durable_count = _postgresql_store(
+            tmp_path / "replay-count.sqlite",
+            schema,
+        ).accepted_count(
+            config,
+            _binding(ToolCapacityScope.RUN),
+        )
+
+    assert records == [
+        {"state": ToolCallState.ACCEPTED.value, "ordinal": 1} for _ in range(4)
+    ]
+    assert durable_count == 1
+
+
+def test_postgresql_completed_terminal_survives_fresh_process(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    queue = context.Queue()
+    object_database = tmp_path / "postgres-terminal-objects.sqlite"
+    started: list[Any] = []
+    with isolated_postgres_schema("tool_terminal") as schema:
+        store = _postgresql_store(object_database, schema)
+        config = _config(
+            capacity=1,
+            namespace=f"tool-{uuid4()}",
+        )
+        call = _call(config, "terminal-restart")
+        store.admit(call, config)
+        result = _success(call, 1)
+        acquisition = store.effect_authority.acquire(
+            tool_effect_request(call),
+            owner_id="terminal-writer",
+            attempt_id="terminal-attempt",
+            lease_duration=timedelta(minutes=5),
+        )
+        assert acquisition.lease is not None
+        terminal = store.effect_authority.succeed(
+            acquisition.lease,
+            result_ref=store.persist_result(result),
+        )
+        completed = store.complete(result, terminal=terminal)
+
+        reader = context.Process(
+            target=load_postgresql_terminal_result_once,
+            args=(
+                str(object_database),
+                schema.dsn,
+                schema.name,
+                call.model_dump(mode="json"),
+                queue,
+            ),
+        )
+        try:
+            reader.start()
+            started.append(reader)
+            record = queue.get(timeout=30)
+            join_processes((reader,), timeout=30)
+            assert "error" not in record
+            assert record["entry"] == completed.model_dump(mode="json")
+            assert record["result"] == result.model_dump(mode="json")
+        finally:
+            terminate_processes(started, timeout=30)
 
 
 @pytest.mark.skipif(

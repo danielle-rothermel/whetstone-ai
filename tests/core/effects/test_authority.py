@@ -19,7 +19,10 @@ from pydantic import ValidationError
 
 from tests.core.effects.authority_spawn import (
     acquire_then_exit,
+    postgresql_acquire_and_succeed_once,
     race_acquire,
+    race_postgresql_acquire,
+    replay_postgresql_effect_once,
 )
 from tests.optimization.processes import (
     in_process_start_methods,
@@ -27,6 +30,11 @@ from tests.optimization.processes import (
     terminate_processes,
 )
 from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
+from tests.postgres import (
+    PostgresTestSchema,
+    isolated_postgres_schema,
+    require_postgres_lock_wait,
+)
 from whetstone.core.effects import _postgres as postgres_authority_module
 from whetstone.core.effects.authority import (
     AcquireOutcome,
@@ -1636,37 +1644,114 @@ def test_postgresql_adapter_rejects_wrong_check_constraint() -> None:
         )
 
 
-@pytest.mark.skipif(
-    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
-    reason=(
-        "WHETSTONE_TEST_POSTGRES_DSN is not configured; adapter SQL is "
-        "covered separately, but PostgreSQL integration did not run"
-    ),
-)
-def test_postgresql_configured_dsn_matches_memory_semantics() -> None:
-    authority = EffectAuthority.postgresql(
-        os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
-    )
-    request = _request(key=f"effect-authority-test:{uuid4()}")
-    acquired = _acquire(
-        authority,
-        request,
-        duration=timedelta(minutes=5),
-    )
-    assert acquired.lease is not None
-    terminal = authority.succeed(
-        acquired.lease,
-        result_ref=_result_ref("postgresql-test-result"),
-    )
-    replay = _acquire(
-        authority,
-        request,
-        owner="worker-2",
-        attempt="attempt-2",
-        duration=timedelta(minutes=5),
-    )
-    assert replay.outcome is AcquireOutcome.SUCCEEDED
-    assert replay.terminal == terminal
+def _run_spawned_postgresql_authority_contention(
+    schema: PostgresTestSchema,
+) -> list[dict[str, Any]]:
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    release = context.Event()
+    starts = [context.Event() for _ in range(2)]
+    ready = [context.Event() for _ in range(2)]
+    query_reached = [context.Event() for _ in range(2)]
+    backend_pids = [context.Value("i", 0) for _ in range(2)]
+    request = _request(key=f"postgres-effect:{uuid4()}")
+    processes = [
+        context.Process(
+            target=race_postgresql_acquire,
+            args=(
+                schema.dsn,
+                schema.name,
+                request.model_dump(mode="json"),
+                "shared-worker",
+                attempt_id,
+                role,
+                ready[index],
+                starts[index],
+                query_reached[index],
+                release,
+                backend_pids[index],
+                output,
+            ),
+        )
+        for index, (attempt_id, role) in enumerate(
+            (("attempt-1", "holder"), ("attempt-2", "contender"))
+        )
+    ]
+    started: list[Any] = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        assert all(signal.wait(timeout=30) for signal in ready)
+        starts[0].set()
+        assert query_reached[0].wait(timeout=30)
+        starts[1].set()
+        assert query_reached[1].wait(timeout=30)
+        require_postgres_lock_wait(schema, backend_pids[1].value)
+        release.set()
+        results = [_spawn_result(output, timeout=30) for _ in processes]
+        join_processes(processes, timeout=30)
+        return results
+    finally:
+        for start in starts:
+            start.set()
+        release.set()
+        terminate_processes(started, timeout=30)
+
+
+def test_spawned_postgresql_same_effect_arbitrates_once() -> None:
+    with isolated_postgres_schema("effect_race") as schema:
+        results = _run_spawned_postgresql_authority_contention(schema)
+
+    assert not [result for result in results if "error" in result]
+    assert sorted(result["outcome"] for result in results) == [
+        AcquireOutcome.ACQUIRED.value,
+        AcquireOutcome.BUSY.value,
+    ]
+
+
+def test_postgresql_terminal_replays_from_fresh_process() -> None:
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    request = _request(key=f"postgres-terminal:{uuid4()}")
+    result_ref = _result_ref("postgresql-test-result")
+    started: list[Any] = []
+    with isolated_postgres_schema("effect_terminal") as schema:
+        writer = context.Process(
+            target=postgresql_acquire_and_succeed_once,
+            args=(
+                schema.dsn,
+                schema.name,
+                request.model_dump(mode="json"),
+                result_ref.model_dump(mode="json"),
+                output,
+            ),
+        )
+        reader = context.Process(
+            target=replay_postgresql_effect_once,
+            args=(
+                schema.dsn,
+                schema.name,
+                request.model_dump(mode="json"),
+                output,
+            ),
+        )
+        try:
+            writer.start()
+            started.append(writer)
+            terminal = _spawn_result(output, timeout=30)
+            join_processes((writer,), timeout=30)
+            assert "error" not in terminal
+
+            reader.start()
+            started.append(reader)
+            replay = _spawn_result(output, timeout=30)
+            join_processes((reader,), timeout=30)
+            assert "error" not in replay
+            assert replay["outcome"] == AcquireOutcome.SUCCEEDED.value
+            assert replay["terminal"] == terminal
+        finally:
+            terminate_processes(started, timeout=30)
 
 
 @pytest.mark.skipif(

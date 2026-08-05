@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from tests.postgres import (
+    PostgresOperationGate,
+    connect_in_postgres_schema,
+)
 from whetstone.core.effects.authority import (
     EffectAuthority,
     EffectRequest,
 )
+from whetstone.core.identity import TypedRef
 
 
 class _TransactionSignals:
@@ -74,3 +80,115 @@ def acquire_then_exit(
         lease_duration=timedelta(seconds=lease_seconds),
     )
     output.put(result.model_dump(mode="json"))
+
+
+def race_postgresql_acquire(
+    dsn: str,
+    schema: str,
+    request_payload: dict[str, Any],
+    owner_id: str,
+    attempt_id: str,
+    role: str,
+    ready: Any,
+    start: Any,
+    query_reached: Any,
+    release: Any,
+    backend_pid: Any,
+    output: Any,
+) -> None:
+    """Race one acquire through an independent schema-bound connection."""
+    try:
+        connect_gate = (
+            PostgresOperationGate(
+                schema=schema,
+                backend_pid=backend_pid,
+                after_query="INSERT INTO whetstone_effect_authority (",
+                after_query_reached=query_reached,
+                release=release,
+            )
+            if role == "holder"
+            else PostgresOperationGate(
+                schema=schema,
+                backend_pid=backend_pid,
+                before_query=(
+                    "SELECT request_identity_hash, replay_policy, state"
+                ),
+                before_query_reached=query_reached,
+            )
+        )
+        authority = EffectAuthority.postgresql(
+            dsn,
+            _connect=connect_gate,
+        )
+        request = EffectRequest.model_validate(request_payload)
+        ready.set()
+        if not start.wait(timeout=60):
+            raise TimeoutError("PostgreSQL authority worker was not released")
+        result = authority.acquire(
+            request,
+            owner_id=owner_id,
+            attempt_id=attempt_id,
+            lease_duration=timedelta(minutes=5),
+        )
+        output.put(result.model_dump(mode="json"))
+    except BaseException as exc:
+        output.put({"error": f"{type(exc).__name__}: {exc}"})
+
+
+def postgresql_acquire_and_succeed_once(
+    dsn: str,
+    schema: str,
+    request_payload: dict[str, Any],
+    result_ref_payload: dict[str, Any],
+    output: Any,
+) -> None:
+    """Acquire and terminalize through one independently opened authority."""
+    try:
+        authority = EffectAuthority.postgresql(
+            dsn,
+            _connect=partial(
+                connect_in_postgres_schema,
+                schema=schema,
+            ),
+        )
+        acquired = authority.acquire(
+            EffectRequest.model_validate(request_payload),
+            owner_id="terminal-writer",
+            attempt_id="terminal-attempt",
+            lease_duration=timedelta(minutes=5),
+        )
+        if acquired.lease is None:
+            raise RuntimeError("terminal writer did not acquire the effect")
+        terminal = authority.succeed(
+            acquired.lease,
+            result_ref=TypedRef.model_validate(result_ref_payload),
+        )
+        output.put(terminal.model_dump(mode="json"))
+    except BaseException as exc:
+        output.put({"error": f"{type(exc).__name__}: {exc}"})
+
+
+def replay_postgresql_effect_once(
+    dsn: str,
+    schema: str,
+    request_payload: dict[str, Any],
+    output: Any,
+) -> None:
+    """Replay one terminal effect from a freshly constructed authority."""
+    try:
+        authority = EffectAuthority.postgresql(
+            dsn,
+            _connect=partial(
+                connect_in_postgres_schema,
+                schema=schema,
+            ),
+        )
+        replay = authority.acquire(
+            EffectRequest.model_validate(request_payload),
+            owner_id="terminal-reader",
+            attempt_id="replay-attempt",
+            lease_duration=timedelta(minutes=5),
+        )
+        output.put(replay.model_dump(mode="json"))
+    except BaseException as exc:
+        output.put({"error": f"{type(exc).__name__}: {exc}"})
