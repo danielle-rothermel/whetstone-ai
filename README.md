@@ -18,7 +18,7 @@ these areas:
 - **Provider interaction** translates language-model inputs and results,
   classifies transport and semantic failures, applies bounded retry policies,
   and retains evidence for each attempt.
-- **Execution and recovery** fan out work through guarded processes, reuse
+- **Execution and recovery** fan out work through managed subprocesses, reuse
   cached provider results, preserve partial progress, and resume previously
   completed work exactly.
 - **Evaluation and scoring** execute graphs over planned tasks and repeats,
@@ -54,3 +54,10 @@ worker count bounded; do not replace it with `-n auto`. Run the complete serial
 suite with `uv run pytest -q`. Live PostgreSQL tests additionally require
 `WHETSTONE_TEST_POSTGRES_DSN`. CI separately exercises process, SQLite timing,
 SQLite contention, installed-wheel, and Python 3.14 compatibility contracts.
+
+Process-integration cleanup is watchdog-bounded and best effort. POSIX process
+and process-group identifiers can be reused, and macOS does not provide an
+atomic pidfd-equivalent signaling handle, so abrupt-failure cleanup cannot
+guarantee that a late signal still identifies the original process. Run these
+tests in an isolated local or CI environment; their process-group assertions
+exercise observed behavior, not a strict containment guarantee.
