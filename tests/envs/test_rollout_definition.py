@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dr_graph
 import pytest
 from dr_graph import graph_hash
 
@@ -43,6 +44,7 @@ def test_env_candidate_base_wire_contract_is_pinned() -> None:
 
 def test_graph_has_one_llm_call_and_one_terminal_eval_node() -> None:
     rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
+    assert isinstance(rd.definition, dr_graph.GraphDefinition)
     nodes = rd.graph_config.nodes
     types = [n.node_type for n in nodes]
     assert types.count(LLM_CALL_NODE_TYPE) == 1
