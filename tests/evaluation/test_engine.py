@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from functools import cache
 from threading import Event
 from typing import cast
 
@@ -52,7 +53,7 @@ from whetstone.envs.encdec_rollout import (
     ENCODER_NODE_ID,
     build_encdec_rollout_definition,
 )
-from whetstone.envs.factory import build_env_experiment
+from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
@@ -151,7 +152,7 @@ _DEFAULT_ROW_JOB_FACTORY = process_row_job_factory(
 )
 
 
-def _experiment(*, repeats: int = 1):
+def _uncached_experiment(*, repeats: int = 1) -> EnvExperiment:
     return build_env_experiment(
         "c18",
         model="openai/test",
@@ -159,6 +160,17 @@ def _experiment(*, repeats: int = 1):
         split_sizes=(1, 1, 1),
         repeats=repeats,
     )
+
+
+@cache
+def _cached_experiment(repeats: int) -> EnvExperiment:
+    # EnvExperiment and its complete object graph are frozen values. Tests
+    # only read this support; the ED1 variant below uses dataclasses.replace.
+    return _uncached_experiment(repeats=repeats)
+
+
+def _experiment(*, repeats: int = 1) -> EnvExperiment:
+    return _cached_experiment(repeats)
 
 
 def _engine(
@@ -416,6 +428,14 @@ def _successful_internal_outcome(
         output_text=output_text,
         finish_reason="stop",
     )
+
+
+def test_uncached_experiment_uses_real_production_constructor() -> None:
+    experiment = _uncached_experiment()
+
+    assert experiment.env_name == "c18"
+    assert len(experiment.eval_configs.internal.instances) == 1
+    assert len(experiment.eval_configs.official.instances) == 1
 
 
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
