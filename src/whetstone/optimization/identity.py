@@ -160,6 +160,10 @@ class FiniteFloat(float):
         return core_schema.no_info_after_validator_function(
             cls,
             core_schema.float_schema(strict=True, allow_inf_nan=False),
+            serialization=core_schema.plain_serializer_function_ser_schema(
+                float,
+                return_schema=core_schema.float_schema(),
+            ),
         )
 
 

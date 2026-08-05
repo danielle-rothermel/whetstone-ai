@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Protocol
+from typing import Literal, Protocol
 
 from dr_code.eval import RepeatPlan, SamplingConfig, TaskSet
 from dr_code.eval.identity import (
@@ -48,7 +48,9 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
     provide_traceback: StrictBool | None
     task_model_identity_hash: StrictStr
     provider_execution_policy_hash: StrictStr
-    provider_parameters: dict[StrictStr, Any] = Field(default_factory=dict)
+    provider_parameters: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     rollout_id: StrictInt | None = None
     copy_task_model: StrictBool = False
 
@@ -65,7 +67,6 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
             "provider_execution_policy_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
-        ImmutableJsonObject(self.provider_parameters)
         return self
 
     def identity_hash(self) -> str:

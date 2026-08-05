@@ -603,6 +603,35 @@ def test_bootstrap_rejection_cannot_masquerade_as_executed_failure(
         Miprov2EvidenceResolver(store).resolve_bootstrap_failure(rejected)
 
 
+def test_provider_parameters_cannot_drift_under_the_policy_identity() -> None:
+    supplied = {"temperature": 0.7, "extra_body": {"nested": [1, 2]}}
+    policy = Miprov2EvaluationExecutionPolicy(
+        num_threads=1,
+        max_errors=1,
+        provide_traceback=None,
+        task_model_identity_hash=FULL_C,
+        provider_execution_policy_hash=FULL_D,
+        provider_parameters=supplied,
+    )
+    before = policy.identity_hash()
+
+    # Every route that could reach the stored mapping: the caller's own dict,
+    # a dumped copy, and direct item assignment on the field itself.
+    supplied["temperature"] = 1.5
+    cast("Any", policy).model_dump(mode="json")["provider_parameters"][
+        "temperature"
+    ] = 1.5
+    with pytest.raises(TypeError):
+        cast("Any", policy.provider_parameters)["temperature"] = 1.5
+
+    assert policy.provider_parameters["temperature"] == 0.7
+    assert policy.identity_hash() == before
+    assert policy.model_dump(mode="json")["provider_parameters"] == {
+        "temperature": 0.7,
+        "extra_body": {"nested": [1, 2]},
+    }
+
+
 def test_restart_resolves_the_same_exact_trace_and_step_refs(tmp_path) -> None:
     database = tmp_path / "restart.sqlite"
     first_store = ObjectStore(SqliteBackend(database))

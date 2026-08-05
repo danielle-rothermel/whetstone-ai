@@ -11,6 +11,7 @@ The types in this module perform no model, storage, or network effects.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -25,6 +26,7 @@ from pydantic import (
 )
 
 from whetstone.optimization.identity import (
+    FiniteFloat,
     ImmutableJsonObject,
     compute_identity_hash,
     require_full_hash,
@@ -35,7 +37,44 @@ MIPROV2_COMPONENT_DEMO_SCHEMA = "whetstone.miprov2_component_demo"
 MIPROV2_COMPONENT_DEMO_SET_SCHEMA = "whetstone.miprov2_component_demo_set"
 MIPROV2_DEMO_SCHEMA_VERSION = 1
 
-type MetricValue = StrictBool | float
+type MetricValue = StrictBool | FiniteFloat
+
+
+def _component_fields(
+    by_component: ImmutableJsonObject,
+    component_id: str,
+    *,
+    field: str,
+) -> dict[str, Any]:
+    """Return one component's field mapping as a fresh strict-JSON object."""
+
+    try:
+        fields = by_component[component_id]
+    except KeyError:
+        raise ValueError(
+            f"{field} has no component {component_id!r}"
+        ) from None
+    if not isinstance(fields, ImmutableJsonObject):
+        raise ValueError(f"{field}[{component_id!r}] must be a JSON object")
+    return fields.to_json()
+
+
+def _require_disjoint_fields(
+    inputs: Mapping[str, Any],
+    outputs: Mapping[str, Any],
+) -> None:
+    """Require input and output field names to name distinct prompt fields.
+
+    Demonstration rendering merges inputs and outputs into one flat field
+    mapping, so an overlapping name silently discards the input value.
+    """
+
+    duplicate_fields = set(inputs) & set(outputs)
+    if duplicate_fields:
+        raise ValueError(
+            "demo input/output fields overlap: "
+            f"{', '.join(sorted(duplicate_fields))}"
+        )
 
 
 class DemoSourceKind(StrEnum):
@@ -63,7 +102,7 @@ class BootstrapAcceptance(BaseModel):
     source_score_identity: StrictStr
     metric_present: StrictBool
     score: MetricValue | None
-    metric_threshold: float | None
+    metric_threshold: FiniteFloat | None
     accepted: StrictBool
 
     @model_validator(mode="after")
@@ -127,8 +166,12 @@ class ObservedTraceStep(BaseModel):
 
     trace_index: StrictInt
     component_id: StrictStr | None
-    inputs: dict[str, Any] = Field(default_factory=dict)
-    outputs: dict[str, Any] = Field(default_factory=dict)
+    inputs: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+    outputs: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
 
     @model_validator(mode="after")
     def _validate_step(self) -> ObservedTraceStep:
@@ -136,8 +179,7 @@ class ObservedTraceStep(BaseModel):
             raise ValueError("trace_index cannot be negative")
         if self.component_id == "":
             raise ValueError("component_id must be non-empty when present")
-        ImmutableJsonObject(self.inputs)
-        ImmutableJsonObject(self.outputs)
+        _require_disjoint_fields(self.inputs, self.outputs)
         return self
 
     def identity_payload(self) -> dict[str, Any]:
@@ -151,8 +193,12 @@ class ComponentDemo(BaseModel):
 
     component_id: StrictStr
     source_kind: DemoSourceKind
-    inputs: dict[str, Any] = Field(default_factory=dict)
-    outputs: dict[str, Any] = Field(default_factory=dict)
+    inputs: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+    outputs: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     augmented: StrictBool
 
     source_task_identity: StrictStr
@@ -193,8 +239,7 @@ class ComponentDemo(BaseModel):
                 raise ValueError(
                     "labeled demos cannot have a source trace index"
                 )
-        ImmutableJsonObject(self.inputs)
-        ImmutableJsonObject(self.outputs)
+        _require_disjoint_fields(self.inputs, self.outputs)
         return self
 
     def identity_payload(self) -> dict[str, Any]:
@@ -214,8 +259,8 @@ class LabeledTaskDemo(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_task_identity: StrictStr
-    inputs_by_component: dict[str, dict[str, Any]]
-    outputs_by_component: dict[str, dict[str, Any]]
+    inputs_by_component: ImmutableJsonObject
+    outputs_by_component: ImmutableJsonObject
 
     @model_validator(mode="after")
     def _validate_task(self) -> LabeledTaskDemo:
@@ -228,23 +273,39 @@ class LabeledTaskDemo(BaseModel):
             )
         if any(not component for component in self.inputs_by_component):
             raise ValueError("labeled component ids must be non-empty")
-        ImmutableJsonObject(self.inputs_by_component)
-        ImmutableJsonObject(self.outputs_by_component)
         return self
+
+    def inputs_for(self, component_id: str) -> dict[str, Any]:
+        """Return one component's labeled input fields as fresh strict JSON."""
+
+        return _component_fields(
+            self.inputs_by_component, component_id, field="inputs_by_component"
+        )
+
+    def outputs_for(self, component_id: str) -> dict[str, Any]:
+        """Return one component's labeled outputs as fresh strict JSON."""
+
+        return _component_fields(
+            self.outputs_by_component,
+            component_id,
+            field="outputs_by_component",
+        )
 
     def for_component(self, component_id: str) -> ComponentDemo:
         """Adapt this task to one component without fake trace data."""
 
         if component_id not in self.inputs_by_component:
             raise ValueError(f"labeled task has no component {component_id!r}")
+        inputs = self.inputs_for(component_id)
+        outputs = self.outputs_for(component_id)
         source_identity = compute_identity_hash(
             schema="whetstone.miprov2_labeled_demo_source",
             schema_version=MIPROV2_DEMO_SCHEMA_VERSION,
             payload={
                 "source_task_identity": self.source_task_identity,
                 "component_id": component_id,
-                "inputs": self.inputs_by_component[component_id],
-                "outputs": self.outputs_by_component[component_id],
+                "inputs": inputs,
+                "outputs": outputs,
             },
         )
         acceptance_identity = compute_identity_hash(
@@ -259,8 +320,8 @@ class LabeledTaskDemo(BaseModel):
         return ComponentDemo(
             component_id=component_id,
             source_kind=DemoSourceKind.LABELED,
-            inputs=self.inputs_by_component[component_id],
-            outputs=self.outputs_by_component[component_id],
+            inputs=inputs,
+            outputs=outputs,
             augmented=False,
             source_task_identity=self.source_task_identity,
             source_rollout_identity=source_identity,

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
+from whetstone.optimization.identity import ImmutableJsonObject
 from whetstone.optimization.miprov2_demo import (
     BootstrapAcceptance,
+    ComponentDemo,
     ComponentDemoSequence,
     ComponentDemoSet,
+    DemoSourceKind,
     LabeledTaskDemo,
     ObservedTraceStep,
     bootstrap_accepts,
@@ -138,6 +142,124 @@ def test_labeled_demo_adapts_to_component_without_fake_rollout_data() -> None:
     assert demo.source_rollout_identity == demo.source_trace_identity
     assert demo.source_trace_identity == demo.source_output_identity
     assert len(demo.acceptance_identity_hash) == 64
+
+
+def _bootstrapped_demo(**overrides: object):
+    fields: dict[str, object] = {
+        "component_id": "answerer",
+        "source_kind": DemoSourceKind.BOOTSTRAPPED,
+        "inputs": {"question": "q"},
+        "outputs": {"answer": "a"},
+        "augmented": True,
+        "source_task_identity": _identity("task"),
+        "source_rollout_identity": _identity("rollout"),
+        "source_trace_identity": _identity("trace"),
+        "source_output_identity": _identity("output"),
+        "source_score_identity": _identity("score"),
+        "source_trace_index": 0,
+        "score": 1.0,
+        "acceptance_identity_hash": _identity("acceptance"),
+    }
+    fields.update(overrides)
+    return ComponentDemo(**fields)  # type: ignore[arg-type]
+
+
+def _assert_item_assignment_refused(mapping: object, key: str) -> None:
+    """Attempt one item assignment through an untyped view of the mapping."""
+
+    with pytest.raises(TypeError):
+        cast("Any", mapping)[key] = "tampered"
+
+
+def test_demo_field_mappings_cannot_drift_under_their_identity_hash() -> None:
+    demo = _bootstrapped_demo()
+    before = demo.identity_hash()
+
+    assert isinstance(demo.inputs, ImmutableJsonObject)
+    assert isinstance(demo.outputs, ImmutableJsonObject)
+    _assert_item_assignment_refused(demo.inputs, "question")
+    _assert_item_assignment_refused(demo.outputs, "answer")
+    demo.inputs.to_json()["question"] = "tampered"
+    demo.model_dump(mode="json")["inputs"]["question"] = "tampered"
+
+    assert demo.inputs == {"question": "q"}
+    assert demo.identity_hash() == before
+
+
+def test_trace_step_field_mappings_are_deeply_immutable() -> None:
+    step = ObservedTraceStep(
+        trace_index=0,
+        component_id="answerer",
+        inputs={"context": {"nested": ["a", "b"]}},
+        outputs={"answer": "a"},
+    )
+
+    assert isinstance(step.inputs, ImmutableJsonObject)
+    nested = step.inputs["context"]
+    assert isinstance(nested, ImmutableJsonObject)
+    _assert_item_assignment_refused(nested, "nested")
+    assert nested["nested"] == ("a", "b")
+
+
+def test_labeled_task_component_mappings_cannot_drift() -> None:
+    task = LabeledTaskDemo(
+        source_task_identity=_identity("task-1"),
+        inputs_by_component={"first": {"question": "q"}},
+        outputs_by_component={"first": {"answer": "a"}},
+    )
+    before = task.for_component("first").identity_hash()
+
+    task.inputs_for("first")["question"] = "tampered"
+    _assert_item_assignment_refused(task.inputs_by_component, "first")
+
+    assert task.for_component("first").identity_hash() == before
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_metric_values_are_rejected_at_construction(
+    bad: float,
+) -> None:
+    with pytest.raises(ValidationError):
+        _bootstrapped_demo(score=bad)
+    with pytest.raises(ValidationError):
+        BootstrapAcceptance(
+            source_task_identity=_identity("task"),
+            source_rollout_identity=_identity("rollout"),
+            source_trace_identity=_identity("trace"),
+            source_output_identity=_identity("output"),
+            source_score_identity=_identity("score"),
+            metric_present=True,
+            score=bad,
+            metric_threshold=None,
+            accepted=True,
+        )
+    with pytest.raises(ValidationError):
+        BootstrapAcceptance(
+            source_task_identity=_identity("task"),
+            source_rollout_identity=_identity("rollout"),
+            source_trace_identity=_identity("trace"),
+            source_output_identity=_identity("output"),
+            source_score_identity=_identity("score"),
+            metric_present=True,
+            score=1.0,
+            metric_threshold=bad,
+            accepted=True,
+        )
+
+
+def test_demo_input_and_output_field_names_must_be_disjoint() -> None:
+    with pytest.raises(ValidationError, match="fields overlap: answer"):
+        _bootstrapped_demo(
+            inputs={"answer": "input"},
+            outputs={"answer": "output"},
+        )
+    with pytest.raises(ValidationError, match="fields overlap: answer"):
+        ObservedTraceStep(
+            trace_index=0,
+            component_id="answerer",
+            inputs={"answer": "input"},
+            outputs={"answer": "output"},
+        )
 
 
 def test_labeled_demo_requires_a_production_task_content_hash() -> None:

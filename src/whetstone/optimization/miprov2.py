@@ -15,6 +15,7 @@ from dr_store import ObjectStore
 from whetstone.optimization.adapters import AdapterOutput
 from whetstone.optimization.effect_authority import ReplayPolicy
 from whetstone.optimization.identity import (
+    TerminalFailure,
     TypedRef,
 )
 from whetstone.optimization.miprov2_eval_config import (
@@ -68,7 +69,53 @@ MIPROV2_BASELINE = "baseline_evaluation"
 MIPROV2_SAMPLE = "sample_evaluation"
 MIPROV2_PROMOTION = "promotion_evaluation"
 MIPROV2_COMPLETE = "complete"
+MIPROV2_FAILED = "failed"
 STATE_SNAPSHOT_SCHEMA = "whetstone.optimization_state_snapshot"
+
+MIPROV2_PROPOSAL_FAILED_CODE = "miprov2_instruction_proposal_failed"
+MIPROV2_INTENT_REJECTED_CODE = "miprov2_evaluation_intent_rejected"
+
+
+def _rejection_detail(
+    intent_id: str,
+    resolution: IntentResolution,
+) -> str:
+    """Name the rejected Intent and the exact reason it was refused."""
+
+    return (
+        f"MIPROv2 Evaluation Intent {intent_id!r} was rejected before "
+        f"execution ({resolution.detail.classification.value}): "
+        f"{resolution.detail.message}"
+    )
+
+
+def _terminalized(state: Miprov2State, *, failure: str) -> Miprov2State:
+    """Bind one terminal cause to durable state so no later plan is owed.
+
+    Every pending effect is dropped with the cause: a terminal MIPROv2 state
+    owes no further effect, and the pending one can never be measured.  The
+    completed-effect ledger is untouched, so already-spent effects stay
+    accounted for.
+    """
+
+    if not failure:
+        raise ValueError("a terminal MIPROv2 state requires its exact cause")
+    return Miprov2State.model_validate(
+        state.model_copy(
+            update={
+                "phase": MIPROV2_FAILED,
+                "failure": failure,
+                "pending_bootstrap": None,
+                "pending_bootstrap_candidate": None,
+                "pending_proposal": None,
+                "pending_evaluation_spec": None,
+                "pending_eval_binding_request": None,
+                "resolved_eval_binding": None,
+                "pending_evaluation": None,
+                "pending_sample": None,
+            }
+        ).model_dump(mode="json")
+    )
 
 
 class Miprov2Adapter:
@@ -197,13 +244,20 @@ class Miprov2Adapter:
             or exact_run.record.reward_policy != state.control.reward_policy
         ):
             raise ValueError("run Reward Policy differs from MIPROv2 control")
-        preview = self._driver.plan(state)
-        returned_count = 1 if preview.kind == MIPROV2_COMPLETE else 0
+        if state.phase == MIPROV2_FAILED:
+            # The prior Step's resolutions terminalized the run.  This Step
+            # exists only to persist the terminal failed Step Result.
+            kind_label = MIPROV2_FAILED
+            returned_count = 0
+        else:
+            preview = self._driver.plan(state)
+            kind_label = preview.kind
+            returned_count = 1 if preview.kind == MIPROV2_COMPLETE else 0
         return OptimizationStepRequest(
             run=exact_run,
             step_id=f"{state.run_id}:miprov2:{step_index}",
             kind=StepKind.PROPOSAL,
-            kind_label=preview.kind,
+            kind_label=kind_label,
             step_index=step_index,
             prior_step_result_ref=prior_result_ref,
             prior_state_ref=prior_state_ref,
@@ -244,6 +298,18 @@ class Miprov2Adapter:
         if prior is not None:
             state = self._fold_prior_resolutions(state, prior)
         self._require_budget_agreement(request.budget, state)
+        if state.phase == MIPROV2_FAILED:
+            # Folding the prior Step's resolutions terminalized the run: a
+            # rejected Evaluation Intent is refused before execution, so the
+            # effect MIPROv2 planned can never be measured.
+            assert state.failure is not None
+            return self._terminal_failure_output(
+                state,
+                failure=TerminalFailure(
+                    code=MIPROV2_INTENT_REJECTED_CODE,
+                    message=state.failure,
+                ),
+            )
         plan = self._driver.plan(state)
         if plan.kind == "eval_config_binding":
             assert plan.eval_config_binding is not None
@@ -467,9 +533,56 @@ class Miprov2Adapter:
             evidence=evidence,
         )
         advanced = self._driver.fold_proposal(plan.state, response)
+        budget_delta = BudgetDelta(consumed={"proposal_calls": 1})
+        if advanced.proposal_state is None:
+            raise ValueError("folded proposal state disappeared")
+        if advanced.proposal_state.stage != MIPROV2_FAILED:
+            return AdapterOutput(
+                budget_delta=budget_delta,
+                state_delta={
+                    MIPROV2_STATE_KEY: advanced.model_dump(mode="json")
+                },
+            )
+        detail = response.failure_detail or "instruction proposal failed"
+        return self._terminal_failure_output(
+            _terminalized(advanced, failure=detail),
+            failure=TerminalFailure(
+                code=MIPROV2_PROPOSAL_FAILED_CODE,
+                message=detail,
+                details={
+                    "component_id": (
+                        advanced.proposal_state.components[
+                            advanced.proposal_state.component_index
+                        ].component_id
+                    ),
+                    "proposal_request_identity_hash": native.identity_hash,
+                },
+            ),
+            budget_delta=budget_delta,
+        )
+
+    @staticmethod
+    def _terminal_failure_output(
+        state: Miprov2State,
+        *,
+        failure: TerminalFailure,
+        budget_delta: BudgetDelta | None = None,
+    ) -> AdapterOutput:
+        """Persist one terminal failed Step instead of wedging the run.
+
+        A MIPROv2 run that cannot advance stops as a failed Step Result
+        carrying its exact cause.  Without this the durable state keeps a
+        pending phase that every later plan refuses, and the run can never
+        reach a terminal Optimization Result.
+        """
+
+        if state.phase != MIPROV2_FAILED:
+            raise ValueError("a terminal failure requires a failed state")
         return AdapterOutput(
-            budget_delta=BudgetDelta(consumed={"proposal_calls": 1}),
-            state_delta={MIPROV2_STATE_KEY: advanced.model_dump(mode="json")},
+            proposed_status=StepStatus.FAILED,
+            terminal_failure=failure,
+            budget_delta=budget_delta or BudgetDelta(),
+            state_delta={MIPROV2_STATE_KEY: state.model_dump(mode="json")},
         )
 
     def fold_resolution(
@@ -482,6 +595,14 @@ class Miprov2Adapter:
         context = load_miprov2_intent_context(self._store, resolution.intent)
         if context.control_identity_hash != state.control.identity_hash():
             raise ValueError("Intent Resolution belongs to another control")
+        if resolution.outcome is IntentOutcome.REJECTED:
+            # A rejection is refused before execution, so it produces no
+            # Evaluation Result at all.  It is not an executed failure and
+            # must never be folded as a zero observation; the intent MIPROv2
+            # planned cannot be measured, so the run is over.
+            return _terminalized(
+                state, failure=_rejection_detail(context.intent_id, resolution)
+            )
         if context.effect_kind == "bootstrap":
             if resolution.outcome is IntentOutcome.COMPLETED:
                 result = self._evidence.resolve_bootstrap(resolution)

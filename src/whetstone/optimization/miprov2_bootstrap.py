@@ -27,7 +27,6 @@ from pydantic import (
 )
 
 from whetstone.optimization.identity import (
-    ImmutableJsonObject,
     compute_identity_hash,
     require_full_hash,
 )
@@ -1064,19 +1063,11 @@ def _frozen_dspy_demo_tuple_pickle(
 
     demos: list[_FrozenDspyExample] = []
     for step in steps:
-        ImmutableJsonObject(step.inputs)
-        ImmutableJsonObject(step.outputs)
-        duplicate_fields = set(step.inputs) & set(step.outputs)
-        if duplicate_fields:
-            raise ValueError(
-                "bootstrap trace input/output fields overlap: "
-                f"{', '.join(sorted(duplicate_fields))}"
-            )
         demos.append(
             _FrozenDspyExample(
                 augmented=True,
-                **step.inputs,
-                **step.outputs,
+                **step.inputs.to_json(),
+                **step.outputs.to_json(),
             )
         )
     buffer = io.BytesIO()

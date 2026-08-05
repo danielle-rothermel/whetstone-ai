@@ -313,20 +313,6 @@ def test_repeated_trace_pickle_matches_frozen_dspy_golden_vector() -> None:
     )
 
 
-def test_repeated_trace_pickle_rejects_overlapping_fields() -> None:
-    steps = [
-        ObservedTraceStep(
-            trace_index=0,
-            component_id="first",
-            inputs={"answer": "input"},
-            outputs={"answer": "output"},
-        )
-    ]
-
-    with pytest.raises(ValueError, match="fields overlap"):
-        _frozen_dspy_demo_tuple_pickle(steps)
-
-
 def test_teacher_copy_and_reset_plan_matches_reference() -> None:
     bootstrap = _plans(explicit_teacher=True)[2]
 

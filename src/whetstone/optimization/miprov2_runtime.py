@@ -1727,10 +1727,8 @@ def _materialize_bootstrap_teacher(
                     continue
                 examples.append(
                     {
-                        "inputs": item.inputs_by_component[spec.component_id],
-                        "outputs": item.outputs_by_component[
-                            spec.component_id
-                        ],
+                        "inputs": item.inputs_for(spec.component_id),
+                        "outputs": item.outputs_for(spec.component_id),
                     }
                 )
         instruction = source.record.payload["user_prompt_template"]

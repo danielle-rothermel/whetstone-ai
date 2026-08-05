@@ -300,7 +300,7 @@ def _proposal_demo_from_component_demo(
     *,
     field_order: tuple[str, ...],
 ) -> Miprov2ProposalDemo:
-    values = {**demo.inputs, **demo.outputs}
+    values = {**demo.inputs.to_json(), **demo.outputs.to_json()}
     fields = tuple(
         Miprov2DemoField(
             name=name,
