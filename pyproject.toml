@@ -13,16 +13,16 @@ dependencies = [
     "dr-serialize>=0.1.0,<0.2",
     "dr-store>=0.1.0,<0.2",
     "numpy>=2.5.1",
+    "psycopg[binary]>=3.3.4",
     "zstandard>=0.25.0",
 ]
 
 [dependency-groups]
-# dbos and psycopg are test-only: the failure-policy tests verify
-# classification behavior against their real error types.
+# dbos is test-only: failure-policy tests verify classification behavior
+# against its real error types.
 dev = [
     "dbos>=2.25.0",
     "pre-commit>=4.6.0",
-    "psycopg>=3.3.4",
     "pytest>=8.4.2",
     "ruff>=0.15.10",
     "ty>=0.0.54",
@@ -50,6 +50,8 @@ addopts = ["--strict-markers"]
 markers = [
     "process_integration: exercises real spawned process and process-group boundaries",
     "process_guardian: exercises guardian and parent-death containment",
+    "sqlite_time_integration: exercises SQLite behavior against real elapsed time",
+    "sqlite_contention: exercises SQLite behavior under concurrent access",
 ]
 
 [tool.pyright]

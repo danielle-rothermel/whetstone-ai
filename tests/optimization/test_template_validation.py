@@ -1,0 +1,447 @@
+"""One hard-cut proposer-draft and mutation validation path."""
+
+from inspect import signature
+from typing import Any, cast
+
+import pytest
+from pydantic import ValidationError
+
+from whetstone.optimization import (
+    Candidate,
+    DiffCheckError,
+    OptimizationRun,
+    OutputContract,
+    ProposalDraft,
+    ProposalValidationError,
+    RewardPolicy,
+    RewardTerm,
+    StepMode,
+    TemplateRenderContract,
+    TemplateRenderKind,
+    candidate_from_draft,
+    candidate_reference,
+    diff_check,
+)
+
+from .support import base_ref, candidate, optimizer_config_ref
+
+
+def python_format_contract(
+    *,
+    available_fields: tuple[str, ...] = ("query",),
+    required_fields: tuple[str, ...] = (),
+) -> TemplateRenderContract:
+    return TemplateRenderContract(
+        kind=TemplateRenderKind.PYTHON_FORMAT_V1,
+        available_fields=available_fields,
+        required_fields=required_fields,
+    )
+
+
+def proposal_run(
+    contract: TemplateRenderContract | None = None,
+) -> OptimizationRun:
+    return OptimizationRun(
+        run_id="template-validation",
+        optimizer_config=optimizer_config_ref("proposal"),
+        adapter_key="proposal-test",
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(returned_proposal_count=1),
+        template_render_contract=contract or python_format_contract(),
+        reward_policy=RewardPolicy(
+            policy_name="template-validation/v1",
+            terms=(RewardTerm(name="score", weight=1.0),),
+        ),
+    )
+
+
+def test_successful_draft_becomes_the_only_surface_mutation() -> None:
+    base = candidate(text="old")
+    proposed = candidate_from_draft(
+        base=base,
+        candidate_id="P1",
+        draft=ProposalDraft(template="Use {query} carefully"),
+        run=proposal_run(),
+    )
+    assert proposed.payload["user_prompt_template"] == "Use {query} carefully"
+    assert proposed.payload["fixed"] == base.payload["fixed"]
+
+
+def test_failed_draft_never_falls_back_to_base_template() -> None:
+    base = candidate(text="old")
+    with pytest.raises(ProposalValidationError, match="timeout"):
+        candidate_from_draft(
+            base=base,
+            candidate_id="P1",
+            draft=ProposalDraft.failure(detail="timeout"),
+            run=proposal_run(),
+        )
+
+
+def test_unrenderable_placeholders_fail_before_candidate_creation() -> None:
+    with pytest.raises(ProposalValidationError, match="question"):
+        candidate_from_draft(
+            base=candidate(),
+            candidate_id="P1",
+            draft=ProposalDraft(template="{question}"),
+            run=proposal_run(),
+        )
+
+
+@pytest.mark.parametrize(
+    "template",
+    (
+        "{}",
+        "{0}",
+        "{query.missing}",
+        "{query[missing]}",
+        "{query!s}",
+        "{query!r}",
+        "{query!a}",
+        "{query!z}",
+        "{query:}",
+        "{query:>10}",
+        "{query:*^10.5s}",
+        "{value:{width}}",
+        "{query",
+        "query}",
+        "{value:{width}",
+        "{value:{width!s}",
+        "{value:{width!!s}}",
+    ),
+)
+def test_python_format_rejects_hostile_or_ambiguous_syntax(
+    template: str,
+) -> None:
+    with pytest.raises(ProposalValidationError):
+        candidate_from_draft(
+            base=candidate(),
+            candidate_id="P1",
+            draft=ProposalDraft(template=template),
+            run=proposal_run(
+                python_format_contract(
+                    available_fields=("query", "value", "width")
+                )
+            ),
+        )
+
+
+def test_python_format_extracts_only_simple_fields_with_multiplicity() -> None:
+    contract = python_format_contract()
+    assert contract.placeholder_fields("{query} then {query}") == (
+        "query",
+        "query",
+    )
+
+
+def test_python_format_escaped_braces_are_literal_and_renderable() -> None:
+    template = "literal {{query.missing}} and {{value[missing]}}"
+    contract = python_format_contract(available_fields=())
+    assert contract.placeholder_fields(template) == ()
+    assert contract.render(template, {}) == (
+        "literal {query.missing} and {value[missing]}"
+    )
+    proposed = candidate_from_draft(
+        base=candidate(),
+        candidate_id="P1",
+        draft=ProposalDraft(template=template),
+        run=proposal_run(contract),
+    )
+    assert proposed.payload["user_prompt_template"] == template
+
+
+def test_accepted_template_renders_actual_string_placeholder_values() -> None:
+    template = "literal {{query}} | {query} | {answer}"
+    contract = python_format_contract(available_fields=("query", "answer"))
+    proposed = candidate_from_draft(
+        base=candidate(),
+        candidate_id="P1",
+        draft=ProposalDraft(template=template),
+        run=proposal_run(contract),
+    )
+
+    rendered_template = proposed.payload["user_prompt_template"]
+    assert isinstance(rendered_template, str)
+    assert (
+        contract.render(
+            rendered_template, {"query": "abcdef", "answer": "yes"}
+        )
+        == "literal {query} | abcdef | yes"
+    )
+
+
+def test_required_fields_preserve_order_and_multiplicity() -> None:
+    contract = python_format_contract(
+        available_fields=("query", "answer"),
+        required_fields=("query", "answer", "query"),
+    )
+    assert contract.validate_template("{query} {answer} {query}") == (
+        "query",
+        "answer",
+        "query",
+    )
+    with pytest.raises(ValueError, match=r"query \(1/2\)"):
+        contract.validate_template("{answer} {query}")
+
+
+def test_template_render_contract_rejects_unknown_and_invalid_fields() -> None:
+    contract = python_format_contract(available_fields=("query",))
+    with pytest.raises(ValueError, match="unavailable fields: answer"):
+        contract.validate_template("{answer}")
+
+    for payload in (
+        {
+            "kind": "python_format/v1",
+            "available_fields": ["query", "query"],
+        },
+        {
+            "kind": "python_format/v1",
+            "available_fields": [""],
+        },
+        {
+            "kind": "python_format/v1",
+            "available_fields": [1],
+        },
+        {
+            "kind": "python_format/v1",
+            "available_fields": ["query"],
+            "required_fields": ["answer"],
+        },
+    ):
+        with pytest.raises(ValidationError):
+            TemplateRenderContract.model_validate(payload)
+
+
+def test_template_render_contract_exact_json_roundtrip() -> None:
+    contract = python_format_contract(
+        available_fields=("query", "answer"),
+        required_fields=("query", "query"),
+    )
+    payload = contract.model_dump(mode="json")
+
+    assert payload == {
+        "kind": "python_format/v1",
+        "available_fields": ["query", "answer"],
+        "required_fields": ["query", "query"],
+    }
+    assert TemplateRenderContract.model_validate(payload) == contract
+
+
+@pytest.mark.parametrize("template", ("", None, 1))
+def test_all_render_kinds_require_nonempty_strict_template_text(
+    template: object,
+) -> None:
+    contracts = (
+        python_format_contract(),
+        TemplateRenderContract(
+            kind=TemplateRenderKind.LITERAL_REPLACE_V1,
+            available_fields=("input",),
+        ),
+        TemplateRenderContract(
+            kind=TemplateRenderKind.LITERAL_BODY_V1,
+            available_fields=(),
+        ),
+    )
+
+    for contract in contracts:
+        with pytest.raises(ValueError, match=r"strict string|non-empty"):
+            contract.validate_template(template)
+
+
+def test_literal_replace_treats_json_and_unmatched_braces_as_literal() -> None:
+    contract = TemplateRenderContract(
+        kind=TemplateRenderKind.LITERAL_REPLACE_V1,
+        available_fields=("input",),
+        required_fields=("input",),
+    )
+    template = (
+        '{"object": {"key": 1}, "prompt": "{input}", '
+        '"partial": "{input", "other": "{query}"}'
+    )
+
+    assert contract.placeholder_fields(template) == ("input",)
+    assert contract.render(template, {"input": "exact {replacement}"}) == (
+        '{"object": {"key": 1}, "prompt": "exact {replacement}", '
+        '"partial": "{input", "other": "{query}"}'
+    )
+
+
+def test_literal_replace_requires_exactly_one_available_field() -> None:
+    for available_fields in ((), ("input", "answer")):
+        with pytest.raises(
+            ValidationError, match="exactly one available field"
+        ):
+            TemplateRenderContract(
+                kind=TemplateRenderKind.LITERAL_REPLACE_V1,
+                available_fields=available_fields,
+            )
+
+
+def test_literal_replace_without_optional_token_needs_no_value() -> None:
+    contract = TemplateRenderContract(
+        kind=TemplateRenderKind.LITERAL_REPLACE_V1,
+        available_fields=("input",),
+    )
+    template = '{"literal": "{other}", "unmatched": "{"}'
+
+    assert contract.render(template, {}) == template
+
+
+def test_literal_body_has_no_active_fields_and_returns_text_unchanged() -> (
+    None
+):
+    contract = TemplateRenderContract(
+        kind=TemplateRenderKind.LITERAL_BODY_V1,
+        available_fields=(),
+    )
+    template = '{"unmatched": "{", "looks_active": "{query}"}'
+
+    assert contract.placeholder_fields(template) == ()
+    assert contract.validate_template(template) == ()
+    assert contract.render(template, {"query": "ignored"}) == template
+
+    with pytest.raises(ValidationError, match="no active fields"):
+        TemplateRenderContract(
+            kind=TemplateRenderKind.LITERAL_BODY_V1,
+            available_fields=("query",),
+        )
+
+
+def test_render_requires_string_values_for_observed_fields() -> None:
+    contract = python_format_contract()
+    with pytest.raises(ValueError, match="missing fields: query"):
+        contract.render("{query}", {})
+    with pytest.raises(ValueError, match="must be strings: query"):
+        contract.render("{query}", {"query": 1})
+
+
+@pytest.mark.parametrize(
+    ("base_value", "proposed_value"),
+    ((True, 1), (1, 1.0)),
+)
+def test_diff_check_uses_strict_json_scalar_equality(
+    base_value: object,
+    proposed_value: object,
+) -> None:
+    base = Candidate(
+        candidate_id="A",
+        base_ref=base_ref(),
+        payload={"user_prompt_template": "old", "fixed": base_value},
+    )
+    proposed = Candidate(
+        candidate_id="P1",
+        base_ref=candidate_reference(base).record_ref,
+        payload={"user_prompt_template": "new", "fixed": proposed_value},
+    )
+    with pytest.raises(DiffCheckError, match="non-surface"):
+        diff_check(base=base, proposed=proposed)
+
+
+def test_diff_check_uses_strict_json_nested_equality() -> None:
+    base = Candidate(
+        candidate_id="A",
+        base_ref=base_ref(),
+        payload={
+            "user_prompt_template": "old",
+            "fixed": {"nested": [{"value": True}]},
+        },
+    )
+    proposed = Candidate(
+        candidate_id="P1",
+        base_ref=candidate_reference(base).record_ref,
+        payload={
+            "user_prompt_template": "new",
+            "fixed": {"nested": [{"value": 1}]},
+        },
+    )
+    with pytest.raises(DiffCheckError, match="non-surface"):
+        diff_check(base=base, proposed=proposed)
+
+
+def test_diff_check_rejects_an_unchanged_mutation_field() -> None:
+    base = candidate(text="same")
+    proposed = Candidate(
+        candidate_id="P1",
+        base_ref=candidate_reference(base).record_ref,
+        payload=base.model_dump(mode="json")["payload"],
+    )
+    with pytest.raises(DiffCheckError, match="must differ"):
+        diff_check(base=base, proposed=proposed)
+
+
+def test_diff_check_has_no_configurable_mutation_field() -> None:
+    assert tuple(signature(diff_check).parameters) == ("base", "proposed")
+
+
+def test_diff_check_preserves_protected_array_order_and_multiplicity() -> None:
+    base = Candidate(
+        candidate_id="A",
+        base_ref=base_ref(),
+        payload={
+            "user_prompt_template": "old",
+            "fixed": ["a", "a", "b"],
+        },
+    )
+    proposed = Candidate(
+        candidate_id="P1",
+        base_ref=candidate_reference(base).record_ref,
+        payload={
+            "user_prompt_template": "new",
+            "fixed": ["a", "b", "a"],
+        },
+    )
+    with pytest.raises(DiffCheckError, match="non-surface"):
+        diff_check(base=base, proposed=proposed)
+
+
+def test_multiple_candidates_may_share_a_base() -> None:
+    base = candidate()
+    proposed = tuple(
+        candidate_from_draft(
+            base=base,
+            candidate_id=f"P{index}",
+            draft=ProposalDraft(template=template),
+            run=proposal_run(),
+        )
+        for index, template in enumerate(
+            ("First {query}", "Second {query}"),
+            start=1,
+        )
+    )
+    assert tuple(item.base_ref for item in proposed) == (
+        candidate_reference(base).record_ref,
+        candidate_reference(base).record_ref,
+    )
+
+
+def test_draft_clones_nested_payload_before_mutating() -> None:
+    base = Candidate(
+        candidate_id="A",
+        base_ref=base_ref(),
+        payload={
+            "user_prompt_template": "old",
+            "nested": {"items": [{"value": 1}, {"value": 2}]},
+        },
+    )
+
+    proposed = candidate_from_draft(
+        base=base,
+        candidate_id="P1",
+        draft=ProposalDraft(template="new {query}"),
+        run=proposal_run(),
+    )
+
+    assert proposed.payload["nested"] == base.payload["nested"]
+    assert proposed.payload.to_json()["nested"] == {
+        "items": [{"value": 1}, {"value": 2}]
+    }
+
+
+def test_draft_requires_exact_run_authority() -> None:
+    with pytest.raises(TypeError, match="exact OptimizationRun"):
+        candidate_from_draft(
+            base=candidate(),
+            candidate_id="P1",
+            draft=ProposalDraft(template="{query}"),
+            run=cast(Any, python_format_contract()),
+        )
