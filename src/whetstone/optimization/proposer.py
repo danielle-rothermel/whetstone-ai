@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -12,6 +13,7 @@ from whetstone.lm.boundary import (
     provider_call_request_from_parameters,
     provider_result_from_response,
 )
+from whetstone.optimization.effect_authority import ReplayPolicy
 from whetstone.optimization.identity import (
     FiniteFloat,
     IdentityHash,
@@ -44,8 +46,12 @@ __all__ = [
     "PROPOSAL_REQUEST_SCHEMA_VERSION",
     "PROPOSER_CONFIG_SCHEMA",
     "PROPOSER_CONFIG_SCHEMA_VERSION",
+    "PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA",
+    "PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION",
+    "DurableProposalExecutor",
     "FakeProposerTransport",
     "ProposalDraft",
+    "ProposalExecutorDurabilityContract",
     "ProposalRequest",
     "ProposerConfig",
     "ProposerTransport",
@@ -60,6 +66,10 @@ PROPOSAL_REQUEST_SCHEMA = "whetstone.proposal_request"
 PROPOSAL_REQUEST_SCHEMA_VERSION = 1
 PROMPT_ADAPTER_SCHEMA = "whetstone.proposal_prompt_adapter"
 PROMPT_ADAPTER_SCHEMA_VERSION = 1
+PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA = (
+    "whetstone.provider_proposer_transport_durability"
+)
+PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION = 1
 
 
 class ProposerConfig(BaseModel):
@@ -130,7 +140,24 @@ class ProposalRequest(BaseModel):
         return value
 
     def identity_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        # Persisted identity contract: spell every key explicitly and pin the
+        # complete payload plus digest in golden tests.
+        return {
+            "proposal_mode": str(self.proposal_mode),
+            "request_ordinal": int(self.request_ordinal),
+            "base_candidate": {
+                "record_ref": {
+                    "schema_name": str(
+                        self.base_candidate.record_ref.schema_name
+                    ),
+                    "content_hash": str(
+                        self.base_candidate.record_ref.content_hash
+                    ),
+                },
+                "identity_hash": str(self.base_candidate.identity_hash),
+            },
+            "context": self.context.to_json(),
+        }
 
     def identity_hash(self) -> IdentityHash:
         return compute_identity_hash(
@@ -214,14 +241,131 @@ class ProposerTransport(Protocol):
     @property
     def prompt_adapter_identity_hash(self) -> str: ...
 
+    @property
+    def durability_identity_hash(self) -> str: ...
+
     def draft(
         self, config: ProposerConfig, request: ProposalRequest, count: int
     ) -> tuple[ProposalDraft, ...]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class ProposalExecutorDurabilityContract:
+    """Immutable identity of one deliberately durable executor boundary."""
+
+    recovery_policy: ReplayPolicy
+    policy_identity_hash: str
+
+    def __post_init__(self) -> None:
+        if self.recovery_policy is not ReplayPolicy.DURABLE_WORKFLOW:
+            raise ValueError(
+                "durable proposal executors require durable-workflow recovery"
+            )
+        require_full_hash(
+            self.policy_identity_hash,
+            field="proposal_executor_policy_identity_hash",
+        )
+
+
+class _ProposalExecution(Protocol):
+    def __call__(
+        self,
+        *,
+        config: ProposerConfig,
+        request: ProposalRequest,
+        transport: ProposerTransport,
+        count: int,
+    ) -> tuple[ProposalDraft, ...]: ...
+
+
+_DURABLE_PROPOSAL_EXECUTOR_TOKEN = object()
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class DurableProposalExecutor:
+    """Exact owned capability for the canonical durable proposal executor.
+
+    The capability value is created only by the canonical durable provider
+    factory in :mod:`whetstone.orchestration.proposal_provider`; a token
+    guard keeps its declared durability contract inseparable from the
+    behavior actually invoked.
+    """
+
+    __durability_contract: ProposalExecutorDurabilityContract
+    __execute: _ProposalExecution
+
+    def __init_subclass__(cls, **_kwargs: Any) -> None:
+        raise TypeError("DurableProposalExecutor cannot be subclassed")
+
+    def __init__(
+        self,
+        *,
+        durability_contract: ProposalExecutorDurabilityContract,
+        execute: _ProposalExecution,
+        _token: object,
+    ) -> None:
+        if _token is not _DURABLE_PROPOSAL_EXECUTOR_TOKEN:
+            raise TypeError(
+                "DurableProposalExecutor is created only by its canonical "
+                "durable provider factory"
+            )
+        object.__setattr__(
+            self,
+            "_DurableProposalExecutor__durability_contract",
+            durability_contract,
+        )
+        object.__setattr__(self, "_DurableProposalExecutor__execute", execute)
+
+    @property
+    def durability_contract(self) -> ProposalExecutorDurabilityContract:
+        """Return the frozen contract snapshot stored by the capability."""
+
+        return self.__durability_contract
+
+    @property
+    def policy_identity_hash(self) -> str:
+        return self.__durability_contract.policy_identity_hash
+
+    @property
+    def recovery_policy(self) -> ReplayPolicy:
+        return self.__durability_contract.recovery_policy
+
+    def execute(
+        self,
+        *,
+        config: ProposerConfig,
+        request: ProposalRequest,
+        transport: ProposerTransport,
+        count: int,
+    ) -> tuple[ProposalDraft, ...]:
+        """Execute one proposal call inside the durable effect authority."""
+
+        return self.__execute(
+            config=config,
+            request=request,
+            transport=transport,
+            count=count,
+        )
+
+
+def _durable_proposal_executor(
+    *,
+    durability_contract: ProposalExecutorDurabilityContract,
+    execute: _ProposalExecution,
+) -> DurableProposalExecutor:
+    """Mint the capability from its canonical durable provider factory."""
+
+    return DurableProposalExecutor(
+        durability_contract=durability_contract,
+        execute=execute,
+        _token=_DURABLE_PROPOSAL_EXECUTOR_TOKEN,
+    )
+
+
 ProviderCallConfigResolver = Callable[[IdentityRef], "ProviderCallConfig"]
 
 
+@dataclass(frozen=True, slots=True)
 class ProviderProposerTransport:
     """Production proposer route over the Whetstone provider kernel.
 
@@ -242,6 +386,16 @@ class ProviderProposerTransport:
     never be mistaken for a successful, underfilled candidate batch.
     """
 
+    _resolve_provider_call_config: ProviderCallConfigResolver
+    _transport: TransportCall
+    _execution_policy: ProviderExecutionPolicy
+    _prompt_adapter: PlainPromptAdapter
+    _clock: Clock | None
+    _sleep: Sleep | None
+
+    def __init_subclass__(cls, **_kwargs: Any) -> None:
+        raise TypeError("ProviderProposerTransport cannot be subclassed")
+
     def __init__(
         self,
         *,
@@ -252,12 +406,18 @@ class ProviderProposerTransport:
         clock: Clock | None = None,
         sleep: Sleep | None = None,
     ) -> None:
-        self._resolve_provider_call_config = resolve_provider_call_config
-        self._transport = transport
-        self._execution_policy = execution_policy
-        self._prompt_adapter = prompt_adapter or PlainPromptAdapter()
-        self._clock = clock
-        self._sleep = sleep
+        object.__setattr__(
+            self,
+            "_resolve_provider_call_config",
+            resolve_provider_call_config,
+        )
+        object.__setattr__(self, "_transport", transport)
+        object.__setattr__(self, "_execution_policy", execution_policy)
+        object.__setattr__(
+            self, "_prompt_adapter", prompt_adapter or PlainPromptAdapter()
+        )
+        object.__setattr__(self, "_clock", clock)
+        object.__setattr__(self, "_sleep", sleep)
 
     @property
     def execution_policy_hash(self) -> str:
@@ -266,6 +426,25 @@ class ProviderProposerTransport:
     @property
     def prompt_adapter_identity_hash(self) -> str:
         return prompt_adapter_identity_hash(self._prompt_adapter)
+
+    @property
+    def durability_identity_hash(self) -> str:
+        """Identify the exact capability a durable executor may invoke."""
+
+        # Persisted identity contract: spell every key explicitly and pin the
+        # complete payload plus digest in golden tests.
+        return compute_identity_hash(
+            schema=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
+            schema_version=(
+                PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION
+            ),
+            payload={
+                "execution_policy_hash": self.execution_policy_hash,
+                "prompt_adapter_identity_hash": (
+                    self.prompt_adapter_identity_hash
+                ),
+            },
+        )
 
     def draft(
         self,
@@ -466,6 +645,23 @@ class FakeProposerTransport:
     @property
     def prompt_adapter_identity_hash(self) -> str:
         return self._prompt_adapter_identity_hash
+
+    @property
+    def durability_identity_hash(self) -> str:
+        # Persisted identity contract: spell every key explicitly and pin the
+        # complete payload plus digest in golden tests.
+        return compute_identity_hash(
+            schema=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
+            schema_version=(
+                PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION
+            ),
+            payload={
+                "execution_policy_hash": self.execution_policy_hash,
+                "prompt_adapter_identity_hash": (
+                    self.prompt_adapter_identity_hash
+                ),
+            },
+        )
 
     def draft(
         self, config: ProposerConfig, request: ProposalRequest, count: int

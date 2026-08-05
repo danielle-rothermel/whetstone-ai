@@ -20,6 +20,8 @@ from whetstone.optimization import (
     typed_ref_for_record,
 )
 from whetstone.optimization.proposer import (
+    PROPOSAL_REQUEST_SCHEMA,
+    PROPOSAL_REQUEST_SCHEMA_VERSION,
     PROPOSER_CONFIG_SCHEMA,
     PROPOSER_CONFIG_SCHEMA_VERSION,
     FakeProposerTransport,
@@ -163,6 +165,71 @@ def test_proposer_route_distinct_from_encoder_decoder_routes() -> None:
 def test_proposer_config_schema_constants() -> None:
     assert PROPOSER_CONFIG_SCHEMA == "whetstone.proposer_config"
     assert PROPOSER_CONFIG_SCHEMA_VERSION == 1
+
+
+def test_proposal_request_schema_constants() -> None:
+    assert PROPOSAL_REQUEST_SCHEMA == "whetstone.proposal_request"
+    assert PROPOSAL_REQUEST_SCHEMA_VERSION == 1
+
+
+def _golden_proposal_request() -> ProposalRequest:
+    return ProposalRequest(
+        proposal_mode="seed_proposal",
+        request_ordinal=3,
+        base_candidate=_base_candidate_ref(),
+        context={"proposal_prompt": "Improve this prompt."},
+    )
+
+
+def test_proposal_request_identity_payload_is_golden() -> None:
+    assert _golden_proposal_request().identity_payload() == {
+        "proposal_mode": "seed_proposal",
+        "request_ordinal": 3,
+        "base_candidate": {
+            "record_ref": {
+                "schema_name": "whetstone.optimization_candidate",
+                "content_hash": (
+                    "a9ad4c9ed294a02a6158db2c0d5685e0"
+                    "3054f87676644da547fcc2beecfc455b"
+                ),
+            },
+            "identity_hash": (
+                "026534070c4cca3d8446ec47ab424e8e"
+                "a452db63804d23387a88d975940b5b30"
+            ),
+        },
+        "context": {"proposal_prompt": "Improve this prompt."},
+    }
+
+
+def test_proposal_request_identity_digest_is_golden() -> None:
+    assert (
+        _golden_proposal_request().identity_hash()
+        == "bfce15706e3ff69a0220615e1a775d3dfeaf0f231bd8e7fc64320e6831e198aa"
+    )
+
+
+def test_proposal_request_identity_payload_carries_no_extra_keys() -> None:
+    payload = _golden_proposal_request().identity_payload()
+
+    assert sorted(payload) == [
+        "base_candidate",
+        "context",
+        "proposal_mode",
+        "request_ordinal",
+    ]
+    assert sorted(payload["base_candidate"]) == [
+        "identity_hash",
+        "record_ref",
+    ]
+
+
+def test_proposal_request_identity_ignores_unaddressed_base_payload() -> None:
+    """Base identity travels by ref components, not the whole record."""
+
+    payload = _golden_proposal_request().identity_payload()
+
+    assert "record" not in payload["base_candidate"]
 
 
 def test_fake_transport_is_scripted_and_records_calls() -> None:

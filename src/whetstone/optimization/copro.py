@@ -37,6 +37,7 @@ from whetstone.optimization.proposal_prompts import (
     copro_proposal_prompt,
 )
 from whetstone.optimization.proposer import (
+    DurableProposalExecutor,
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
@@ -669,16 +670,29 @@ def _validate_attempt_placeholders(
 
 
 class CoproAdapter:
-    """Plan one COPRO round and emit an exact intent for each candidate."""
+    """Plan one COPRO round and emit an exact intent for each candidate.
+
+    COPRO's paid proposal call is executed through one injected
+    :class:`DurableProposalExecutor`, so an interrupted Step recovers by
+    replaying the executor's completed checkpoint instead of failing the run.
+    The executor's own durability contract states the guarantee it delivers.
+    """
 
     def __init__(
         self,
         *,
         control: CoproControl,
         transport: ProposerTransport,
+        proposal_executor: DurableProposalExecutor,
     ) -> None:
+        if type(proposal_executor) is not DurableProposalExecutor:
+            raise TypeError(
+                "COPRO requires the canonical DurableProposalExecutor "
+                "capability for its paid proposal call"
+            )
         self._control = control
         self._transport = transport
+        self._proposal_executor = proposal_executor
         self.invocations = 0
 
     @property
@@ -691,7 +705,11 @@ class CoproAdapter:
 
     @property
     def required_replay_policy(self) -> ReplayPolicy:
-        return ReplayPolicy.NO_REDRIVE
+        return self._proposal_executor.recovery_policy
+
+    @property
+    def proposal_executor(self) -> DurableProposalExecutor:
+        return self._proposal_executor
 
     @property
     def proposer_config(self) -> ProposerConfig:
@@ -829,10 +847,11 @@ class CoproAdapter:
             base_candidate=proposal_request.base_candidate,
             context={**context, "proposal_prompt": prompt},
         )
-        drafts = self._transport.draft(
-            self._control.prompt_model,
-            proposal_request,
-            plan.proposal_count,
+        drafts = self._proposal_executor.execute(
+            config=self._control.prompt_model,
+            request=proposal_request,
+            transport=self._transport,
+            count=plan.proposal_count,
         )
 
         occurrences: list[tuple[int, Candidate]] = []

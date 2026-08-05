@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from typing import cast
 
 import pytest
 
 from tests.optimization.support import (
     FULL_A,
     FULL_B,
+    FULL_C,
     RecordingEvaluationService,
     evaluation_binding,
     internal_reward_policy,
@@ -58,7 +60,29 @@ from whetstone.optimization.copro import (
     CoproState,
     rank_attempt_history,
 )
+from whetstone.optimization.proposer import (
+    DurableProposalExecutor,
+    ProposalExecutorDurabilityContract,
+    _durable_proposal_executor,
+)
 from whetstone.optimization.schema import STEP_RESULT_SCHEMA
+
+
+def _direct_executor(
+    *, policy_identity_hash: str = FULL_C
+) -> DurableProposalExecutor:
+    """Mint the canonical capability over an in-process pass-through."""
+
+    def execute(*, config, request, transport, count):
+        return transport.draft(config, request, count)
+
+    return _durable_proposal_executor(
+        durability_contract=ProposalExecutorDurabilityContract(
+            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
+            policy_identity_hash=policy_identity_hash,
+        ),
+        execute=execute,
+    )
 
 
 def _prompt_model(*, temperature: float = 1.4) -> ProposerConfig:
@@ -107,7 +131,11 @@ def _adapter(
         prompt_adapter_identity_hash=exact_control.prompt_adapter_identity_hash,
     )
     return (
-        CoproAdapter(control=exact_control, transport=transport),
+        CoproAdapter(
+            control=exact_control,
+            transport=transport,
+            proposal_executor=_direct_executor(),
+        ),
         transport,
         exact_control,
     )
@@ -268,10 +296,40 @@ def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
     assert transport.calls[0][2] == 2
 
 
-def test_adapter_requires_no_redrive_replay() -> None:
+def test_adapter_requires_the_executor_durable_workflow_replay() -> None:
     adapter, _, _ = _adapter({})
 
-    assert adapter.required_replay_policy is ReplayPolicy.NO_REDRIVE
+    assert adapter.required_replay_policy is ReplayPolicy.DURABLE_WORKFLOW
+    assert (
+        adapter.required_replay_policy
+        is adapter.proposal_executor.recovery_policy
+    )
+    assert adapter.proposal_executor.policy_identity_hash == FULL_C
+
+
+def test_adapter_rejects_a_structural_proposal_executor() -> None:
+    class _StructuralExecutor:
+        policy_identity_hash = FULL_C
+        recovery_policy = ReplayPolicy.DURABLE_WORKFLOW
+
+        def execute(self, **_kwargs):
+            raise AssertionError("test does not execute proposal effects")
+
+    control = _control()
+    transport = FakeProposerTransport(
+        {},
+        execution_policy_hash=FULL_A,
+        prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+    )
+
+    with pytest.raises(TypeError, match="DurableProposalExecutor"):
+        CoproAdapter(
+            control=control,
+            transport=transport,
+            proposal_executor=cast(
+                DurableProposalExecutor, _StructuralExecutor()
+            ),
+        )
 
 
 def test_idempotent_harness_rejects_before_copro_effects(
@@ -305,14 +363,14 @@ def test_idempotent_harness_rejects_before_copro_effects(
         harness.run_step(_request(control))
 
     assert caught.value.configured_policy is ReplayPolicy.IDEMPOTENT
-    assert caught.value.required_policy is ReplayPolicy.NO_REDRIVE
+    assert caught.value.required_policy is ReplayPolicy.DURABLE_WORKFLOW
     assert adapter.invocations == 0
     assert transport.calls == []
     assert service.calls == []
     assert puts == 0
 
 
-def test_no_redrive_harness_reaches_copro_and_replays_completed_result(
+def test_durable_workflow_harness_reaches_copro_and_replays_result(
     tmp_path,
 ) -> None:
     adapter, transport, control = _adapter(
@@ -327,7 +385,7 @@ def test_no_redrive_harness_reaches_copro_and_replays_completed_result(
         adapter_registry=MappingAdapterRegistry({"copro": adapter}),
         run=_run(control),
         evaluation_service=service,
-        adapter_replay_policy=ReplayPolicy.NO_REDRIVE,
+        adapter_replay_policy=ReplayPolicy.DURABLE_WORKFLOW,
     )
     request = _request(control)
 
@@ -692,7 +750,11 @@ def test_exact_control_and_transport_are_verified_before_effects() -> None:
         execution_policy_hash=FULL_B,
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
     )
-    wrong_adapter = CoproAdapter(control=control, transport=wrong_policy)
+    wrong_adapter = CoproAdapter(
+        control=control,
+        transport=wrong_policy,
+        proposal_executor=_direct_executor(),
+    )
     with pytest.raises(ValueError, match="execution policy"):
         wrong_adapter.invoke(_request(control), ())
     assert wrong_policy.calls == []

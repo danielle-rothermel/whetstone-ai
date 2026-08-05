@@ -1922,6 +1922,7 @@ name = "whetstone-ai"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dbos" },
     { name = "dr-code" },
     { name = "dr-graph" },
     { name = "dr-providers" },
@@ -1935,7 +1936,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "dbos" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-xdist" },
@@ -1945,6 +1945,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", git = "https://github.com/danielle-rothermel/dr-code?rev=5810f30dede14094fcf1b8f1cce95d73a1055c84" },
     { name = "dr-graph", specifier = ">=0.1.0,<0.2" },
     { name = "dr-providers", specifier = ">=0.2.1,<0.3" },
@@ -1958,7 +1959,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "dbos", specifier = ">=2.25.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },

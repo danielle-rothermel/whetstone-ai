@@ -12,8 +12,14 @@ from dr_providers import (
 )
 
 from tests.provider import support as provider_support
-from whetstone.optimization.identity import IdentityRef, typed_ref_for_record
+from whetstone.optimization.identity import (
+    IdentityRef,
+    compute_identity_hash,
+    typed_ref_for_record,
+)
 from whetstone.optimization.proposer import (
+    PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
+    PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION,
     FakeProposerTransport,
     ProposalRequest,
     ProposerConfig,
@@ -393,3 +399,86 @@ def test_fake_transport_strict_mode_never_invents_padding_candidates() -> None:
     assert drafts[1].template == ""
     assert drafts[1].terminal_failure is not None
     assert "underfilled strict batch" in drafts[1].terminal_failure.message
+
+
+def test_provider_transport_cannot_be_subclassed_or_mutated() -> None:
+    proposer, _config, recording, _refs = _transport(
+        provider_support.response_outcome(text="must not run"),
+    )
+
+    assert not hasattr(proposer, "__dict__")
+    with pytest.raises((AttributeError, TypeError)):
+        proposer.draft = lambda *_args, **_kwargs: ()
+    with pytest.raises((AttributeError, TypeError)):
+        proposer._execution_policy = None
+    with pytest.raises(TypeError, match="cannot be subclassed"):
+        type("ProposerOverride", (ProviderProposerTransport,), {})
+
+    assert recording.served == []
+
+
+def test_transport_durability_schema_constants() -> None:
+    assert PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA == (
+        "whetstone.provider_proposer_transport_durability"
+    )
+    assert PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION == 1
+
+
+def test_transport_durability_identity_payload_and_digest_are_golden() -> None:
+    """The registry key is exactly these two pinned capability components."""
+
+    golden = "862c33a44ec69924e65f4556e5077ba61e0afbcfcb129e4cbd32ce7fa75b767c"
+    assert (
+        compute_identity_hash(
+            schema=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
+            schema_version=(
+                PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION
+            ),
+            payload={
+                "execution_policy_hash": "a" * 64,
+                "prompt_adapter_identity_hash": "b" * 64,
+            },
+        )
+        == golden
+    )
+
+    scripted = FakeProposerTransport(
+        {},
+        execution_policy_hash="a" * 64,
+        prompt_adapter_identity_hash="b" * 64,
+    )
+    assert scripted.durability_identity_hash == golden
+
+
+def test_transport_durability_identity_binds_policy_and_prompt_adapter() -> (
+    None
+):
+    outcome = provider_support.response_outcome(text="identity fixture")
+    base, _c, _r, _refs = _transport(outcome)
+    changed_policy, _c2, _r2, _refs2 = _transport(outcome, max_attempts=3)
+    changed_adapter = FakeProposerTransport(
+        {},
+        execution_policy_hash=base.execution_policy_hash,
+        prompt_adapter_identity_hash="d" * 64,
+    )
+
+    assert base.durability_identity_hash == compute_identity_hash(
+        schema=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
+        schema_version=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION,
+        payload={
+            "execution_policy_hash": base.execution_policy_hash,
+            "prompt_adapter_identity_hash": (
+                base.prompt_adapter_identity_hash
+            ),
+        },
+    )
+    assert (
+        len(
+            {
+                base.durability_identity_hash,
+                changed_policy.durability_identity_hash,
+                changed_adapter.durability_identity_hash,
+            }
+        )
+        == 3
+    )
