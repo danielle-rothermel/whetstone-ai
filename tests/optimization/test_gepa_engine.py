@@ -23,6 +23,10 @@ from whetstone.optimization.gepa_source import (
 from whetstone.optimization.gepa_upstream_adapter import (
     GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
 )
+from whetstone.optimization.identity import (
+    IdentityRef,
+    typed_ref_for_record,
+)
 
 
 def _identity(index: int) -> str:
@@ -190,8 +194,13 @@ class _Data:
 def _control(**overrides):
     values: dict[str, Any] = {
         "reflection_model": ProposerConfig(
-            provider_call_config_ref="provider://reflection",
-            provider_call_config_hash=FULL_A,
+            provider_call_config=IdentityRef(
+                record_ref=typed_ref_for_record(
+                    "dr_providers.provider_call_config",
+                    {"provider_call_config_ref": "provider://reflection"},
+                ),
+                identity_hash=FULL_A,
+            ),
         ),
         "metric": eval_config_reference(eval_config()),
         "reward_policy_hash": FULL_B,
@@ -340,8 +349,13 @@ def test_engine_rejects_adapter_and_order_identity_drift() -> None:
             "proposal",
             "proposer_config",
             ProposerConfig(
-                provider_call_config_ref="provider://drifted",
-                provider_call_config_hash=FULL_D,
+                provider_call_config=IdentityRef(
+                    record_ref=typed_ref_for_record(
+                        "dr_providers.provider_call_config",
+                        {"provider_call_config_ref": "provider://drifted"},
+                    ),
+                    identity_hash=FULL_D,
+                ),
             ),
         ),
         ("proposal", "prompt_binding_identity_hash", _identity(905)),

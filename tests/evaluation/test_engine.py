@@ -3588,7 +3588,8 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
             "args": {**call.args, "task_ids": ["not-the-bound-task"]},
         }
     )
-    served = len(transport.served)
+    # Both malformed task_ids subsets are rejected during validation, before
+    # the engine performs any evaluation work.
     with pytest.raises(ToolValidationError, match="unknown task IDs"):
         EngineToolEvaluator(engine).evaluate(mismatched, config)
     duplicate = call.model_copy(

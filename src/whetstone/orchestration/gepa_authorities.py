@@ -19,7 +19,7 @@ from whetstone.evaluation.schema import (
     EVALUATION_OUTPUTS_SCHEMA,
     EvaluationEvidence,
 )
-from whetstone.graph.rollout import EvaluationRole
+from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.gepa_control import GepaControl
 from whetstone.optimization.gepa_effects import (
     GepaCandidateComponent,
@@ -39,6 +39,7 @@ from whetstone.optimization.identity import (
     TypedRef,
     compute_identity_hash,
     require_full_hash,
+    typed_ref_for_record,
 )
 from whetstone.optimization.mutation import MUTATION_FIELD
 from whetstone.optimization.proposer import (
@@ -46,8 +47,10 @@ from whetstone.optimization.proposer import (
     ProposerTransport,
 )
 from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     Candidate,
     CandidateRef,
+    EvaluationBinding,
     EvaluationIntent,
     IntentOutcome,
     candidate_reference,
@@ -456,17 +459,26 @@ class CanonicalGepaEvaluationAuthority:
         candidate = self._candidate_assembler.assemble(request.candidate)
         task_ids = tuple(item.data_id for item in request.data)
         subset_engine = self._engine.for_task_ids(task_ids)
+        evaluation_binding = EvaluationBinding(
+            schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
+            eval_config=subset_engine.eval_config_ref,
+            role=EvaluationRole.INTERNAL,
+            campaign=request.slot.context.run_id,
+            provider_execution_policy_ref=(
+                subset_engine.provider_execution_policy_ref
+            ),
+        )
         intent = EvaluationIntent(
             intent_id=(
                 f"{request.slot.context.run_id}:gepa:{request.identity_hash()}"
             ),
             candidate=candidate,
             target_eval_config=subset_engine.eval_config_ref,
-            context_role=EvaluationRole.INTERNAL,
-            context_policy_ref=request.identity_hash(),
+            evaluation_binding=evaluation_binding,
             purpose="gepa_metric",
             run_id=request.slot.context.run_id,
             step_index=request.slot.invocation_ordinal,
+            expected_reward_policy_hash=self._control.reward_policy_hash,
         )
         resolution = EngineEvaluationService(
             store=self._store,
@@ -574,7 +586,7 @@ class CanonicalGepaEvaluationAuthority:
             evidence.outputs_ref,
             evidence.aggregate_ref,
             *(
-                (evidence.reward_ref,)
+                (evidence.reward_ref.record_ref,)
                 if evidence.reward_ref is not None
                 else ()
             ),
@@ -907,17 +919,24 @@ class CanonicalGepaProposalAuthority:
                 "GEPA reflection proposer must return exactly one draft"
             )
         draft = drafts[0]
-        attempt_refs = self._persist_attempt_evidence(draft.response_evidence)
+        request_evidence = draft.request_evidence.to_json()
+        response_evidence = draft.response_evidence.to_json()
+        usage = draft.usage.to_json()
+        attempt_refs = self._persist_attempt_evidence(response_evidence)
         if draft.failed:
             return GepaProposalEffectResult(
                 request_identity_hash=request.identity_hash(),
-                request_evidence=draft.request_evidence,
-                response_evidence=draft.response_evidence,
+                request_evidence=request_evidence,
+                response_evidence=response_evidence,
                 provider_attempt_refs=attempt_refs,
-                usage=draft.usage,
+                usage=usage,
                 cost=draft.cost,
                 failed=True,
-                failure_detail=draft.failure_detail,
+                failure_detail=(
+                    draft.terminal_failure.message
+                    if draft.terminal_failure is not None
+                    else None
+                ),
             )
         raw = draft.template
         try:
@@ -929,10 +948,10 @@ class CanonicalGepaProposalAuthority:
             return GepaProposalEffectResult(
                 request_identity_hash=request.identity_hash(),
                 raw_response=raw,
-                request_evidence=draft.request_evidence,
-                response_evidence=draft.response_evidence,
+                request_evidence=request_evidence,
+                response_evidence=response_evidence,
                 provider_attempt_refs=attempt_refs,
-                usage=draft.usage,
+                usage=usage,
                 cost=draft.cost,
                 failed=True,
                 failure_detail=str(exc) or type(exc).__name__,
@@ -946,10 +965,10 @@ class CanonicalGepaProposalAuthority:
                     text=parsed,
                 ),
             ),
-            request_evidence=draft.request_evidence,
-            response_evidence=draft.response_evidence,
+            request_evidence=request_evidence,
+            response_evidence=response_evidence,
             provider_attempt_refs=attempt_refs,
-            usage=draft.usage,
+            usage=usage,
             cost=draft.cost,
         )
 

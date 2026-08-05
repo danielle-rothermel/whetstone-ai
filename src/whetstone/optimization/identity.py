@@ -33,6 +33,7 @@ __all__ = [
     "canonical_json_equal",
     "compute_identity_hash",
     "freeze_json_object",
+    "reject_non_json",
     "require_full_hash",
     "typed_ref_for_record",
 ]
@@ -288,6 +289,28 @@ def freeze_json_object(
         return value
     try:
         return ImmutableJsonObject(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field}: {exc}") from exc
+
+
+def reject_non_json(value: Any, *, field: str) -> None:
+    """Reject any value that is not strict, finite JSON.
+
+    Wraps the canonical strict-JSON encoder so callers validating a whole
+    payload raise the same way as the frozen JSON containers do.
+    """
+
+    def unwrapped(item: Any) -> Any:
+        if isinstance(item, ImmutableJsonObject):
+            return {key: unwrapped(entry) for key, entry in item.items()}
+        if isinstance(item, dict):
+            return {key: unwrapped(entry) for key, entry in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [unwrapped(entry) for entry in item]
+        return item
+
+    try:
+        canonical_json(unwrapped(value))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field}: {exc}") from exc
 

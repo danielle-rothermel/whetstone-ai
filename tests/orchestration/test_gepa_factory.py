@@ -15,7 +15,10 @@ from whetstone.evaluation import EvaluationEngine
 from whetstone.optimization.gepa_control import configure_gepa
 from whetstone.optimization.gepa_effects import GepaDataInstance
 from whetstone.optimization.gepa_engine import GepaDetailedResult
-from whetstone.optimization.identity import typed_ref_for_record
+from whetstone.optimization.identity import (
+    IdentityRef,
+    typed_ref_for_record,
+)
 from whetstone.optimization.proposer import (
     FakeProposerTransport,
     ProposerConfig,
@@ -88,7 +91,10 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
     base = candidate_reference(
         Candidate(
             candidate_id="gepa-base",
-            base_ref="test.gepa.base",
+            base_ref=typed_ref_for_record(
+                "test.gepa.base",
+                {"candidate_id": "gepa-base"},
+            ),
             payload={"alpha": "alpha-0", "beta": "beta-0"},
         )
     )
@@ -114,8 +120,13 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
     metric = eval_config_reference(eval_config())
     control = configure_gepa(
         reflection_model=ProposerConfig(
-            provider_call_config_ref="provider://gepa",
-            provider_call_config_hash=_A,
+            provider_call_config=IdentityRef(
+                record_ref=typed_ref_for_record(
+                    "dr_providers.provider_call_config",
+                    {"provider_call_config_ref": "provider://gepa"},
+                ),
+                identity_hash=_A,
+            ),
         ),
         metric=metric,
         reward_policy_hash=_B,

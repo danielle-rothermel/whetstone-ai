@@ -14,7 +14,7 @@ import pytest
 
 from tests.optimization.test_gepa_adapter import _control, _detailed
 from whetstone.optimization.gepa_effects import GepaDataInstance
-from whetstone.optimization.identity import typed_ref_for_record
+from whetstone.optimization.identity import ContentHash, typed_ref_for_record
 
 
 class _ReplayDbos:
@@ -164,7 +164,7 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
             ),
         ),
     )
-    factory.runtime_identity_hash = "9" * 64
+    factory.runtime_identity_hash = ContentHash("9" * 64)
 
     with pytest.raises(RuntimeError, match="factory identity drifted"):
         module.DbosGepaRunner().run(request)
@@ -207,7 +207,6 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
 ) -> None:
     from dbos import DBOS, DBOSConfig
 
-    from tests.orchestration.platform_support import engine_dsn
     from whetstone.orchestration.gepa_runner import (
         DbosGepaRunner,
         GepaParentRunRequest,
@@ -215,7 +214,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
     )
 
     suffix = uuid4().hex[:10]
-    database_url = engine_dsn(pg_engine)
+    database_url = pg_engine.url.render_as_string(hide_password=False)
     config: DBOSConfig = {
         "name": f"gepa-parent-{suffix}",
         "system_database_url": database_url,
@@ -286,7 +285,6 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
         _prompt_services,
         _proposal_authority,
     )
-    from tests.orchestration.platform_support import engine_dsn
     from whetstone.optimization.gepa_effects import GepaEffectContext
     from whetstone.optimization.gepa_engine import GepaDetailedResult
     from whetstone.optimization.gepa_source import (
@@ -308,7 +306,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     )
 
     suffix = uuid4().hex[:10]
-    database_url = engine_dsn(pg_engine)
+    database_url = pg_engine.url.render_as_string(hide_password=False)
     config: DBOSConfig = {
         "name": f"gepa-recovery-{suffix}",
         "system_database_url": database_url,

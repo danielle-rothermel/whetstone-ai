@@ -48,7 +48,10 @@ from whetstone.optimization.gepa_upstream_adapter import (
     GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
     WhetstoneGepaAdapter,
 )
-from whetstone.optimization.identity import typed_ref_for_record
+from whetstone.optimization.identity import (
+    IdentityRef,
+    typed_ref_for_record,
+)
 
 _ORACLE = Path(__file__).with_name("gepa_upstream_oracle.py")
 _FIXTURE = Path(__file__).parent / "fixtures" / "gepa_replay_spike_v1.json"
@@ -521,8 +524,13 @@ def test_native_adapter_matches_independent_upstream_oracle_and_replays(
     )
     services = _native_prompt_services()
     reflection_model = ProposerConfig(
-        provider_call_config_ref="provider://gepa-differential",
-        provider_call_config_hash=_D,
+        provider_call_config=IdentityRef(
+            record_ref=typed_ref_for_record(
+                "dr_providers.provider_call_config",
+                {"provider_call_config_ref": "provider://gepa-differential"},
+            ),
+            identity_hash=_D,
+        ),
     )
     train_labels = (
         "train-A-0",

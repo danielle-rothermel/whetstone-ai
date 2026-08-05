@@ -497,12 +497,23 @@ class ProviderProposerTransport:
                     "structured proposer messages require the identity-bound "
                     "StructuredPromptAdapter"
                 )
-            if not isinstance(raw_messages, list):
+            if not isinstance(raw_messages, list | tuple):
                 raise ValueError(
-                    "proposal_messages must be an ordered JSON list"
+                    "proposal_messages must be an ordered list of JSON "
+                    "message records"
+                )
+            records: list[dict[str, Any]] = []
+            for record in raw_messages:
+                if not isinstance(record, Mapping):
+                    raise ValueError(
+                        "proposal_messages must be an ordered list of JSON "
+                        "message records"
+                    )
+                records.append(
+                    {str(key): value for key, value in record.items()}
                 )
             messages = self._prompt_adapter.messages_from_records(
-                tuple(raw_messages)
+                tuple(records)
             )
         provider_request = provider_call_request_from_parameters(
             config=provider_config,

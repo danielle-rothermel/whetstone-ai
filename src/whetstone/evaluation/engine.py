@@ -244,8 +244,8 @@ class EvaluationEngine:
             experiment=self.experiment,
             sampling=derived,
             execution_policy=self._execution_policy,
-            transport=self._transport,
-            fanout=self._fanout,
+            row_job_factory=self._row_job_factory,
+            max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
         )

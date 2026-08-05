@@ -42,7 +42,10 @@ from whetstone.optimization.gepa_upstream_adapter import (
     GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
     WhetstoneGepaAdapter,
 )
-from whetstone.optimization.identity import typed_ref_for_record
+from whetstone.optimization.identity import (
+    IdentityRef,
+    typed_ref_for_record,
+)
 from whetstone.optimization.proposer import ProposerConfig
 
 _A = "a" * 64
@@ -129,8 +132,13 @@ def _proposal_authority(
         prompt_adapter_identity_hash=_E,
         durability_policy_identity_hash=_F,
         proposer_config=ProposerConfig(
-            provider_call_config_ref="provider://gepa-reflection",
-            provider_call_config_hash=_D,
+            provider_call_config=IdentityRef(
+                record_ref=typed_ref_for_record(
+                    "dr_providers.provider_call_config",
+                    {"provider_call_config_ref": "provider://gepa-reflection"},
+                ),
+                identity_hash=_D,
+            ),
         ),
     )
 

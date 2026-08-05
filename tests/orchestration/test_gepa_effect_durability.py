@@ -21,10 +21,12 @@ from tests.optimization.test_gepa_effects import (
 from tests.orchestration.test_proposal_provider_durability import (
     _executor,
     _OrderedReplayDbos,
+    _provider_transport,
 )
 from tests.orchestration.test_proposal_provider_durability import (
     _load_boundary as _load_provider_boundary,
 )
+from tests.provider import support as provider_support
 from whetstone.optimization.gepa_effects import (
     GepaCandidateComponent,
     GepaEffectRecorder,
@@ -35,10 +37,7 @@ from whetstone.optimization.gepa_effects import (
 )
 from whetstone.optimization.gepa_prompts import GepaRenderedPrompt
 from whetstone.optimization.identity import typed_ref_for_record
-from whetstone.optimization.proposer import (
-    FakeProposerTransport,
-    ProposalRequest,
-)
+from whetstone.optimization.proposer import ProposalRequest
 from whetstone.orchestration.gepa_authorities import (
     CanonicalGepaProposalAuthority,
 )
@@ -214,11 +213,12 @@ class _DurableAuthority:
 class _ProviderBackedProposalAuthority:
     """Exercise the real application store and decorated provider executor."""
 
-    def __init__(self, *, store, request, transport, executor) -> None:
+    def __init__(self, *, store, request, transport, executor, config) -> None:
         self.runtime_identity_hash = request.authority.authority_identity_hash
         self._store = store
         self._transport = transport
         self._executor = executor
+        self._config = config
 
     def propose(self, request):
         generic = ProposalRequest(
@@ -233,7 +233,7 @@ class _ProviderBackedProposalAuthority:
             context={"proposal_prompt": request.rendered_prompt.text},
         )
         drafts = self._executor.execute(
-            config=request.authority.proposer_config,
+            config=self._config,
             request=generic,
             transport=self._transport,
             count=1,
@@ -253,8 +253,8 @@ class _ProviderBackedProposalAuthority:
                     text=draft.template,
                 ),
             ),
-            request_evidence=draft.request_evidence,
-            response_evidence=draft.response_evidence,
+            request_evidence=draft.request_evidence.to_json(),
+            response_evidence=draft.response_evidence.to_json(),
             provider_attempt_refs=(attempt_ref,),
         )
 
@@ -347,12 +347,8 @@ def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
     provider_module = _load_provider_boundary(_OrderedReplayDbos)
     effect_module = _load_boundary(_OrderedReplayDbos)
     request = _proposal_request()
-    transport = FakeProposerTransport(
-        {("gepa_reflection", 0): ("alpha-improved",)},
-        execution_policy_hash=request.authority.execution_policy_identity_hash,
-        prompt_adapter_identity_hash=(
-            request.authority.prompt_adapter_identity_hash
-        ),
+    transport, proposer_config, recording = _provider_transport(
+        provider_support.response_outcome(text="alpha-improved"),
     )
     executor = _executor(
         provider_module,
@@ -366,6 +362,7 @@ def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
         request=request,
         transport=transport,
         executor=executor,
+        config=proposer_config,
     )
     effect_module.register_gepa_proposal_authority(
         authority.runtime_identity_hash,
@@ -380,14 +377,14 @@ def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
     broker._recorder.record_proposal_result = crash_before_outer_bind
     with pytest.raises(RuntimeError, match="before GEPA child commit"):
         broker.propose(request)
-    assert len(transport.calls) == 1
+    assert len(recording.served) == 1
 
     broker._recorder.record_proposal_result = original_record
     _OrderedReplayDbos.begin_replay()
     replay = broker.propose(request)
 
     assert replay.parsed_components[0].text == "alpha-improved"
-    assert len(transport.calls) == 1
+    assert len(recording.served) == 1
     assert _OrderedReplayDbos.cursor == 1
     assert len(_OrderedReplayDbos.checkpoints) == 1
 
@@ -399,12 +396,8 @@ def test_parent_replay_always_consumes_stable_child_operation(
     provider_module = _load_provider_boundary(_SynchronousChildOrderedDbos)
     effect_module = _load_boundary(_SynchronousChildOrderedDbos)
     request = _proposal_request()
-    transport = FakeProposerTransport(
-        {("gepa_reflection", 0): ("alpha-improved",)},
-        execution_policy_hash=request.authority.execution_policy_identity_hash,
-        prompt_adapter_identity_hash=(
-            request.authority.prompt_adapter_identity_hash
-        ),
+    transport, proposer_config, recording = _provider_transport(
+        provider_support.response_outcome(text="alpha-improved"),
     )
     executor = _executor(
         provider_module,
@@ -419,6 +412,7 @@ def test_parent_replay_always_consumes_stable_child_operation(
         request=request,
         transport=transport,
         executor=executor,
+        config=proposer_config,
     )
     effect_module.register_gepa_proposal_authority(
         authority.runtime_identity_hash,
@@ -439,7 +433,7 @@ def test_parent_replay_always_consumes_stable_child_operation(
     assert later_operation("safe") == "later:safe"
 
     assert replay == first
-    assert len(transport.calls) == 1
+    assert len(recording.served) == 1
     assert _SynchronousChildOrderedDbos.cursor == 2
     assert len(_SynchronousChildOrderedDbos.checkpoints) == 2
 
@@ -454,7 +448,6 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
 
     from dbos import DBOS, DBOSConfig
 
-    from tests.orchestration.platform_support import engine_dsn
     from whetstone.orchestration.gepa_effects import (
         DbosGepaEffectBroker,
         register_gepa_evaluation_authority,
@@ -462,7 +455,7 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
     )
 
     suffix = uuid4().hex[:10]
-    database_url = engine_dsn(pg_engine)
+    database_url = pg_engine.url.render_as_string(hide_password=False)
     config: DBOSConfig = {
         "name": f"gepa-effect-{suffix}",
         "system_database_url": database_url,

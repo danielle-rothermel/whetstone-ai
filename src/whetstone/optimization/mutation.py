@@ -17,6 +17,7 @@ attempt cap or fails the Step per its cardinality rule.
 
 from __future__ import annotations
 
+import string
 from typing import TYPE_CHECKING
 
 from dr_serialize import canonical_json
@@ -36,11 +37,34 @@ __all__ = [
     "ProposalValidationError",
     "candidate_from_draft",
     "diff_check",
+    "template_placeholder_fields",
     "validate_candidate_template",
 ]
 
 # The single allowed mutation field across every optimizing run here.
 MUTATION_FIELD = "user_prompt_template"
+
+
+def template_placeholder_fields(template: str) -> tuple[str, ...]:
+    """Return every placeholder occurrence in one template, in order.
+
+    Parses the pinned brace syntax without importing the candidate runtime, so
+    callers validating a bare replacement template need no render contract.
+    Raises :class:`ValueError` when the braces are malformed.
+    """
+
+    fields: list[str] = []
+    for _literal, field_name, _spec, _conversion in string.Formatter().parse(
+        template
+    ):
+        if field_name is None:
+            continue
+        if field_name == "":
+            fields.append("<positional>")
+            continue
+        head = field_name.replace("[", ".").split(".", 1)[0]
+        fields.append("<positional>" if head.isdigit() else head)
+    return tuple(fields)
 
 
 class DiffCheckError(ValueError):

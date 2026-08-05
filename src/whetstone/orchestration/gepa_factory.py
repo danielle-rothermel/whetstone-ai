@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from dr_store import ObjectStore
 
 from whetstone.optimization.gepa_control import GepaControl
@@ -21,6 +23,9 @@ from whetstone.optimization.gepa_upstream_adapter import (
 from whetstone.optimization.identity import (
     TypedRef,
     compute_identity_hash,
+)
+from whetstone.optimization.proposer import (
+    RetryDurableProposerTransport,
 )
 from whetstone.orchestration.gepa_authorities import (
     CanonicalGepaEvaluationAuthority,
@@ -123,7 +128,10 @@ class CanonicalGepaAdapterFactory:
         )
         register_proposal_transport(
             self._proposal_authority.executor.transport_registry_key,
-            self._proposal_authority.transport,
+            cast(
+                RetryDurableProposerTransport,
+                self._proposal_authority.transport,
+            ),
         )
         return WhetstoneGepaAdapter(
             context=GepaEffectContext(
