@@ -12,9 +12,9 @@ terminal Node"):
   against the task's ``INPUT_CODE`` and a per-task character budget
   ``MAX_BUDGET = round(budget_ratio * chars(INPUT_CODE))``. It declares the
   Character Budget Variable (``CharacterBudgetRule(ratio=budget_ratio)``), so
-  the
-  ratio folds into ``graph_hash`` (the concrete budget bound is a runtime Graph
-  External Input, never in identity).
+  the ratio folds into ``graph_hash``. The concrete budget bound is used while
+  rendering the encoder prompt; that rendered prompt is the runtime Graph
+  External Input, while the bound itself is never in identity.
 * The **decoder** conditions ONLY on the encoder's description (its
   ``prompt_source`` is the encoder Node's Generation output) and reconstructs
   code.

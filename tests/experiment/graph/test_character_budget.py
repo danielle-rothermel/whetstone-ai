@@ -11,7 +11,6 @@ from tests.experiment.graph.support import (
     fake_hash,
 )
 from whetstone.experiment.graph.character_budget import (
-    CHARACTER_BUDGET_EXTERNAL_INPUT,
     CharacterBudgetRule,
     derive_character_bound,
 )
@@ -66,15 +65,14 @@ def test_changing_budget_rule_ratio_changes_graph_hash() -> None:
     assert graph_hash(base) != graph_hash(changed)
 
 
-def test_concrete_task_bound_is_a_graph_external_input() -> None:
-    # The concrete Task-derived bound is supplied via task.<field> and is a
-    # Graph External Input, excluded from Graph Config identity.
-    assert CHARACTER_BUDGET_EXTERNAL_INPUT.startswith("task.")
-
-
 def test_derive_character_bound() -> None:
     rule = CharacterBudgetRule(ratio=0.5)
     assert derive_character_bound(rule, task_length=100) == 50
+
+
+def test_derivation_uses_python_round_semantics() -> None:
+    rule = CharacterBudgetRule(ratio=0.5)
+    assert derive_character_bound(rule, task_length=3) == 2
 
 
 def test_budget_rule_rejects_nonpositive_ratio() -> None:
@@ -105,7 +103,7 @@ def test_huge_finite_derived_bound_has_stable_error() -> None:
         (2 / 3, 3, 2),
     ],
 )
-def test_derivation_preserves_float_then_truncate_semantics(
+def test_derivation_preserves_float_then_round_semantics(
     ratio: float,
     task_length: int,
     expected: int,

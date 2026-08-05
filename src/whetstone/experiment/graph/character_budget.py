@@ -8,9 +8,9 @@ Its binding is deliberately split so that identity stays clean:
   changes ``graph_hash``. It is carried as an LLM Call Node static Variable
   (see ``nodes.CHARACTER_BUDGET_VARIABLE``).
 * The *concrete Task-derived bound* (an integer character count computed
-  from a Task at runtime) is a Graph External Input, supplied through the
-  ``task.<field>`` namespace and excluded from Graph Config / Rollout
-  Variant identity.
+  from a Task at runtime) is used by the environment when rendering the
+  encoder prompt. The rendered prompt is the Graph External Input; the bound
+  itself is not part of Graph Config / Rollout Variant identity.
 
 Whetstone owns this experiment binding directly. There is deliberately no
 separate character-budget policy artifact — no dedicated type, schema,
@@ -23,10 +23,6 @@ from __future__ import annotations
 import math
 
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
-
-# The Graph External Input field through which a concrete Task-derived
-# character budget bound is supplied at runtime. It is NOT in identity.
-CHARACTER_BUDGET_EXTERNAL_INPUT = "task.character_budget"
 
 
 class CharacterBudgetRule(BaseModel):
@@ -63,8 +59,8 @@ def derive_character_bound(
 ) -> int:
     """Derive the concrete character-count bound from a Task-provided length.
 
-    The result is a Graph External Input value (runtime), never entered into
-    Graph Config identity.
+    The environment uses the result to render the encoder prompt at runtime;
+    the result is never entered into Graph Config identity.
     """
     if task_length < 0:
         raise ValueError("task_length must be non-negative")
@@ -78,11 +74,10 @@ def derive_character_bound(
         raise ValueError(
             "derived character bound exceeds the supported finite range"
         )
-    return int(scaled)
+    return round(scaled)
 
 
 __all__ = [
-    "CHARACTER_BUDGET_EXTERNAL_INPUT",
     "CharacterBudgetRule",
     "derive_character_bound",
 ]

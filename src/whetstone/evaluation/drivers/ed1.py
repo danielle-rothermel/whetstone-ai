@@ -117,7 +117,9 @@ from whetstone.experiment.binding import (
     EvaluationBinding,
     eval_config_reference,
 )
-from whetstone.experiment.graph.character_budget import CharacterBudgetRule
+from whetstone.experiment.graph.character_budget import (
+    derive_character_bound,
+)
 from whetstone.experiment.reward import Reward
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
@@ -520,11 +522,6 @@ def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
     )
 
 
-def _max_budget(input_code: str, rule: CharacterBudgetRule) -> int:
-    """``MAX_BUDGET = round(ratio * chars(input_code))`` (design rule)."""
-    return round(rule.ratio * len(input_code))
-
-
 def _none_add(x: float | None, y: float | None) -> float | None:
     """Sum two optional numbers, None-preserving (None iff BOTH are None)."""
     if x is None and y is None:
@@ -596,7 +593,11 @@ def drive_ed1_row(
     # NO-BUDGET frame (task 22.4): budget_rule None -> no MAX_BUDGET, no budget
     # sentence rendered (render_encoder_frame drops the clause on None).
     rule = rd.budget_rule
-    max_budget = None if rule is None else _max_budget(input_code, rule)
+    max_budget = (
+        None
+        if rule is None
+        else derive_character_bound(rule, task_length=len(input_code))
+    )
     try:
         encoder_prompt = _render_encoder(
             candidate_template, input_code=input_code, max_budget=max_budget
