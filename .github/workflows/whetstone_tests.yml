@@ -203,4 +203,4 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
       - name: Verify frozen DSPy Example pickle bytes
-        run: uv run pytest -q tests/optimization/test_miprov2_bootstrap.py -k repeated_trace_pickle
+        run: uv run pytest -q tests/optimization/miprov2/test_bootstrap.py -k repeated_trace_pickle

@@ -58,6 +58,16 @@ GENERATION_OUTPUT_FIELD = "generation"
 EVAL_OUTPUT_FIELD = "evaluation"
 
 
+def _require_config_hash(value: object, *, field: str) -> str:
+    """Preserve the graph boundary's ValueError validation contract."""
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field} must be a full 64-char lowercase SHA-256 hash, "
+            f"got {value!r}"
+        )
+    return require_full_hash(value, field=field)
+
+
 def _typed_config_ref(
     *, schema_name: str, identity_hash: str
 ) -> dict[str, str]:
@@ -73,7 +83,7 @@ def _typed_config_ref(
         raise ValueError("config reference schema_name must be non-empty")
     return {
         "schema_name": schema_name,
-        "identity_hash": require_full_hash(
+        "identity_hash": _require_config_hash(
             identity_hash, field="config reference identity_hash"
         ),
     }
@@ -200,7 +210,7 @@ def eval_node_procedure_hash(node_variables: Mapping[str, Any]) -> str:
             "evaluation procedure config reference schema_name must be "
             "non-empty"
         )
-    return require_full_hash(
+    return _require_config_hash(
         ref.get("identity_hash"),
         field="evaluation procedure config reference identity_hash",
     )
