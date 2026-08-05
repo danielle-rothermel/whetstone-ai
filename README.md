@@ -451,3 +451,38 @@ a workflow body, so driving steps from the parent satisfies it by construction
 and the optimization harness stays DBOS-unaware. And the harness requires its
 configured replay policy to equal each adapter's exactly, so the runner builds
 one harness, and one controller, per optimizer.
+
+`whetstone.runner.startup.register_runtime` is the single registration site.
+It binds the proposer transport, mints the one durable proposal executor every
+proposing adapter is constructed with, and registers the run controllers and
+GEPA's adapter factories. Registration happens strictly before `DBOS.launch()`,
+because recovery begins at launch and resolves its dependencies by identity.
+
+### Optimizers the runner drives
+
+Harness-driven optimizers -- MIPROv2, Codex, and identity -- run through
+`HarnessRunController` under the shared parent run workflow. GEPA runs through
+its own `DbosGepaRunner` parent workflow, which replays a frozen engine run
+from ordinal 0; the runner registers GEPA's factories at the same startup site
+so both paths share one registration invariant.
+
+COPRO is not among them. `CoproAdapter.invoke` reports `CONTINUE` on every
+successful round and `terminalize` refuses a continuing tail, so a COPRO run
+reaches a terminal Optimization Result only once a controller folds each
+round's resolved evaluation intents back into the adapter's `attempt_history`
+pool. That folding capability has no implementation outside the optimization
+layer's own tests, so the runner does not drive COPRO.
+
+### CLI
+
+`whetstone-validate` has three commands. `cell --factory module:callable`
+resolves a typed `RunnerLaunch`, registers capabilities, owns the DBOS
+lifecycle, and prints the resulting cell line; a completed cell short-circuits
+before any runtime is constructed. `status --root <dir>` prints the validated
+ledger lines. `refinalize --root <dir> --optimizer … --env … --attempt …`
+appends an evidence-only corrected line.
+
+The DBOS system database defaults to a per-cell SQLite file under
+`<ledger>/dbos/`, and is overridable by `--dbos-system-database-url` or
+`$WHETSTONE_DBOS_SYSTEM_DATABASE_URL`; `--dbos-application-database-url` and
+`--dbos-application-version` have matching `WHETSTONE_DBOS_*` variables.
