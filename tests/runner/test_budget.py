@@ -64,3 +64,38 @@ def test_credits_from_flat_payload() -> None:
 def test_credits_missing_fields_remaining_none() -> None:
     snap = credits_from_payload({"total_credits": None})
     assert snap.remaining_usd is None
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity", "nonsense"])
+def test_credits_reject_non_finite_amounts(bad: str) -> None:
+    """A non-finite amount reads as unreported, never as a number.
+
+    A parsed ``NaN`` propagates into ``remaining_usd`` and makes every guard
+    comparison false, so admitting one would silently disarm the reserve and
+    the stop-loss on a paid run.
+    """
+    snap = credits_from_payload({"total_credits": bad, "total_usage": 1.0})
+    assert snap.total_credits is None
+    assert snap.remaining_usd is None
+
+
+def test_reserve_refuses_a_non_finite_balance() -> None:
+    """NaN is an unreadable balance, not a balance above the reserve."""
+    guard = BudgetGuard()
+    with pytest.raises(ReserveError, match="not a finite amount"):
+        guard.check_start(canonical=True, remaining_usd=float("nan"))
+
+
+def test_stop_loss_halts_on_a_non_finite_spend() -> None:
+    """``nan > stop_loss`` is False, so the guard must reject it explicitly."""
+    guard = BudgetGuard()
+    with pytest.raises(StopLossError, match="not a finite amount"):
+        guard.check_stop_loss(float("nan"))
+    assert guard.would_halt(float("nan"))
+
+
+def test_would_halt_reads_unknown_spend_as_no_halt() -> None:
+    """Unknown spend is not evidence of a halt; a real overspend is."""
+    guard = BudgetGuard()
+    assert not guard.would_halt(None)
+    assert guard.would_halt(4.01)

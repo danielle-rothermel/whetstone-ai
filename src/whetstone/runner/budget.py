@@ -15,6 +15,7 @@ LLM call; it is budget plumbing.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -70,22 +71,38 @@ class CreditsSnapshot:
         return self.total_credits - self.total_usage
 
 
+def _finite_or_none(value: Any) -> float | None:
+    """Parse one credits number, admitting only a real finite amount.
+
+    ``None`` means "not reported", which every guard reads as "does not gate".
+    A non-finite value is worse than absent: ``NaN`` propagates through
+    ``remaining_usd`` and makes both ``remaining_usd < reserve_usd`` and
+    ``spent_usd > stop_loss_usd`` evaluate ``False``, silently disarming the
+    reserve and the stop-loss on a paid run. Non-finite and unparseable
+    amounts therefore collapse to "not reported" rather than to a number.
+    """
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def credits_from_payload(payload: dict[str, Any]) -> CreditsSnapshot:
     """Parse an OpenRouter credits JSON body into a snapshot.
 
     OpenRouter returns ``{"data": {"total_credits": .., "total_usage": ..}}``;
-    a flat body is also accepted.
+    a flat body is also accepted. Only finite amounts are admitted; anything
+    else reads as unreported, so a malformed body can never disarm a guard.
     """
     data = payload.get("data", payload)
     if not isinstance(data, dict):
         data = payload
-    total_credits = data.get("total_credits")
-    total_usage = data.get("total_usage")
     return CreditsSnapshot(
-        total_credits=(
-            float(total_credits) if total_credits is not None else None
-        ),
-        total_usage=(float(total_usage) if total_usage is not None else None),
+        total_credits=_finite_or_none(data.get("total_credits")),
+        total_usage=_finite_or_none(data.get("total_usage")),
         at=str(payload.get("at", "")),
     )
 
@@ -157,6 +174,12 @@ class BudgetGuard:
         """
         if not canonical or is_rerun or remaining_usd is None:
             return
+        if not math.isfinite(remaining_usd):
+            raise ReserveError(
+                "remaining credits are not a finite amount "
+                f"({remaining_usd!r}); refusing to start a canonical cell "
+                "against an unreadable balance"
+            )
         if remaining_usd < self.reserve_usd:
             raise ReserveError(
                 f"remaining ${remaining_usd:.2f} < reserve "
@@ -164,7 +187,16 @@ class BudgetGuard:
             )
 
     def check_stop_loss(self, spent_usd: float) -> None:
-        """Halt a cell whose spend crossed ``multiplier x`` expected."""
+        """Halt a cell whose spend crossed ``multiplier x`` expected.
+
+        A non-finite spend halts too: it is an unreadable meter, not evidence
+        of spending nothing, and ``NaN > stop_loss`` would silently pass.
+        """
+        if not math.isfinite(spent_usd):
+            raise StopLossError(
+                f"cell spend is not a finite amount ({spent_usd!r}); "
+                "halting rather than running against an unreadable meter"
+            )
         if spent_usd > self.stop_loss_usd:
             raise StopLossError(
                 f"cell spent ${spent_usd:.2f} > stop-loss "
@@ -173,5 +205,14 @@ class BudgetGuard:
                 f"${self.expected_cell_usd:.2f})"
             )
 
-    def would_halt(self, spent_usd: float) -> bool:
+    def would_halt(self, spent_usd: float | None) -> bool:
+        """Whether ``spent_usd`` is a known amount past the stop-loss.
+
+        Unknown spend (``None``) is not evidence of a halt, so it reads
+        ``False``; a non-finite amount is an unreadable meter and halts.
+        """
+        if spent_usd is None:
+            return False
+        if not math.isfinite(spent_usd):
+            return True
         return spent_usd > self.stop_loss_usd
