@@ -12,6 +12,7 @@ from dr_store import ObjectStore, SqliteBackend
 
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
     INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -381,6 +382,7 @@ def evaluation_binding(
     config: EvalConfigRef | None = None,
 ) -> EvaluationBinding:
     return EvaluationBinding(
+        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=config or eval_config_reference(eval_config()),
         role=EvaluationRole.INTERNAL,
         authority_principal=None,

@@ -7,6 +7,7 @@ from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.adapters import AdapterOutput
 from whetstone.optimization.identity import TerminalFailure
 from whetstone.optimization.schema import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     BudgetDelta,
     EvaluationBinding,
     EvaluationIntent,
@@ -77,6 +78,7 @@ def test_failed_adapter_output_rejects_evaluation_intents() -> None:
         candidate=candidate_reference(proposed),
         target_eval_config=config,
         evaluation_binding=EvaluationBinding(
+            schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
             eval_config=config,
             role=EvaluationRole.INTERNAL,
             campaign="adapter-contract",

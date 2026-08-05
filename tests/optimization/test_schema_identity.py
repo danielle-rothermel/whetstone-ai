@@ -3,6 +3,7 @@
 from typing import Any
 
 import pytest
+from dr_providers import ProviderTransportPolicy
 from pydantic import ValidationError
 
 from whetstone.evaluation_role import EvaluationRole
@@ -43,6 +44,7 @@ from whetstone.optimization import (
     candidate_from_draft,
     candidate_reference,
     canonical_json_equal,
+    compute_identity_hash,
     eval_config_reference,
     optimization_run_reference,
     tool_call_reference,
@@ -68,6 +70,10 @@ from whetstone.optimization.schema import (
     step_result_reference,
 )
 from whetstone.optimization.tools import tool_capacity_binding
+from whetstone.provider.policy import (
+    PROVIDER_EXECUTION_POLICY_SCHEMA,
+    ProviderExecutionPolicy,
+)
 
 from .support import (
     FULL_A,
@@ -129,14 +135,12 @@ def _evaluation_binding(
     config: EvalConfigRef | None = None,
 ) -> EvaluationBinding:
     return EvaluationBinding(
+        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=config or eval_config_reference(eval_config()),
         role=role,
         authority_principal=authority_principal,
         campaign="schema-tests",
-        provider_execution_policy_ref=typed_ref_for_record(
-            "whetstone.test.provider_execution_policy",
-            {"max_attempts": 2},
-        ),
+        provider_execution_policy_ref=_provider_execution_policy_ref(),
         retry_policy_ref=typed_ref_for_record(
             "whetstone.test.retry_policy",
             {"max_retries": 1},
@@ -154,6 +158,23 @@ def _evaluation_binding(
         ),
         provenance_note="schema test",
         provenance_ordinal=1,
+    )
+
+
+def _provider_execution_policy_ref() -> IdentityRef:
+    policy = ProviderExecutionPolicy(
+        transport_policy=ProviderTransportPolicy(
+            api_key_env="TEST_PROVIDER_API_KEY",
+            base_url="https://provider.test/v1",
+        ),
+        max_attempts=2,
+    )
+    return IdentityRef(
+        record_ref=typed_ref_for_record(
+            PROVIDER_EXECUTION_POLICY_SCHEMA,
+            policy.identity_payload(),
+        ),
+        identity_hash=policy.identity_hash,
     )
 
 
@@ -275,8 +296,12 @@ def test_candidate_identity_contract_literals_are_pinned() -> None:
 def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
     binding = _evaluation_binding()
     assert EVALUATION_BINDING_SCHEMA == "whetstone.evaluation_binding"
-    assert EVALUATION_BINDING_SCHEMA_VERSION == 1
+    assert EVALUATION_BINDING_SCHEMA_VERSION == 2
+    assert binding.schema_version == EVALUATION_BINDING_SCHEMA_VERSION
+    assert binding.record_content()["schema_version"] == 2
+    assert tuple(binding.record_content()) == tuple(binding.identity_payload())
     assert tuple(binding.identity_payload()) == (
+        "schema_version",
         "eval_config",
         "role",
         "authority_principal",
@@ -288,10 +313,84 @@ def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
         "provenance_note",
         "provenance_ordinal",
     )
+    assert binding.identity_payload()["provider_execution_policy_ref"] == {
+        "record_ref": {
+            "schema_name": "whetstone.provider_execution_policy",
+            "content_hash": (
+                "ddb2115fb1631560c9b02b1aa16820482"
+                "e37b28523d1f43ddd7dbecbed664909"
+            ),
+        },
+        "identity_hash": (
+            "e11d5ffb3acb35048f57ae08dbc34cc4b68332115707ecf8fd304e8c5d147ac2"
+        ),
+    }
     assert (
         binding.identity_hash()
-        == "f5fb2eea09fa98299be769f242606e05383987115a60241d8fb7000570f0f519"
+        == "d77a3ea054252f78bbce949e66569a32b2f01e71c43785443597f44c731e4391"
     )
+
+
+def test_evaluation_binding_rejects_wrong_provider_policy_schema() -> None:
+    binding = _evaluation_binding()
+    payload = binding.model_dump(mode="json")
+    payload["provider_execution_policy_ref"]["record_ref"]["schema_name"] = (
+        "whetstone.test.wrong_policy"
+    )
+
+    with pytest.raises(
+        ValidationError,
+        match="provider_execution_policy_ref must use schema",
+    ):
+        EvaluationBinding.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "provider_ref_present",
+    [True, False],
+    ids=["provider-ref-present", "provider-ref-absent"],
+)
+def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
+    provider_ref_present: bool,
+) -> None:
+    current_payload = _evaluation_binding().model_dump(mode="json")
+    if not provider_ref_present:
+        current_payload["provider_execution_policy_ref"] = None
+    current_binding = EvaluationBinding.model_validate(current_payload)
+
+    legacy_wire = current_binding.model_dump(mode="json")
+    legacy_wire.pop("schema_version")
+    if provider_ref_present:
+        policy_ref = current_binding.provider_execution_policy_ref
+        assert policy_ref is not None
+        legacy_wire["provider_execution_policy_ref"] = (
+            policy_ref.record_ref.model_dump(mode="json")
+        )
+
+    legacy_identity_hash = compute_identity_hash(
+        schema=EVALUATION_BINDING_SCHEMA,
+        schema_version=1,
+        payload=legacy_wire,
+    )
+    assert (
+        legacy_identity_hash
+        == {
+            True: (
+                "f95ccb10ad8717c32924c1ca2355caf9"
+                "f7679ddc5b95d40472f61e1f3dc75f97"
+            ),
+            False: (
+                "f182528f43640e0342fe996172213e68d"
+                "c5a7049fa75fe3d0196ac88b735309f"
+            ),
+        }[provider_ref_present]
+    )
+    assert legacy_identity_hash != current_binding.identity_hash()
+
+    with pytest.raises(ValidationError, match="Field required"):
+        EvaluationBinding.model_validate(legacy_wire)
+    with pytest.raises(ValidationError, match="Input should be 2"):
+        EvaluationBinding.model_validate({"schema_version": 1, **legacy_wire})
 
 
 def test_intent_resolution_v2_wire_contract_is_exact() -> None:
@@ -330,7 +429,7 @@ def test_intent_resolution_v2_wire_contract_is_exact() -> None:
     assert record["reward_evidence_refs"] == []
     assert (
         typed_ref_for_record(INTENT_RESOLUTION_SCHEMA, record).content_hash
-        == "782647392bf80d24922165b5b453dbfe998b470c7ff3c5071998c327b106fd1a"
+        == "4390a1d15b03a38c06119832292033eb665909d6f0deb55025c56e84dc02f3ea"
     )
 
 
