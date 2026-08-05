@@ -14,7 +14,12 @@ from whetstone.optimization.mcp_bridge import (
     JsonRpcClient,
 )
 from whetstone.optimization.mcp_server import build_server_from_env
-from whetstone.optimization.schema import OptimizationStepRequest
+from whetstone.optimization.schema import (
+    OptimizationStepRequest,
+    candidate_reference,
+)
+
+_MODEL_ROUTE = "openai/test"
 
 app = typer.Typer(
     add_completion=False,
@@ -105,12 +110,13 @@ def main(context: typer.Context) -> None:
         return
     proposals: list[dict[str, object]] = []
     conversation_evidence: dict[str, object] = {"agent": "final"}
-    output_count = request.output_contract.returned_proposal_count
+    output_count = request.step_output_contract.returned_proposal_count
     if output_count:
         base = request.candidates[0]
         template = base.payload["user_prompt_template"]
         assert isinstance(template, str)
         proposed_template = f"{template}\nAnswer carefully."
+        base_ref = base.base_ref.model_dump(mode="json")
         client = JsonRpcClient(
             InProcessMcpProcess(
                 build_server_from_env(_mcp_environment(args))
@@ -121,14 +127,16 @@ def main(context: typer.Context) -> None:
         assert [tool["name"] for tool in tools] == ["evaluate_candidate"]
         result = client.evaluate(
             call_id="subprocess-proposal-evaluation",
-            base_ref=base.base_ref,
-            model_route=base.base_ref,
+            base_ref=base_ref,
+            model_route=_MODEL_ROUTE,
             template=proposed_template,
         )
         proposals.append(
             {
                 "candidate_id": "subprocess-proposal",
-                "base_ref": base.base_ref,
+                "base_ref": candidate_reference(base).record_ref.model_dump(
+                    mode="json"
+                ),
                 "payload": {"user_prompt_template": proposed_template},
             }
         )

@@ -21,10 +21,15 @@ from whetstone.optimization.codex import (
     CodexRunResult,
     OpaqueStepError,
 )
-from whetstone.optimization.mcp_bridge import JsonRpcClient
+from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.mcp_bridge import (
+    EvaluateCandidateServer,
+    InProcessMcpProcess,
+    JsonRpcClient,
+)
 from whetstone.optimization.reward import RewardPolicy
 from whetstone.optimization.schema import Candidate, OptimizationStepRequest
-from whetstone.optimization.tools import ToolConfig
+from whetstone.optimization.tools import RuntimeToolHandle
 
 if TYPE_CHECKING:
     from whetstone.execution.mode import EvaluationRuntimeConfig
@@ -71,7 +76,7 @@ class JsonRpcProcess(Protocol):
 @dataclass(frozen=True, slots=True)
 class ScriptedAgentCall:
     call_id: str
-    base_ref: str
+    base_ref: TypedRef
     model_route: str
     template: str
 
@@ -176,7 +181,7 @@ class FakeCodexRunner:
     def __init__(
         self,
         *,
-        process: JsonRpcProcess,
+        process: JsonRpcProcess | None = None,
         scripted_calls: Sequence[ScriptedAgentCall],
         final_proposals: Sequence[Candidate],
     ) -> None:
@@ -185,19 +190,28 @@ class FakeCodexRunner:
         self._proposals = tuple(final_proposals)
         self.observed_payloads: list[dict[str, Any]] = []
 
+    def bind_process(self, process: JsonRpcProcess) -> None:
+        """Attach the fake process boundary for one exact Tool Handle."""
+        self._process = process
+
+    def _boundary(self, handle: RuntimeToolHandle) -> JsonRpcProcess:
+        if self._process is not None:
+            return self._process
+        return InProcessMcpProcess(EvaluateCandidateServer(handle=handle))
+
     def run(
-        self, request: OptimizationStepRequest, tool_config: ToolConfig
+        self, request: OptimizationStepRequest, handle: RuntimeToolHandle
     ) -> CodexRunResult:
-        client = JsonRpcClient(self._process.exchange)
+        client = JsonRpcClient(self._boundary(handle).exchange)
         client.initialize()
         tools = client.list_tools()
-        if not any(tool["name"] == tool_config.tool_name for tool in tools):
+        if not any(tool["name"] == handle.config.tool_name for tool in tools):
             raise OpaqueStepError("external MCP process omitted the tool")
         for call in self._calls:
             self.observed_payloads.append(
                 client.evaluate(
                     call_id=call.call_id,
-                    base_ref=call.base_ref,
+                    base_ref=call.base_ref.model_dump(mode="json"),
                     model_route=call.model_route,
                     template=call.template,
                 )
@@ -317,7 +331,7 @@ class SubprocessCodexRunner:
         }
 
     def run(
-        self, request: OptimizationStepRequest, tool_config: ToolConfig
+        self, request: OptimizationStepRequest, handle: RuntimeToolHandle
     ) -> CodexRunResult:
         resolved_binary = shutil.which(
             self._binary, path=self._environment.get("PATH")
@@ -356,7 +370,10 @@ class SubprocessCodexRunner:
                 model=self._model,
                 mcp_env={
                     "WS_MCP_SQLITE_PATH": self._sqlite_path,
-                    "WS_MCP_TOOL_CONFIG": tool_config.model_dump_json(),
+                    "WS_MCP_TOOL_CONFIG": handle.config.model_dump_json(),
+                    "WS_MCP_CAPACITY_BINDING": (
+                        handle.binding.model_dump_json()
+                    ),
                     "WS_MCP_RUNTIME_CONFIG": self._runtime.model_dump_json(),
                     "WS_MCP_REWARD_POLICY": (
                         self._reward_policy.model_dump_json()
@@ -423,7 +440,7 @@ class SubprocessCodexRunner:
             destination / package_root.name,
             dirs_exist_ok=True,
         )
-        module_name = self._runtime.transport_factory.partition(":")[0]
+        module_name = self._runtime.row_job_entrypoint.partition(":")[0]
         top_level = module_name.partition(".")[0]
         spec = importlib.util.find_spec(top_level)
         if spec is None:

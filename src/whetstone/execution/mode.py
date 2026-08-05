@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from pathlib import Path
 
 from dr_store import ObjectStore
@@ -15,12 +14,12 @@ from pydantic import (
 )
 
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.sampling import Completeness
+from whetstone.envs.internal_eval import InternalRowRequest
+from whetstone.envs.sampling import INTERNAL_EVAL, Completeness
 from whetstone.evaluation.engine import EvaluationEngine
-from whetstone.execution.fanout import FanoutConfig
+from whetstone.execution.fanout import ProcessJob
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 
@@ -39,7 +38,7 @@ class EvaluationRuntimeConfig(BaseModel):
     max_skip_fraction: float = 0.0
     expected_eval_config_hash: StrictStr
     execution_policy: ProviderExecutionPolicy
-    transport_factory: StrictStr
+    row_job_entrypoint: StrictStr
     concurrency: StrictInt = 5
     max_wall_seconds: float | None = None
     partial_log_path: StrictStr | None = None
@@ -47,11 +46,19 @@ class EvaluationRuntimeConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> EvaluationRuntimeConfig:
-        if ":" not in self.transport_factory:
-            raise ValueError("transport_factory must be 'module:callable'")
+        if ":" not in self.row_job_entrypoint:
+            raise ValueError(
+                "row_job_entrypoint must be 'importable.module:callable'"
+            )
         if self.repeats < 1 or self.concurrency < 1:
             raise ValueError("repeats and concurrency must be positive")
         return self
+
+    def _row_job(self, request: InternalRowRequest) -> ProcessJob:
+        return ProcessJob(
+            entrypoint=self.row_job_entrypoint,
+            payload=request.model_dump(mode="json"),
+        )
 
     def build_engine(self, store: ObjectStore) -> EvaluationEngine:
         experiment = build_env_experiment(
@@ -66,26 +73,21 @@ class EvaluationRuntimeConfig(BaseModel):
         sampling = experiment.eval_configs.eval_config_for(self.sampling_role)
         split = (
             experiment.eval_configs.internal
-            if self.sampling_role == "internal_eval"
+            if self.sampling_role == INTERNAL_EVAL
             else experiment.eval_configs.official
         )
         if sampling.config_identity_hash != self.expected_eval_config_hash:
             raise ValueError(
                 "reconstructed runtime produced a different Eval Config"
             )
-        module_name, attr = self.transport_factory.split(":", 1)
-        factory = getattr(importlib.import_module(module_name), attr)
-        transport: TransportCall = factory()
         return EvaluationEngine(
             store=store,
             experiment=experiment,
             sampling=split,
             execution_policy=self.execution_policy,
-            transport=transport,
-            fanout=FanoutConfig(
-                concurrency=self.concurrency,
-                max_wall_seconds=self.max_wall_seconds,
-            ),
+            row_job_factory=self._row_job,
+            concurrency=self.concurrency,
+            max_wall_seconds=self.max_wall_seconds,
             partial_log=PartialLog(Path(self.partial_log_path))
             if self.partial_log_path
             else None,

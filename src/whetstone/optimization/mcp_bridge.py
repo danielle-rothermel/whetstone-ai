@@ -7,9 +7,12 @@ from collections.abc import Callable
 from io import StringIO
 from typing import Any, TextIO
 
-from whetstone.optimization.tool_eval import EvaluatingToolExecutor
-from whetstone.optimization.tool_store import ToolCallStore
-from whetstone.optimization.tools import ToolCall, ToolConfig, ToolResult
+from whetstone.optimization.identity import ImmutableJsonObject, NonEmptyId
+from whetstone.optimization.tools import (
+    RuntimeToolHandle,
+    ToolCall,
+    ToolResult,
+)
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 
@@ -25,9 +28,9 @@ def tool_result_to_mcp_content(result: ToolResult) -> dict[str, Any]:
     if result.refusal is not None:
         payload = {
             "refused": True,
-            "call_id": result.call_id,
+            "call_id": str(result.call_id),
             "refusal_class": result.refusal.refusal_class.value,
-            "reason": result.refusal.reason,
+            "reason": str(result.refusal.reason),
         }
         return {
             "isError": True,
@@ -35,9 +38,13 @@ def tool_result_to_mcp_content(result: ToolResult) -> dict[str, Any]:
         }
     payload = {
         "refused": False,
-        "call_id": result.call_id,
-        "output": result.output,
-        "reward": result.reward,
+        "call_id": str(result.call_id),
+        "output": None if result.output is None else result.output.to_json(),
+        "reward": (
+            None
+            if result.reward is None
+            else result.reward.model_dump(mode="json")
+        ),
     }
     return {
         "isError": False,
@@ -49,16 +56,14 @@ def tool_result_to_mcp_content(result: ToolResult) -> dict[str, Any]:
 class EvaluateCandidateServer:
     """Expose exactly one externally modeled evaluation tool."""
 
-    def __init__(
-        self,
-        *,
-        tool_config: ToolConfig,
-        store: ToolCallStore,
-        executor: EvaluatingToolExecutor,
-    ) -> None:
-        self.tool_config = tool_config
-        self._store = store
-        self._handle = executor.runtime_handle(tool_config, store)
+    def __init__(self, *, handle: RuntimeToolHandle) -> None:
+        self.tool_config = handle.config
+        self._handle = handle
+
+    @property
+    def handle(self) -> RuntimeToolHandle:
+        """The exact admitted Tool Handle this server dispatches through."""
+        return self._handle
 
     def handle_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
         request_id = message.get("id")
@@ -100,7 +105,14 @@ class EvaluateCandidateServer:
                 "type": "object",
                 "properties": {
                     "call_id": {"type": "string"},
-                    "base_ref": {"type": "string"},
+                    "base_ref": {
+                        "type": "object",
+                        "properties": {
+                            "schema_name": {"type": "string"},
+                            "content_hash": {"type": "string"},
+                        },
+                        "required": ["schema_name", "content_hash"],
+                    },
                     "model_route": {"type": "string"},
                     "template": {"type": "string"},
                 },
@@ -122,17 +134,25 @@ class EvaluateCandidateServer:
         call_id = arguments.get("call_id")
         if not isinstance(call_id, str) or not call_id:
             raise McpError(-32602, "call_id must be non-empty")
+        base_ref = arguments.get("base_ref")
+        if not isinstance(base_ref, dict):
+            raise McpError(-32602, "base_ref must be a typed reference object")
+        try:
+            args = ImmutableJsonObject(
+                {
+                    "base_ref": base_ref,
+                    "model_route": arguments.get("model_route", ""),
+                    "template": arguments.get("template", ""),
+                }
+            )
+        except ValueError as exc:
+            raise McpError(-32602, str(exc)) from exc
         call = ToolCall(
-            call_id=call_id,
-            tool_config_hash=self.tool_config.identity_hash(),
-            store_namespace=self.tool_config.store_namespace,
-            args={
-                "base_ref": arguments.get("base_ref", ""),
-                "model_route": arguments.get("model_route", ""),
-                "template": arguments.get("template", ""),
-            },
+            call_id=NonEmptyId(call_id),
+            tool_config=self._handle.tool_config_ref,
+            capacity_binding=self._handle.binding,
+            args=args,
         )
-        self._store.record_namespace_call(call)
         return tool_result_to_mcp_content(self._handle(call))
 
 
@@ -188,7 +208,7 @@ class JsonRpcClient:
         self,
         *,
         call_id: str,
-        base_ref: str,
+        base_ref: dict[str, Any],
         model_route: str,
         template: str,
     ) -> dict[str, Any]:

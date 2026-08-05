@@ -8,20 +8,19 @@ from typing import Any, Protocol
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from whetstone.optimization.adapters import AdapterOutput, ToolCallRecord
-from whetstone.optimization.identity import TypedRef
+from whetstone.optimization.adapters import AdapterOutput
+from whetstone.optimization.effect_authority import ReplayPolicy
+from whetstone.optimization.identity import TerminalFailure, TypedRef
 from whetstone.optimization.mutation import DiffCheckError, diff_check
 from whetstone.optimization.schema import (
     Candidate,
     OptimizationStepRequest,
     StepMode,
     StepStatus,
+    candidate_reference,
 )
-from whetstone.optimization.tool_store import (
-    ToolCallState,
-    ToolCallStore,
-)
-from whetstone.optimization.tools import ToolConfig, ToolResult
+from whetstone.optimization.tool_store import ToolCallStore
+from whetstone.optimization.tools import RuntimeToolHandle
 
 CODEX_ADAPTER_KEY = "codex"
 CODEX_OUTPUT_ARTIFACT_SCHEMA = "whetstone.codex_output_artifact"
@@ -49,7 +48,9 @@ class CodexRunResult:
 
 class CodexRunner(Protocol):
     def run(
-        self, request: OptimizationStepRequest, tool_config: ToolConfig
+        self,
+        request: OptimizationStepRequest,
+        handle: RuntimeToolHandle,
     ) -> CodexRunResult: ...
 
 
@@ -75,22 +76,27 @@ class CodexAdapter:
     def mode(self) -> StepMode:
         return StepMode.TOOL_USING
 
+    @property
+    def required_replay_policy(self) -> ReplayPolicy:
+        return ReplayPolicy.NO_REDRIVE
+
     def invoke(
         self,
         request: OptimizationStepRequest,
-        handles: tuple[Any, ...],
+        handles: tuple[RuntimeToolHandle, ...],
     ) -> AdapterOutput:
-        del handles
         if request.step_index != 0:
             raise OpaqueStepError("Codex runs exactly one opaque step")
-        if len(request.tool_configs) != 1:
+        if len(handles) != 1:
             raise OpaqueStepError(
-                "Codex requires one serialized external MCP Tool Config"
+                "Codex requires exactly one Runtime Tool Handle for its "
+                "external MCP evaluation Tool"
             )
-        config = request.tool_configs[0]
-        if not config.endpoint.startswith("mcp"):
+        handle = handles[0]
+        config = handle.config
+        if not str(config.endpoint_key).startswith("mcp"):
             raise OpaqueStepError("Codex evaluation must be external MCP")
-        run = self._runner.run(request, config)
+        run = self._runner.run(request, handle)
         if run.artifact.run_id != request.run_id:
             raise OpaqueStepError(
                 "Codex output artifact belongs to another run"
@@ -104,74 +110,56 @@ class CodexAdapter:
             content_hash=artifact_ref.content_hash,
         )
         proposals = self._validate_proposals(request, run.artifact.proposals)
-        records = self._reconstruct_records(config)
+        rejected = proposals is None
         return AdapterOutput(
             proposed_candidates=proposals or (),
             accepted_candidates=proposals or (),
-            tool_call_records=records,
             proposed_status=(
-                StepStatus.COMPLETE
-                if proposals is not None
-                else StepStatus.FAILED
+                StepStatus.FAILED if rejected else StepStatus.COMPLETE
+            ),
+            terminal_failure=(
+                TerminalFailure(
+                    code="codex_proposal_contract",
+                    message=(
+                        "Codex output artifact proposals violate the exact "
+                        "Step output contract"
+                    ),
+                    details={
+                        "returned_proposal_count": (
+                            request.step_output_contract.returned_proposal_count
+                        ),
+                        "artifact_proposal_count": len(run.artifact.proposals),
+                    },
+                )
+                if rejected
+                else None
             ),
             state_delta={
                 "codex_output_artifact_ref": typed_artifact_ref.model_dump(
                     mode="json"
                 ),
-                "tool_namespace": config.store_namespace,
-                "tool_call_count": len(records),
+                "tool_namespace": str(config.store_namespace_key),
                 "accepted_call_count": self._tool_store.accepted_count(
-                    config.identity_hash()
+                    config, handle.binding
                 ),
             },
         )
-
-    def _reconstruct_records(
-        self, config: ToolConfig
-    ) -> tuple[ToolCallRecord, ...]:
-        config_hash = config.identity_hash()
-        records: list[ToolCallRecord] = []
-        for call in self._tool_store.namespace_calls(
-            config.store_namespace, config_hash
-        ):
-            entry = self._tool_store.get(config_hash, call.call_id)
-            if entry is None:
-                raise OpaqueStepError(
-                    f"namespace call {call.call_id!r} has no store entry"
-                )
-            if entry.state is ToolCallState.COMPLETED:
-                result = self._tool_store.load_completed_result(entry)
-            elif entry.state is ToolCallState.REFUSED:
-                assert entry.refusal is not None
-                result = ToolResult(
-                    call_id=call.call_id,
-                    tool_config_ref=config.tool_definition_ref,
-                    tool_config_hash=config_hash,
-                    store_namespace=config.store_namespace,
-                    refusal=entry.refusal,
-                )
-            else:
-                raise OpaqueStepError(
-                    f"namespace call {call.call_id!r} did not terminate"
-                )
-            records.append(ToolCallRecord(call=call, result=result))
-        return tuple(records)
 
     @staticmethod
     def _validate_proposals(
         request: OptimizationStepRequest,
         proposals: tuple[Candidate, ...],
     ) -> tuple[Candidate, ...] | None:
-        contract = request.output_contract
+        contract = request.step_output_contract
         if len(proposals) != contract.returned_proposal_count:
             return None
-        bases = {candidate.base_ref for candidate in request.candidates}
         base_by_ref = {
-            candidate.base_ref: candidate for candidate in request.candidates
+            candidate_reference(candidate).record_ref: candidate
+            for candidate in request.candidates
         }
-        seen: set[str] = set()
+        seen: set[TypedRef] = set()
         for proposal in proposals:
-            if proposal.base_ref not in bases:
+            if proposal.base_ref not in base_by_ref:
                 return None
             if contract.require_distinct_bases and proposal.base_ref in seen:
                 return None

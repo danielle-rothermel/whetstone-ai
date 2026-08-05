@@ -9,22 +9,33 @@ from dr_store import ObjectStore, SqliteBackend
 
 from whetstone.evaluation.tool import EngineToolEvaluator
 from whetstone.execution.mode import EvaluationRuntimeConfig
+from whetstone.optimization.effect_authority import (
+    EffectAuthority,
+    ReplayPolicy,
+)
 from whetstone.optimization.mcp_bridge import (
     EvaluateCandidateServer,
     serve_stdio,
 )
 from whetstone.optimization.reward import RewardPolicy
 from whetstone.optimization.tool_eval import EvaluatingToolExecutor
-from whetstone.optimization.tool_store import ToolCallStore
-from whetstone.optimization.tools import ToolConfig
+from whetstone.optimization.tool_store import (
+    ToolAdmissionAuthority,
+    ToolCallStore,
+)
+from whetstone.optimization.tools import ToolCapacityBinding, ToolConfig
 
 
 def build_server_from_env(
     environ: dict[str, str] | None = None,
 ) -> EvaluateCandidateServer:
     env = environ if environ is not None else dict(os.environ)
-    store = ObjectStore(SqliteBackend(env["WS_MCP_SQLITE_PATH"]))
+    sqlite_path = env["WS_MCP_SQLITE_PATH"]
+    store = ObjectStore(SqliteBackend(sqlite_path))
     tool_config = ToolConfig.model_validate_json(env["WS_MCP_TOOL_CONFIG"])
+    binding = ToolCapacityBinding.model_validate_json(
+        env["WS_MCP_CAPACITY_BINDING"]
+    )
     runtime = EvaluationRuntimeConfig.model_validate_json(
         env["WS_MCP_RUNTIME_CONFIG"]
     )
@@ -32,14 +43,27 @@ def build_server_from_env(
         env["WS_MCP_REWARD_POLICY"]
     )
     engine = runtime.build_engine(store)
-    if reward_policy.identity_hash() != tool_config.reward_policy_ref:
+    if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")
-    return EvaluateCandidateServer(
-        tool_config=tool_config,
-        store=ToolCallStore(store),
-        executor=EvaluatingToolExecutor(
-            EngineToolEvaluator(engine), reward_policy
+    effect_authority = EffectAuthority.sqlite(sqlite_path)
+    tool_store = ToolCallStore(
+        store,
+        ToolAdmissionAuthority.sqlite(sqlite_path),
+        effect_authority,
+    )
+    executor = EvaluatingToolExecutor(
+        EngineToolEvaluator(engine),
+        reward_policy,
+        effect_authority,
+        owner_id=f"whetstone-mcp-{os.getpid()}",
+        replay_policy=(
+            ReplayPolicy.IDEMPOTENT
+            if tool_config.idempotent_replay
+            else ReplayPolicy.NO_REDRIVE
         ),
+    )
+    return EvaluateCandidateServer(
+        handle=executor.runtime_handle(tool_config, tool_store, binding)
     )
 
 
