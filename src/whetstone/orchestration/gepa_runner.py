@@ -51,11 +51,15 @@ class GepaParentRunRequest(BaseModel):
             self.control.trainset_task_identities
         ):
             raise ValueError("GEPA parent workflow trainset identity drift")
+        # Mirror the engine's valset binding check so an unrunnable request
+        # cannot validate and hash into a persistable workflow ID.
         if self.valset is None:
             if self.control.source_valset_task_identities is not None:
                 raise ValueError(
                     "GEPA parent workflow omitted its bound valset"
                 )
+        elif self.control.source_valset_task_identities is None:
+            raise ValueError("GEPA parent workflow supplied an unbound valset")
         elif tuple(item.data_id for item in self.valset) != (
             self.control.valset_task_identities
         ):

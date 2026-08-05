@@ -352,6 +352,13 @@ class CanonicalGepaEvaluationAuthority:
             raise ValueError(
                 "GEPA evaluation engine conflicts with reward policy"
             )
+        # The single-repeat contract is pinned into the response-parser
+        # identity; enforce it here so a multi-repeat engine cannot reach a
+        # paid evaluation before failing.
+        if engine.sampling.repeat_plan.repeat_count != 1:
+            raise ValueError(
+                "GEPA evaluation engine must use a single-repeat plan"
+            )
         expected_data_ids = tuple(
             dict.fromkeys(
                 (

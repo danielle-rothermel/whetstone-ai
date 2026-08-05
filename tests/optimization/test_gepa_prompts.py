@@ -236,6 +236,37 @@ def test_multimodal_reflection_snapshot_preserves_structured_part() -> None:
     assert "data:image/png" not in rendered.text
 
 
+def test_typed_but_textual_part_renders_its_text_instead_of_media() -> None:
+    """A media ``type`` alone must not divert text out of the prompt.
+
+    Classifying on ``type`` alone projected textual dicts into structured
+    content, so their text never reached the reflection prompt.
+    """
+
+    textual = {
+        "type": "image",
+        "label": "diagram-7",
+        "caption": "A circle inscribed in a square.",
+    }
+    examples = (
+        {
+            "Inputs": {"question": "What shape is shown?", "image": textual},
+            "Generated Outputs": {"answer": "square"},
+            "Feedback": "The image contains a circle.",
+        },
+    )
+    rendered = NativeGepaReflectionPromptBuilder().render(
+        _descriptor(),
+        _request(examples=examples),
+    )
+
+    # No structured content part is emitted, so the prompt stays plain text.
+    assert rendered.messages is None
+    assert "[MEDIA-1 — see structured content]" not in rendered.text
+    assert "diagram-7" in rendered.text
+    assert "A circle inscribed in a square." in rendered.text
+
+
 def test_multi_component_registry_and_prompt_order_snapshot() -> None:
     descriptor = _descriptor(
         _component(),

@@ -371,6 +371,11 @@ class WhetstoneGepaAdapter:
         selected = tuple(components_to_update)
         replacements: dict[str, str] = {}
         for component_name in selected:
+            # Upstream gepa's proposer skips components with no reflective
+            # examples rather than failing the whole proposal round, so a
+            # traceless component must not sink its traced siblings.
+            if not concrete_dataset.get(component_name):
+                continue
             reflection_request = GepaReflectionRequest(
                 candidate=dict(candidate),
                 reflective_dataset=concrete_dataset,

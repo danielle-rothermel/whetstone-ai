@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 from whetstone.evaluation_role import EvaluationRole
 from whetstone.optimization.identity import ImmutableJsonObject, TypedRef
@@ -47,17 +49,25 @@ class EngineToolEvaluator:
         engine = self._engine
         task_ids = call.args.get("task_ids")
         if task_ids is not None:
-            if not isinstance(task_ids, list) or not all(
-                isinstance(task_id, str) for task_id in task_ids
+            # Frozen JSON args render arrays as tuples, so accept any
+            # non-string ordered sequence of strings.
+            if isinstance(task_ids, (str, bytes)) or not isinstance(
+                task_ids, Sequence
             ):
                 raise ToolValidationError(
                     "tool task_ids must be an ordered list of strings"
                 )
-            if task_ids:
-                try:
-                    engine = self._engine.for_task_ids(tuple(task_ids))
-                except ValueError as exc:
-                    raise ToolValidationError(str(exc)) from exc
+            resolved: list[str] = []
+            for task_id in task_ids:
+                if not isinstance(task_id, str):
+                    raise ToolValidationError(
+                        "tool task_ids must be an ordered list of strings"
+                    )
+                resolved.append(task_id)
+            try:
+                engine = self._engine.for_task_ids(tuple(resolved))
+            except ValueError as exc:
+                raise ToolValidationError(str(exc)) from exc
         return engine
 
     def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:

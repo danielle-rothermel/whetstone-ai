@@ -177,6 +177,7 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
             reward_policy_identity_hash=_B,
             sampling=SimpleNamespace(
                 task_set=SimpleNamespace(task_identities=(_A, _B, _C)),
+                repeat_plan=SimpleNamespace(repeat_count=1),
                 instances=(
                     SimpleNamespace(id="a", prompt_inputs={"input": "a"}),
                     SimpleNamespace(id="b", prompt_inputs={"input": "b"}),
@@ -194,6 +195,33 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
         candidate_assembler=assembler,
         data_registry=registry,
     )
+    # A multi-repeat engine is refused at construction, before any paid
+    # evaluation: the single-repeat contract is pinned into the GEPA
+    # response-parser identity.
+    multi_repeat_engine = cast(
+        EvaluationEngine,
+        SimpleNamespace(
+            eval_config_ref=engine.eval_config_ref,
+            task_model_identity_hash=engine.task_model_identity_hash,
+            execution_policy_identity_hash=(
+                engine.execution_policy_identity_hash
+            ),
+            reward_policy_identity_hash=engine.reward_policy_identity_hash,
+            sampling=SimpleNamespace(
+                task_set=engine.sampling.task_set,
+                repeat_plan=SimpleNamespace(repeat_count=2),
+                instances=engine.sampling.instances,
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="single-repeat plan"):
+        CanonicalGepaEvaluationAuthority(
+            store=store,
+            engine=multi_repeat_engine,
+            control=control,
+            candidate_assembler=assembler,
+            data_registry=registry,
+        )
     proposer = CanonicalGepaProposalAuthority(
         store=store,
         control=control,

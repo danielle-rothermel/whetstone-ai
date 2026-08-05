@@ -283,21 +283,25 @@ class GepaReflectionResponseParser(Protocol):
     def parse(self, raw_response: str) -> str: ...
 
 
+#: Keys that carry an actual media payload. A media ``type`` alone does not
+#: make a dict media: typed-but-textual parts must render as text rather than
+#: being projected into structured content and dropped from the prompt.
+_MEDIA_PAYLOAD_KEYS = frozenset({"image_url", "url", "data", "input_audio"})
+_MEDIA_PART_TYPES = frozenset(
+    {"image", "image_url", "input_image", "input_audio", "video"}
+)
+
+
 def _structured_content_part(value: Any) -> dict[str, Any] | None:
     """Recognize already-serialized provider content without stringifying it."""
 
     if not isinstance(value, dict):
         return None
-    part_type = value.get("type")
-    if part_type in {
-        "image",
-        "image_url",
-        "input_image",
-        "input_audio",
-        "video",
-    }:
-        return dict(value)
-    return None
+    if value.get("type") not in _MEDIA_PART_TYPES:
+        return None
+    if not _MEDIA_PAYLOAD_KEYS.intersection(value):
+        return None
+    return dict(value)
 
 
 def _format_examples(
@@ -356,7 +360,7 @@ class NativeGepaReflectionPromptBuilder:
                 "upstream_semantics": "gepa==0.1.1.InstructionProposalSignature",
                 "native_format_constraints": True,
                 "dspy_signature_field_formatting": False,
-                "multimodal_projection": "ordered_structured_content_parts/v1",
+                "multimodal_projection": "ordered_structured_content_parts/v2",
             },
         )
 

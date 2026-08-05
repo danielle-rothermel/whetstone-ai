@@ -436,6 +436,52 @@ def test_upstream_adapter_preserves_order_evidence_and_effect_ordinals() -> (
     )
 
 
+def test_upstream_adapter_skips_components_without_reflective_traces() -> None:
+    """A traceless component must not sink its traced siblings.
+
+    Upstream gepa's proposer logs and continues past components with no
+    reflective examples, so a partial reflective dataset proposes for the
+    traced components rather than crashing the whole round.
+    """
+
+    broker = _FakeBroker()
+    adapter = _adapter(broker)
+    candidate = {"alpha": "alpha-0", "beta": "beta-0"}
+    partial_dataset = {
+        "alpha": (
+            {
+                "Inputs": {"x": 1},
+                "Generated Outputs": "1",
+                "Feedback": "ok",
+            },
+        ),
+        # "beta" produced no traces at all this round.
+    }
+
+    proposed = adapter.propose_new_texts(
+        candidate,
+        partial_dataset,
+        ["alpha", "beta"],
+    )
+
+    assert proposed == {"alpha": "alpha-improved"}
+    assert [request.component_name for request in broker.proposals] == [
+        "alpha"
+    ]
+
+    # An empty (rather than absent) trace list is skipped the same way.
+    empty_broker = _FakeBroker()
+    empty_adapter = _adapter(empty_broker)
+    assert empty_adapter.propose_new_texts(
+        candidate,
+        {**partial_dataset, "beta": ()},
+        ["alpha", "beta"],
+    ) == {"alpha": "alpha-improved"}
+    assert [request.component_name for request in empty_broker.proposals] == [
+        "alpha"
+    ]
+
+
 class _ReorderingBroker(_FakeBroker):
     def evaluate(
         self,

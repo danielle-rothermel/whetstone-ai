@@ -171,6 +171,94 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
         module.DbosGepaRunner().run(request)
 
 
+def _train_instance(control):
+    return GepaDataInstance(
+        upstream_position=0,
+        data_id=control.trainset_task_identities[0],
+        data_ref=typed_ref_for_record("test.gepa.data", {"id": "train"}),
+        loader_identity_hash="f" * 64,
+    )
+
+
+def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
+    """Validation is symmetric with the engine's valset binding check.
+
+    The engine refuses a supplied valset when the control binds valset
+    omission, so a request carrying one is unrunnable and must not be able
+    to validate and hash into a persistable workflow ID.
+    """
+
+    module = _load_runner()
+    control = _control()
+    assert control.source_valset_task_identities is None
+
+    with pytest.raises(ValueError, match="supplied an unbound valset"):
+        module.GepaParentRunRequest(
+            factory_identity_hash="f" * 64,
+            control=control,
+            seed_candidate={"prompt": "seed"},
+            trainset=(_train_instance(control),),
+            valset=(
+                GepaDataInstance(
+                    upstream_position=0,
+                    data_id=control.trainset_task_identities[0],
+                    data_ref=typed_ref_for_record(
+                        "test.gepa.data",
+                        {"id": "val"},
+                    ),
+                    loader_identity_hash="f" * 64,
+                ),
+            ),
+        )
+
+
+def test_parent_request_rejects_bound_valset_identity_drift() -> None:
+    """A bound valset must still match the control's exact data identities."""
+
+    module = _load_runner()
+    control = _control(valset_task_identities=("c" * 64,))
+    assert control.source_valset_task_identities is not None
+
+    with pytest.raises(ValueError, match="valset identity drift"):
+        module.GepaParentRunRequest(
+            factory_identity_hash="f" * 64,
+            control=control,
+            seed_candidate={"prompt": "seed"},
+            trainset=(_train_instance(control),),
+            valset=(
+                GepaDataInstance(
+                    upstream_position=0,
+                    data_id="d" * 64,
+                    data_ref=typed_ref_for_record(
+                        "test.gepa.data",
+                        {"id": "val"},
+                    ),
+                    loader_identity_hash="f" * 64,
+                ),
+            ),
+        )
+
+    # The matching valset validates and hashes.
+    accepted = module.GepaParentRunRequest(
+        factory_identity_hash="f" * 64,
+        control=control,
+        seed_candidate={"prompt": "seed"},
+        trainset=(_train_instance(control),),
+        valset=(
+            GepaDataInstance(
+                upstream_position=0,
+                data_id=control.valset_task_identities[0],
+                data_ref=typed_ref_for_record(
+                    "test.gepa.data",
+                    {"id": "val"},
+                ),
+                loader_identity_hash="f" * 64,
+            ),
+        ),
+    )
+    assert accepted.identity_hash()
+
+
 def test_parent_request_rejects_same_count_seed_reordering() -> None:
     module = _load_runner()
     control = _control().model_copy(
