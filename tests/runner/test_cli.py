@@ -50,15 +50,19 @@ def _isolated_registries() -> Iterator[None]:
     the register functions close over the module global rather than looking it
     up through the module, so rebinding the attribute would not affect them.
     """
-    transports = dict(proposal_provider._TRANSPORTS)
+    transport_registry = proposal_provider._TRANSPORT_REGISTRY
+    with transport_registry._lock:
+        transports = dict(transport_registry._transports)
     controllers = dict(run_workflow._CONTROLLERS)
     factories = dict(gepa_runner._GEPA_FACTORIES)
-    proposal_provider._TRANSPORTS.clear()
+    with transport_registry._lock:
+        transport_registry._transports.clear()
     run_workflow._CONTROLLERS.clear()
     gepa_runner._GEPA_FACTORIES.clear()
     yield
-    proposal_provider._TRANSPORTS.clear()
-    proposal_provider._TRANSPORTS.update(transports)
+    with transport_registry._lock:
+        transport_registry._transports.clear()
+        transport_registry._transports.update(transports)
     run_workflow._CONTROLLERS.clear()
     run_workflow._CONTROLLERS.update(controllers)
     gepa_runner._GEPA_FACTORIES.clear()
