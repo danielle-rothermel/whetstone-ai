@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         Candidate,
         OptimizationRun,
         OptimizationRunRef,
+        TemplateRenderContract,
     )
 
 __all__ = [
@@ -55,7 +56,7 @@ def candidate_from_draft(
     base: Candidate,
     candidate_id: str,
     draft: ProposalDraft,
-    run: OptimizationRun | OptimizationRunRef,
+    run: OptimizationRun | OptimizationRunRef | TemplateRenderContract,
 ) -> Candidate:
     """The sole draft-to-candidate validation path.
 
@@ -74,17 +75,22 @@ def candidate_from_draft(
         Candidate,
         OptimizationRun,
         OptimizationRunRef,
+        TemplateRenderContract,
         candidate_reference,
     )
 
     if type(run) is OptimizationRun:
-        exact_run = run
+        contract = run.template_render_contract
     elif type(run) is OptimizationRunRef:
-        exact_run = run.record
+        contract = run.record.template_render_contract
+    elif type(run) is TemplateRenderContract:
+        contract = run
     else:
-        raise TypeError("run must be an exact OptimizationRun or RunRef")
+        raise TypeError(
+            "run must be an exact OptimizationRun, RunRef, or render contract"
+        )
     try:
-        exact_run.template_render_contract.validate_template(draft.template)
+        contract.validate_template(draft.template)
     except ValueError as error:
         raise ProposalValidationError(
             f"proposal template violates its render contract: {error}"

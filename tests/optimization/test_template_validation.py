@@ -1,7 +1,6 @@
 """One hard-cut proposer-draft and mutation validation path."""
 
 from inspect import signature
-from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
@@ -437,11 +436,12 @@ def test_draft_clones_nested_payload_before_mutating() -> None:
     }
 
 
-def test_draft_requires_exact_run_authority() -> None:
-    with pytest.raises(TypeError, match="exact OptimizationRun"):
-        candidate_from_draft(
-            base=candidate(),
-            candidate_id="P1",
-            draft=ProposalDraft(template="{query}"),
-            run=cast(Any, python_format_contract()),
-        )
+def test_draft_accepts_exact_render_contract_authority() -> None:
+    proposed = candidate_from_draft(
+        base=candidate(),
+        candidate_id="P1",
+        draft=ProposalDraft(template="{query}"),
+        run=python_format_contract(),
+    )
+
+    assert proposed.payload["user_prompt_template"] == "{query}"

@@ -37,7 +37,10 @@ from whetstone.provider.driver import (
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 if TYPE_CHECKING:
-    from dr_providers import ProviderCallConfig, ProviderCallRequest
+    from dr_providers import (
+        ProviderCallConfig,
+        ProviderCallRequest,
+    )
 
 __all__ = [
     "PROMPT_ADAPTER_SCHEMA",
@@ -608,10 +611,9 @@ class FakeProposerTransport:
     """A scripted, deterministic proposer transport for harness tests.
 
     Responses are keyed by ``(proposal_mode, request_ordinal)`` -> a tuple of
-    template strings. Strict mode is the default: a short script produces
-    explicit failed slots instead of invented candidates. Legacy padding is
-    available only with ``strict=False``. Every call records the configured
-    execution-policy and prompt-adapter identities.
+    template strings. A short script produces explicit failed slots instead
+    of invented candidates. Every call records the configured execution-policy
+    and prompt-adapter identities.
     """
 
     def __init__(
@@ -621,7 +623,6 @@ class FakeProposerTransport:
         default: tuple[str, ...] = (),
         execution_policy_hash: str,
         prompt_adapter_identity_hash: str,
-        strict: bool = True,
     ) -> None:
         require_full_hash(
             execution_policy_hash,
@@ -635,7 +636,6 @@ class FakeProposerTransport:
         self._default = default
         self._execution_policy_hash = execution_policy_hash
         self._prompt_adapter_identity_hash = prompt_adapter_identity_hash
-        self._strict = strict
         self.calls: list[tuple[IdentityHash, ProposalRequest, int]] = []
 
     @property
@@ -681,7 +681,7 @@ class FakeProposerTransport:
         for index in range(count):
             if index < len(templates):
                 text = templates[index]
-            elif self._strict:
+            else:
                 drafts.append(
                     ProposalDraft.failure(
                         detail=(
@@ -696,11 +696,6 @@ class FakeProposerTransport:
                     )
                 )
                 continue
-            else:
-                text = (
-                    f"{request.base_template}::pad::"
-                    f"{request.request_ordinal}:{index}"
-                )
             if not text:
                 drafts.append(
                     ProposalDraft.failure(

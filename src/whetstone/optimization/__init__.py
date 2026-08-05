@@ -1,5 +1,7 @@
 """Generic durable optimization contracts and harness."""
 
+from importlib import import_module
+
 from whetstone.optimization.adapters import (
     AdapterCheckpoint,
     AdapterOutput,
@@ -210,6 +212,33 @@ from whetstone.optimization.tools import (
     tool_result_reference,
 )
 
+_LAZY_MIPROV2_EXPORTS = {
+    "MIPROV2_ADAPTER_KEY": "whetstone.optimization.miprov2",
+    "Miprov2Adapter": "whetstone.optimization.miprov2",
+    "MIPROV2_ALGORITHM_VERSION": "whetstone.optimization.miprov2_control",
+    "MIPROV2_OPTUNA_VERSION": "whetstone.optimization.miprov2_control",
+    "MIPROV2_PROMPT_FORMAT_ADAPTER_VERSION": (
+        "whetstone.optimization.miprov2_control"
+    ),
+    "MIPROV2_REFERENCE_COMMIT": "whetstone.optimization.miprov2_control",
+    "Miprov2AutoMode": "whetstone.optimization.miprov2_control",
+    "Miprov2Control": "whetstone.optimization.miprov2_control",
+    "Miprov2InjectedDefaults": "whetstone.optimization.miprov2_control",
+    "configure_miprov2": "whetstone.optimization.miprov2_control",
+}
+
+
+def __getattr__(name: str):
+    """Load the MIPROv2 facade without introducing env import cycles."""
+
+    module_name = _LAZY_MIPROV2_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(name)
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
+
 __all__ = [
     "ADAPTER_CHECKPOINT_SCHEMA",
     "CANDIDATE_IDENTITY_SCHEMA",
@@ -227,6 +256,11 @@ __all__ = [
     "GLOBAL_CAPACITY_SCOPE_ID",
     "INTENT_RESOLUTION_SCHEMA",
     "INTENT_RESOLUTION_SCHEMA_VERSION",
+    "MIPROV2_ADAPTER_KEY",
+    "MIPROV2_ALGORITHM_VERSION",
+    "MIPROV2_OPTUNA_VERSION",
+    "MIPROV2_PROMPT_FORMAT_ADAPTER_VERSION",
+    "MIPROV2_REFERENCE_COMMIT",
     "MUTATION_FIELD",
     "OPTIMIZATION_RESULT_SCHEMA",
     "OPTIMIZATION_RUN_SCHEMA",
@@ -295,6 +329,10 @@ __all__ = [
     "IssuedToolCallConflictError",
     "LeaseMaintenance",
     "MappingAdapterRegistry",
+    "Miprov2Adapter",
+    "Miprov2AutoMode",
+    "Miprov2Control",
+    "Miprov2InjectedDefaults",
     "MissingDataPolicy",
     "NonEmptyId",
     "NonNegativeInt",
@@ -374,6 +412,7 @@ __all__ = [
     "canonical_json_equal",
     "compute_identity_hash",
     "configure_copro",
+    "configure_miprov2",
     "diff_check",
     "eval_config_reference",
     "freeze_json_object",

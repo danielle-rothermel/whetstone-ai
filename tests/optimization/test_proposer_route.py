@@ -238,7 +238,6 @@ def test_fake_transport_is_scripted_and_records_calls() -> None:
         default=("d",),
         execution_policy_hash="a" * 64,
         prompt_adapter_identity_hash="b" * 64,
-        strict=False,
     )
     pc = _pc("pcc://proposer")
     request = ProposalRequest(
@@ -247,9 +246,9 @@ def test_fake_transport_is_scripted_and_records_calls() -> None:
         base_candidate=_base_candidate_ref(),
     )
     drafts = transport.draft(pc, request, 3)
-    # Scripted for the first two; deterministic pad for the third.
+    # Scripted for the first two; explicit failure for the underfilled third.
     assert [d.template for d in drafts[:2]] == ["t1", "t2"]
-    assert drafts[2].template.startswith("base::pad::")
+    assert drafts[2].failed is True
     # It recorded the proposer route identity used (no network).
     assert transport.calls[0][0] == pc.identity_hash()
     # A missing script key falls back to the default.

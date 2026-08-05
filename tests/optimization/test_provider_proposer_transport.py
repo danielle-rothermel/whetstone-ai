@@ -375,12 +375,11 @@ def test_proposal_request_binds_exact_base_candidate() -> None:
     assert first.identity_hash() != second.identity_hash()
 
 
-def test_fake_transport_strict_mode_never_invents_padding_candidates() -> None:
+def test_fake_transport_never_invents_padding_candidates() -> None:
     transport = FakeProposerTransport(
         {("seed_proposal", 0): ("only one",)},
         execution_policy_hash="b" * 64,
         prompt_adapter_identity_hash="c" * 64,
-        strict=True,
     )
     config = ProposerConfig(
         provider_call_config=IdentityRef(
