@@ -47,9 +47,11 @@ class OfficialFailurePolicy(StrEnum):
     the account is produced rather than raising, so the operator sees exactly
     which keys are missing.
 
-    Neither policy drops a planned key: the difference is only whether a
-    missing key raises immediately (``STRICT``, when ``raise_on_missing`` is
-    set) or is surfaced as a visible missing row.
+    Neither policy drops a planned key: the difference is only how the
+    account labels the incompleteness. Whether a missing key also *raises* is
+    the separate, policy-independent ``raise_on_missing`` switch on
+    :func:`account_planned_keys` — either policy may ask to record everything
+    and then fail loudly.
     """
 
     STRICT = "strict"
@@ -133,9 +135,11 @@ def account_planned_keys(
     produces exactly one :class:`PlannedKeyResult`; a missing key is recorded
     as an explicit missing row, never dropped.
 
-    With ``raise_on_missing`` set (and the strict policy), any missing key
-    raises :class:`MissingPlannedKeysError` after the full account is computed,
-    so the caller still sees the complete missing set in the exception.
+    ``raise_on_missing`` is independent of ``policy``: with it set, any missing
+    key raises :class:`MissingPlannedKeysError` under either policy, after the
+    full account is computed, so the caller still sees the complete missing set
+    in the exception. Combining ``RECORD_MISSING`` with ``raise_on_missing`` is
+    a coherent "record everything, then fail loudly" request.
     """
     if not planned_keys:
         raise ValueError("account_planned_keys requires >=1 planned key")

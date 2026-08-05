@@ -201,6 +201,14 @@ class OfficialEvaluationRecord(BaseModel):
         )
         if not self.planned_results:
             raise ValueError("an official record has >=1 planned key")
+        # Every planned key appears exactly once: a duplicated planned key
+        # would inflate the planned/present counts and let a record certify as
+        # complete while covering fewer keys than it claims.
+        planned_keys = {p.planned_key for p in self.planned_results}
+        if len(planned_keys) != len(self.planned_results):
+            raise ValueError(
+                "planned_results must have unique planned_key values"
+            )
 
         # The completeness counts MUST match the planned/present accounting.
         present = sum(1 for p in self.planned_results if p.is_present)
@@ -226,7 +234,6 @@ class OfficialEvaluationRecord(BaseModel):
 
         # The ordered mapping's planned keys MUST be a subset of the record's
         # planned keys, and its aggregate refs MUST all be declared aggregates.
-        planned_keys = {p.planned_key for p in self.planned_results}
         # The record's actual present/missing accounting: a planned key is
         # present iff its row carries a bound ordinary Result ref.
         present_keys = {
@@ -241,18 +248,24 @@ class OfficialEvaluationRecord(BaseModel):
                     f"record's planned keys: {sorted(unknown)}"
                 )
             # Reconcile the mapping's result attribution with the record's
-            # actual present accounting: an entry may only attribute a result
-            # to a planned key whose row is actually present (result_ref set).
-            # Otherwise the load-bearing per-graph lineage mapping would
-            # contradict the completeness accounting (attributing a result to
-            # a key the record marks missing), and plot publication stacks
-            # directly on this mapping.
-            attributed_missing = set(entry.result_key_set) - present_keys
-            if attributed_missing:
+            # actual present accounting, in both directions: within the
+            # entry's own planned set, the attributed result keys are exactly
+            # the keys the record accounts as present. Over-attribution names
+            # a key the record marks missing; under-attribution silently drops
+            # a present result from the per-graph lineage. Either way the
+            # load-bearing mapping would contradict the completeness
+            # accounting, and plot publication stacks directly on it.
+            expected_results = set(entry.planned_key_set) & present_keys
+            attributed = set(entry.result_key_set)
+            if attributed != expected_results:
+                attributed_missing = sorted(attributed - expected_results)
+                unattributed_present = sorted(expected_results - attributed)
                 raise ValueError(
-                    "ordered mapping attributes a result to planned keys the "
-                    "record accounts as missing (result_ref is None): "
-                    f"{sorted(attributed_missing)}"
+                    "ordered mapping result_key_set does not reconcile with "
+                    "the record's present accounting; keys the record "
+                    "accounts as missing (result_ref is None): "
+                    f"{attributed_missing}; present keys the mapping omits: "
+                    f"{unattributed_present}"
                 )
             if entry.aggregate_ref not in declared_aggregates:
                 raise ValueError(

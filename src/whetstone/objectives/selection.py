@@ -215,7 +215,10 @@ def select_official(
 
     1. For every candidate, derive one Objective per spec from that candidate's
        named certified aggregate (refusing missing / non-OK / incomplete
-       evidence), forming an ordered :class:`ObjectiveVector`.
+       evidence), forming an ordered :class:`ObjectiveVector`. Every aggregate
+       across every candidate must share one ``eval_config_hash``: candidates
+       evaluated under different Eval Configs are incomparable evidence and
+       are refused, not silently ranked against each other.
     2. Construct the deterministic :class:`ParetoFront` over those vectors in
        stable input order with the explicit ``tie_behavior``.
     3. Officially select the front's first member (lowest original index) under
@@ -239,6 +242,10 @@ def select_official(
     candidate_vectors: list[ObjectiveVector] = []
     front_input: list[tuple[str, ObjectiveVector]] = []
     seen_ids: set[str] = set()
+    # Every aggregate entering one selection must be bound to the same Eval
+    # Config identity: comparing candidates evaluated under different eval
+    # configs would compare incomparable evidence.
+    eval_config_hashes: set[str] = set()
 
     for candidate in candidates:
         if candidate.candidate_id in seen_ids:
@@ -260,6 +267,13 @@ def select_official(
                 raise ValueError(
                     f"candidate {candidate.candidate_id!r} graph_hash does "
                     f"not match aggregate {spec.aggregate_name!r}"
+                )
+            eval_config_hashes.add(aggregate.eval_config_hash)
+            if len(eval_config_hashes) > 1:
+                raise ValueError(
+                    "official selection requires every candidate aggregate to "
+                    "share one eval_config_hash; saw "
+                    f"{sorted(eval_config_hashes)}"
                 )
             value = _certified_value(aggregate)
             objectives.append(

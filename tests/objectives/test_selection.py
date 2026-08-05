@@ -207,6 +207,64 @@ def test_selection_never_names_reward_objective() -> None:
         select_official([candidate], objective_specs=(reward_spec,))
 
 
+def test_selection_requires_one_shared_eval_config_hash() -> None:
+    # The two candidates were evaluated under different Eval Configs (a
+    # different planned matrix yields a different config identity hash), so
+    # their aggregates are incomparable evidence and selection refuses them
+    # rather than ranking them against each other.
+    baseline = _candidate(
+        candidate_id="c0",
+        graph_hash=GRAPH_A,
+        quality_value=1.0,
+        compression_value=2.0,
+    )
+    other_config = SelectionCandidate(
+        candidate_id="c1",
+        graph_hash=GRAPH_B,
+        aggregates={
+            SELECTION_QUALITY_AGGREGATE_NAME: quality_aggregate(
+                graph_hash=GRAPH_B, value=2.0, tasks=3
+            ),
+            "mean_compression_ratio": compression_aggregate(
+                graph_hash=GRAPH_B, value=1.0, tasks=3
+            ),
+        },
+    )
+    quality = other_config.aggregates[SELECTION_QUALITY_AGGREGATE_NAME]
+    baseline_quality = baseline.aggregates[SELECTION_QUALITY_AGGREGATE_NAME]
+    # Sanity: the fixtures genuinely differ in eval_config_hash.
+    assert quality.eval_config_hash != baseline_quality.eval_config_hash
+    with pytest.raises(ValueError, match="share one eval_config_hash"):
+        select_official([baseline, other_config], objective_specs=SPECS)
+
+
+def test_selection_accepts_one_shared_eval_config_hash() -> None:
+    # The ordinary path: every aggregate of every candidate shares one Eval
+    # Config identity, so selection proceeds.
+    candidates = [
+        _candidate(
+            candidate_id="c0",
+            graph_hash=GRAPH_A,
+            quality_value=1.0,
+            compression_value=2.0,
+        ),
+        _candidate(
+            candidate_id="c1",
+            graph_hash=GRAPH_B,
+            quality_value=2.0,
+            compression_value=1.0,
+        ),
+    ]
+    hashes = {
+        aggregate.eval_config_hash
+        for candidate in candidates
+        for aggregate in candidate.aggregates.values()
+    }
+    assert len(hashes) == 1
+    evidence = select_official(candidates, objective_specs=SPECS)
+    assert evidence.selected_candidate_id in {"c0", "c1"}
+
+
 def test_selection_rejects_duplicate_candidate_ids() -> None:
     c = _candidate(
         candidate_id="dup",

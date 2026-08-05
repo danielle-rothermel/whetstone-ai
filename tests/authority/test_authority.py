@@ -328,6 +328,52 @@ def test_mapping_result_keys_matching_present_set_is_accepted() -> None:
     assert record.completeness.missing_count == 1
 
 
+def test_mapping_cannot_omit_a_present_planned_key() -> None:
+    # Both planned keys are present, but the mapping attributes a result only
+    # to k0. Under-attribution drops a present result from the per-graph
+    # lineage the plot publication path stacks on, so it is refused.
+    planned = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        PlannedKeyResult(planned_key="k1", result_ref=result_ref("e")),
+    )
+    under_attributing = SelectedRecordMapping(
+        entries=(
+            SelectedRecordMappingEntry(
+                record_ref=record_ref("1"),
+                graph_hash=GRAPH_A,
+                planned_key_set=("k0", "k1"),
+                result_key_set=("k0",),  # omits the present k1
+                aggregate_ref=aggregate_ref("9"),
+            ),
+        )
+    )
+    with pytest.raises(ValueError, match="present keys the mapping omits"):
+        _record(planned=planned, mapping=under_attributing)
+
+
+def test_mapping_entry_need_not_cover_planned_keys_outside_its_set() -> None:
+    # Reconciliation is scoped to the entry's own planned_key_set: k1 is
+    # present at the record level but outside this entry's planned set, so its
+    # absence from result_key_set is not under-attribution.
+    planned = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        PlannedKeyResult(planned_key="k1", result_ref=result_ref("e")),
+    )
+    scoped = SelectedRecordMapping(
+        entries=(
+            SelectedRecordMappingEntry(
+                record_ref=record_ref("1"),
+                graph_hash=GRAPH_A,
+                planned_key_set=("k0",),
+                result_key_set=("k0",),
+                aggregate_ref=aggregate_ref("9"),
+            ),
+        )
+    )
+    record = _record(planned=planned, mapping=scoped)
+    assert record.completeness.present_count == 2
+
+
 def test_converged_entries_agree_with_record_present_set() -> None:
     # Two selected records converge on one graph_hash. Their shared
     # result_key_set must reconcile with the record-level present set: if it
@@ -393,3 +439,22 @@ def test_authority_issued_binding_id_is_a_full_hash() -> None:
         selection_evidence_ref=result_ref("f"),
     )
     assert record.evaluation_binding_id == binding_id
+
+
+# ---------------------------------------------------------------------------
+# Planned keys are unique in a record: a duplicated key would inflate the
+# planned/present counts and certify as complete over fewer keys than claimed.
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_planned_keys_are_refused() -> None:
+    duplicated = (
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+        PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
+    )
+    with pytest.raises(ValueError, match="unique planned_key"):
+        _record(
+            planned=duplicated,
+            mapping=single_entry_mapping(planned_keys=("k0",)),
+            certified=True,
+        )

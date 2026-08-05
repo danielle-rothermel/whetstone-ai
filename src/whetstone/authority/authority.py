@@ -18,8 +18,10 @@ not a capability or signature, so the ``EvaluationAuthority`` methods are an
 enforced funnel rather than an unforgeable cryptographic boundary. The
 authority-enforced guarantees are:
 
-* the relabeling refusal (below) applies on every :meth:`certify` /
-  :meth:`publish_plot` call — internal evidence is refused there;
+* the relabeling refusal (below) applies on every :meth:`certify` call —
+  internal evidence is refused there. :meth:`publish_plot` takes no Evaluation
+  Binding and performs no refusal of its own; it publishes over already
+  certified Official Evaluation Record references;
 * an :class:`~whetstone.authority.records.OfficialEvaluationRecord` will only
   accept an ``evaluation_binding_id`` that is the exact Evaluation Binding
   Identity Hash (see ``records.py``).
