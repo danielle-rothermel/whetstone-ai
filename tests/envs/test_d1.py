@@ -15,6 +15,7 @@ from tests.envs.support import (
 )
 from whetstone.envs.d1 import (
     D1_INPUT_ARMS,
+    D1_RENAMED_ARM,
     D1_SUBMISSION_SCORE_NAME,
     D1_WRAPPER_BODY_CEILING,
     D1_WRAPPER_BODY_NAIVE,
@@ -96,6 +97,66 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
         )
     assert len(graphs) == len(D1_INPUT_ARMS)
     assert len(evals) == len(D1_INPUT_ARMS)
+
+    # The rename_token is identity-bearing ON THE ARM THAT READS IT: two
+    # `renamed` cells with different tokens score against different entry
+    # points, so they are different experiments and must not share identity.
+    renamed = [
+        build_d1_experiment(
+            input_arm=D1_RENAMED_ARM, tasks=tasks, rename_token=token
+        )
+        for token in ("target_fxn", "other_fxn")
+    ]
+    assert (
+        renamed[0].rollout_definition.graph_hash
+        != renamed[1].rollout_definition.graph_hash
+    )
+    assert (
+        renamed[0].eval_configs.official.eval_config.config_identity_hash
+        != renamed[1].eval_configs.official.eval_config.config_identity_hash
+    )
+
+
+def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
+    # Only the `renamed` arm substitutes the token; folding it into the other
+    # arms would churn their hashes for a value they never read.
+    tasks = _tasks()
+    for arm in D1_INPUT_ARMS:
+        if arm == D1_RENAMED_ARM:
+            continue
+        a = build_d1_experiment(
+            input_arm=arm, tasks=tasks, rename_token="target_fxn"
+        )
+        b = build_d1_experiment(
+            input_arm=arm, tasks=tasks, rename_token="other_fxn"
+        )
+        assert (
+            a.rollout_definition.graph_hash == b.rollout_definition.graph_hash
+        )
+        assert (
+            a.eval_configs.official.eval_config.config_identity_hash
+            == b.eval_configs.official.eval_config.config_identity_hash
+        )
+
+
+@pytest.mark.parametrize(
+    "bad", ["not a token", "2fxn", "", "def", "class", "target-fxn", "a.b"]
+)
+def test_invalid_rename_token_is_rejected_at_build_time(bad: str) -> None:
+    # The token is substituted into rendered SOURCE; an invalid identifier is
+    # otherwise a per-row SyntaxError at drive time, after the pool load and
+    # every provider call.
+    with pytest.raises(ValueError, match="rename_token"):
+        build_d1_experiment(
+            input_arm=D1_RENAMED_ARM, tasks=_tasks(1), rename_token=bad
+        )
+
+
+def test_valid_rename_token_is_accepted() -> None:
+    experiment = build_d1_experiment(
+        input_arm=D1_RENAMED_ARM, tasks=_tasks(1), rename_token="solve_it"
+    )
+    assert experiment.rename_token == "solve_it"
 
 
 def test_naive_prompt_matches_canonical_direct_prompt() -> None:

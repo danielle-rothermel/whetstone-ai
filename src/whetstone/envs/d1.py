@@ -41,6 +41,7 @@ the ed1 blended reward; d1 builds NO budget enforcement.
 
 from __future__ import annotations
 
+import keyword
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -113,12 +114,15 @@ _DEFINITION_VERSION = "1"
 #: screen DIRECT arm's slice of the canonical HumanEval prompt; ``renamed``
 #: additionally scrubs EVERY canonical-name occurrence (signature + doctests)
 #: and scores against the renamed entry point (the amendment-2 ablation).
+#: The one arm that reads ``rename_token`` (and so folds it into identity).
+D1_RENAMED_ARM = "renamed"
+
 D1_INPUT_ARMS: tuple[str, ...] = (
     "original",
     "docstring",
     "signature",
     "name",
-    "renamed",
+    D1_RENAMED_ARM,
 )
 
 #: The default rename token for the renamed input arm (matches the screen's).
@@ -251,25 +255,41 @@ def d1_graph_definition() -> GraphDefinition:
     return GraphDefinition(nodes=(llm, ev), terminal_node_id=EVAL_NODE_ID)
 
 
+def d1_arm_token(input_arm: str, rename_token: str) -> str:
+    """The identity-bearing control token for one (arm, rename token) pair.
+
+    ``rename_token`` folds in ONLY for the ``renamed`` arm -- it is the text
+    substituted for every canonical name in that arm, so two ``renamed`` cells
+    with different tokens are different experiments. The other arms never read
+    the token, so folding it there would churn their identities for a value
+    they ignore.
+    """
+    if input_arm == D1_RENAMED_ARM:
+        return f"d1_input_arm:{input_arm}|rename={rename_token}"
+    return f"d1_input_arm:{input_arm}"
+
+
 def build_d1_graph_config(
     *,
     provider_call_config_hash: str,
     evaluation_procedure_config_hash: str,
     input_arm: str,
+    rename_token: str = D1_DEFAULT_RENAME_TOKEN,
 ) -> GraphConfig:
     """Materialize the d1 Graph Config binding the route, procedure, and arm.
 
     The LLM Call Node carries the Provider Call Config reference AND the FROZEN
     input-arm control token (in the declared budget-variable slot); the Eval
-    Node carries the code-eval Procedure reference. A distinct arm yields a
-    distinct ``graph_hash`` (identity-folded by construction).
+    Node carries the code-eval Procedure reference. A distinct arm -- or, on
+    the ``renamed`` arm, a distinct ``rename_token`` -- yields a distinct
+    ``graph_hash`` (identity-folded by construction).
     """
     definition = d1_graph_definition()
     assignments = {
         LLM_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
             provider_call_config_hash=provider_call_config_hash,
-            character_budget_rule=f"d1_input_arm:{input_arm}",
+            character_budget_rule=d1_arm_token(input_arm, rename_token),
         ),
         EVAL_NODE_ID: eval_variable_assignment(
             evaluation_procedure_config_schema=D1_PROCEDURE_CONFIG_SCHEMA,
@@ -286,6 +306,7 @@ def build_d1_rollout_definition(
     model: str,
     procedure_config_hash: str,
     input_arm: str,
+    rename_token: str = D1_DEFAULT_RENAME_TOKEN,
 ) -> D1RolloutDefinition:
     """Build the d1 direct Rollout Definition for one (model, input arm)."""
     provider_call_config = openrouter_chat_config(model=model)
@@ -293,6 +314,7 @@ def build_d1_rollout_definition(
         provider_call_config_hash=provider_call_config.identity_hash,
         evaluation_procedure_config_hash=procedure_config_hash,
         input_arm=input_arm,
+        rename_token=rename_token,
     )
     return D1RolloutDefinition(
         env_name=D1_ENV_NAME,
@@ -316,13 +338,16 @@ def _d1_split(
     max_skip_fraction: float,
     repeats: int,
     input_arm: str,
+    rename_token: str = D1_DEFAULT_RENAME_TOKEN,
     manifest_tag: str | None = None,
 ) -> EnvSplitSampling:
     """A d1 split whose Task Set + sampling fold in the FROZEN input arm.
 
     Mirrors ``ed1._ed1_split`` but adds the input arm to the manifest id so a
     ``renamed`` cell and an ``original`` cell over the SAME task ids have
-    DISTINCT ``eval_config_hash`` values (the arm is identity-bearing).
+    DISTINCT ``eval_config_hash`` values (the arm is identity-bearing). On the
+    ``renamed`` arm the ``rename_token`` folds in too: it changes the scored
+    entry point, so two tokens are two experiments.
 
     ``manifest_tag`` (a task-split-manifest's content-hash + pool, task 29)
     folds in ALONGSIDE the input arm so a manifest-driven split is a DISTINCT
@@ -341,6 +366,8 @@ def _d1_split(
         }
     )
     namespace = f"whetstone.d1.{input_arm}"
+    if input_arm == D1_RENAMED_ARM:
+        namespace = f"{namespace}.{rename_token}"
     if manifest_tag is not None:
         namespace = f"{namespace}.{manifest_tag}"
     return derive_split_sampling(
@@ -359,9 +386,11 @@ def _d1_split(
 class D1Experiment(EnvExperiment):
     """An ``EnvExperiment`` for the d1 direct-generation env.
 
-    Adds the FROZEN ``input_arm`` + the ``rename_token`` (both identity-
-    bearing) and the direct :class:`D1RolloutDefinition` on top of the base
-    experiment shape. ``rollout_definition`` (the base field) is the same
+    Adds the FROZEN ``input_arm`` + the ``rename_token`` and the direct
+    :class:`D1RolloutDefinition` on top of the base experiment shape. The arm
+    is identity-bearing unconditionally; the ``rename_token`` is identity-
+    bearing on the ``renamed`` arm, the only arm that reads it (see
+    :func:`d1_arm_token`). ``rollout_definition`` (the base field) is the same
     direct rollout so ``experiment.rollout_definition.graph_hash`` resolves for
     the runner. The
     per-task HumanEval map (``humaneval_by_id``) lets the direct drive rebuild
@@ -371,9 +400,11 @@ class D1Experiment(EnvExperiment):
     input_arm: str = "original"
     rename_token: str = D1_DEFAULT_RENAME_TOKEN
     dataset_revision: str = ""
-    #: The injectable code scorer (raw_submission, task) -> CodeScore. ``None``
-    #: uses the production dr-code local subprocess sandbox; tests/dry-runs
-    #: inject a fast no-subprocess scorer.
+    #: The injectable code scorer (raw_submission, task) -> CodeScore. The
+    #: production injection runs candidate code in a LOCAL, NON-ISOLATED
+    #: subprocess (``dr_code.execution.run_python_subprocess``); tests/dry-runs
+    #: inject a fast no-subprocess scorer. Execution isolation is a
+    #: runner-layer concern, not this layer's.
     scorer: Callable[..., CodeScore] | None = None
     #: Per-Instance-id parsed HumanEval task (for the frozen input-arm render +
     #: the renamed-arm scoring task); empty for a bare shape.
@@ -427,6 +458,14 @@ def build_d1_experiment(
             f"unknown d1 input arm {input_arm!r} "
             f"(choose one of {D1_INPUT_ARMS})"
         )
+    # The rename token is substituted into rendered SOURCE, so an invalid
+    # identifier is a per-row SyntaxError at drive time (after the pool load
+    # and every provider call). Reject it at build time instead.
+    if not rename_token.isidentifier() or keyword.iskeyword(rename_token):
+        raise ValueError(
+            f"d1 rename_token {rename_token!r} is not a valid, "
+            "non-keyword Python identifier"
+        )
     pool = (
         tasks
         if tasks is not None
@@ -443,6 +482,7 @@ def build_d1_experiment(
         model=model,
         procedure_config_hash=procedure.config_identity_hash,
         input_arm=input_arm,
+        rename_token=rename_token,
     )
     humaneval_by_id = {str(t.instance.id): t.humaneval_task for t in pool}
     manifest_tag: str | None = None
@@ -478,6 +518,7 @@ def build_d1_experiment(
         max_skip_fraction=max_skip_fraction,
         repeats=repeats,
         input_arm=input_arm,
+        rename_token=rename_token,
         manifest_tag=manifest_tag,
     )
     official_split = _d1_split(
@@ -488,6 +529,7 @@ def build_d1_experiment(
         max_skip_fraction=max_skip_fraction,
         repeats=repeats,
         input_arm=input_arm,
+        rename_token=rename_token,
         manifest_tag=manifest_tag,
     )
     eval_configs = EnvEvalConfigs(
@@ -535,6 +577,7 @@ __all__ = [
     "D1_DEFAULT_RENAME_TOKEN",
     "D1_ENV_NAME",
     "D1_INPUT_ARMS",
+    "D1_RENAMED_ARM",
     "D1_SUBMISSION_SCORE_NAME",
     "D1_WRAPPER_BODY_CEILING",
     "D1_WRAPPER_BODY_NAIVE",
