@@ -35,6 +35,10 @@ if TYPE_CHECKING:
     from whetstone.execution.mode import EvaluationRuntimeConfig
 
 _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
+# Codex 0.146 parses mcp_servers.<name>.default_tools_approval_mode as one of
+# "auto", "prompt", "writes", "approve"; "auto" runs the server's tools
+# without an interactive approval turn.
+_MCP_TOOLS_APPROVAL_MODE = "auto"
 _CODEX_DENIED_FEATURES = (
     "apps",
     "browser_use",
@@ -282,6 +286,13 @@ def build_codex_command(
             "-c",
             "mcp_servers.whetstone.args="
             + json.dumps(["-m", "whetstone.optimization.mcp_server"]),
+            # stdin is closed, so an approval prompt for the one evaluation
+            # tool would stall or cancel the measurement instead of asking.
+            # This server is the only sanctioned measurement path and is
+            # already bounded by the Tool Config capacity it enforces.
+            "-c",
+            "mcp_servers.whetstone.default_tools_approval_mode="
+            + json.dumps(_MCP_TOOLS_APPROVAL_MODE),
         ]
     )
     for key, value in sorted(mcp_env.items()):
@@ -536,6 +547,14 @@ class SubprocessCodexRunner:
                     "Codex partial-log parent directory does not exist"
                 )
             state_paths.add(partial_path)
+            # PartialLog serializes writers on a sidecar lock next to the
+            # record directory, and creates the record directory itself
+            # through the parent descriptor. Both the sidecar and the parent
+            # entry must be writable or the child's first append is denied.
+            state_paths.add(
+                partial_path.with_name(f".{partial_path.name}.lock")
+            )
+            state_paths.add(partial_path.parent)
         if self._runtime.prompt_cache_path:
             cache_path = Path(self._runtime.prompt_cache_path).resolve()
             if not cache_path.is_dir():

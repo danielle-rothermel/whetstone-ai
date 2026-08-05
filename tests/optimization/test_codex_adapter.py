@@ -12,6 +12,7 @@ from tests.envs.support import execution_policy, process_row_job_factory
 from whetstone.envs.factory import build_env_experiment
 from whetstone.evaluation import EngineToolEvaluator, EvaluationEngine
 from whetstone.execution.mode import EvaluationRuntimeConfig
+from whetstone.execution.partials import PartialLog
 from whetstone.optimization import (
     CODEX_OUTPUT_ARTIFACT_SCHEMA,
     Candidate,
@@ -42,7 +43,9 @@ from whetstone.optimization import (
 )
 from whetstone.optimization.codex_runner import (
     _CODEX_DENIED_FEATURES,
+    _MCP_TOOLS_APPROVAL_MODE,
     _MacOsProcessIsolation,
+    build_codex_command,
 )
 from whetstone.optimization.mcp_server import build_server_from_env
 from whetstone.optimization.schema import (
@@ -813,3 +816,55 @@ def test_serve_stdio_answers_malformed_lines_and_keeps_serving(
     assert responses[0]["id"] is None
     assert responses[0]["error"]["code"] == code
     assert responses[1] == {"jsonrpc": "2.0", "id": 7, "result": {}}
+
+
+def test_codex_command_pre_approves_the_whetstone_mcp_tools() -> None:
+    argv = build_codex_command(
+        prompt="proposal prompt",
+        codex_binary="/usr/bin/codex",
+        model="gpt-5",
+        mcp_env={"WS_MCP_SQLITE_PATH": "/abs/store.sqlite"},
+        output_schema_path="/abs/schema.json",
+        output_artifact_path="/abs/last-message.json",
+        working_directory="/abs/work",
+    )
+
+    # stdin is DEVNULL, so the evaluation tool must not need an approval turn.
+    assert (
+        "mcp_servers.whetstone.default_tools_approval_mode="
+        + json.dumps(_MCP_TOOLS_APPROVAL_MODE)
+    ) in argv
+    # Pinned against the Codex config parser, which accepts only these.
+    assert _MCP_TOOLS_APPROVAL_MODE in {"auto", "prompt", "writes", "approve"}
+
+
+def test_sandbox_allows_the_partial_log_lock_and_parent(tmp_path) -> None:
+    experiment = _experiment()
+    store = ObjectStore(SqliteBackend(tmp_path / "partial-lock.sqlite"))
+    engine = _engine(store, experiment)
+    partial_root = tmp_path / "partial-root"
+    partial_root.mkdir()
+    partial_path = partial_root / "partials"
+    runner = SubprocessCodexRunner(
+        sqlite_path=str(tmp_path / "mcp-store.sqlite"),
+        runtime_config=_runtime_config(
+            engine, partial_log_path=str(partial_path)
+        ),
+        reward_policy=experiment.reward_policy,
+        environment={},
+    )
+
+    writable = runner._writable_runtime_paths(tmp_path / "root")
+    profile = _MacOsProcessIsolation._profile(
+        readable_paths=(), writable_paths=writable
+    )
+
+    # PartialLog locks on this exact sibling and creates the record
+    # directory through its parent descriptor.
+    lock_path = partial_root / f".{partial_path.name}.lock"
+    assert PartialLog(partial_path)._lock_path == lock_path
+    assert lock_path in writable
+    assert partial_root.resolve() in writable
+    assert json.dumps(str(lock_path)) in profile
+    parent_rule = json.dumps(str(partial_root.resolve()))
+    assert f"(allow file-write* (subpath {parent_rule}))" in profile
