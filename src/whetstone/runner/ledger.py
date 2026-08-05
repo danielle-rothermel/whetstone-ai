@@ -49,8 +49,10 @@ from whetstone.evaluation.schema import EVALUATION_EVIDENCE_SCHEMA
 from whetstone.optimization.identity import TypedRef, require_full_hash
 
 __all__ = [
+    "BOUNDARY_SPEND_PHASES",
     "CELLS_SCHEMA",
     "CELL_STATUSES",
+    "CHECKPOINT_SPEND_PHASE_PREFIX",
     "COMPLETED_CELL_STATUSES",
     "OFFICIAL_ANCHOR_COUNT_MAX",
     "OFFICIAL_ANCHOR_SCHEMA",
@@ -80,6 +82,15 @@ OFFICIAL_ANCHOR_SCHEMA = "whetstone.runner.official_anchor/v1"
 #: Official-anchor repeats and counts remain representable as signed 64-bit
 #: integers in every persisted consumer.
 OFFICIAL_ANCHOR_COUNT_MAX = 2**63 - 1
+
+#: Persisted-format contract: the paired outer boundary of one cell's spend
+#: timeline. Exactly one ``before`` is open at a time, and it is the stop-loss
+#: baseline a resumed invocation recovers.
+BOUNDARY_SPEND_PHASES: frozenset[str] = frozenset({"before", "after"})
+
+#: Persisted-format contract: the prefix marking one paid boundary inside a
+#: cell. The suffix names the boundary being guarded.
+CHECKPOINT_SPEND_PHASE_PREFIX = "checkpoint:"
 
 
 def _canonical_cell_filename(
@@ -599,6 +610,14 @@ class SpendRecord(BaseModel):
     never captured -- never an empty string, which would read as recorded but
     blank. ``event_id`` is a per-row unique id so a spend timeline can address
     individual snapshots.
+
+    A cell's spend timeline has three kinds of line. ``before`` and ``after``
+    are its paired outer boundary, and exactly one ``before`` is open at a
+    time -- that open record is the stop-loss baseline a resumed invocation
+    recovers. Between them sit the ``checkpoint:<boundary>`` lines, one per
+    paid boundary the cell is about to cross, each keyed by a deterministic
+    ``event_id`` so re-entering the same boundary reuses its snapshot instead
+    of paying for a second one.
     """
 
     model_config = ConfigDict(
@@ -609,7 +628,8 @@ class SpendRecord(BaseModel):
     schema_: StrictStr = Field(default=SPEND_SCHEMA, alias="schema")
     event_id: StrictStr | None = None
     cell_id: StrictStr
-    #: Exactly ``"before"`` or ``"after"``: the paired boundary of one cell.
+    #: Persisted-format contract: exactly ``"before"``, ``"after"``, or
+    #: ``"checkpoint:<boundary>"`` with a non-empty boundary name.
     phase: StrictStr
     lane: StrictStr
     total_credits: float | None = None
@@ -621,8 +641,14 @@ class SpendRecord(BaseModel):
     def _validate(self) -> SpendRecord:
         if self.schema_ != SPEND_SCHEMA:
             raise ValueError(f"schema must be exactly {SPEND_SCHEMA!r}")
-        if self.phase not in {"before", "after"}:
-            raise ValueError("phase must be exactly 'before' or 'after'")
+        if self.phase not in BOUNDARY_SPEND_PHASES and not (
+            self.phase.startswith(CHECKPOINT_SPEND_PHASE_PREFIX)
+            and self.phase[len(CHECKPOINT_SPEND_PHASE_PREFIX) :].strip()
+        ):
+            raise ValueError(
+                "phase must be 'before', 'after', or "
+                f"'{CHECKPOINT_SPEND_PHASE_PREFIX}<boundary>'"
+            )
         return self
 
     def to_line(self) -> str:

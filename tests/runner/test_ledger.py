@@ -379,9 +379,19 @@ def test_cell_key_matches_the_record_key() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_spend_phase_is_a_closed_pair() -> None:
-    with pytest.raises(ValidationError, match="phase must be exactly"):
+def test_spend_phase_is_a_closed_set() -> None:
+    with pytest.raises(ValidationError, match="phase must be"):
         SpendRecord(cell_id="copro:c18:a0", phase="during", lane="l")
+    with pytest.raises(ValidationError, match="phase must be"):
+        SpendRecord(cell_id="copro:c18:a0", phase="checkpoint:", lane="l")
+
+
+def test_spend_phase_admits_named_paid_checkpoints() -> None:
+    record = SpendRecord(
+        cell_id="copro:c18:a0", phase="checkpoint:official:best", lane="l"
+    )
+
+    assert SpendRecord.from_line(record.to_line()) == record
 
 
 def test_spend_at_is_null_when_never_captured() -> None:
