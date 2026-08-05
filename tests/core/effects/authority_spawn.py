@@ -96,7 +96,7 @@ def acquire_then_exit(
 def race_postgresql_acquire(
     dsn: str,
     schema: str,
-    request_payload: dict[str, Any],
+    request_json: str,
     owner_id: str,
     attempt_id: str,
     role: str,
@@ -131,7 +131,7 @@ def race_postgresql_acquire(
             dsn,
             _connect=connect_gate,
         )
-        request = EffectRequest.model_validate(request_payload)
+        request = EffectRequest.model_validate_json(request_json)
         ready.set()
         if not start.wait(timeout=60):
             raise TimeoutError("PostgreSQL authority worker was not released")
@@ -149,8 +149,8 @@ def race_postgresql_acquire(
 def postgresql_acquire_and_succeed_once(
     dsn: str,
     schema: str,
-    request_payload: dict[str, Any],
-    result_ref_payload: dict[str, Any],
+    request_json: str,
+    result_ref_json: str,
     output: Any,
 ) -> None:
     """Acquire and terminalize through one independently opened authority."""
@@ -163,7 +163,7 @@ def postgresql_acquire_and_succeed_once(
             ),
         )
         acquired = authority.acquire(
-            EffectRequest.model_validate(request_payload),
+            EffectRequest.model_validate_json(request_json),
             owner_id="terminal-writer",
             attempt_id="terminal-attempt",
             lease_duration=timedelta(minutes=5),
@@ -172,7 +172,7 @@ def postgresql_acquire_and_succeed_once(
             raise RuntimeError("terminal writer did not acquire the effect")
         terminal = authority.succeed(
             acquired.lease,
-            result_ref=TypedRef.model_validate(result_ref_payload),
+            result_ref=TypedRef.model_validate_json(result_ref_json),
         )
         output.put(terminal.model_dump(mode="json"))
     except BaseException as exc:
@@ -182,7 +182,7 @@ def postgresql_acquire_and_succeed_once(
 def replay_postgresql_effect_once(
     dsn: str,
     schema: str,
-    request_payload: dict[str, Any],
+    request_json: str,
     output: Any,
 ) -> None:
     """Replay one terminal effect from a freshly constructed authority."""
@@ -195,7 +195,7 @@ def replay_postgresql_effect_once(
             ),
         )
         replay = authority.acquire(
-            EffectRequest.model_validate(request_payload),
+            EffectRequest.model_validate_json(request_json),
             owner_id="terminal-reader",
             attempt_id="replay-attempt",
             lease_duration=timedelta(minutes=5),

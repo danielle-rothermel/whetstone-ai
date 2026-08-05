@@ -426,7 +426,7 @@ def _run_spawned_postgresql_authority_contention(
             args=(
                 schema.dsn,
                 schema.name,
-                request.model_dump(mode="json"),
+                request.model_dump_json(),
                 "shared-worker",
                 attempt_id,
                 role,
@@ -491,8 +491,8 @@ def test_postgresql_terminal_replays_from_fresh_process() -> None:
             args=(
                 schema.dsn,
                 schema.name,
-                request.model_dump(mode="json"),
-                result_ref.model_dump(mode="json"),
+                request.model_dump_json(),
+                result_ref.model_dump_json(),
                 output,
             ),
         )
@@ -501,7 +501,7 @@ def test_postgresql_terminal_replays_from_fresh_process() -> None:
             args=(
                 schema.dsn,
                 schema.name,
-                request.model_dump(mode="json"),
+                request.model_dump_json(),
                 output,
             ),
         )
