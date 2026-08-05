@@ -195,6 +195,52 @@ class TestStructuredPromptAdapter:
         assert message.provider_dict() == expected
         assert message.identity_payload() == expected
 
+    def test_returned_payload_mutation_cannot_change_wire_or_identity(
+        self,
+    ) -> None:
+        message = StructuredPromptAdapter().messages_from_records(
+            (
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.test/original.png",
+                                "metadata": {"labels": ["original"]},
+                            },
+                        },
+                    ],
+                },
+            )
+        )[0]
+        provider_payload = message.provider_dict()
+        identity_payload = message.identity_payload()
+
+        provider_content = provider_payload["content"]
+        identity_content = identity_payload["content"]
+        assert isinstance(provider_content, tuple)
+        assert isinstance(identity_content, tuple)
+        provider_content[0]["image_url"]["url"] = "mutated"
+        identity_content[0]["image_url"]["metadata"]["labels"].append(
+            "mutated"
+        )
+
+        expected = {
+            "role": "user",
+            "content": (
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.test/original.png",
+                        "metadata": {"labels": ["original"]},
+                    },
+                },
+            ),
+        }
+        assert message.provider_dict() == expected
+        assert message.identity_payload() == expected
+
 
 class TestProviderCallRequestFromParameters:
     def test_maps_parameters_into_config_controls(self) -> None:

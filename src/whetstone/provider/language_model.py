@@ -115,7 +115,7 @@ class _TransientStructuredPromptMessage(PromptMessage):
     content: StrictStr | tuple[dict[str, Any], ...]
 
     def provider_dict(self) -> dict[str, Any]:
-        return {"role": self.role.value, "content": self.content}
+        return {"role": self.role.value, "content": deepcopy(self.content)}
 
     def identity_payload(self) -> dict[str, Any]:
         return self.provider_dict()
