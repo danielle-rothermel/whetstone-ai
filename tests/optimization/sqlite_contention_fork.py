@@ -7,10 +7,10 @@ import sys
 import threading
 from pathlib import Path
 
-from tests.optimization.test_effect_authority import (
+from tests.core.effects.test_authority import (
     test_spawned_same_owner_different_attempts_arbitrate_once,
 )
-from tests.optimization.test_tool_store import (
+from tests.optimization.tools.test_store import (
     test_spawned_global_capacity_has_one_process_shared_bucket,
     test_spawned_same_call_replay_has_one_ordinal,
     test_spawned_sqlite_capacity_race_is_atomic,

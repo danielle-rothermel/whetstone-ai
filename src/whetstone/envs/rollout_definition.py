@@ -36,23 +36,23 @@ from dr_graph import GraphConfig, GraphDefinition, graph_hash
 from dr_providers import ProviderCallConfig, openrouter_chat_config
 from whetstone_envs.core import Instance
 
+from whetstone.core.identity import TypedRef, typed_ref_for_record
 from whetstone.envs.procedure import (
     EVALUATION_PROCEDURE_CONFIG_SCHEMA,
     env_procedure_config,
 )
 from whetstone.envs.registry import EnvSpec
 from whetstone.envs.task import EnvTask
-from whetstone.graph.nodes import (
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.graph.nodes import (
     eval_node_definition,
     eval_variable_assignment,
     llm_call_node_definition,
     llm_call_variable_assignment,
 )
-from whetstone.optimization.identity import TypedRef, typed_ref_for_record
-from whetstone.optimization.mutation import (
+from whetstone.optimization.proposal.mutation import (
     MUTATION_FIELD,
 )
-from whetstone.optimization.schema import Candidate
 
 #: The Provider Call Config schema name (referenced by the LLM Call Node's
 #: static Variable typed reference).

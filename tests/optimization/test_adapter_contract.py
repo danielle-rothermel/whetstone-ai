@@ -3,17 +3,19 @@
 import pytest
 from pydantic import ValidationError
 
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.adapters import AdapterOutput
-from whetstone.optimization.identity import TerminalFailure
-from whetstone.optimization.schema import (
+from whetstone.core.identity import TerminalFailure
+from whetstone.core.roles import EvaluationRole
+from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
-    BudgetDelta,
     EvaluationBinding,
+    eval_config_reference,
+)
+from whetstone.experiment.candidate import candidate_reference
+from whetstone.optimization.adapters import AdapterOutput
+from whetstone.optimization.contracts import (
+    BudgetDelta,
     EvaluationIntent,
     StepStatus,
-    candidate_reference,
-    eval_config_reference,
 )
 
 from .support import (

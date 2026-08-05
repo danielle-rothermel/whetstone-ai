@@ -50,7 +50,6 @@ from dr_graph import GraphConfig, GraphDefinition, graph_hash
 from dr_providers import ProviderCallConfig, openrouter_chat_config
 from whetstone_envs.core import Instance
 
-from whetstone.code_eval.aggregate import aggregation_definition
 from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
     ED1_SUBMISSION_SCORE_NAME,
@@ -77,19 +76,20 @@ from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
 )
-from whetstone.graph.nodes import (
+from whetstone.evaluation.code.aggregate import aggregation_definition
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.graph.nodes import (
     eval_node_definition,
     eval_variable_assignment,
     llm_call_node_definition,
     llm_call_variable_assignment,
 )
-from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.reward import (
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     RewardPolicy,
     RewardTerm,
 )
-from whetstone.optimization.schema import Candidate
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 #: The d1 env id.
 D1_ENV_NAME = "d1"

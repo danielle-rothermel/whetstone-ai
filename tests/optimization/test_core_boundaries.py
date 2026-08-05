@@ -1,45 +1,47 @@
-"""PR4 contains only generic optimization core modules."""
+"""The source and test trees preserve the functional package boundaries."""
 
 from pathlib import Path
 
+FUNCTIONAL_PACKAGES = {
+    "coordination",
+    "core",
+    "envs",
+    "evaluation",
+    "execution",
+    "experiment",
+    "optimization",
+    "provider",
+}
 
-def test_optimization_package_has_only_core_modules() -> None:
+
+def _package_directories(root: Path) -> set[str]:
+    return {
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    }
+
+
+def test_source_and_test_trees_share_functional_packages() -> None:
+    assert _package_directories(Path("src/whetstone")) == FUNCTIONAL_PACKAGES
+    assert _package_directories(Path("tests")) == FUNCTIONAL_PACKAGES
+
+
+def test_optimization_root_contains_only_shared_orchestration() -> None:
     root = Path("src/whetstone/optimization")
     assert {path.name for path in root.glob("*.py")} == {
         "__init__.py",
         "adapters.py",
-        "effect_authority.py",
-        "copro.py",
-        "copro_control.py",
-        "gepa.py",
-        "gepa_control.py",
-        "gepa_effects.py",
-        "gepa_engine.py",
-        "gepa_prompts.py",
-        "gepa_result_artifact.py",
-        "gepa_source.py",
-        "gepa_upstream_adapter.py",
+        "contracts.py",
         "harness.py",
-        "identity.py",
-        "mutation.py",
-        "miprov2.py",
-        "miprov2_bootstrap.py",
-        "miprov2_control.py",
-        "miprov2_demo.py",
-        "miprov2_eval_config.py",
-        "miprov2_evidence.py",
-        "miprov2_proposal.py",
-        "miprov2_render.py",
-        "miprov2_rng.py",
-        "miprov2_runtime.py",
-        "miprov2_study.py",
-        "proposer.py",
-        "proposal_prompts.py",
-        "reward.py",
-        "schema.py",
-        "tool_eval.py",
-        "tool_store.py",
-        "tools.py",
+        "run_store.py",
+    }
+    assert _package_directories(root) == {
+        "copro",
+        "gepa",
+        "miprov2",
+        "proposal",
+        "tools",
     }
 
 
@@ -59,7 +61,7 @@ def test_harness_has_no_concrete_adapter_or_runner_dependencies() -> None:
     assert all(symbol not in text for symbol in forbidden)
 
 
-def test_core_has_no_runner_or_environment_imports() -> None:
+def test_shared_optimization_modules_avoid_execution_policy() -> None:
     text = "\n".join(
         path.read_text()
         for path in Path("src/whetstone/optimization").glob("*.py")

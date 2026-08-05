@@ -23,13 +23,13 @@ def _cache(root: str | None):
 def drive_internal_success(payload: JsonValue) -> JsonValue:
     """Run the real internal-row adapter with a child-local fake transport."""
     from tests.envs.support import FakeTransport, constant_reply
-    from whetstone.envs.internal_eval import (
+    from whetstone.envs.procedure import env_procedure_config
+    from whetstone.envs.registry import env_spec
+    from whetstone.evaluation.drivers.internal import (
         InternalRowRequest,
         InternalRowResult,
         drive_internal_row,
     )
-    from whetstone.envs.procedure import env_procedure_config
-    from whetstone.envs.registry import env_spec
 
     request = InternalRowRequest.from_process_payload(payload)
     instance = request.instance.to_instance()
@@ -65,13 +65,13 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
     """Run the real D1 row adapter with child-local transport and scorer."""
     from tests.envs.support import FakeTransport, constant_reply
     from whetstone.envs.d1 import build_d1_experiment
-    from whetstone.envs.d1_eval import (
+    from whetstone.envs.ed1 import Ed1Instance
+    from whetstone.envs.ed1_scoring import score_ed1_submission
+    from whetstone.evaluation.drivers.d1 import (
         D1RowRequest,
         D1RowResult,
         drive_d1_row,
     )
-    from whetstone.envs.ed1 import Ed1Instance
-    from whetstone.envs.ed1_scoring import score_ed1_submission
 
     request = D1RowRequest.from_process_payload(payload)
     instance = request.instance.to_instance()
@@ -140,12 +140,12 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         ed1_instance_from_task,
         humaneval_task_from_instance,
     )
-    from whetstone.envs.ed1_eval import (
+    from whetstone.envs.ed1_scoring import score_ed1_submission
+    from whetstone.evaluation.drivers.ed1 import (
         Ed1RowRequest,
         Ed1RowResult,
         drive_ed1_row,
     )
-    from whetstone.envs.ed1_scoring import score_ed1_submission
 
     request = Ed1RowRequest.from_process_payload(payload)
     instance = request.instance.to_instance()

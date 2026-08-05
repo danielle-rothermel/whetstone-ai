@@ -32,12 +32,20 @@ from tests.optimization.support import (
     python_format_contract,
     registry,
 )
-from whetstone.code_eval.aggregate import (
-    ROLLOUT_AGGREGATE_SCHEMA,
-    RowValue,
-    TaskRows,
-    unweighted_task_mean,
+from whetstone.coordination.evaluation_claims import (
+    EVALUATION_INTENT_CLAIM_SCHEMA,
+    EVALUATION_RESULT_ATTESTATION_SCHEMA,
+    EvaluationIntentClaim,
+    EvaluationResultAttestation,
 )
+from whetstone.coordination.evaluation_service import EngineEvaluationService
+from whetstone.core.effects.authority import EffectAuthority
+from whetstone.core.effects.models import ReplayPolicy
+from whetstone.core.identity import (
+    TerminalFailure,
+    TypedRef,
+)
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import DECODER_TEMPLATE
 from whetstone.envs.encdec_rollout import (
     DECODER_NODE_ID,
@@ -45,88 +53,96 @@ from whetstone.envs.encdec_rollout import (
     build_encdec_rollout_definition,
 )
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.internal_eval import (
-    ExecutedRowState,
+from whetstone.envs.oracle_operator import env_exact_match_score
+from whetstone.envs.registry import env_spec
+from whetstone.envs.reward import reward_from_internal_aggregate
+from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
+from whetstone.evaluation import engine as evaluation_engine_module
+from whetstone.evaluation.code.aggregate import (
+    ROLLOUT_AGGREGATE_SCHEMA,
+    RowValue,
+    TaskRows,
+    unweighted_task_mean,
+)
+from whetstone.evaluation.drivers.internal import (
     InternalRowJobFactory,
     InternalRowOutcome,
     InternalRowRequest,
     InternalRowResult,
     _llm_component_step,
 )
-from whetstone.envs.oracle_operator import env_exact_match_score
-from whetstone.envs.registry import env_spec
-from whetstone.envs.reward import reward_from_internal_aggregate
-from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
-from whetstone.evaluation import (
+from whetstone.evaluation.engine import (
     EngineEvaluation,
-    EngineEvaluationService,
-    EngineToolEvaluator,
+    EvaluationEngine,
+    EvaluationRequest,
+)
+from whetstone.evaluation.schema import (
+    EVALUATION_COMPONENT_TRACES_SCHEMA,
+    EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
+    EVALUATION_EVIDENCE_SCHEMA_VERSION,
+    EVALUATION_OUTPUTS_SCHEMA,
+    EVALUATION_OUTPUTS_SCHEMA_VERSION,
     EvaluationComponentTraces,
     EvaluationComponentTracesRef,
-    EvaluationEngine,
     EvaluationEvidence,
     EvaluationEvidenceRef,
     EvaluationFailureEvidence,
     EvaluationFailureEvidenceRef,
     EvaluationOutputRow,
     EvaluationOutputsRecord,
-    EvaluationRequest,
 )
-from whetstone.evaluation import engine as evaluation_engine_module
-from whetstone.evaluation.schema import (
-    EVALUATION_COMPONENT_TRACES_SCHEMA,
-    EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
-    EVALUATION_EVIDENCE_SCHEMA_VERSION,
-    EVALUATION_INTENT_CLAIM_SCHEMA,
-    EVALUATION_OUTPUTS_SCHEMA,
-    EVALUATION_OUTPUTS_SCHEMA_VERSION,
-    EVALUATION_RESULT_ATTESTATION_SCHEMA,
-    EvaluationIntentClaim,
-    EvaluationResultAttestation,
+from whetstone.evaluation.schema_names import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_FAILURE_SCHEMA,
 )
-from whetstone.evaluation_role import EvaluationRole
+from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.execution.fanout import ProcessJob
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.optimization import (
-    AdapterOutput,
-    BudgetDelta,
+from whetstone.experiment.binding import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
+    EvaluationBinding,
+)
+from whetstone.experiment.candidate import (
     Candidate,
-    EffectAuthority,
-    EvaluatingToolExecutor,
+    candidate_reference,
+)
+from whetstone.experiment.reward import (
+    Reward,
+    reward_reference,
+)
+from whetstone.optimization.adapters import AdapterOutput
+from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
+    BudgetDelta,
     EvaluationIntent,
     IntentOutcome,
     IntentResolution,
-    RefusalClass,
-    ReplayPolicy,
     ResolutionClass,
     ResolutionDetail,
-    Reward,
     StepMode,
     StepStatus,
-    TerminalFailure,
-    ToolAdmissionAuthority,
+)
+from whetstone.optimization.tools.contracts import (
+    RefusalClass,
     ToolCall,
-    ToolCallStore,
     ToolCapacity,
     ToolCapacityScope,
     ToolConfig,
     ToolDefinition,
-    ToolValidationError,
-    TypedRef,
-    candidate_reference,
-    reward_reference,
     tool_capacity_binding,
     tool_config_reference,
     tool_definition_reference,
 )
-from whetstone.optimization.schema import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    EVALUATION_EVIDENCE_SCHEMA,
-    EVALUATION_FAILURE_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA_VERSION,
-    EvaluationBinding,
+from whetstone.optimization.tools.evaluator import EngineToolEvaluator
+from whetstone.optimization.tools.execution import (
+    EvaluatingToolExecutor,
+    ToolValidationError,
+)
+from whetstone.optimization.tools.facade import (
+    ToolAdmissionAuthority,
+    ToolCallStore,
 )
 from whetstone.provider.policy import ProviderExecutionPolicy
 

@@ -2,14 +2,14 @@
 
 import pytest
 
-from whetstone.optimization import (
+from whetstone.core.identity import TypedRef
+from whetstone.optimization.contracts import (
     BudgetDelta,
     BudgetState,
-    OptimizationHarness,
     OptimizationRunRef,
     OutputContract,
-    TypedRef,
 )
+from whetstone.optimization.harness import OptimizationHarness
 
 from .support import (
     FULL_D,

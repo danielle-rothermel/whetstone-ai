@@ -2,10 +2,8 @@
 
 import pytest
 
-from whetstone.optimization import (
-    OptimizationResultConflictError,
-    step_result_reference,
-)
+from whetstone.optimization.contracts import step_result_reference
+from whetstone.optimization.run_store import OptimizationResultConflictError
 
 from .support import make_harness, make_store, pure_request, registry
 

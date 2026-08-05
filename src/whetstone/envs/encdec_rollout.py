@@ -38,8 +38,8 @@ from dataclasses import dataclass
 from dr_graph import GraphConfig, GraphDefinition, graph_hash
 from dr_providers import ProviderCallConfig, openrouter_chat_config
 
-from whetstone.graph.character_budget import CharacterBudgetRule
-from whetstone.graph.nodes import (
+from whetstone.experiment.graph.character_budget import CharacterBudgetRule
+from whetstone.experiment.graph.nodes import (
     eval_node_definition,
     eval_variable_assignment,
     llm_call_node_definition,

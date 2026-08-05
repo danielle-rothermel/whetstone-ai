@@ -4,19 +4,19 @@ from typing import Any, cast
 
 import pytest
 
-from whetstone.optimization import (
-    BudgetState,
-    EvaluatingToolExecutor,
-    ReplayPolicy,
-    ToolCallState,
+from whetstone.core.effects.authority import EffectAuthority
+from whetstone.core.effects.models import ReplayPolicy
+from whetstone.optimization.contracts import BudgetState
+from whetstone.optimization.tools.admission import ToolCallState
+from whetstone.optimization.tools.contracts import (
     ToolCapacityScope,
+    tool_capacity_binding,
 )
-from whetstone.optimization.effect_authority import EffectAuthority
-from whetstone.optimization.tool_store import (
+from whetstone.optimization.tools.execution import EvaluatingToolExecutor
+from whetstone.optimization.tools.facade import (
     ToolAdmissionAuthority,
     ToolCallStore,
 )
-from whetstone.optimization.tools import tool_capacity_binding
 
 from .support import (
     RecordingToolExecutor,

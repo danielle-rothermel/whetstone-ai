@@ -35,7 +35,7 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.identity import require_full_hash
+from whetstone.core.identity import require_full_hash
 from whetstone.provider.classification import (
     Generation,
     ProviderSemanticFailure,

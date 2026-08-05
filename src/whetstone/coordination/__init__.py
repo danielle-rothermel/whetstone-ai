@@ -1,0 +1,1 @@
+"""Cross-capability coordination boundaries."""

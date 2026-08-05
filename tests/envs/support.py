@@ -24,11 +24,11 @@ from dr_providers import (
 from pydantic import BaseModel, JsonValue
 from whetstone_envs.core import Instance
 
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import Ed1Instance, ed1_instance_from_task
 from whetstone.envs.sampling import EnvSplitSampling
-from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import ProcessJob
-from whetstone.optimization.schema import (
+from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
     EvaluationBinding,
     eval_config_reference,
@@ -49,17 +49,17 @@ def row_job_factory(
     """Build request-bound importable jobs for reducer-focused tests."""
 
     def build(request: BaseModel) -> ProcessJob:
-        from whetstone.envs.d1_eval import (
+        from whetstone.evaluation.drivers.d1 import (
             D1RowOutcome,
             D1RowRequest,
             D1RowResult,
         )
-        from whetstone.envs.ed1_eval import (
+        from whetstone.evaluation.drivers.ed1 import (
             Ed1RowOutcome,
             Ed1RowRequest,
             Ed1RowResult,
         )
-        from whetstone.envs.internal_eval import (
+        from whetstone.evaluation.drivers.internal import (
             InternalRowOutcome,
             InternalRowRequest,
             InternalRowResult,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from dr_graph import graph_hash
 
+from whetstone.core.identity import typed_ref_for_record
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.rollout_definition import (
     ENV_CANDIDATE_BASE_SCHEMA,
@@ -18,14 +19,16 @@ from whetstone.envs.rollout_definition import (
     initial_candidate,
     render_prompt,
 )
-from whetstone.graph.nodes import (
+from whetstone.experiment.candidate import (
+    Candidate,
+    TemplateRenderKind,
+)
+from whetstone.experiment.graph.nodes import (
     EVAL_NODE_TYPE,
     LLM_CALL_NODE_TYPE,
     eval_node_procedure_hash,
 )
-from whetstone.optimization.identity import typed_ref_for_record
-from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.schema import Candidate, TemplateRenderKind
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 _MODEL = "openai/gpt-5-nano"
 

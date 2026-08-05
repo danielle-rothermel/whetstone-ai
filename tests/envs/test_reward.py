@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+from whetstone.core.identity import typed_ref_for_record
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.reward import (
     ENV_EXACT_MATCH_AGGREGATE_NAME,
@@ -11,9 +13,7 @@ from whetstone.envs.reward import (
     build_reward_policy,
     reward_from_internal_aggregate,
 )
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import typed_ref_for_record
-from whetstone.optimization.reward import (
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     OfficialRewardError,
     apply_reward_policy,

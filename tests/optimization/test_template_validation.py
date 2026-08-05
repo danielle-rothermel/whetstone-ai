@@ -5,22 +5,28 @@ from inspect import signature
 import pytest
 from pydantic import ValidationError
 
-from whetstone.optimization import (
+from whetstone.experiment.candidate import (
     Candidate,
-    DiffCheckError,
-    OptimizationRun,
-    OutputContract,
-    ProposalDraft,
-    ProposalValidationError,
-    RewardPolicy,
-    RewardTerm,
-    StepMode,
     TemplateRenderContract,
     TemplateRenderKind,
-    candidate_from_draft,
     candidate_reference,
+)
+from whetstone.experiment.reward import (
+    RewardPolicy,
+    RewardTerm,
+)
+from whetstone.optimization.contracts import (
+    OptimizationRun,
+    OutputContract,
+    StepMode,
+)
+from whetstone.optimization.proposal.mutation import (
+    DiffCheckError,
+    ProposalValidationError,
+    candidate_from_draft,
     diff_check,
 )
+from whetstone.optimization.proposal.proposer import ProposalDraft
 
 from .support import base_ref, candidate, optimizer_config_ref
 
