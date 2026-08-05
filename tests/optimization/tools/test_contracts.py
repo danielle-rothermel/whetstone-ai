@@ -603,6 +603,7 @@ def test_ordered_contract_fields_reject_unordered_containers(
         factory()
 
 
+@pytest.mark.process_integration
 def test_unordered_input_is_rejected_for_every_python_hash_seed() -> None:
     script = """
 from pydantic import ValidationError

@@ -464,6 +464,8 @@ def _run_spawned_postgresql_authority_contention(
         terminate_processes(started, timeout=30)
 
 
+@pytest.mark.process_integration
+@pytest.mark.postgres_integration
 def test_spawned_postgresql_same_effect_arbitrates_once() -> None:
     with isolated_postgres_schema("effect_race") as schema:
         results = _run_spawned_postgresql_authority_contention(schema)
@@ -475,6 +477,8 @@ def test_spawned_postgresql_same_effect_arbitrates_once() -> None:
     ]
 
 
+@pytest.mark.process_integration
+@pytest.mark.postgres_integration
 def test_postgresql_terminal_replays_from_fresh_process() -> None:
     context = multiprocessing.get_context("spawn")
     output = context.Queue()
@@ -523,6 +527,7 @@ def test_postgresql_terminal_replays_from_fresh_process() -> None:
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for live collation checks",
 )
+@pytest.mark.postgres_integration
 def test_postgresql_17_rejects_case_insensitive_authority_schema() -> None:
     from psycopg import connect
     from psycopg.sql import SQL, Identifier

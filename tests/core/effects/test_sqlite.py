@@ -357,6 +357,7 @@ def test_sqlite_initialization_is_idempotent_and_terminal_write_atomic(
 
 @pytest.mark.sqlite_contention
 @pytest.mark.parametrize("start_method", in_process_start_methods())
+@pytest.mark.process_integration
 def test_spawned_same_owner_different_attempts_arbitrate_once(
     tmp_path: Path,
     start_method: str,
@@ -369,6 +370,7 @@ def test_spawned_same_owner_different_attempts_arbitrate_once(
 
 @pytest.mark.sqlite_time_integration
 @pytest.mark.sqlite_contention
+@pytest.mark.process_integration
 def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
     tmp_path: Path,
 ) -> None:

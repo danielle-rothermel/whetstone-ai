@@ -188,6 +188,7 @@ def test_phase_wall_uses_strict_fanout_duration_contract(value) -> None:
 
 
 @pytest.mark.parametrize("env_name", ["c11", "c19", "c18", "c23"])
+@pytest.mark.process_integration
 def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
     exp = _tiny_experiment(env_name)
     internal_insts = exp.eval_configs.internal.instances
@@ -215,6 +216,7 @@ def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
     assert result.reward.value == pytest.approx(1.0)
 
 
+@pytest.mark.process_integration
 def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
     # c22 correct responses are constraint-stack-specific (proven at score 1
     # against a hand-built fixture in test_oracle_operator); here the full
@@ -243,6 +245,7 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
     assert result.reward.value == pytest.approx(0.0)
 
 
+@pytest.mark.process_integration
 def test_internal_eval_wrong_answers_score_zero() -> None:
     exp = _tiny_experiment("c18")
     # Always answer the opposite label so every task scores 0.
@@ -261,6 +264,7 @@ def test_internal_eval_wrong_answers_score_zero() -> None:
     assert result.reward.value == pytest.approx(0.0)
 
 
+@pytest.mark.process_integration
 def test_internal_process_job_runs_real_row_driver() -> None:
     exp = _tiny_experiment("c18")
     result = run_internal_eval(
@@ -284,6 +288,7 @@ def test_internal_process_job_runs_real_row_driver() -> None:
     assert step.input_field_names == ("prompt",)
 
 
+@pytest.mark.process_integration
 def test_internal_result_for_different_request_is_rejected() -> None:
     exp = _tiny_experiment("c18")
 
@@ -308,6 +313,7 @@ def test_internal_result_for_different_request_is_rejected() -> None:
         )
 
 
+@pytest.mark.process_integration
 def test_internal_v2_request_hash_is_pinned() -> None:
     exp = _tiny_experiment("c18")
     sampling = exp.eval_configs.internal
@@ -354,6 +360,7 @@ sys.stdout.write(request.request_identity)
 """
 
 
+@pytest.mark.process_integration
 def test_internal_row_request_json_is_stable_across_python_hash_seeds() -> (
     None
 ):
@@ -494,6 +501,7 @@ def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
     assert result.aggregate.rows_failed == 0
 
 
+@pytest.mark.process_integration
 def test_internal_resume_requires_exact_evaluation_binding(
     tmp_path: Path,
 ) -> None:
@@ -539,6 +547,7 @@ def test_internal_resume_requires_exact_evaluation_binding(
     assert len(identities_b) == len(identities_a)
 
 
+@pytest.mark.process_integration
 def test_internal_partial_resume_restores_exact_trace(tmp_path: Path) -> None:
     from whetstone.execution.partials import PartialLog
 
@@ -572,6 +581,7 @@ def test_internal_partial_resume_restores_exact_trace(tmp_path: Path) -> None:
     assert resumed.outputs == first.outputs
 
 
+@pytest.mark.process_integration
 def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -742,6 +752,7 @@ def test_invalid_prompt_is_rejected_before_transport() -> None:
     assert served == []
 
 
+@pytest.mark.process_integration
 def test_internal_eval_is_deterministic() -> None:
     exp = _tiny_experiment("c18")
     internal_insts = exp.eval_configs.internal.instances
@@ -771,6 +782,7 @@ def test_internal_eval_is_deterministic() -> None:
     assert a.aggregate.graph_hash == b.aggregate.graph_hash
 
 
+@pytest.mark.process_integration
 def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
     # A blank generation is not an accepted Generation (a provider semantic
     # failure); the internal-eval marks it a FAILED row. Under the default
@@ -790,6 +802,7 @@ def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
         )
 
 
+@pytest.mark.process_integration
 def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
     # An official-role binding with incomplete
     # evidence (all-blank -> failed rows -> aggregate None, PROPAGATE) must

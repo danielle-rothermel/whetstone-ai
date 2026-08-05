@@ -282,6 +282,7 @@ def test_sqlite_admission_decode_rejects_blob_json(tmp_path) -> None:
 
 @pytest.mark.sqlite_contention
 @pytest.mark.parametrize("start_method", in_process_start_methods())
+@pytest.mark.process_integration
 def test_spawned_sqlite_capacity_race_is_atomic(
     tmp_path: Path, start_method: str
 ) -> None:
@@ -290,6 +291,7 @@ def test_spawned_sqlite_capacity_race_is_atomic(
 
 @pytest.mark.sqlite_contention
 @pytest.mark.parametrize("start_method", in_process_start_methods())
+@pytest.mark.process_integration
 def test_spawned_global_capacity_has_one_process_shared_bucket(
     tmp_path: Path, start_method: str
 ) -> None:
@@ -298,6 +300,7 @@ def test_spawned_global_capacity_has_one_process_shared_bucket(
 
 @pytest.mark.sqlite_contention
 @pytest.mark.parametrize("start_method", in_process_start_methods())
+@pytest.mark.process_integration
 def test_spawned_same_call_replay_has_one_ordinal(
     tmp_path: Path, start_method: str
 ) -> None:

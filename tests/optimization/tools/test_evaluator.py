@@ -95,6 +95,7 @@ def _tool_call(
     )
 
 
+@pytest.mark.process_integration
 def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "tool.sqlite"))
     engine = _engine(tmp_path, store=store)
@@ -161,6 +162,7 @@ def test_tool_projection_rejects_malformed_task_subsets(tmp_path) -> None:
         EngineToolEvaluator(engine).evaluate(empty, config)
 
 
+@pytest.mark.process_integration
 def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
     """A well-formed subset reaches the engine through the real args path.
 
@@ -187,6 +189,7 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
     assert len(projected.rollout_refs) == 1
 
 
+@pytest.mark.process_integration
 def test_engine_tool_evaluator_drives_a_call_through_the_executor(
     tmp_path,
 ) -> None:

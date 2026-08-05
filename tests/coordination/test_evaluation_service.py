@@ -136,6 +136,7 @@ def test_service_rejects_provider_policy_mismatch_before_execution(
     assert submitted == []
 
 
+@pytest.mark.process_integration
 def test_evaluator_uses_exact_v2_resolution_wire_and_v3_namespace(
     tmp_path,
 ) -> None:
@@ -222,6 +223,7 @@ def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:
     assert submitted == []
 
 
+@pytest.mark.process_integration
 def test_internal_official_failed_and_rejected_resolution_graphs(
     tmp_path,
     monkeypatch,
@@ -320,6 +322,7 @@ def test_internal_official_failed_and_rejected_resolution_graphs(
     assert rejected.reward_evidence_refs == ()
 
 
+@pytest.mark.process_integration
 def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
     database = tmp_path / "restart.sqlite"
     store = ObjectStore(SqliteBackend(database))
@@ -405,6 +408,7 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
         "missing_output",
     ),
 )
+@pytest.mark.process_integration
 def test_restart_rejects_forged_or_incomplete_result_graphs(
     tmp_path,
     forgery: str,
@@ -534,6 +538,7 @@ def test_restart_rejects_forged_or_incomplete_result_graphs(
         service.resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
     tmp_path,
 ) -> None:
@@ -661,6 +666,7 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
         service.resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_prebind_and_restart_reject_rewritten_operational_evidence(
     tmp_path,
 ) -> None:
@@ -715,6 +721,7 @@ def test_prebind_and_restart_reject_rewritten_operational_evidence(
         service.resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_prebind_and_restart_reject_rewritten_failure_evidence(
     tmp_path,
 ) -> None:
@@ -821,6 +828,7 @@ def test_prebind_and_restart_reject_rewritten_failure_evidence(
         service.resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "failed-row.sqlite"))
 
@@ -876,6 +884,7 @@ def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
     )
 
 
+@pytest.mark.process_integration
 def test_concrete_evaluation_service_reaches_harness_boundary(
     tmp_path,
 ) -> None:
@@ -956,6 +965,7 @@ def test_concrete_evaluation_service_reaches_harness_boundary(
         ("corrupt", ContentHashMismatchError),
     ),
 )
+@pytest.mark.process_integration
 def test_restart_rejects_unresolvable_provider_execution_policy(
     tmp_path,
     corruption: str,
@@ -1020,6 +1030,7 @@ def test_restart_rejects_unresolvable_provider_execution_policy(
         ("corrupt", ContentHashMismatchError),
     ),
 )
+@pytest.mark.process_integration
 def test_restart_rejects_unresolvable_component_trace_artifact(
     tmp_path,
     corruption: str,
@@ -1069,6 +1080,7 @@ def test_restart_rejects_unresolvable_component_trace_artifact(
         ).resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_restart_rejects_result_attested_under_another_provider_policy(
     tmp_path,
 ) -> None:
@@ -1104,6 +1116,7 @@ def test_restart_rejects_result_attested_under_another_provider_policy(
         ).resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_restart_rejects_aggregate_from_another_rollout_graph(
     tmp_path,
 ) -> None:
@@ -1172,6 +1185,7 @@ def test_restart_rejects_aggregate_from_another_rollout_graph(
         service.resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_restart_rejects_evidence_resolution_reward_disagreement(
     tmp_path,
 ) -> None:

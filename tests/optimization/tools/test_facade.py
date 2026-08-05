@@ -150,6 +150,7 @@ def test_admission_replay_debits_once_and_completion_is_exact(
         ToolCallStoreEntry.model_validate(recovery)
 
 
+@pytest.mark.process_integration
 def test_completed_terminal_survives_spawned_restart(tmp_path) -> None:
     database = tmp_path / "spawned-completion.sqlite"
     authority = EffectAuthority.sqlite(database)

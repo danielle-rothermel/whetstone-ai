@@ -1505,6 +1505,7 @@ def test_repeated_completed_process_trees_are_clean() -> None:
         _assert_process_gone(pid)
 
 
+@pytest.mark.process_integration
 def test_lazy_dispatch_never_starts_more_than_current_capacity() -> None:
     signals = ProcessSignals()
     specs = [
@@ -1556,6 +1557,7 @@ def test_lazy_dispatch_never_starts_more_than_current_capacity() -> None:
 
 
 @pytest.mark.parametrize("failure_stage", ["decode", "predicate", "commit"])
+@pytest.mark.process_integration
 def test_accepted_worker_is_not_cancelled_when_parent_callback_fails(
     failure_stage: str,
 ) -> None:
@@ -1629,6 +1631,7 @@ def test_accepted_worker_is_not_cancelled_when_parent_callback_fails(
         _assert_process_gone(pid)
 
 
+@pytest.mark.process_integration
 def test_completion_order_drives_commits_but_results_preserve_input_order() -> (  # noqa: E501
     None
 ):
@@ -1695,6 +1698,7 @@ def test_completion_order_drives_commits_but_results_preserve_input_order() -> (
     ]
 
 
+@pytest.mark.process_integration
 def test_rate_feedback_reduces_capacity_before_filling_it() -> None:
     signals = ProcessSignals()
     committed = {
@@ -1916,6 +1920,7 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
         _assert_process_group_absent(signals.pid(key))
 
 
+@pytest.mark.process_integration
 def test_wall_watcher_stops_sibling_while_decode_runs_past_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1984,6 +1989,7 @@ def test_wall_watcher_stops_sibling_while_decode_runs_past_deadline(
     ]
 
 
+@pytest.mark.process_integration
 def test_slow_spawn_cannot_release_worker_after_wall(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2050,6 +2056,7 @@ def test_slow_serialization_stops_before_spawn_after_wall(
     signals.close()
 
 
+@pytest.mark.process_integration
 def test_slow_commit_may_finish_but_wall_stops_later_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2250,6 +2257,7 @@ def test_invalid_unit_deadline_fails_before_dispatch(
 
 
 @pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.process_integration
 def test_worker_rejects_non_finite_result_recursively(
     tmp_path: Path,
     nested: bool,

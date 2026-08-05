@@ -369,6 +369,7 @@ def test_cache_disabled_is_byte_identical_and_creates_no_bytes(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.process_integration
 def test_six_processes_execute_one_paid_call_and_restart_stats(
     tmp_path: Path,
 ) -> None:
@@ -476,6 +477,7 @@ def test_policy_and_drive_ordinal_partition_cached_results(
     assert cache.counters() == {"hits": 0, "misses": 3, "stores": 3}
 
 
+@pytest.mark.process_integration
 def test_killed_single_flight_owner_releases_lock_for_waiter(
     tmp_path: Path,
 ) -> None:
@@ -540,6 +542,7 @@ def test_killed_single_flight_owner_releases_lock_for_waiter(
     }
 
 
+@pytest.mark.process_integration
 def test_corrupt_entry_repair_is_single_flight_across_processes(
     tmp_path: Path,
 ) -> None:
@@ -642,6 +645,7 @@ def test_atomic_publication_fsyncs_entry_and_stats_directories(
     assert set(replaced_source_modes) == {0o600}
 
 
+@pytest.mark.process_integration
 def test_restart_reconciles_kill_after_durable_entry_publication(
     tmp_path: Path,
 ) -> None:
@@ -687,6 +691,7 @@ def test_restart_reconciles_kill_after_durable_entry_publication(
     assert not cache._applied_accounting_path_for(key).exists()
 
 
+@pytest.mark.process_integration
 def test_restart_reconciles_kill_after_stats_write_before_journal_rename(
     tmp_path: Path,
 ) -> None:
@@ -723,6 +728,7 @@ def test_restart_reconciles_kill_after_stats_write_before_journal_rename(
     }
 
 
+@pytest.mark.process_integration
 def test_restart_reconciles_kill_after_applied_rename_before_cleanup(
     tmp_path: Path,
 ) -> None:
@@ -759,6 +765,7 @@ def test_restart_reconciles_kill_after_applied_rename_before_cleanup(
     }
 
 
+@pytest.mark.process_integration
 def test_reconciliation_preserves_journal_and_reports_corrupt_entry(
     tmp_path: Path,
 ) -> None:
@@ -799,6 +806,7 @@ def test_reconciliation_preserves_journal_and_reports_corrupt_entry(
     assert pending_path.exists()
 
 
+@pytest.mark.process_integration
 def test_corrupt_entry_is_quarantined_before_pending_publication(
     tmp_path: Path,
 ) -> None:
@@ -948,6 +956,7 @@ def test_file_lock_rejects_symlink_without_chmodding_target(
     _assert_unchanged(victim, body=body, mode=0o644)
 
 
+@pytest.mark.process_integration
 def test_cache_files_and_directories_are_private_under_permissive_umask(
     tmp_path: Path,
 ) -> None:

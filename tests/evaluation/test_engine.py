@@ -113,6 +113,7 @@ def test_uncached_experiment_uses_real_production_constructor() -> None:
     assert len(experiment.eval_configs.official.instances) == 1
 
 
+@pytest.mark.process_integration
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "engine.sqlite"))
     engine = _engine(tmp_path, store=store)
@@ -223,6 +224,7 @@ def test_engine_persists_missing_row_state_without_fabricated_steps(
     assert trace.executed_component_steps == ()
 
 
+@pytest.mark.process_integration
 def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
     tmp_path,
     monkeypatch,
@@ -417,6 +419,7 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
         ("failed_prefix_nonnull", "nonterminal component prefix"),
     ),
 )
+@pytest.mark.process_integration
 def test_ed1_trace_relationship_forgery_fails_prebind_and_restart(
     tmp_path,
     monkeypatch,
@@ -567,6 +570,7 @@ def test_ed1_trace_relationship_forgery_fails_prebind_and_restart(
         ("failed_prefix_nonnull", "nonterminal component prefix"),
     ),
 )
+@pytest.mark.process_integration
 def test_one_step_trace_relationship_forgery_fails_prebind_and_restart(
     tmp_path,
     forgery: str,
@@ -666,6 +670,7 @@ def test_one_step_trace_relationship_forgery_fails_prebind_and_restart(
         ).resolve_evaluation_intent(intent)
 
 
+@pytest.mark.process_integration
 def test_engine_passes_exact_canonical_row_job_factory(
     tmp_path, monkeypatch
 ) -> None:
@@ -708,6 +713,7 @@ def test_engine_passes_exact_canonical_row_job_factory(
     assert len(submitted) == 1
 
 
+@pytest.mark.process_integration
 def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "identity-mismatch.sqlite"))
 
@@ -769,6 +775,7 @@ def test_engine_rejects_another_provider_execution_policy(tmp_path) -> None:
         ("deadline_reached", 0),
     ),
 )
+@pytest.mark.process_integration
 def test_evaluation_evidence_rejects_coercible_booleans(
     tmp_path,
     field: str,
@@ -865,6 +872,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
     }
 
 
+@pytest.mark.process_integration
 def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "trace-wire.sqlite"))
     engine = _engine(tmp_path, store=store)
@@ -944,6 +952,7 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
         ("evidence", 1),
     ),
 )
+@pytest.mark.process_integration
 def test_evaluation_artifacts_reject_prior_wire_versions(
     tmp_path,
     record_name: str,
@@ -1017,6 +1026,7 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
         )
 
 
+@pytest.mark.process_integration
 def test_exact_evaluation_result_refs_reject_forged_hashes(
     tmp_path,
     monkeypatch,
@@ -1100,6 +1110,7 @@ def test_evaluation_output_row_rejects_wire_schema_drift(
         EvaluationOutputRow.model_validate(payload)
 
 
+@pytest.mark.process_integration
 def test_engine_rejects_output_outside_sampling_plan(
     tmp_path, monkeypatch
 ) -> None:
@@ -1133,6 +1144,7 @@ def test_engine_rejects_output_outside_sampling_plan(
         )
 
 
+@pytest.mark.process_integration
 def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "output-order.sqlite"))
     engine = _engine(
@@ -1162,6 +1174,7 @@ def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
         )
 
 
+@pytest.mark.process_integration
 def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "cache.sqlite"))
     delegated = process_row_job_factory(
@@ -1213,6 +1226,7 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     )
 
 
+@pytest.mark.process_integration
 def test_cache_evidence_excludes_another_bindings_partial_rows(
     tmp_path,
 ) -> None:

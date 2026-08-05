@@ -604,6 +604,7 @@ def test_legacy_predictable_temp_is_unknown_and_untouched(
     assert legacy_temp.read_bytes() == b"unknown"
 
 
+@pytest.mark.process_integration
 def test_killed_atomic_writer_leaves_ignored_bounded_orphan(
     tmp_path: Path,
 ) -> None:
@@ -815,6 +816,7 @@ def test_repeated_load_then_append_reads_only_new_target_on_append(
         assert reads == after_load + 1
 
 
+@pytest.mark.process_integration
 def test_multiprocess_multi_megabyte_appends_all_validate(
     tmp_path: Path,
 ) -> None:
@@ -846,6 +848,7 @@ def test_multiprocess_multi_megabyte_appends_all_validate(
     }
 
 
+@pytest.mark.process_integration
 def test_append_survives_immediate_child_hard_exit(tmp_path: Path) -> None:
     path = tmp_path / "calls.partial"
     context = multiprocessing.get_context("spawn")
@@ -867,6 +870,7 @@ def test_append_survives_immediate_child_hard_exit(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("operation", ["append", "load", "delete"])
+@pytest.mark.process_integration
 def test_separate_instances_serialize_all_operations(
     tmp_path: Path,
     operation: str,

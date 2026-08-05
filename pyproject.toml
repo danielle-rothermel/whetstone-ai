@@ -54,6 +54,7 @@ addopts = ["--strict-markers"]
 markers = [
     "process_integration: exercises observed spawned-process and process-group behavior",
     "process_guardian: exercises observed guardian and parent-death behavior",
+    "postgres_integration: exercises live PostgreSQL and DBOS behavior",
     "sqlite_time_integration: exercises SQLite behavior against real elapsed time",
     "sqlite_contention: exercises SQLite behavior under concurrent access",
 ]

@@ -485,6 +485,7 @@ def _normalized_native_result(
         ("all", True),
     ],
 )
+@pytest.mark.process_integration
 def test_direct_upstream_oracle_matches_frozen_crash_fixture_across_hash_seeds(
     component_selector: str,
     merge: bool,

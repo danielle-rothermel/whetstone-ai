@@ -404,6 +404,8 @@ def test_postgresql_entry_lock_digest_is_pinned_and_unambiguous() -> None:
     ) != postgres_store_module._entry_lock_key(("ab", "c"))
 
 
+@pytest.mark.process_integration
+@pytest.mark.postgres_integration
 def test_spawned_postgresql_global_capacity_race_accepts_once(
     tmp_path: Path,
 ) -> None:
@@ -446,6 +448,8 @@ def test_spawned_postgresql_global_capacity_race_accepts_once(
     assert durable_count == 1
 
 
+@pytest.mark.process_integration
+@pytest.mark.postgres_integration
 def test_spawned_postgresql_same_call_replay_has_one_ordinal(
     tmp_path: Path,
 ) -> None:
@@ -475,6 +479,8 @@ def test_spawned_postgresql_same_call_replay_has_one_ordinal(
     assert durable_count == 1
 
 
+@pytest.mark.process_integration
+@pytest.mark.postgres_integration
 def test_postgresql_completed_terminal_survives_fresh_process(
     tmp_path: Path,
 ) -> None:
@@ -530,6 +536,7 @@ def test_postgresql_completed_terminal_survives_fresh_process(
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for live collation checks",
 )
+@pytest.mark.postgres_integration
 def test_postgresql_17_rejects_case_insensitive_admission_schema() -> None:
     from psycopg import connect
     from psycopg.sql import SQL, Identifier

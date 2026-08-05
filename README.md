@@ -37,7 +37,7 @@ The authoritative unit lane is serial:
 
 ```bash
 uv run pytest tests/ -q \
-  -m "not process_integration and not sqlite_time_integration and not sqlite_contention"
+  -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention"
 ```
 
 For a faster local iteration loop, the same selection can use a fixed four
@@ -45,15 +45,19 @@ workers with load balancing:
 
 ```bash
 uv run pytest tests/ -q \
-  -m "not process_integration and not sqlite_time_integration and not sqlite_contention" \
+  -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention" \
   -n 4 --dist=load
 ```
 
 The parallel command is a local convenience, not the CI default. Keep the
-worker count bounded; do not replace it with `-n auto`. Run the complete serial
-suite with `uv run pytest -q`. Live PostgreSQL tests additionally require
-`WHETSTONE_TEST_POSTGRES_DSN`. CI separately exercises process, SQLite timing,
-SQLite contention, installed-wheel, and Python 3.14 compatibility contracts.
+worker count bounded; do not replace it with `-n auto`. The isolated serial
+integration entrypoints are `scripts/ci/process-integration.sh`,
+`scripts/ci/sqlite-time-integration.sh`,
+`scripts/ci/sqlite-contention.sh`, and
+`scripts/ci/postgres-integration.sh`. The PostgreSQL entrypoint requires
+`WHETSTONE_TEST_POSTGRES_DSN`. Run the complete serial suite with
+`uv run pytest -q`; CI also exercises installed-wheel and Python 3.14
+compatibility contracts.
 
 Process-integration cleanup is watchdog-bounded and best effort. POSIX process
 and process-group identifiers can be reused, and macOS does not provide an

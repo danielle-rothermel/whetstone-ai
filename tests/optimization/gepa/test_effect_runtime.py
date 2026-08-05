@@ -527,6 +527,7 @@ def test_parent_replay_always_consumes_stable_child_operation(
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
 )
 @pytest.mark.parametrize("effect_kind", ["evaluate", "propose"])
+@pytest.mark.postgres_integration
 def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
     tmp_path,
     effect_kind: Literal["evaluate", "propose"],

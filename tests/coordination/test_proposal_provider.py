@@ -592,6 +592,7 @@ def _assert_concurrent_conflicting_transport_binding_is_atomic() -> None:
     assert registry.resolve(first.durability_identity_hash) is winner
 
 
+@pytest.mark.process_integration
 def test_concurrent_conflicting_transport_binding_is_atomic() -> None:
     context = multiprocessing.get_context("spawn")
     process = context.Process(
@@ -626,6 +627,7 @@ def test_conflicting_transport_under_one_key_is_rejected() -> None:
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
 )
+@pytest.mark.postgres_integration
 def test_real_dbos_workflow_replays_completed_proposal() -> None:
     """A repeated real workflow ID returns its checkpointed first result."""
 

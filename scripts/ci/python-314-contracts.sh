@@ -2,7 +2,7 @@
 set -euo pipefail
 
 uv run --python 3.14 pytest -q \
-  tests/optimization/test_schema_identity.py::test_candidate_ref_binds_exact_record_content_and_identity \
+  tests/experiment/test_candidate.py::test_candidate_ref_round_trips_exact_json \
   tests/provider/test_driver.py::TestReplayDeterminism::test_same_recorded_outcomes_produce_same_stable_payload \
   tests/execution/test_resume.py::test_pending_ordinal_zero_requires_exact_ordinal_one \
   tests/execution/test_prompt_cache.py::test_hit_preserves_original_entry_provenance_and_nulls_latency \

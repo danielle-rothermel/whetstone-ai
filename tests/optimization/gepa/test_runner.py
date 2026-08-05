@@ -299,6 +299,7 @@ def test_parent_request_rejects_same_count_seed_reordering() -> None:
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
 )
+@pytest.mark.postgres_integration
 def test_real_dbos_parent_same_id_returns_checkpointed_result(
     monkeypatch,
 ) -> None:
@@ -368,6 +369,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
     "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
     reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
 )
+@pytest.mark.postgres_integration
 def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     monkeypatch,
     tmp_path,

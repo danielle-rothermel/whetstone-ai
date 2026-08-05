@@ -32,7 +32,11 @@ from whetstone.optimization.tools.facade import ToolCallStore
 
 @pytest.fixture(
     name="store",
-    params=("memory", "sqlite", "postgresql"),
+    params=(
+        "memory",
+        "sqlite",
+        pytest.param("postgresql", marks=pytest.mark.postgres_integration),
+    ),
 )
 def store_fixture(
     request: pytest.FixtureRequest,
