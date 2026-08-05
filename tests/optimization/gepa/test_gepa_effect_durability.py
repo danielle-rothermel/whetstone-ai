@@ -13,19 +13,17 @@ from typing import Any, ClassVar, Literal
 import pytest
 from dr_store import ObjectStore, SqliteBackend
 
-from tests.coordination.test_proposal_provider import (
-    _executor,
-    _provider_transport,
+from tests.coordination.support import (
+    load_proposal_provider_boundary,
+    proposal_executor,
+    provider_transport,
 )
-from tests.coordination.test_proposal_provider import (
-    _load_boundary as _load_provider_boundary,
-)
-from tests.optimization.gepa.test_effects import (
-    _context,
-    _evaluation_request,
-    _evaluation_result,
-    _prompt_services,
-    _proposal_authority,
+from tests.optimization.gepa.support import (
+    effect_context,
+    evaluation_request,
+    evaluation_result,
+    prompt_services,
+    proposal_authority_binding,
 )
 from tests.provider import support as provider_support
 from whetstone.core.identity import typed_ref_for_record
@@ -114,9 +112,9 @@ def _load_boundary(dbos_type=_ReplayDbos):
 
 
 def _proposal_request() -> GepaProposalEffectRequest:
-    services = _prompt_services()
+    services = prompt_services()
     return GepaProposalEffectRequest(
-        slot=GepaEffectSlot(context=_context(), invocation_ordinal=0),
+        slot=GepaEffectSlot(context=effect_context(), invocation_ordinal=0),
         candidate=(
             GepaCandidateComponent(name="alpha", text="alpha-0"),
             GepaCandidateComponent(name="beta", text="beta-0"),
@@ -124,7 +122,7 @@ def _proposal_request() -> GepaProposalEffectRequest:
         components_to_update=("alpha", "beta"),
         component_name="alpha",
         rendered_prompt=GepaRenderedPrompt(text="Improve alpha."),
-        authority=_proposal_authority(services),
+        authority=proposal_authority_binding(services),
     )
 
 
@@ -160,8 +158,8 @@ def test_completed_object_store_result_does_not_skip_stable_child(
     store = ObjectStore(SqliteBackend(tmp_path / f"{effect_kind}.sqlite"))
     recorder = GepaEffectRecorder(store)
     if effect_kind == "evaluate":
-        request = _evaluation_request()
-        result = _evaluation_result(request)
+        request = evaluation_request()
+        result = evaluation_result(request)
         recorder.record_request(request)
         recorder.record_evaluation_result(request, result)
         invoke = module.DbosGepaEffectBroker(store).evaluate
@@ -378,8 +376,8 @@ def test_child_completion_then_outer_result_bind_replays_without_authority(
     database = tmp_path / f"{effect_kind}-crash.sqlite"
     store = ObjectStore(SqliteBackend(database))
     if effect_kind == "evaluate":
-        request = _evaluation_request()
-        result = _evaluation_result(request)
+        request = evaluation_request()
+        result = evaluation_result(request)
         authority = _DurableAuthority(
             request.authority.authority_identity_hash,
             result,
@@ -444,13 +442,13 @@ def _nested_proposal_broker(tmp_path, name: str):
     """Wire one GEPA broker over the executor on the nested DBOS emulator."""
 
     _NestedReplayDbos.reset()
-    provider_module = _load_provider_boundary(_NestedReplayDbos)
+    provider_module = load_proposal_provider_boundary(_NestedReplayDbos)
     effect_module = _load_boundary(_NestedReplayDbos)
     request = _proposal_request()
-    transport, proposer_config, recording = _provider_transport(
+    transport, proposer_config, recording = provider_transport(
         provider_support.response_outcome(text="alpha-improved"),
     )
-    executor = _executor(provider_module, transport)
+    executor = proposal_executor(provider_module, transport)
     store = ObjectStore(SqliteBackend(tmp_path / f"{name}.sqlite"))
     authority = _ProviderBackedProposalAuthority(
         store=store,
@@ -555,7 +553,7 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
     }
     DBOS(config=config)
     if effect_kind == "evaluate":
-        request = _evaluation_request()
+        request = evaluation_request()
     else:
         request = _proposal_request()
     context = request.slot.context.model_copy(
@@ -575,7 +573,7 @@ def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
         }
     )
     if effect_kind == "evaluate":
-        result = _evaluation_result(
+        result = evaluation_result(
             GepaEvaluationEffectRequest.model_validate(request)
         )
     else:

@@ -7,36 +7,32 @@ import pytest
 from dr_store import ObjectStore, SqliteBackend
 from gepa.core.adapter import EvaluationBatch
 
-from whetstone.core.identity import (
-    IdentityRef,
-    typed_ref_for_record,
+from tests.optimization.gepa.support import (
+    data_instance,
+    effect_context,
+    evaluation_authority_binding,
+    evaluation_request,
+    evaluation_result,
+    prompt_services,
+    proposal_authority_binding,
 )
+from whetstone.core.identity import typed_ref_for_record
 from whetstone.optimization.gepa.contracts import (
     GepaCandidateComponent,
     GepaComponentTraceProjection,
-    GepaDataInstance,
     GepaEffectConflictError,
     GepaEffectContext,
     GepaEffectRecorder,
-    GepaEffectSlot,
     GepaEffectTranscript,
     GepaEvaluationAuthorityBinding,
     GepaEvaluationEffectRequest,
     GepaEvaluationEffectResult,
     GepaEvaluationRow,
-    GepaProposalAuthorityBinding,
     GepaProposalEffectRequest,
     GepaProposalEffectResult,
     GepaTrajectoryProjection,
 )
 from whetstone.optimization.gepa.engine import GepaDetailedResult
-from whetstone.optimization.gepa.prompts import (
-    GepaComponentFormat,
-    GepaPromptFormatDescriptor,
-    GepaPromptServices,
-    NativeGepaReflectionPromptBuilder,
-    NativeGepaReflectionResponseParser,
-)
 from whetstone.optimization.gepa.result_artifact import (
     GepaResultArtifactStore,
     GepaRunResultArtifact,
@@ -46,132 +42,8 @@ from whetstone.optimization.gepa.upstream_adapter import (
     GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
     WhetstoneGepaAdapter,
 )
-from whetstone.optimization.proposal.proposer import ProposerConfig
 
 _A = "a" * 64
-_B = "b" * 64
-_C = "c" * 64
-_D = "d" * 64
-_E = "e" * 64
-_F = "f" * 64
-
-
-def _prompt_services() -> GepaPromptServices:
-    return GepaPromptServices(
-        descriptor=GepaPromptFormatDescriptor(
-            format_name="test",
-            components=(
-                GepaComponentFormat(
-                    component_name="alpha",
-                    component_schema_identity_hash=_A,
-                ),
-                GepaComponentFormat(
-                    component_name="beta",
-                    component_schema_identity_hash=_B,
-                ),
-            ),
-        ),
-        reflection_builder=NativeGepaReflectionPromptBuilder(),
-        reflection_parser=NativeGepaReflectionResponseParser(),
-    )
-
-
-def _context() -> GepaEffectContext:
-    return GepaEffectContext(
-        run_id="gepa:test",
-        control_identity_hash=_A,
-        source_manifest_identity_hash=_B,
-        adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
-    )
-
-
-def _data(index: int) -> GepaDataInstance:
-    return GepaDataInstance(
-        upstream_position=index,
-        data_id=f"{index + 1:064x}",
-        data_ref=typed_ref_for_record(
-            "test.gepa.data",
-            {"index": index},
-        ),
-        loader_identity_hash=_C,
-    )
-
-
-def _evaluation_authority(
-    *,
-    failure_score: float = 0.0,
-    add_format_failure_as_feedback: bool = False,
-    warn_on_score_mismatch: bool = True,
-    selection_seed: int = 0,
-) -> GepaEvaluationAuthorityBinding:
-    return GepaEvaluationAuthorityBinding(
-        authority_identity_hash=_A,
-        evaluation_config_identity_hash=_B,
-        reward_policy_identity_hash=_C,
-        provider_route_identity_hash=_D,
-        execution_policy_identity_hash=_E,
-        prompt_adapter_identity_hash=_F,
-        response_parser_identity_hash=_A,
-        data_registry_identity_hash=_B,
-        failure_score=failure_score,
-        add_format_failure_as_feedback=add_format_failure_as_feedback,
-        warn_on_score_mismatch=warn_on_score_mismatch,
-        selection_seed=selection_seed,
-    )
-
-
-def _proposal_authority(
-    services: GepaPromptServices | None = None,
-) -> GepaProposalAuthorityBinding:
-    active = services or _prompt_services()
-    return GepaProposalAuthorityBinding(
-        authority_identity_hash=_B,
-        proposer_transport_identity_hash=_C,
-        prompt_binding_identity_hash=active.binding.identity_hash(),
-        execution_policy_identity_hash=_D,
-        prompt_adapter_identity_hash=_E,
-        durability_policy_identity_hash=_F,
-        proposer_config=ProposerConfig(
-            provider_call_config=IdentityRef(
-                record_ref=typed_ref_for_record(
-                    "dr_providers.provider_call_config",
-                    {"provider_call_config_ref": "provider://gepa-reflection"},
-                ),
-                identity_hash=_D,
-            ),
-        ),
-    )
-
-
-def _evaluation_request() -> GepaEvaluationEffectRequest:
-    return GepaEvaluationEffectRequest(
-        slot=GepaEffectSlot(context=_context(), invocation_ordinal=0),
-        candidate=(
-            GepaCandidateComponent(name="alpha", text="alpha-0"),
-            GepaCandidateComponent(name="beta", text="beta-0"),
-        ),
-        data=(_data(0), _data(1)),
-        capture_traces=False,
-        authority=_evaluation_authority(),
-    )
-
-
-def _evaluation_result(
-    request: GepaEvaluationEffectRequest,
-) -> GepaEvaluationEffectResult:
-    return GepaEvaluationEffectResult(
-        request_identity_hash=request.identity_hash(),
-        rows=tuple(
-            GepaEvaluationRow(
-                data=item,
-                output={"data_id": item.data_id},
-                score=float(index),
-                evidence_refs=(item.data_ref,),
-            )
-            for index, item in enumerate(request.data)
-        ),
-        logical_metric_calls=len(request.data),
-    )
 
 
 def test_effect_recorder_reuses_exact_result_and_rejects_slot_drift(
@@ -181,8 +53,8 @@ def test_effect_recorder_reuses_exact_result_and_rejects_slot_drift(
     first = GepaEffectRecorder(
         ObjectStore(SqliteBackend(database)),
     )
-    request = _evaluation_request()
-    result = _evaluation_result(request)
+    request = evaluation_request()
+    result = evaluation_result(request)
 
     first.record_request(request)
     first.record_request(request)
@@ -202,7 +74,7 @@ def test_effect_recorder_reuses_exact_result_and_rejects_slot_drift(
 def test_evaluation_row_rejects_unauditable_success() -> None:
     with pytest.raises(ValueError, match="canonical evidence"):
         GepaEvaluationRow(
-            data=_data(0),
+            data=data_instance(0),
             output={"answer": "unproven"},
             score=1.0,
         )
@@ -211,8 +83,8 @@ def test_evaluation_row_rejects_unauditable_success() -> None:
 def test_recorder_builds_ordered_semantic_effect_transcript(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "transcript.sqlite"))
     recorder = GepaEffectRecorder(store)
-    request = _evaluation_request()
-    result = _evaluation_result(request)
+    request = evaluation_request()
+    result = evaluation_result(request)
     recorder.record_request(request)
     recorder.record_evaluation_result(request, result)
 
@@ -253,8 +125,8 @@ def test_result_artifact_pairs_detail_and_effect_transcript_idempotently(
         candidates=({"alpha": "alpha-0"},),
         parents=((),),
         val_aggregate_scores=(0.5,),
-        val_subscores=({_data(0).data_id: 0.5},),
-        per_val_instance_best_candidates={_data(0).data_id: (0,)},
+        val_subscores=({data_instance(0).data_id: 0.5},),
+        per_val_instance_best_candidates={data_instance(0).data_id: (0,)},
         discovery_eval_counts=(1,),
         seed=0,
         best_idx=0,
@@ -369,12 +241,14 @@ def _adapter(
     *,
     evaluation_authority: GepaEvaluationAuthorityBinding | None = None,
 ) -> WhetstoneGepaAdapter:
-    services = _prompt_services()
+    services = prompt_services()
     return WhetstoneGepaAdapter(
-        context=_context(),
+        context=effect_context(),
         broker=broker,
-        evaluation_authority=evaluation_authority or _evaluation_authority(),
-        proposal_authority=_proposal_authority(services),
+        evaluation_authority=(
+            evaluation_authority or evaluation_authority_binding()
+        ),
+        proposal_authority=proposal_authority_binding(services),
         prompt_services=services,
     )
 
@@ -385,7 +259,7 @@ def test_upstream_adapter_preserves_order_evidence_and_effect_ordinals() -> (
     broker = _FakeBroker()
     adapter = _adapter(broker)
     candidate = {"alpha": "alpha-0", "beta": "beta-0"}
-    batch = [_data(1), _data(0)]
+    batch = [data_instance(1), data_instance(0)]
 
     evaluated = adapter.evaluate(batch, candidate, capture_traces=True)
 
@@ -431,7 +305,7 @@ def test_upstream_adapter_preserves_order_evidence_and_effect_ordinals() -> (
     ]
     assert all(
         request.authority.prompt_binding_identity_hash
-        == _prompt_services().binding.identity_hash()
+        == prompt_services().binding.identity_hash()
         for request in broker.proposals
     )
 
@@ -495,7 +369,7 @@ def test_upstream_adapter_rejects_reordered_evaluation_rows() -> None:
     adapter = _adapter(_ReorderingBroker())
     with pytest.raises(ValueError, match="requested data order"):
         adapter.evaluate(
-            [_data(0), _data(1)],
+            [data_instance(0), data_instance(1)],
             {"alpha": "alpha-0", "beta": "beta-0"},
         )
 
@@ -573,11 +447,11 @@ class _FailureBroker(_FakeBroker):
 def test_adapter_maps_failed_rows_to_bound_failure_score() -> None:
     adapter = _adapter(
         _FailureBroker(),
-        evaluation_authority=_evaluation_authority(failure_score=-1.25),
+        evaluation_authority=evaluation_authority_binding(failure_score=-1.25),
     )
 
     result = adapter.evaluate(
-        [_data(0)],
+        [data_instance(0)],
         {"alpha": "alpha-0", "beta": "beta-0"},
     )
 
@@ -586,7 +460,7 @@ def test_adapter_maps_failed_rows_to_bound_failure_score() -> None:
 
 def _trajectory_with_component_records() -> GepaTrajectoryProjection:
     return GepaTrajectoryProjection(
-        data_id=_data(0).data_id,
+        data_id=data_instance(0).data_id,
         inputs={"x": "fallback"},
         generated_outputs={"answer": "fallback"},
         feedback="fallback",
@@ -633,7 +507,7 @@ def test_adapter_applies_bound_format_failure_feedback_policy(
 ) -> None:
     adapter = _adapter(
         _FakeBroker(),
-        evaluation_authority=_evaluation_authority(
+        evaluation_authority=evaluation_authority_binding(
             add_format_failure_as_feedback=include_format_failure,
         ),
     )
@@ -653,7 +527,7 @@ def test_adapter_captures_and_warns_once_for_score_mismatch(
     warn_on_mismatch: bool,
 ) -> None:
     trajectory = GepaTrajectoryProjection(
-        data_id=_data(0).data_id,
+        data_id=data_instance(0).data_id,
         inputs={},
         generated_outputs={},
         feedback="fallback",
@@ -672,7 +546,7 @@ def test_adapter_captures_and_warns_once_for_score_mismatch(
     )
     adapter = _adapter(
         _FakeBroker(),
-        evaluation_authority=_evaluation_authority(
+        evaluation_authority=evaluation_authority_binding(
             warn_on_score_mismatch=warn_on_mismatch,
         ),
     )
@@ -708,7 +582,7 @@ def test_adapter_seeded_trace_choice_restarts_exactly() -> None:
         for index in range(3)
     )
     trajectory = GepaTrajectoryProjection(
-        data_id=_data(0).data_id,
+        data_id=data_instance(0).data_id,
         inputs={},
         generated_outputs={},
         feedback="fallback",
@@ -717,7 +591,7 @@ def test_adapter_seeded_trace_choice_restarts_exactly() -> None:
     eval_batch = _evaluation_batch(trajectory)
     adapter = _adapter(
         _FakeBroker(),
-        evaluation_authority=_evaluation_authority(selection_seed=7),
+        evaluation_authority=evaluation_authority_binding(selection_seed=7),
     )
 
     first = adapter.make_reflective_dataset(
@@ -749,7 +623,7 @@ def test_adapter_seeded_trace_choice_restarts_exactly() -> None:
 
 def test_adapter_treats_tiny_score_delta_as_mismatch() -> None:
     trajectory = GepaTrajectoryProjection(
-        data_id=_data(0).data_id,
+        data_id=data_instance(0).data_id,
         inputs={},
         generated_outputs={},
         feedback="fallback",
@@ -791,7 +665,7 @@ def test_format_failure_precedes_failed_prediction_skip() -> None:
         feedback="valid feedback",
     )
     failed_trajectory = GepaTrajectoryProjection(
-        data_id=_data(0).data_id,
+        data_id=data_instance(0).data_id,
         inputs={},
         generated_outputs={},
         feedback="fallback",
@@ -804,7 +678,7 @@ def test_format_failure_precedes_failed_prediction_skip() -> None:
     eval_batch = _evaluation_batch(with_format_failure)
     adapter = _adapter(
         _FakeBroker(),
-        evaluation_authority=_evaluation_authority(
+        evaluation_authority=evaluation_authority_binding(
             add_format_failure_as_feedback=True,
         ),
     )

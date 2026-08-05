@@ -13,7 +13,10 @@ from uuid import uuid4
 
 import pytest
 
-from tests.optimization.gepa.test_adapter import _control, _detailed
+from tests.optimization.gepa.support import (
+    gepa_control,
+    make_gepa_detailed_result,
+)
 from whetstone.core.identity import ContentHash, typed_ref_for_record
 from whetstone.optimization.gepa.contracts import GepaDataInstance
 
@@ -89,7 +92,7 @@ class _Factory:
     def persist_result(self, *, control, adapter, detailed_result):
         assert control == self.control
         assert adapter.effect_ordinal == 7
-        assert detailed_result == _detailed(control)
+        assert detailed_result == make_gepa_detailed_result(control)
         self.persist_calls += 1
         return typed_ref_for_record(
             "whetstone.gepa.run_result_artifact",
@@ -101,7 +104,7 @@ def test_parent_replay_recreates_adapter_at_ordinal_zero(
     monkeypatch,
 ) -> None:
     module = _load_runner()
-    control = _control()
+    control = gepa_control()
     factory = _Factory(control)
     module.register_gepa_adapter_factory(factory)
     data_ref = typed_ref_for_record("test.gepa.data", {"id": "train"})
@@ -125,7 +128,7 @@ def test_parent_replay_recreates_adapter_at_ordinal_zero(
         adapter = kwargs["adapter"]
         observed_ordinals.append(adapter.effect_ordinal)
         adapter.effect_ordinal = 7
-        return _detailed(control)
+        return make_gepa_detailed_result(control)
 
     monkeypatch.setattr(
         "whetstone.optimization.gepa.adapter.run_gepa_engine",
@@ -148,7 +151,7 @@ def test_parent_replay_recreates_adapter_at_ordinal_zero(
 
 def test_parent_refuses_registered_factory_identity_drift() -> None:
     module = _load_runner()
-    control = _control()
+    control = gepa_control()
     factory = _Factory(control)
     module.register_gepa_adapter_factory(factory)
     request = module.GepaParentRunRequest(
@@ -191,7 +194,7 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
     """
 
     module = _load_runner()
-    control = _control()
+    control = gepa_control()
     assert control.source_valset_task_identities is None
 
     with pytest.raises(ValueError, match="supplied an unbound valset"):
@@ -218,7 +221,7 @@ def test_parent_request_rejects_bound_valset_identity_drift() -> None:
     """A bound valset must still match the control's exact data identities."""
 
     module = _load_runner()
-    control = _control(valset_task_identities=("c" * 64,))
+    control = gepa_control(valset_task_identities=("c" * 64,))
     assert control.source_valset_task_identities is not None
 
     with pytest.raises(ValueError, match="valset identity drift"):
@@ -263,7 +266,7 @@ def test_parent_request_rejects_bound_valset_identity_drift() -> None:
 
 def test_parent_request_rejects_same_count_seed_reordering() -> None:
     module = _load_runner()
-    control = _control().model_copy(
+    control = gepa_control().model_copy(
         update={
             "component_names": ("alpha", "beta"),
             "num_predictors": 2,
@@ -318,7 +321,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
         "use_listen_notify": False,
     }
     DBOS(config=config)
-    control = _control()
+    control = gepa_control()
     factory = _Factory(control, identity_salt=suffix)
     register_gepa_adapter_factory(cast(Any, factory))
     request = GepaParentRunRequest(
@@ -343,7 +346,7 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
         nonlocal engine_calls
         engine_calls += 1
         kwargs["adapter"].effect_ordinal = 7
-        return _detailed(control)
+        return make_gepa_detailed_result(control)
 
     monkeypatch.setattr(
         "whetstone.optimization.gepa.adapter.run_gepa_engine",
@@ -376,11 +379,11 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     )
     from dr_store import ObjectStore, SqliteBackend
 
-    from tests.optimization.gepa.test_effects import (
-        _evaluation_authority,
-        _evaluation_result,
-        _prompt_services,
-        _proposal_authority,
+    from tests.optimization.gepa.support import (
+        evaluation_authority_binding,
+        evaluation_result,
+        prompt_services,
+        proposal_authority_binding,
     )
     from whetstone.core.identity import TypedRef
     from whetstone.optimization.gepa.contracts import GepaEffectContext
@@ -424,8 +427,8 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
             {"control": control_hash, "suffix": suffix},
         )
 
-    services = _prompt_services()
-    control = _control().model_copy(
+    services = prompt_services()
+    control = gepa_control().model_copy(
         update={
             "component_names": ("alpha", "beta"),
             "num_predictors": 2,
@@ -444,7 +447,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
         ),
         loader_identity_hash="f" * 64,
     )
-    evaluation_binding = _evaluation_authority()
+    evaluation_binding = evaluation_authority_binding()
 
     class EvaluationAuthority:
         runtime_identity_hash = evaluation_binding.authority_identity_hash
@@ -452,7 +455,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
 
         def evaluate(self, request):
             self.calls += 1
-            return _evaluation_result(request)
+            return evaluation_result(request)
 
     authority = EvaluationAuthority()
     store = ObjectStore(
@@ -486,7 +489,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
                 ),
                 broker=DbosGepaEffectBroker(store),
                 evaluation_authority=evaluation_binding,
-                proposal_authority=_proposal_authority(services),
+                proposal_authority=proposal_authority_binding(services),
                 prompt_services=services,
             )
 

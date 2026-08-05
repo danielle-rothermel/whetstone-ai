@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dr_store import ObjectStore, SqliteBackend
 
-from tests.optimization.gepa.test_effects import (
-    _context,
-    _prompt_services,
-    _proposal_authority,
+from tests.optimization.gepa.support import (
+    effect_context,
+    prompt_services,
+    proposal_authority_binding,
 )
 from whetstone.core.identity import typed_ref_for_record
 from whetstone.optimization.gepa.contracts import (
@@ -25,10 +25,10 @@ def _request(
     ordinal: int,
     component_name: str,
 ) -> GepaProposalEffectRequest:
-    services = _prompt_services()
+    services = prompt_services()
     return GepaProposalEffectRequest(
         slot=GepaEffectSlot(
-            context=_context(),
+            context=effect_context(),
             invocation_ordinal=ordinal,
         ),
         candidate=(
@@ -38,7 +38,7 @@ def _request(
         components_to_update=("alpha", "beta"),
         component_name=component_name,
         rendered_prompt=GepaRenderedPrompt(text=f"Improve {component_name}."),
-        authority=_proposal_authority(services),
+        authority=proposal_authority_binding(services),
     )
 
 
@@ -79,7 +79,7 @@ def test_component_specific_entries_never_guess_candidate_indices(
         recorder.record_proposal_result(request, _result(request))
 
     transcript = recorder.build_transcript(
-        context=_context(),
+        context=effect_context(),
         effect_count=2,
     )
 

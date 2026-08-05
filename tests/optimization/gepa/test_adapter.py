@@ -1,28 +1,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import pytest
 
-from tests.optimization.support import (
-    FULL_A,
-    FULL_B,
-    FULL_C,
-    FULL_D,
-    eval_config,
+from tests.optimization.gepa.support import (
+    gepa_control,
+    make_gepa_detailed_result,
 )
-from whetstone.core.identity import IdentityRef, typed_ref_for_record
-from whetstone.experiment.binding import eval_config_reference
+from tests.optimization.support import FULL_A
+from whetstone.core.identity import typed_ref_for_record
 from whetstone.optimization.gepa.adapter import (
     GEPA_ADAPTER_KEY,
     GepaOptimizer,
     project_gepa_terminal,
 )
-from whetstone.optimization.gepa.control import configure_gepa
-from whetstone.optimization.gepa.engine import GepaDetailedResult
 from whetstone.optimization.gepa.source import GEPA_SOURCE_MANIFEST_HASH
-from whetstone.optimization.proposal.proposer import ProposerConfig
 
 
 @dataclass(frozen=True)
@@ -69,52 +62,6 @@ class _Factory:
         )
 
 
-def _control(**overrides):
-    values: dict[str, Any] = {
-        "reflection_model": ProposerConfig(
-            provider_call_config=IdentityRef(
-                record_ref=typed_ref_for_record(
-                    "dr_providers.provider_call_config",
-                    {"provider_call_config_ref": "provider://reflection"},
-                ),
-                identity_hash=FULL_A,
-            ),
-        ),
-        "metric": eval_config_reference(eval_config()),
-        "reward_policy_hash": FULL_B,
-        "evaluation_execution_policy_hash": FULL_C,
-        "proposal_execution_policy_hash": FULL_A,
-        "proposal_prompt_adapter_identity_hash": FULL_B,
-        "proposal_durability_policy_identity_hash": FULL_D,
-        "task_model_identity_hash": FULL_D,
-        "prompt_format_identity_hash": FULL_A,
-        "prompt_binding_identity_hash": FULL_B,
-        "trainset_task_identities": (FULL_A,),
-        "valset_task_identities": None,
-        "component_names": ("prompt",),
-        "num_predictors": 1,
-        "max_metric_calls": 1,
-    }
-    values.update(overrides)
-    return configure_gepa(**values)
-
-
-def _detailed(control) -> GepaDetailedResult:
-    return GepaDetailedResult(
-        candidates=({"prompt": "seed"}, {"prompt": "best"}),
-        parents=((None,), (0,)),
-        val_aggregate_scores=(0.0, 1.0),
-        val_subscores=({FULL_A: 0.0}, {FULL_A: 1.0}),
-        per_val_instance_best_candidates={FULL_A: (1,)},
-        discovery_eval_counts=(0, 1),
-        total_metric_calls=1,
-        num_full_val_evals=2,
-        seed=control.seed,
-        best_idx=1,
-        control_identity_hash=control.identity_hash(),
-    )
-
-
 def test_public_gepa_name_is_canonical() -> None:
     assert GEPA_ADAPTER_KEY == "gepa"
 
@@ -122,11 +69,11 @@ def test_public_gepa_name_is_canonical() -> None:
 def test_optimizer_uses_fresh_factory_adapter_and_direct_engine(
     monkeypatch,
 ) -> None:
-    control = _control()
+    control = gepa_control()
     adapter = _Adapter(control.identity_hash())
     factory = _Factory(adapter)
     optimizer = GepaOptimizer(control=control, adapter_factory=factory)
-    detailed = _detailed(control)
+    detailed = make_gepa_detailed_result(control)
     observed = {}
 
     def fake_run_gepa_engine(**kwargs):
@@ -160,10 +107,10 @@ def test_optimizer_uses_fresh_factory_adapter_and_direct_engine(
 def test_terminal_projection_honors_track_stats_without_changing_best() -> (
     None
 ):
-    hidden_control = _control(track_stats=False)
-    tracked_control = _control(track_stats=True)
-    hidden_detail = _detailed(hidden_control)
-    tracked_detail = _detailed(tracked_control)
+    hidden_control = gepa_control(track_stats=False)
+    tracked_control = gepa_control(track_stats=True)
+    hidden_detail = make_gepa_detailed_result(hidden_control)
+    tracked_detail = make_gepa_detailed_result(tracked_control)
 
     hidden = project_gepa_terminal(
         control=hidden_control,
@@ -186,7 +133,7 @@ def test_terminal_projection_honors_track_stats_without_changing_best() -> (
 def test_terminal_is_not_exposed_until_post_engine_persistence(
     monkeypatch,
 ) -> None:
-    control = _control()
+    control = gepa_control()
     adapter = _Adapter(control.identity_hash())
 
     class CrashOnceFactory(_Factory):
@@ -206,7 +153,7 @@ def test_terminal_is_not_exposed_until_post_engine_persistence(
 
     factory = CrashOnceFactory(adapter)
     optimizer = GepaOptimizer(control=control, adapter_factory=factory)
-    detailed = _detailed(control)
+    detailed = make_gepa_detailed_result(control)
     engine_calls = 0
 
     def fake_run_gepa_engine(**kwargs):

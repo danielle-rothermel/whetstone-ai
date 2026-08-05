@@ -9,7 +9,7 @@ import pytest
 from dr_serialize import Jsonable
 from dr_store import ObjectStore, SqliteBackend
 
-from tests.optimization.gepa.test_effects import _prompt_services
+from tests.optimization.gepa.support import prompt_services
 from tests.optimization.support import eval_config
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import (
@@ -110,7 +110,7 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "factory.sqlite"))
-    services = _prompt_services()
+    services = prompt_services()
     base = candidate_reference(
         Candidate(
             candidate_id="gepa-base",
@@ -322,7 +322,7 @@ def test_authority_refuses_a_structurally_similar_executor(tmp_path) -> None:
     """Only the exact canonical capability may carry the paid GEPA call."""
 
     store = ObjectStore(SqliteBackend(tmp_path / "structural.sqlite"))
-    services = _prompt_services()
+    services = prompt_services()
     transport = FakeProposerTransport(
         {},
         execution_policy_hash=_D,
