@@ -629,6 +629,10 @@ def drive_ed1_row(
             is_transient_transport_failure,
         )
 
+        # A failed call still carries whatever the transport measured (a
+        # failed call has no usage, so tokens stay None -- coverage-honest --
+        # but its accepted latency is real spend and is recorded).
+        enc_tel = call_telemetry(enc)
         return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
@@ -637,9 +641,14 @@ def drive_ed1_row(
             row_state=ExecutedRowState.FAILED,
             executed_component_steps=(),
             failure_code=failure_code_of(enc),
+            prompt_tokens=enc_tel.prompt_tokens,
+            completion_tokens=enc_tel.completion_tokens,
+            total_tokens=enc_tel.total_tokens,
+            reasoning_tokens=enc_tel.reasoning_tokens,
+            latency_s=enc_tel.latency_s,
             max_budget=max_budget,
             encoder_len=None,
-            provider_error=call_telemetry(enc).provider_error,
+            provider_error=enc_tel.provider_error,
             redrivable=is_transient_transport_failure(enc),
         )
     encoder_text = enc.generation.text
@@ -675,6 +684,11 @@ def drive_ed1_row(
             is_transient_transport_failure,
         )
 
+        # The ENCODER leg succeeded, so its token spend is fully known and is
+        # real spend regardless of the decoder's failure; summing in the failed
+        # decoder's telemetry adds its accepted latency (it has no usage).
+        dec_tel = call_telemetry(dec)
+        fail_tel = _sum_telemetry(call_telemetry(enc), dec_tel)
         return Ed1RowOutcome(
             primary_value=None,
             compression_value=None,
@@ -683,9 +697,14 @@ def drive_ed1_row(
             row_state=ExecutedRowState.FAILED,
             executed_component_steps=executed_component_steps,
             failure_code=failure_code_of(dec),
+            prompt_tokens=fail_tel.prompt_tokens,
+            completion_tokens=fail_tel.completion_tokens,
+            total_tokens=fail_tel.total_tokens,
+            reasoning_tokens=fail_tel.reasoning_tokens,
+            latency_s=fail_tel.latency_s,
             max_budget=max_budget,
             encoder_len=encoder_len,
-            provider_error=call_telemetry(dec).provider_error,
+            provider_error=dec_tel.provider_error,
             redrivable=is_transient_transport_failure(dec),
         )
     decoder_text = dec.generation.text
@@ -1276,12 +1295,15 @@ def run_ed1_eval(
     if evaluation_binding.role is EvaluationRole.INTERNAL:
         if blend_config is not None:
             # The aggregate blended reward = MEAN over tasks of the per-task
-            # blended rewards (unweighted mean over the tasks with a present
-            # primary mean; a fully-failed task with mean 0 still counts,
-            # matching the primary aggregate's completeness handling).
+            # blended rewards. GATED on the primary aggregate's completeness:
+            # ``per_task_scores`` folds an absent/failed row in as 0.0, so a
+            # raw mean would silently certify an INCOMPLETE evaluation that the
+            # primary aggregate refuses (value None under PROPAGATE). No
+            # primary value -> no blended value -> the FAIL policy raises.
             mean_blended = (
                 sum(reward_scores) / len(reward_scores)
                 if reward_scores
+                and primary_aggregate.aggregation_output.value is not None
                 else None
             )
             reward = ed1_reward_from_blended(

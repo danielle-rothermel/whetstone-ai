@@ -5,6 +5,7 @@ per-task composition, identity fold, retro-compute utility. No network.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from whetstone.envs.ed1_blended import (
     BLENDED_METRIC_ID,
@@ -96,6 +97,46 @@ def test_degenerate_bounds_give_no_compression_credit() -> None:
     assert blended_reward(
         primary_score=1.0, compression_ratio=1.0, config=cfg
     ) == pytest.approx(0.5)
+
+
+# --- bound validation (the [0, 1] output contract) ---------------------------
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_weight_or_bounds_are_rejected(bad: float) -> None:
+    """A NaN/inf bound survives every clamp and poisons every blended reward.
+
+    It must be impossible to construct, not merely undefined downstream.
+    """
+    with pytest.raises(ValidationError):
+        BoundedCompressionMetricConfig(weight=bad)
+    with pytest.raises(ValidationError):
+        BoundedCompressionMetricConfig(min_compression_ratio=bad)
+    with pytest.raises(ValidationError):
+        BoundedCompressionMetricConfig(max_compression_ratio=bad)
+
+
+def test_negative_bounds_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        BoundedCompressionMetricConfig(min_compression_ratio=-0.5)
+
+
+def test_inverted_bounds_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="must not be below"):
+        BoundedCompressionMetricConfig(
+            min_compression_ratio=3.0, max_compression_ratio=1.0
+        )
+
+
+def test_every_accepted_config_yields_a_reward_in_unit_interval() -> None:
+    """The documented output contract holds across the accepted bound space."""
+    for lo, hi in ((0.0, 4.0), (0.01, 4.0), (2.0, 2.0), (0.5, 5.0)):
+        cfg = _cfg(weight=1.0, lo=lo, hi=hi)
+        for ratio in (0.0, 0.5, 1.0, 3.0, 10.0):
+            reward = blended_reward(
+                primary_score=1.0, compression_ratio=ratio, config=cfg
+            )
+            assert 0.0 <= reward <= 1.0
 
 
 # --- per-task composition + pairing ------------------------------------------

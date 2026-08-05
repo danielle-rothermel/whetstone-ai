@@ -215,10 +215,20 @@ def ed1_body_rejection(body: str) -> tuple[str, ...]:
     Returns the ordered, de-duplicated offending tokens (a ``{field}`` name or
     a triple-backtick code fence); an empty tuple means the body is a clean
     strategy sentence the frame can wrap.
+
+    A MALFORMED brace (``'Explain {code'``) is an offending token too, not a
+    bare parse error: the contract's parser raises ``ValueError`` on it, and
+    letting that escape would surface as an untyped crash at eval start instead
+    of the promised typed :class:`Ed1BodyError` / ``ED1_INVALID_BODY``
+    rejection.
     """
     offending: list[str] = []
     seen: set[str] = set()
-    for field_name in _ED1_BODY_RENDER_CONTRACT.placeholder_fields(body):
+    try:
+        placeholder_fields = _ED1_BODY_RENDER_CONTRACT.placeholder_fields(body)
+    except ValueError:
+        return ("{",) if "{" in body else ("}",)
+    for field_name in placeholder_fields:
         token = "{" + field_name + "}"
         if token not in seen:
             seen.add(token)
@@ -606,9 +616,13 @@ class Ed1Experiment(EnvExperiment):
     #: compression term carries the pressure instead.
     budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO
     dataset_revision: str = ED1_DATASET_REVISION
-    #: The injectable code scorer (raw_submission, task) -> CodeScore. ``None``
-    #: uses the production dr-code container sandbox; tests / dry-runs inject a
-    #: local no-container runner so no Docker/network is needed.
+    #: The injectable code scorer (raw_submission, task) -> CodeScore. The
+    #: scorer is INJECTED by the caller that drives rows; the production
+    #: injection is :func:`whetstone.envs.ed1_scoring.score_ed1_submission`,
+    #: which runs candidate code via
+    #: ``dr_code.execution.run_python_subprocess`` -- a LOCAL, NON-ISOLATED
+    #: subprocess, not a container sandbox. Execution isolation is a
+    #: runner-layer concern, not this layer's.
     scorer: Callable[..., CodeScore] | None = None
     #: The weighted-blend reward config (task 22), OR ``None`` for primary
     #: score only.
@@ -744,7 +758,16 @@ def build_ed1_experiment(
         initial_candidate=ed1_initial_candidate(),
         ceiling_candidate=ed1_ceiling_candidate(),
         eval_configs=eval_configs,
-        reward_policy=build_ed1_reward_policy(),
+        # The ADVERTISED policy must be the one reward time actually applies:
+        # a blend config means the blended-reward policy, not the pass-only
+        # one (see ``ed1_reward_from_blended``).
+        reward_policy=(
+            build_ed1_reward_policy()
+            if blend_config is None
+            else build_ed1_blended_reward_policy(
+                blend_config, env_name=ED1_ENV_NAME
+            )
+        ),
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),

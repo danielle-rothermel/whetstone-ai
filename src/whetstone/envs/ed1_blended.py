@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 BLENDED_METRIC_ID = "primary_score_with_bounded_compression_penalty"
 
@@ -50,20 +50,54 @@ class BoundedCompressionMetricConfig(BaseModel):
     ``weight=0`` degenerates to the primary score.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    #: ``allow_inf_nan=False``: a NaN or infinite weight/bound survives every
+    #: clamp in :func:`compression_score` and poisons EVERY blended reward
+    #: (NaN in, NaN out), silently breaking the documented [0, 1] output
+    #: contract. Non-finite values are rejected at construction instead.
+    model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     metric_id: Literal["primary_score_with_bounded_compression_penalty"] = (
         BLENDED_METRIC_ID
     )
     weight: float = Field(ge=0.0, le=1.0, default=DEFAULT_COMPRESSION_WEIGHT)
-    min_compression_ratio: float = 0.01
-    max_compression_ratio: float = 4.0
+    #: Constrained (not bare floats) so a NaN or negative bound cannot enter:
+    #: NaN survives every clamp in :func:`compression_score` (all NaN
+    #: comparisons are False) and would poison EVERY blended reward with NaN,
+    #: silently breaking this module's documented [0, 1] output contract.
+    #: ``ge=0.0`` rejects NaN as a side effect -- every NaN comparison fails --
+    #: which is exactly the intent; a compression RATIO is non-negative anyway.
+    min_compression_ratio: float = Field(ge=0.0, default=0.01)
+    max_compression_ratio: float = Field(ge=0.0, default=4.0)
+
+    @model_validator(mode="after")
+    def _ordered_bounds(self) -> BoundedCompressionMetricConfig:
+        """Reject INVERTED bounds (max < min), which flip the score's sign.
+
+        ``max == min`` stays legal: it is the documented degenerate case
+        :func:`compression_score` guards, returning the neutral 0.0 (no
+        compression credit). Only an inverted pair is incoherent.
+        """
+        if self.max_compression_ratio < self.min_compression_ratio:
+            raise ValueError(
+                "max_compression_ratio must not be below "
+                f"min_compression_ratio (got "
+                f"min={self.min_compression_ratio}, "
+                f"max={self.max_compression_ratio})"
+            )
+        return self
 
     def identity_key(self) -> str:
         """A stable identity string folding metric_id + weight + bounds.
 
         Folded into the ed1 eval/reward config identity so a distinct weight
         (or bounds) is a distinct, visibly-comparable config.
+
+        Identity is pinned to 6 SIGNIFICANT FIGURES (``:.6g``): configs that
+        differ only below that resolution are deliberately THE SAME comparable
+        config. No production caller varies a weight or bound at sub-1e-7
+        resolution, and the pinned format is what every recorded policy
+        identity hash was computed under -- changing the precision would be a
+        versioned identity change, not a formatting tweak.
         """
         return (
             f"{self.metric_id}"

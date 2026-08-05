@@ -155,3 +155,26 @@ def test_duplicate_role_ids_are_rejected() -> None:
     ed1["train"] = ["Synthetic/0", "Synthetic/0"]
     with pytest.raises(TaskSplitManifestError, match="duplicate"):
         parse_task_split_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("role_a", "role_b"),
+    [("train", "test"), ("val", "test"), ("train", "val")],
+)
+def test_cross_role_duplicate_ids_are_rejected(
+    role_a: str, role_b: str
+) -> None:
+    """An id in two roles leaks a training task into the held-out split."""
+    payload = _manifest()
+    pools = cast(dict[str, object], payload["pools"])
+    ed1 = cast(dict[str, object], pools["ed1"])
+    shared = cast(list[str], ed1[role_a])[0]
+    ed1[role_b] = [*cast(list[str], ed1[role_b]), shared]
+    with pytest.raises(TaskSplitManifestError, match="disjoint"):
+        parse_task_split_manifest(payload)
+
+
+def test_train_val_test_roles_stay_disjoint_end_to_end() -> None:
+    """The accepted manifest's internal and official ids never overlap."""
+    roles = parse_task_split_manifest(_manifest()).for_env("ed1")
+    assert not set(roles.internal_ids) & set(roles.official_ids)

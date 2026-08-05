@@ -28,10 +28,23 @@ class _PoolRoles(BaseModel):
     test: tuple[str, ...]
 
     def model_post_init(self, _context: object) -> None:
+        seen: dict[str, str] = {}
         for role in ("train", "val", "test"):
             ids = getattr(self, role)
             if len(set(ids)) != len(ids):
                 raise ValueError(f"role {role!r} has duplicate task ids")
+            # Roles are DISJOINT: an id in more than one role would leak a
+            # train/val task into the held-out test split (train and val both
+            # fold into the internal split, test is the official one), which
+            # silently invalidates every official measurement.
+            for task_id in ids:
+                other = seen.get(task_id)
+                if other is not None:
+                    raise ValueError(
+                        f"task id {task_id!r} appears in both role {other!r} "
+                        f"and role {role!r}; manifest roles must be disjoint"
+                    )
+                seen[task_id] = role
 
 
 class TaskSplitManifest(BaseModel):

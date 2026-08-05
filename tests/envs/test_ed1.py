@@ -28,11 +28,15 @@ from whetstone.envs.ed1 import (
     ED1_SUBMISSION_SCORE_NAME,
     ENCODER_BODY_A,
     Ed1BodyError,
+    build_ed1_blended_reward_policy,
     build_ed1_experiment,
+    build_ed1_reward_policy,
     ed1_body_rejection,
     ed1_initial_candidate,
     render_encoder_frame,
+    validate_ed1_body,
 )
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_eval import (
     Ed1PartialPayload,
     Ed1RowOutcome,
@@ -52,6 +56,7 @@ from whetstone.envs.internal_eval import (
     ExecutedRowState,
     _llm_component_step,
 )
+from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness
 from whetstone.execution.fanout import (
     FanoutResult,
@@ -110,6 +115,7 @@ def _evaluate(
     outcome_for=None,
     partial_log: PartialLog | None = None,
     apply_reward: bool = False,
+    blend_config: BoundedCompressionMetricConfig | None = None,
 ):
     selected = tasks or _tasks()
     experiment = build_ed1_experiment(
@@ -119,6 +125,7 @@ def _evaluate(
         repeats=repeats,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
+        blend_config=blend_config,
     )
     candidate = ed1_initial_candidate()
     active_outcome = outcome_for or (
@@ -404,6 +411,65 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
     assert outcome.executed_component_steps[0].outputs == {
         "generation": encoder_text
     }
+    # A decoder failure does not erase the ENCODER leg's telemetry: that call
+    # succeeded and its spend is real. The failed decoder still carries the
+    # typed provider diagnostic.
+    assert outcome.latency_s is not None
+    assert outcome.provider_error is not None
+    assert outcome.encoder_len == len(encoder_text)
+
+
+def test_encoder_failure_still_reports_what_was_measured() -> None:
+    # The encoder call failed, so there is no usage to report (tokens stay
+    # None -- coverage-honest), but the budget the row was driven under and
+    # the typed provider diagnostic ARE known and must not be dropped.
+    tasks = _tasks(1)
+    experiment = build_ed1_experiment(
+        tasks=tasks, repeats=1, internal_n=1, official_n=1
+    )
+    instance = tasks[0].instance
+    candidate = ed1_initial_candidate()
+    policy = execution_policy(max_attempts=1)
+
+    def transport(request):
+        return build_evidence(
+            request=request,
+            policy=policy.transport_policy,
+            outcome=failure_outcome(
+                failure_class=FailureClass.PERMANENT,
+                message="encoder rejected",
+            ),
+        )
+
+    def scorer_must_not_run(**_kwargs):
+        raise AssertionError("encoder failure must not reach scoring")
+
+    rollout = experiment.encdec_rollout
+    assert rollout is not None
+    outcome = drive_ed1_row(
+        experiment=experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        instance=instance,
+        provider_call_config=rollout.provider_call_config,
+        execution_policy=policy,
+        transport=transport,
+        scorer=scorer_must_not_run,
+        logical_call_id="encoder-failure",
+        repeat_index=0,
+        drive_ordinal=0,
+        cache=None,
+        cache_phase="internal_eval",
+        cache_unit="encoder-failure",
+    )
+
+    assert outcome.row_state is ExecutedRowState.FAILED
+    assert outcome.encoder_text is None
+    assert outcome.latency_s is not None
+    assert outcome.provider_error is not None
+    assert outcome.max_budget == round(0.5 * len(tasks[0].input_code))
+    # No usage exists for a failed call: reporting 0 would fabricate coverage.
+    assert outcome.prompt_tokens is None
+    assert outcome.total_tokens is None
 
 
 def test_ed1_v2_request_hash_is_pinned() -> None:
@@ -516,6 +582,92 @@ def test_all_failed_diagnostics_name_dominant_failure() -> None:
     assert "code_eval_infrastructure_unknown" in (
         result.diagnostics.none_reason
     )
+
+
+def _one_failed_row(instance, _repeat: int, _drive_ordinal: int):
+    """One task fails outright; the rest succeed (an INCOMPLETE evaluation)."""
+    if str(instance.id).endswith("/0"):
+        return Ed1RowOutcome(
+            primary_value=None,
+            compression_value=None,
+            encoder_text=None,
+            decoder_text=None,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=(),
+            failure_code="code_eval_infrastructure_unknown",
+        )
+    return _successful_outcome(instance)
+
+
+def test_blended_reward_refuses_an_incomplete_evaluation() -> None:
+    # A failed row folds into per-task scores as 0.0, so a raw mean of the
+    # blended rewards would CERTIFY an evaluation the primary aggregate
+    # refuses (value None under PROPAGATE). The blended path must gate on the
+    # same completeness signal: no primary value -> typed failure, not a
+    # silently-deflated Reward.
+    with pytest.raises(CandidateEvaluationFailure):
+        _evaluate(
+            outcome_for=_one_failed_row,
+            apply_reward=True,
+            blend_config=BoundedCompressionMetricConfig(weight=0.1),
+        )
+
+
+def test_unblended_and_blended_agree_on_refusing_incompleteness() -> None:
+    # The non-blended branch already refuses; the two branches must not
+    # disagree about whether the SAME evaluation is certifiable.
+    with pytest.raises(CandidateEvaluationFailure):
+        _evaluate(outcome_for=_one_failed_row, apply_reward=True)
+
+
+def test_blended_reward_is_produced_when_the_evaluation_is_complete() -> None:
+    # The gate must not block the healthy path: every row present -> a Reward.
+    _, result = _evaluate(
+        apply_reward=True,
+        blend_config=BoundedCompressionMetricConfig(weight=0.1),
+    )
+    assert result.reward is not None
+    assert result.primary_aggregate.aggregation_output.value is not None
+
+
+def test_advertised_reward_policy_matches_the_policy_applied() -> None:
+    # The experiment ADVERTISES reward_policy; reward time builds the blended
+    # policy from blend_config. A reader (and any consumer keying on the
+    # policy identity) must not see the pass-only policy on a blended cell.
+    blend = BoundedCompressionMetricConfig(weight=0.1)
+    blended = build_ed1_experiment(tasks=_tasks(1), blend_config=blend)
+    expected = build_ed1_blended_reward_policy(blend, env_name=ED1_ENV_NAME)
+    assert blended.reward_policy.policy_name == expected.policy_name
+    assert blended.reward_policy == expected
+
+    plain = build_ed1_experiment(tasks=_tasks(1))
+    assert plain.reward_policy == build_ed1_reward_policy()
+    assert plain.reward_policy.policy_name != expected.policy_name
+
+
+def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
+    # A different weight is a different comparable config; the advertised
+    # policy name must carry that distinction, not collapse it.
+    names = {
+        build_ed1_experiment(
+            tasks=_tasks(1),
+            blend_config=BoundedCompressionMetricConfig(weight=w),
+        ).reward_policy.policy_name
+        for w in (0.05, 0.10, 0.20)
+    }
+    assert len(names) == 3
+
+
+def test_malformed_brace_is_a_typed_body_rejection() -> None:
+    # An unmatched '{' makes the render contract's parser raise a BARE
+    # ValueError; unguarded that surfaces as an untyped crash at eval start
+    # instead of the promised typed ED1_INVALID_BODY rejection.
+    for body in ("Explain {code", "Explain code}", "Explain {a{b} thing"):
+        assert ed1_body_rejection(body)
+        with pytest.raises(Ed1BodyError) as excinfo:
+            validate_ed1_body(body)
+        assert ED1_INVALID_BODY in str(excinfo.value)
+        assert excinfo.value.offending
 
 
 def test_bounded_skip_certifies_retained_scores_and_accounting() -> None:

@@ -34,6 +34,7 @@ from whetstone_envs.core import Instance
 from whetstone.envs.ed1 import (
     Ed1Experiment,
     build_code_eval_procedure_config,
+    build_ed1_blended_reward_policy,
     ed1_ceiling_candidate,
     ed1_initial_candidate,
 )
@@ -258,7 +259,16 @@ def build_ed1m_experiment(
         initial_candidate=ed1_initial_candidate(),
         ceiling_candidate=ed1_ceiling_candidate(),
         eval_configs=eval_configs,
-        reward_policy=build_ed1m_reward_policy(),
+        # The ADVERTISED policy must be the one reward time actually applies:
+        # a blend config means the blended-reward policy, not the fidelity-only
+        # one (see ``ed1_reward_from_blended``).
+        reward_policy=(
+            build_ed1m_reward_policy()
+            if blend_config is None
+            else build_ed1_blended_reward_policy(
+                blend_config, env_name=ED1M_ENV_NAME
+            )
+        ),
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),

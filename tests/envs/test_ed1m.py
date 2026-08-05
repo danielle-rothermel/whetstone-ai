@@ -261,6 +261,22 @@ def test_build_uses_content_and_dataset_identities(
         loaded.manifest.dataset_identity
     )
     assert experiment.blend_config is not None
+    # The ADVERTISED policy must be the one reward time applies: a blended
+    # ed1m cell advertises the blended policy (scoped to the ed1m env name),
+    # never the fidelity-only one.
+    from whetstone.envs.ed1 import build_ed1_blended_reward_policy
+    from whetstone.envs.ed1m import ED1M_ENV_NAME, build_ed1m_reward_policy
+
+    assert experiment.reward_policy == build_ed1_blended_reward_policy(
+        experiment.blend_config, env_name=ED1M_ENV_NAME
+    )
+    assert experiment.reward_policy != build_ed1m_reward_policy()
+
+    unblended = build_ed1m_experiment(
+        artifact_dir=mutant_dataset_dir, internal_n=1, official_n=1
+    )
+    assert unblended.reward_policy == build_ed1m_reward_policy()
+
     ed1m_procedure = build_ed1m_procedure_config()
     assert rollout.procedure_config_hash == ed1m_procedure.config_identity_hash
     assert ed1m_procedure.definition_ref.definition_id == (
