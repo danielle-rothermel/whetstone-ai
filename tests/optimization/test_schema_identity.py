@@ -1,6 +1,5 @@
 """Typed optimization serialization-boundary contracts."""
 
-import pickle
 from typing import Any
 
 import pytest
@@ -9,10 +8,8 @@ from pydantic import ValidationError
 
 from whetstone.core.identity import (
     IdentityRef,
-    ImmutableJsonObject,
     TerminalFailure,
     TypedRef,
-    canonical_json_equal,
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
@@ -743,74 +740,6 @@ def test_optimization_run_owns_proposal_reward_policy() -> None:
     pure_payload["reward_policy"] = _reward_policy().model_dump(mode="json")
     with pytest.raises(ValidationError, match="only a proposal-only"):
         OptimizationRun.model_validate(pure_payload)
-
-
-def test_json_fields_survive_pickle_round_trips() -> None:
-    original = ImmutableJsonObject(
-        {
-            "nested": {"enabled": True, "depth": {"count": 2}},
-            "items": [1, 2.5, "three", None, {"name": "first"}],
-            "flag": False,
-        }
-    )
-
-    restored = pickle.loads(pickle.dumps(original))
-
-    assert type(restored) is ImmutableJsonObject
-    assert restored == original
-    assert restored.to_json() == original.to_json()
-    restored_nested: Any = restored["nested"]
-    restored_items: Any = restored["items"]
-    assert type(restored_nested) is ImmutableJsonObject
-    assert type(restored_items) is tuple
-    with pytest.raises(TypeError):
-        restored_nested["enabled"] = False
-    with pytest.raises(AttributeError):
-        restored._items = ()
-
-
-def test_records_carrying_json_fields_survive_pickle_round_trips() -> None:
-    record = candidate()
-    record = record.model_validate(
-        {
-            **record.model_dump(mode="json"),
-            "payload": {"nested": {"enabled": True}, "items": [1, "two"]},
-        }
-    )
-
-    restored = pickle.loads(pickle.dumps(record))
-
-    assert restored == record
-    assert restored.identity_hash() == record.identity_hash()
-    assert restored.payload.to_json() == record.payload.to_json()
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"bad": object()},
-        {1: "non-string key"},
-        {"bad": float("nan")},
-        {"bad": float("inf")},
-    ],
-)
-def test_json_fields_reject_non_json_and_nonfinite_values(payload) -> None:
-    with pytest.raises((TypeError, ValidationError, ValueError)):
-        candidate().model_validate(
-            {
-                **candidate().model_dump(mode="json"),
-                "payload": payload,
-            }
-        )
-
-
-def test_canonical_json_comparison_preserves_json_types() -> None:
-    assert not canonical_json_equal({"value": True}, {"value": 1})
-    assert not canonical_json_equal({"value": 1}, {"value": 1.0})
-    assert canonical_json_equal(
-        {"nested": [{"value": 1}]},
-        {"nested": [{"value": 1}]},
-    )
 
 
 def test_budget_validates_overlapping_maps_independently() -> None:

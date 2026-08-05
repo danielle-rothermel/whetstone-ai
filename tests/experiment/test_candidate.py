@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pickle
 from typing import Any
 
 import pytest
@@ -129,3 +130,38 @@ def test_candidate_json_round_trip_is_exact() -> None:
     }
     assert Candidate.model_validate(dumped) == record
     assert Candidate.model_validate_json(record.model_dump_json()) == record
+
+
+def test_records_carrying_json_fields_survive_pickle_round_trips() -> None:
+    record = _candidate()
+    record = record.model_validate(
+        {
+            **record.model_dump(mode="json"),
+            "payload": {"nested": {"enabled": True}, "items": [1, "two"]},
+        }
+    )
+
+    restored = pickle.loads(pickle.dumps(record))
+
+    assert restored == record
+    assert restored.identity_hash() == record.identity_hash()
+    assert restored.payload.to_json() == record.payload.to_json()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"bad": object()},
+        {1: "non-string key"},
+        {"bad": float("nan")},
+        {"bad": float("inf")},
+    ],
+)
+def test_json_fields_reject_non_json_and_nonfinite_values(payload) -> None:
+    with pytest.raises((TypeError, ValidationError, ValueError)):
+        _candidate().model_validate(
+            {
+                **_candidate().model_dump(mode="json"),
+                "payload": payload,
+            }
+        )

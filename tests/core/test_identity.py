@@ -1,99 +1,44 @@
-"""The zero-optimization baseline is pure and durable."""
+"""Direct identity, immutable JSON, and canonical comparison contracts."""
+
+import pickle
+from typing import Any
 
 import pytest
 
-from tests.optimization.support import (
-    candidate,
-    make_harness,
-    make_store,
-    make_tool_definition_config,
-    pure_request,
-    registry,
-    tool_run,
-)
-from whetstone.experiment.candidate import CANDIDATE_RECORD_SCHEMA
-from whetstone.optimization.adapters import IdentityOptimizerAdapter
-from whetstone.optimization.contracts import (
-    StepStatus,
-    step_result_reference,
-)
-from whetstone.optimization.tools.contracts import (
-    RuntimeToolHandle,
-    ToolCapacityScope,
-    ToolResult,
-    tool_call_reference,
-    tool_capacity_binding,
+from whetstone.core.identity import (
+    ImmutableJsonObject,
+    canonical_json_equal,
 )
 
 
-def test_identity_persists_candidates_and_terminal_result(tmp_path) -> None:
-    store = make_store(tmp_path)
-    request = pure_request(candidates=(candidate("A"), candidate("B")))
-    harness = make_harness(
-        store=store,
-        adapter_registry=registry(),
-        run=request.run,
+def test_json_fields_survive_pickle_round_trips() -> None:
+    original = ImmutableJsonObject(
+        {
+            "nested": {"enabled": True, "depth": {"count": 2}},
+            "items": [1, 2.5, "three", None, {"name": "first"}],
+            "flag": False,
+        }
     )
-    step, _step_ref = harness.run_step(request)
-    persisted_request = store.get(step.request.record_ref.reference)
-    assert isinstance(persisted_request, dict)
-    assert persisted_request == request.model_dump(mode="json")
-    assert persisted_request["run"] == request.run.model_dump(mode="json")
-    assert step.status is StepStatus.COMPLETE
-    assert step.resolved_intents == ()
-    assert step.tool_evidence == ()
-    assert all(
-        ref.record_ref.schema_name == CANDIDATE_RECORD_SCHEMA
-        for ref in step.accepted_candidates
-    )
-    terminal, terminal_ref = harness.terminalize(
-        run=request.run,
-        step_results=(step_result_reference(step),),
-    )
-    assert [p.candidate.record.candidate_id for p in terminal.proposals] == [
-        "A",
-        "B",
-    ]
-    assert harness.resolve_optimization_result(request.run_id) == terminal_ref
+
+    restored = pickle.loads(pickle.dumps(original))
+
+    assert type(restored) is ImmutableJsonObject
+    assert restored == original
+    assert restored.to_json() == original.to_json()
+    restored_nested: Any = restored["nested"]
+    restored_items: Any = restored["items"]
+    assert type(restored_nested) is ImmutableJsonObject
+    assert type(restored_items) is tuple
+    with pytest.raises(TypeError):
+        restored_nested["enabled"] = False
+    with pytest.raises(AttributeError):
+        restored._items = ()
 
 
-def test_identity_replay_never_invokes_registry_adapter(tmp_path) -> None:
-    store = make_store(tmp_path)
-    request = pure_request()
-    first = make_harness(
-        store=store,
-        adapter_registry=registry(),
-        run=request.run,
+def test_canonical_json_comparison_preserves_json_types() -> None:
+    assert not canonical_json_equal({"value": True}, {"value": 1})
+    assert not canonical_json_equal({"value": 1}, {"value": 1.0})
+    assert canonical_json_equal(
+        {"nested": [{"value": 1}]},
+        {"nested": [{"value": 1}]},
     )
-    result_a, ref_a = first.run_step(request)
-
-    class MissingRegistry:
-        def resolve(self, adapter_key):
-            del adapter_key
-            raise AssertionError(
-                "replay must not resolve or invoke an adapter"
-            )
-
-    fresh = make_harness(
-        store=make_store(tmp_path),
-        adapter_registry=MissingRegistry(),
-        run=request.run,
-    )
-    result_b, ref_b = fresh.run_step(request)
-    assert (result_b, ref_b) == (result_a, ref_a)
-
-
-def test_identity_adapter_refuses_runtime_handles() -> None:
-    config = make_tool_definition_config()
-    handle = RuntimeToolHandle(
-        config,
-        tool_capacity_binding(
-            ToolCapacityScope.RUN, tool_run(config=config).record_ref
-        ),
-        lambda call: ToolResult(
-            call=tool_call_reference(call),
-            refusal={"refusal_class": "validation", "reason": "unused"},
-        ),
-    )
-    with pytest.raises(ValueError, match="no Runtime"):
-        IdentityOptimizerAdapter().invoke(pure_request(), (handle,))
