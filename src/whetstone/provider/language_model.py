@@ -12,6 +12,7 @@ exceptions.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any, Literal
 
 from dr_providers import (
@@ -146,7 +147,7 @@ class StructuredPromptAdapter(PlainPromptAdapter):
                     raise ValueError(
                         "structured prompt content parts must be objects"
                     )
-                content = tuple(dict(part) for part in raw_content)
+                content = tuple(deepcopy(part) for part in raw_content)
             else:
                 raise ValueError(
                     "structured prompt content must be text or content parts"

@@ -34,6 +34,7 @@ from whetstone.provider.failures import (
 )
 from whetstone.provider.language_model import (
     PlainPromptAdapter,
+    StructuredPromptAdapter,
     provider_call_request_from_parameters,
     provider_result_from_response,
     translate_provider_failure,
@@ -55,6 +56,144 @@ class TestPlainPromptAdapter:
         messages = PlainPromptAdapter().messages(user_content="write add")
         assert len(messages) == 1
         assert messages[0].role is MessageRole.USER
+
+
+class TestStructuredPromptAdapter:
+    def test_mixed_messages_preserve_exact_wire_and_identity_order(
+        self,
+    ) -> None:
+        messages = StructuredPromptAdapter().messages_from_records(
+            (
+                {"role": "system", "content": "follow the format"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": "https://example.test/image.png",
+                                "detail": "high",
+                            },
+                        },
+                    ],
+                },
+                {"role": "assistant", "content": "description"},
+            )
+        )
+
+        expected = [
+            {"role": "system", "content": "follow the format"},
+            {
+                "role": "user",
+                "content": (
+                    {"type": "text", "text": "describe this"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.test/image.png",
+                            "detail": "high",
+                        },
+                    },
+                ),
+            },
+            {"role": "assistant", "content": "description"},
+        ]
+        assert [message.provider_dict() for message in messages] == expected
+        assert [message.identity_payload() for message in messages] == expected
+
+    @pytest.mark.parametrize(
+        "record",
+        [
+            {"role": "user"},
+            {"content": "hello"},
+            {"role": "user", "content": "hello", "name": "caller"},
+        ],
+    )
+    def test_rejects_missing_or_extra_record_keys(
+        self, record: dict[str, object]
+    ) -> None:
+        with pytest.raises(
+            ValueError,
+            match="structured prompt messages require role and content",
+        ):
+            StructuredPromptAdapter().messages_from_records((record,))
+
+    def test_rejects_invalid_role(self) -> None:
+        with pytest.raises(
+            ValueError, match="'invalid' is not a valid MessageRole"
+        ):
+            StructuredPromptAdapter().messages_from_records(
+                ({"role": "invalid", "content": "hello"},)
+            )
+
+    def test_rejects_empty_records(self) -> None:
+        with pytest.raises(
+            ValueError, match="structured prompt messages cannot be empty"
+        ):
+            StructuredPromptAdapter().messages_from_records(())
+
+    def test_rejects_empty_content_parts(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="structured prompt content must be text or content parts",
+        ):
+            StructuredPromptAdapter().messages_from_records(
+                ({"role": "user", "content": []},)
+            )
+
+    def test_rejects_non_object_content_parts(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="structured prompt content parts must be objects",
+        ):
+            StructuredPromptAdapter().messages_from_records(
+                (
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "hello"}, "bad"],
+                    },
+                )
+            )
+
+    def test_nested_source_mutation_cannot_change_wire_or_identity(
+        self,
+    ) -> None:
+        nested_image = {
+            "url": "https://example.test/original.png",
+            "metadata": {"labels": ["original"]},
+        }
+        records = (
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": nested_image},
+                ],
+            },
+        )
+        message = StructuredPromptAdapter().messages_from_records(records)[0]
+        provider_payload = message.provider_dict()
+        identity_payload = message.identity_payload()
+
+        nested_image["url"] = "https://example.test/mutated.png"
+        nested_image["metadata"]["labels"].append("mutated")
+
+        expected = {
+            "role": "user",
+            "content": (
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://example.test/original.png",
+                        "metadata": {"labels": ["original"]},
+                    },
+                },
+            ),
+        }
+        assert provider_payload == expected
+        assert identity_payload == expected
+        assert message.provider_dict() == expected
+        assert message.identity_payload() == expected
 
 
 class TestProviderCallRequestFromParameters:
