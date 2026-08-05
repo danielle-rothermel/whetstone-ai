@@ -434,6 +434,21 @@ class RolloutOutput:
     max_budget: int | None = None
     over_budget: bool | None = None
 
+    @property
+    def failed(self) -> bool:
+        """Whether the authoritative execution state is failed."""
+        return self.row_state is ExecutedRowState.FAILED
+
+    @property
+    def missing(self) -> bool:
+        """Whether the authoritative execution state is missing."""
+        return self.row_state is ExecutedRowState.MISSING
+
+    @property
+    def invalid(self) -> bool:
+        """Whether the row is invalid in the current execution state model."""
+        return False
+
 
 @dataclass(frozen=True, slots=True)
 class InternalEvalResult:
@@ -465,6 +480,10 @@ class InternalEvalResult:
     #: Exact row state, trace, display output, and score for every planned row
     #: in instance/repeat order, including exact partial restores.
     outputs: tuple[RolloutOutput, ...]
+    #: Every planned row-request identity for this exact Evaluation Binding,
+    #: both drive ordinals. Restoration is strictly scoped to this set, so it
+    #: is also the only set a caller may attribute partial rows to.
+    request_identities: frozenset[str] = frozenset()
     concurrency_halved: bool = False
     deadline_reached: bool = False
     guard_timeouts: int = 0
@@ -984,6 +1003,11 @@ def run_internal_eval(
         for instance, _task in tasks
         for index in range(repeats)
     }
+    planned_request_identities = frozenset(
+        request.request_identity
+        for ordinals in requests_by_key.values()
+        for request in ordinals
+    )
     partial_records = index_partial_records(
         () if partial_log is None else partial_log.load(),
         phase=partial_phase,
@@ -1134,8 +1158,9 @@ def run_internal_eval(
     deadline_reached = deadline_1 or deadline_2
     guard_timeouts = guard_1 + guard_2
 
-    # Assemble per-task rows and exact traces in instance/repeat order.
-    # Restored rows carry the same persisted trace as their fresh execution.
+    # Assemble one complete per-task matrix with exact traces in
+    # instance/repeat order. Restored rows retain their persisted output and
+    # trace; deadline-stopped rows remain explicit missing outcomes.
     task_rows: list[TaskRows] = []
     outputs: list[RolloutOutput] = []
     for instance, task in tasks:
@@ -1200,6 +1225,7 @@ def run_internal_eval(
         deadline_reached=deadline_reached,
         guard_timeouts=guard_timeouts,
         outputs=tuple(outputs),
+        request_identities=planned_request_identities,
     )
 
 
