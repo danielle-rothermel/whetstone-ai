@@ -54,6 +54,8 @@ from whetstone.optimization.identity import (
 )
 
 _ORACLE = Path(__file__).with_name("gepa_upstream_oracle.py")
+# Harness watchdog only; oracle assertions do not depend on elapsed time.
+_ORACLE_TIMEOUT_SECONDS = 120.0
 _FIXTURE = Path(__file__).parent / "fixtures" / "gepa_replay_spike_v1.json"
 _A = "a" * 64
 _B = "b" * 64
@@ -84,23 +86,35 @@ def _invoke(
 ) -> subprocess.CompletedProcess[str]:
     environment = dict(os.environ)
     environment["PYTHONHASHSEED"] = str(hash_seed)
-    return subprocess.run(
-        [
-            sys.executable,
-            str(_ORACLE),
-            "--component-selector",
-            component_selector,
-            "--effect-log",
-            str(effect_log),
-            "--crash-after",
-            str(crash_after),
-            *(["--merge"] if merge else []),
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
+    command = [
+        sys.executable,
+        str(_ORACLE),
+        "--component-selector",
+        component_selector,
+        "--effect-log",
+        str(effect_log),
+        "--crash-after",
+        str(crash_after),
+        *(["--merge"] if merge else []),
+    ]
+    try:
+        return subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+            timeout=_ORACLE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise AssertionError(
+            "frozen GEPA oracle subprocess exceeded its "
+            f"{_ORACLE_TIMEOUT_SECONDS:.0f}-second watchdog "
+            f"(component_selector={component_selector!r}, merge={merge!r}, "
+            f"hash_seed={hash_seed}, crash_after={crash_after}); "
+            f"captured stdout={error.stdout!r}; "
+            f"captured stderr={error.stderr!r}"
+        ) from error
 
 
 def _replay_to_completion(
