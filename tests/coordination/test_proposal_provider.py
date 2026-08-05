@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import multiprocessing
 import os
 import sys
 import types
@@ -16,6 +17,7 @@ from uuid import uuid4
 import pytest
 from dr_providers import FailureClass
 
+from tests.optimization.processes import terminate_processes
 from tests.optimization.support import candidate
 from tests.provider import support as provider_support
 from whetstone.core.effects.authority import ReplayPolicy
@@ -614,7 +616,7 @@ def test_identity_keyed_registry_keeps_sequential_executions_separate() -> (
     assert len(second_recording.served) == 1
 
 
-def test_concurrent_conflicting_transport_binding_is_atomic() -> None:
+def _assert_concurrent_conflicting_transport_binding_is_atomic() -> None:
     module = _load_boundary()
     registry = module._ProposalTransportRegistry()
     first, _config_value, _first_recording = _provider_transport(
@@ -701,6 +703,20 @@ def test_concurrent_conflicting_transport_binding_is_atomic() -> None:
     assert str(conflicts[0]) == "proposal transport key is already bound"
     winner = first if isinstance(outcomes[0], str) else twin
     assert registry.resolve(first.durability_identity_hash) is winner
+
+
+def test_concurrent_conflicting_transport_binding_is_atomic() -> None:
+    context = multiprocessing.get_context("spawn")
+    process = context.Process(
+        target=_assert_concurrent_conflicting_transport_binding_is_atomic,
+    )
+    process.start()
+    try:
+        process.join(timeout=10)
+        assert not process.is_alive(), "registry contention did not terminate"
+        assert process.exitcode == 0
+    finally:
+        terminate_processes((process,), timeout=5)
 
 
 def test_conflicting_transport_under_one_key_is_rejected() -> None:

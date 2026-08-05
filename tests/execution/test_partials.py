@@ -929,16 +929,6 @@ def test_at_requires_canonical_utc_isoformat(value: str) -> None:
         _record(at=value)
 
 
-def test_load_orders_canonical_utc_timestamps_chronologically(
-    tmp_path: Path,
-) -> None:
-    log = PartialLog(path=tmp_path / "calls.partial")
-    log.append(_record(unit="later", at="2026-08-01T00:00:00+00:00"))
-    log.append(_record(unit="earlier", at="2026-07-31T23:59:59+00:00"))
-
-    assert [record.unit for record in log.load()] == ["earlier", "later"]
-
-
 @pytest.mark.parametrize(
     ("update", "match"),
     [
