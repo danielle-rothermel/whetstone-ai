@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.evaluation.drivers.support import _MODEL, _tiny_experiment
+from tests.envs.support import TEST_MODEL, tiny_experiment
 from whetstone.envs.factory import build_env_experiment
 from whetstone.envs.registry import ENV_NAMES
 
@@ -16,7 +16,7 @@ def test_build_env_experiment_returns_all_five_deliverables(
     # The factory contract (five deliverables + shared Procedure identity) is
     # N-independent, so build over a tiny pool -- avoids the full-N c18/c18h
     # PrOntoQA regeneration this parametrization would otherwise pay twice.
-    exp = _tiny_experiment(env_name)
+    exp = tiny_experiment(env_name)
     d = exp.as_dict()
     assert set(d) == {
         "rollout_definition",
@@ -36,4 +36,4 @@ def test_unknown_env_rejected() -> None:
     from whetstone.envs.registry import UnknownEnvError
 
     with pytest.raises(UnknownEnvError):
-        build_env_experiment("c99", model=_MODEL)
+        build_env_experiment("c99", model=TEST_MODEL)

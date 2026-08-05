@@ -26,6 +26,8 @@ from whetstone_envs.core import Instance
 
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import Ed1Instance, ed1_instance_from_task
+from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.registry import env_spec
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.execution.fanout import ProcessJob
 from whetstone.experiment.binding import (
@@ -36,11 +38,53 @@ from whetstone.experiment.binding import (
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 API_KEY_ENV = "OPENROUTER_API_KEY"
+TEST_MODEL = "openai/gpt-5-nano"
+_TINY_SPLIT = (2, 2, 2)
+# At n_per_stratum=sum(_TINY_SPLIT), even one stratum supplies the complete
+# split; additional strata can only increase capacity.
+TINY_SPLIT_FIT_CEILING = sum(_TINY_SPLIT)
 
 #: A text-returning callable keyed on the request's user-message content
 #: (the rendered prompt), so a fake can answer differently per task.
 ReplyFn = Callable[[str], str]
 RowPayloadFn = Callable[[Instance, int, int], BaseModel | JsonValue]
+
+
+def tiny_split_fits(env, n: int) -> bool:
+    """Return whether a generated pool can serve the tiny test split."""
+    pool = env.generate_pool(n_per_stratum=n)
+    if not env.stratified_split:
+        return len(pool) >= sum(_TINY_SPLIT)
+    n_strata = len(pool.strata)
+    per_stratum_max = sum(
+        -(-part // n_strata)
+        for part in _TINY_SPLIT  # ceil division per split part
+    )
+    return n >= per_stratum_max
+
+
+def tiny_experiment(env_name: str) -> EnvExperiment:
+    """Build the smallest bounded experiment that fits the shared split."""
+    env = env_spec(env_name)
+    attempted_sizes: list[int] = []
+    for n in range(1, TINY_SPLIT_FIT_CEILING + 1):
+        attempted_sizes.append(n)
+        if tiny_split_fits(env, n):
+            break
+    else:
+        raise AssertionError(
+            f"{env_name} could not fit split {_TINY_SPLIT} by independently "
+            f"derived n_per_stratum ceiling {TINY_SPLIT_FIT_CEILING}; "
+            f"attempted_sizes={attempted_sizes}; "
+            f"final_attempted_size={attempted_sizes[-1]}"
+        )
+    return build_env_experiment(
+        env_name,
+        model=TEST_MODEL,
+        pool_n_per_stratum=n,
+        split_sizes=_TINY_SPLIT,
+        repeats=2,
+    )
 
 
 def row_job_factory(

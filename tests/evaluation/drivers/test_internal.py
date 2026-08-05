@@ -10,20 +10,20 @@ from pathlib import Path
 import pytest
 from dr_code.eval import AggregationStatus
 
+from tests.envs import support as env_support
 from tests.envs.support import (
+    TINY_SPLIT_FIT_CEILING,
     constant_reply,
     execution_policy,
     process_row_job_factory,
     row_job_factory,
+    tiny_experiment,
 )
-from tests.evaluation.drivers import support as driver_support
 from tests.evaluation.drivers.support import (
-    _SPLIT_FIT_CEILING,
     _binding,
     _correct_reply,
     _internal_jobs,
     _successful_internal_outcome,
-    _tiny_experiment,
 )
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.reward import CandidateEvaluationFailure
@@ -61,13 +61,13 @@ def test_tiny_experiment_split_fit_search_is_bounded(monkeypatch) -> None:
         attempted_sizes.append(n)
         return False
 
-    monkeypatch.setattr(driver_support, "_split_fits", never_fits)
+    monkeypatch.setattr(env_support, "tiny_split_fits", never_fits)
     with pytest.raises(AssertionError) as error:
-        _tiny_experiment("c11")
+        tiny_experiment("c11")
 
-    assert attempted_sizes == list(range(1, _SPLIT_FIT_CEILING + 1))
+    assert attempted_sizes == list(range(1, TINY_SPLIT_FIT_CEILING + 1))
     assert f"attempted_sizes={attempted_sizes}" in str(error.value)
-    assert f"final_attempted_size={_SPLIT_FIT_CEILING}" in str(error.value)
+    assert f"final_attempted_size={TINY_SPLIT_FIT_CEILING}" in str(error.value)
 
 
 def test_process_row_wire_schemas_are_pinned() -> None:
@@ -190,7 +190,7 @@ def test_phase_wall_uses_strict_fanout_duration_contract(value) -> None:
 @pytest.mark.parametrize("env_name", ["c11", "c19", "c18", "c23"])
 @pytest.mark.process_integration
 def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
-    exp = _tiny_experiment(env_name)
+    exp = tiny_experiment(env_name)
     internal_insts = exp.eval_configs.internal.instances
     result = run_internal_eval(
         exp,
@@ -223,7 +223,7 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
     # internal-eval loop is exercised end to end through the c22 gold-first
     # oracle, producing a VALID Rollout Aggregate + Reward. A response that
     # satisfies no stack scores 0 across the split.
-    exp = _tiny_experiment("c22")
+    exp = tiny_experiment("c22")
     result = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,
@@ -247,7 +247,7 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
 
 @pytest.mark.process_integration
 def test_internal_eval_wrong_answers_score_zero() -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     # Always answer the opposite label so every task scores 0.
     result = run_internal_eval(
         exp,
@@ -266,7 +266,7 @@ def test_internal_eval_wrong_answers_score_zero() -> None:
 
 @pytest.mark.process_integration
 def test_internal_process_job_runs_real_row_driver() -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     result = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,
@@ -290,7 +290,7 @@ def test_internal_process_job_runs_real_row_driver() -> None:
 
 @pytest.mark.process_integration
 def test_internal_result_for_different_request_is_rejected() -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
 
     def mismatched(request: InternalRowRequest) -> ProcessJob:
         result = InternalRowResult(
@@ -315,7 +315,7 @@ def test_internal_result_for_different_request_is_rejected() -> None:
 
 @pytest.mark.process_integration
 def test_internal_v2_request_hash_is_pinned() -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     sampling = exp.eval_configs.internal
     base = _internal_jobs(exp, _correct_reply("c18", sampling.instances))
     requests: list[InternalRowRequest] = []
@@ -404,7 +404,7 @@ def test_internal_eval_rejects_binding_role_mismatch_before_restore(
     split_name: str,
     evaluation_role: EvaluationRole,
 ) -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     sampling = getattr(exp.eval_configs, split_name)
     binding = EvaluationBinding(
         schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
@@ -440,7 +440,7 @@ def test_internal_eval_rejects_binding_role_mismatch_before_restore(
 
 
 def test_internal_redrive_preserves_phase_bounds(monkeypatch) -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     calls: list[tuple[int, float | None]] = []
 
     def pool(specs, *, concurrency, is_rate_limited, max_wall_seconds):
@@ -507,7 +507,7 @@ def test_internal_resume_requires_exact_evaluation_binding(
 ) -> None:
     from whetstone.execution.partials import PartialLog
 
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     sampling = exp.eval_configs.internal
     binding_a = _binding(exp)
     binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
@@ -551,7 +551,7 @@ def test_internal_resume_requires_exact_evaluation_binding(
 def test_internal_partial_resume_restores_exact_trace(tmp_path: Path) -> None:
     from whetstone.execution.partials import PartialLog
 
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     sampling = exp.eval_configs.internal
     log = PartialLog(path=tmp_path / "internal-trace.partial")
     reply = _correct_reply("c18", sampling.instances)
@@ -587,7 +587,7 @@ def test_internal_pending_ordinal_zero_resumes_at_ordinal_one(
 ) -> None:
     from whetstone.execution.partials import PartialLog
 
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     sampling = exp.eval_configs.internal
     log = PartialLog(path=tmp_path / "internal-redrive.partial")
     pending = InternalRowOutcome(
@@ -666,7 +666,7 @@ def test_internal_terminal_timeout_persists_both_exact_requests(
 ) -> None:
     from whetstone.execution.partials import PartialLog
 
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     sampling = exp.eval_configs.official
     log = PartialLog(path=tmp_path / "internal-timeout.partial")
 
@@ -725,7 +725,7 @@ def test_internal_terminal_timeout_persists_both_exact_requests(
 
 
 def test_invalid_prompt_is_rejected_before_transport() -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     invalid = Candidate(
         candidate_id="invalid-input",
         base_ref=exp.initial_candidate.base_ref,
@@ -754,7 +754,7 @@ def test_invalid_prompt_is_rejected_before_transport() -> None:
 
 @pytest.mark.process_integration
 def test_internal_eval_is_deterministic() -> None:
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     internal_insts = exp.eval_configs.internal.instances
     reply = _correct_reply("c18", internal_insts)
     a = run_internal_eval(
@@ -790,7 +790,7 @@ def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
     # None) -- never a silent 0 -- so on the internal/optimizer path (reward
     # applied) the FAIL Reward Policy surfaces the TYPED
     # CandidateEvaluationFailure the optimizer loop handles, not a bare crash.
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     with pytest.raises(CandidateEvaluationFailure):
         run_internal_eval(
             exp,
@@ -807,7 +807,7 @@ def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
     # An official-role binding with incomplete
     # evidence (all-blank -> failed rows -> aggregate None, PROPAGATE) must
     # NOT crash and must derive NO Reward -- visible incompleteness only.
-    exp = _tiny_experiment("c18")
+    exp = tiny_experiment("c18")
     result = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,

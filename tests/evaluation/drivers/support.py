@@ -18,7 +18,7 @@ from dr_providers import (
 from tests.envs.support import ReplyFn, execution_policy, row_job_factory
 from whetstone.core.identity import IdentityHash, TypedRef
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import LLM_NODE_ID
@@ -34,13 +34,6 @@ from whetstone.experiment.binding import (
     eval_config_reference,
 )
 from whetstone.experiment.candidate import Candidate
-
-_MODEL = "openai/gpt-5-nano"
-_SPLIT = (2, 2, 2)
-# At n_per_stratum=sum(_SPLIT), even one stratum supplies the complete split;
-# additional strata can only increase capacity. This bound is independent of
-# the generated pool sizes observed by the fit loop.
-_SPLIT_FIT_CEILING = sum(_SPLIT)
 
 
 def _successful_internal_outcome(
@@ -58,35 +51,6 @@ def _successful_internal_outcome(
             ),
         ),
         output_text=output_text,
-    )
-
-
-def _tiny_experiment(env_name: str) -> EnvExperiment:
-    # n_per_stratum=1 gives >= 4 instances (all envs have >= 4 strata except
-    # c18 which has 4); a (2,2,2) split needs >= 6, so grow the pool until it
-    # is large enough. For a stratified-split env (c22, whose pool is blocked)
-    # each stratum must independently hold its per-stratum quota, so grow until
-    # the stratified split is satisfiable rather than only until the total
-    # instance count clears sum(_SPLIT).
-    env = env_spec(env_name)
-    attempted_sizes: list[int] = []
-    for n in range(1, _SPLIT_FIT_CEILING + 1):
-        attempted_sizes.append(n)
-        if _split_fits(env, n):
-            break
-    else:
-        raise AssertionError(
-            f"{env_name} could not fit split {_SPLIT} by independently "
-            f"derived n_per_stratum ceiling {_SPLIT_FIT_CEILING}; "
-            f"attempted_sizes={attempted_sizes}; "
-            f"final_attempted_size={attempted_sizes[-1]}"
-        )
-    return build_env_experiment(
-        env_name,
-        model=_MODEL,
-        pool_n_per_stratum=n,
-        split_sizes=_SPLIT,
-        repeats=2,
     )
 
 
@@ -109,24 +73,6 @@ def _binding(
         ),
         campaign="env-test",
     )
-
-
-def _split_fits(env, n: int) -> bool:
-    """True once a pool at ``n_per_stratum=n`` can serve the ``_SPLIT`` totals.
-
-    For a contiguous-split env the whole pool need only exceed ``sum(_SPLIT)``;
-    for a stratified-split env each stratum must hold its per-stratum quota, so
-    ``n`` must clear the largest single-stratum draw.
-    """
-    pool = env.generate_pool(n_per_stratum=n)
-    if not env.stratified_split:
-        return len(pool) >= sum(_SPLIT)
-    n_strata = len(pool.strata)
-    per_stratum_max = sum(
-        -(-part // n_strata)
-        for part in _SPLIT  # ceil division per split part
-    )
-    return n >= per_stratum_max
 
 
 def _correct_reply(env_name: str, instances) -> ReplyFn:
