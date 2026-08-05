@@ -83,7 +83,14 @@ class ScriptedAgentCall:
 
 @dataclass(frozen=True, slots=True)
 class _MacOsProcessIsolation:
-    """Fail-closed outer filesystem boundary for Codex and descendants."""
+    """Fail-closed outer filesystem boundary for Codex and descendants.
+
+    The boundary is filesystem-only. The network and credential surface is
+    explicitly unclaimed: the profile allows all network operations, and the
+    child environment deliberately carries the provider API key, because
+    passing it in argv would expose it to any process listing on the host. A
+    compromised child can therefore reach the network and spend that key.
+    """
 
     def wrap(
         self,
@@ -202,10 +209,13 @@ class FakeCodexRunner:
     def run(
         self, request: OptimizationStepRequest, handle: RuntimeToolHandle
     ) -> CodexRunResult:
-        client = JsonRpcClient(self._boundary(handle).exchange)
+        client = JsonRpcClient(
+            self._boundary(handle).exchange,
+            tool_name=handle.config.tool_name,
+        )
         client.initialize()
         tools = client.list_tools()
-        if not any(tool["name"] == handle.config.tool_name for tool in tools):
+        if not any(tool["name"] == client.tool_name for tool in tools):
             raise OpaqueStepError("external MCP process omitted the tool")
         for call in self._calls:
             self.observed_payloads.append(
@@ -285,6 +295,25 @@ def build_codex_command(
     return argv
 
 
+def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
+    """Reject relative runtime paths that mean different files per process.
+
+    Sandbox write rules resolve against the host working directory while the
+    Codex child resolves the same string against its own temporary working
+    directory, so a relative path silently sends durable state to a directory
+    deleted on exit.
+    """
+    if not raw:
+        if optional:
+            return
+        raise OpaqueStepError(f"Codex {field} is required")
+    if not Path(raw).is_absolute():
+        raise OpaqueStepError(
+            f"Codex {field} must be absolute; {raw!r} resolves differently "
+            "in the host and in the isolated child process"
+        )
+
+
 class SubprocessCodexRunner:
     """Launch Codex through the macOS-only, fail-closed MCP sandbox."""
 
@@ -302,6 +331,17 @@ class SubprocessCodexRunner:
             Callable[[OptimizationStepRequest], str] | None
         ) = None,
     ) -> None:
+        _require_absolute("sqlite_path", sqlite_path, optional=False)
+        _require_absolute(
+            "partial_log_path",
+            runtime_config.partial_log_path,
+            optional=True,
+        )
+        _require_absolute(
+            "prompt_cache_path",
+            runtime_config.prompt_cache_path,
+            optional=True,
+        )
         self._sqlite_path = sqlite_path
         self._runtime = runtime_config
         self._reward_policy = reward_policy
@@ -517,8 +557,10 @@ def _default_prompt(request: OptimizationStepRequest) -> str:
         "Do not call any built-in tool. Build proposals from the exact "
         "candidate base_ref, model route, payload template, Tool Config, "
         "capacity, budget, pools, hyperparameters, and output contract in "
-        "the serialized request below. Evaluate candidate drafts through "
-        "MCP before selecting them. Write the schema-conforming final "
+        "the serialized request below. Guidance, not a checked requirement: "
+        "evaluating candidate drafts through MCP before selecting them "
+        "produces better proposals, but the artifact is accepted on its "
+        "proposal contract alone. Write the schema-conforming final "
         "artifact with exactly the requested proposal count.\n"
         f"OPTIMIZATION_STEP_REQUEST_JSON={context}"
     )

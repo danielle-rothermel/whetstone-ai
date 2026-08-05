@@ -55,7 +55,26 @@ class CodexRunner(Protocol):
 
 
 class CodexAdapter:
-    """Validate the typed artifact and reconstruct MCP calls durably."""
+    """Persist the typed Codex artifact and check its proposal contract.
+
+    Every proposal in the artifact is checked against exactly four rules,
+    enforced by `_validate_proposals`: the proposal count equals the Step
+    output contract's `returned_proposal_count`; each `base_ref` names a
+    candidate supplied in the request; bases are distinct when the contract
+    requires it; and each proposal passes `diff_check` against its base. A
+    violation of any rule fails the whole Step.
+
+    Per-proposal MCP evaluation evidence is deliberately not required: a
+    schema-valid proposal set satisfying those four rules is accepted even
+    when the external agent measured nothing through the Tool Handle. Spend
+    and admission for the MCP calls the agent does make are owned by the
+    Tool Call Store and the harness ledger, not by this adapter.
+
+    The `harness_store_accepted_call_count` state key reports calls admitted
+    into this harness-side Tool Call Store only. A runner that evaluates in
+    a separate process writes to that process's own store, so the key reads
+    0 for such a run regardless of how many calls the agent made.
+    """
 
     def __init__(
         self,
@@ -139,8 +158,8 @@ class CodexAdapter:
                     mode="json"
                 ),
                 "tool_namespace": str(config.store_namespace_key),
-                "accepted_call_count": self._tool_store.accepted_count(
-                    config, handle.binding
+                "harness_store_accepted_call_count": (
+                    self._tool_store.accepted_count(config, handle.binding)
                 ),
             },
         )

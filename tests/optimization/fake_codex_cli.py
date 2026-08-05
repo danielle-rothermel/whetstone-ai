@@ -117,14 +117,14 @@ def main(context: typer.Context) -> None:
         assert isinstance(template, str)
         proposed_template = f"{template}\nAnswer carefully."
         base_ref = base.base_ref.model_dump(mode="json")
+        server = build_server_from_env(_mcp_environment(args))
         client = JsonRpcClient(
-            InProcessMcpProcess(
-                build_server_from_env(_mcp_environment(args))
-            ).exchange
+            InProcessMcpProcess(server).exchange,
+            tool_name=server.tool_config.tool_name,
         )
         client.initialize()
         tools = client.list_tools()
-        assert [tool["name"] for tool in tools] == ["evaluate_candidate"]
+        assert [tool["name"] for tool in tools] == [client.tool_name]
         result = client.evaluate(
             call_id="subprocess-proposal-evaluation",
             base_ref=base_ref,

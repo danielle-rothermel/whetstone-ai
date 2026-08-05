@@ -159,9 +159,20 @@ class EvaluateCandidateServer:
 class JsonRpcClient:
     """MCP client over an injected line-oriented process boundary."""
 
-    def __init__(self, exchange: Callable[[str], str | None]) -> None:
+    def __init__(
+        self,
+        exchange: Callable[[str], str | None],
+        *,
+        tool_name: str,
+    ) -> None:
         self._exchange = exchange
+        self._tool_name = tool_name
         self._next_id = 0
+
+    @property
+    def tool_name(self) -> str:
+        """The exact server-advertised tool name this client calls."""
+        return self._tool_name
 
     def _send(
         self, method: str, params: dict[str, Any] | None = None
@@ -215,7 +226,7 @@ class JsonRpcClient:
         result = self._send(
             "tools/call",
             {
-                "name": "evaluate_candidate",
+                "name": self._tool_name,
                 "arguments": {
                     "call_id": call_id,
                     "base_ref": base_ref,
@@ -241,13 +252,33 @@ class InProcessMcpProcess:
         return response or None
 
 
+def _protocol_error(code: int, message: str) -> dict[str, Any]:
+    return {
+        "jsonrpc": "2.0",
+        "id": None,
+        "error": {"code": code, "message": message},
+    }
+
+
 def serve_stdio(
     server: EvaluateCandidateServer, *, stdin: TextIO, stdout: TextIO
 ) -> None:
+    """Serve one request per line; malformed lines never end the session."""
     for raw in stdin:
         if not raw.strip():
             continue
-        response = server.handle_request(json.loads(raw))
+        response: dict[str, Any] | None
+        try:
+            message = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            response = _protocol_error(-32700, f"parse error: {exc.msg}")
+        else:
+            if isinstance(message, dict):
+                response = server.handle_request(message)
+            else:
+                response = _protocol_error(
+                    -32600, "request must be a JSON object"
+                )
         if response is not None:
             stdout.write(json.dumps(response) + "\n")
             stdout.flush()

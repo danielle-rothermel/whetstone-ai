@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sys
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -16,9 +18,12 @@ from whetstone.optimization import (
     CodexAdapter,
     CodexOutputArtifact,
     EffectAuthority,
+    EvaluateCandidateServer,
     EvaluatingToolExecutor,
     FakeCodexRunner,
     InProcessMcpProcess,
+    JsonRpcClient,
+    McpError,
     OpaqueStepError,
     OptimizationRun,
     OptimizationStepRequest,
@@ -33,6 +38,7 @@ from whetstone.optimization import (
     ToolConfig,
     ToolDefinition,
     TypedRef,
+    serve_stdio,
 )
 from whetstone.optimization.codex_runner import (
     _CODEX_DENIED_FEATURES,
@@ -84,10 +90,14 @@ def _engine(store: ObjectStore, experiment) -> EvaluationEngine:
 
 
 def _tool_config(
-    engine: EvaluationEngine, experiment, namespace: str
+    engine: EvaluationEngine,
+    experiment,
+    namespace: str,
+    *,
+    tool_name: str = "evaluate_candidate",
 ) -> ToolConfig:
     definition = ToolDefinition(
-        tool_name="evaluate_candidate",
+        tool_name=tool_name,
         input_fields=("base_ref", "model_route", "template"),
         output_fields=(
             "evaluation_evidence_ref",
@@ -269,7 +279,7 @@ def test_fake_process_actual_jsonrpc_artifact_and_restart(tmp_path) -> None:
     artifact_ref = TypedRef.model_validate(state["codex_output_artifact_ref"])
     assert artifact_ref.schema_name == CODEX_OUTPUT_ARTIFACT_SCHEMA
     assert store.get(artifact_ref.reference)["run_id"] == request.run_id
-    assert state["accepted_call_count"] == 1
+    assert state["harness_store_accepted_call_count"] == 1
     assert state["tool_namespace"] == str(config.store_namespace_key)
 
     class ExplodingRegistry:
@@ -627,3 +637,179 @@ def test_process_isolation_fails_closed_on_unsupported_platform(
             readable_paths=(),
             writable_paths=(tmp_path,),
         )
+
+
+def test_client_calls_the_handles_configured_tool_name(tmp_path) -> None:
+    database = tmp_path / "renamed-tool.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    experiment = _experiment()
+    engine = _engine(store, experiment)
+    config = _tool_config(
+        engine,
+        experiment,
+        "codex-renamed-tool",
+        tool_name="score_candidate_draft",
+    )
+    assert config.tool_name != "evaluate_candidate"
+    authority = EffectAuthority.memory()
+    tool_store = memory_tool_call_store(store, authority)
+    executor = _executor(engine, experiment, authority)
+    base = experiment.initial_candidate
+    request = _request(base, config, run_id="codex-run-renamed-tool")
+    handle = executor.runtime_handle(config, tool_store, _binding(request))
+    runner = _runner(base, call_id="renamed-tool-call")
+
+    output = CodexAdapter(runner, store=store, tool_store=tool_store).invoke(
+        request, (handle,)
+    )
+
+    assert output.proposed_status is StepStatus.COMPLETE
+    assert runner.observed_payloads[0]["refused"] is False
+    assert tool_store.accepted_count(config, handle.binding) == 1
+
+
+def test_client_rejects_a_tool_name_the_server_does_not_serve(
+    tmp_path,
+) -> None:
+    database = tmp_path / "mismatched-tool.sqlite"
+    store = ObjectStore(SqliteBackend(database))
+    experiment = _experiment()
+    engine = _engine(store, experiment)
+    config = _tool_config(engine, experiment, "codex-mismatched-tool")
+    authority = EffectAuthority.memory()
+    tool_store = memory_tool_call_store(store, authority)
+    executor = _executor(engine, experiment, authority)
+    base = experiment.initial_candidate
+    request = _request(base, config, run_id="codex-run-mismatched-tool")
+    handle = executor.runtime_handle(config, tool_store, _binding(request))
+    client = JsonRpcClient(
+        InProcessMcpProcess(EvaluateCandidateServer(handle=handle)).exchange,
+        tool_name="not_the_served_tool",
+    )
+    client.initialize()
+
+    with pytest.raises(McpError, match="unknown tool"):
+        client.evaluate(
+            call_id="mismatched-tool-call",
+            base_ref=base.base_ref.model_dump(mode="json"),
+            model_route=MODEL_ROUTE,
+            template="{question}\n{query}\nRespond True or False.",
+        )
+
+
+def _runtime_config(
+    engine: EvaluationEngine,
+    *,
+    partial_log_path: str | None = None,
+    prompt_cache_path: str | None = None,
+) -> EvaluationRuntimeConfig:
+    return EvaluationRuntimeConfig(
+        env_name="c18",
+        model="openai/test",
+        pool_n_per_stratum=2,
+        split_sizes=(1, 1, 1),
+        repeats=1,
+        expected_eval_config_hash=engine.eval_config_ref.identity_hash,
+        execution_policy=execution_policy(),
+        row_job_entrypoint=ROW_JOB_ENTRYPOINT,
+        partial_log_path=partial_log_path,
+        prompt_cache_path=prompt_cache_path,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "sqlite_path", "partial_log_path", "prompt_cache_path"),
+    [
+        ("sqlite_path", "relative/store.sqlite", None, None),
+        (
+            "partial_log_path",
+            "/abs/store.sqlite",
+            "relative/partials.jsonl",
+            None,
+        ),
+        ("prompt_cache_path", "/abs/store.sqlite", None, "relative/cache"),
+    ],
+)
+def test_subprocess_runner_rejects_relative_runtime_paths(
+    tmp_path,
+    field: str,
+    sqlite_path: str,
+    partial_log_path: str | None,
+    prompt_cache_path: str | None,
+) -> None:
+    experiment = _experiment()
+    store = ObjectStore(SqliteBackend(tmp_path / "relative-paths.sqlite"))
+    engine = _engine(store, experiment)
+
+    with pytest.raises(OpaqueStepError, match=f"{field} must be absolute"):
+        SubprocessCodexRunner(
+            sqlite_path=sqlite_path,
+            runtime_config=_runtime_config(
+                engine,
+                partial_log_path=partial_log_path,
+                prompt_cache_path=prompt_cache_path,
+            ),
+            reward_policy=experiment.reward_policy,
+            environment={},
+        )
+
+
+def test_subprocess_runner_accepts_absolute_runtime_paths(tmp_path) -> None:
+    experiment = _experiment()
+    store = ObjectStore(SqliteBackend(tmp_path / "absolute-paths.sqlite"))
+    engine = _engine(store, experiment)
+
+    runner = SubprocessCodexRunner(
+        sqlite_path=str(tmp_path / "mcp-store.sqlite"),
+        runtime_config=_runtime_config(
+            engine,
+            partial_log_path=str(tmp_path / "partials.jsonl"),
+            prompt_cache_path=str(tmp_path / "cache"),
+        ),
+        reward_policy=experiment.reward_policy,
+        environment={},
+    )
+
+    assert isinstance(runner, SubprocessCodexRunner)
+
+
+def _malformed_line_server(tmp_path):
+    experiment = _experiment()
+    store = ObjectStore(SqliteBackend(tmp_path / "serve-stdio.sqlite"))
+    engine = _engine(store, experiment)
+    config = _tool_config(engine, experiment, "codex-serve-stdio")
+    authority = EffectAuthority.memory()
+    tool_store = memory_tool_call_store(store, authority)
+    request = _request(
+        experiment.initial_candidate, config, run_id="codex-run-serve-stdio"
+    )
+    handle = _executor(engine, experiment, authority).runtime_handle(
+        config, tool_store, _binding(request)
+    )
+    return EvaluateCandidateServer(handle=handle)
+
+
+@pytest.mark.parametrize(
+    ("malformed", "code"),
+    [("not-json", -32700), ("[]", -32600)],
+)
+def test_serve_stdio_answers_malformed_lines_and_keeps_serving(
+    tmp_path, malformed: str, code: int
+) -> None:
+    server = _malformed_line_server(tmp_path)
+    stdin = StringIO(
+        f"{malformed}\n"
+        + json.dumps({"jsonrpc": "2.0", "id": 7, "method": "ping"})
+        + "\n"
+    )
+    stdout = StringIO()
+
+    serve_stdio(server, stdin=stdin, stdout=stdout)
+
+    responses = [
+        json.loads(line) for line in stdout.getvalue().splitlines() if line
+    ]
+    assert len(responses) == 2
+    assert responses[0]["id"] is None
+    assert responses[0]["error"]["code"] == code
+    assert responses[1] == {"jsonrpc": "2.0", "id": 7, "result": {}}
