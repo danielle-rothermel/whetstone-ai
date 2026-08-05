@@ -211,10 +211,20 @@ class RunEvent(BaseModel):
         return json.dumps(self.model_dump_json_dict(), sort_keys=True)
 
     def marker_line(self) -> str:
-        """The loud one-line stderr form: ``<MARKER> <id> key=val ...``."""
+        """The loud one-line stderr form: ``<MARKER> <id> key=val ...``.
+
+        The marker is the greppable signal, so it is exactly one line: a field
+        value carrying newlines (a formatted traceback) would spill the rest
+        of the event across lines a watcher would read as unrelated records.
+        Such values are elided here and kept whole in the JSONL stream.
+        """
         parts = [self.marker, self.unit.display_id]
         for key in sorted(self.fields):
-            parts.append(f"{key}={self.fields[key]}")
+            value = self.fields[key]
+            rendered = f"{value}"
+            if "\n" in rendered or "\r" in rendered:
+                rendered = "<multiline; see events.jsonl>"
+            parts.append(f"{key}={rendered}")
         return " ".join(parts)
 
     @classmethod

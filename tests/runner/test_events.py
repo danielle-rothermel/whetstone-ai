@@ -105,6 +105,29 @@ def test_marker_line_is_greppable_and_sorted() -> None:
     assert line.index("concurrency_halved") < line.index("rate_limit_rows")
 
 
+def test_a_multiline_field_never_breaks_the_marker_line(tmp_path) -> None:
+    """The marker stays exactly one line, so a grep watcher reads one event.
+
+    A formatted traceback interpolated verbatim would spill the rest of the
+    event across lines a line-oriented watcher reads as unrelated records.
+    The full text stays in the JSONL stream.
+    """
+    stream = EventStream(tmp_path)
+
+    with pytest.raises(ValueError, match="boom"):
+        with emit_traceback_on_unhandled(stream, unit=_unit()):
+            raise ValueError("boom")
+
+    (event,) = stream.load()
+    line = event.marker_line()
+
+    assert "\n" not in line
+    assert line.startswith("TRACEBACK copro:c18:a0 ")
+    # Elided in the marker, preserved whole in the structured stream.
+    assert "traceback=<multiline; see events.jsonl>" in line
+    assert "ValueError: boom" in event.fields["traceback"]
+
+
 def test_every_event_name_has_a_unique_marker() -> None:
     assert len(set(EVENT_MARKERS.values())) == len(EVENT_MARKERS)
 

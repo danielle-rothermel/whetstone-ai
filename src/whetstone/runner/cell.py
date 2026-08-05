@@ -333,8 +333,17 @@ def _ensure_initial_spend(config: CellConfig) -> SpendRecord | None:
 
 
 def _check_cell_start(config: CellConfig, initial: SpendRecord | None) -> None:
+    """Apply the reserve guard, which only a rerun of *this* attempt escapes.
+
+    A rerun is this exact ``(optimizer, env, attempt)`` starting again, so the
+    money it is about to spend was already committed to once. A later attempt
+    of the same env is a *fresh* paid cell no matter how many earlier attempts
+    exist, so keying on any prior line for the env would let attempt N>0 start
+    below the reserve -- precisely the spend the guard exists to refuse.
+    """
     is_rerun = (
-        config.ledger.latest_for(config.optimizer, config.env) is not None
+        config.ledger.for_attempt(config.optimizer, config.env, config.attempt)
+        is not None
     )
     config.budget_guard.check_start(
         canonical=config.canonical,
@@ -482,6 +491,33 @@ def _completed_record(config: CellConfig) -> CellRecord | None:
     )
 
 
+def _verify_bound_controls(config: CellConfig) -> None:
+    """Refuse to reuse a completed cell whose controls have since changed.
+
+    Skipping a completed cell returns evidence produced under the controls
+    that were bound when it ran. If the factory has since changed the
+    baseline, ceiling, models, lane, run control, or official Eval Config,
+    that evidence answers a different question, and returning it would make
+    the skip a silent substitution. The bound control is immutable, so
+    comparing this config's control against it turns the drift into the same
+    loud conflict a rebinding attempt raises -- the skip path is held to
+    exactly the contract the paid path is.
+    """
+    bound = config.store.resolve(f"{CELL_RUN_CONTROL_SCHEMA}:{config.cell_id}")
+    if bound is None:
+        return
+    expected, _ = config.store.put(
+        CELL_RUN_CONTROL_SCHEMA, _cell_run_control(config).record_content()
+    )
+    if bound.content_hash != expected.content_hash:
+        raise CellError(
+            f"cell {config.cell_id!r} completed under control "
+            f"{bound.content_hash}, but the current config resolves to "
+            f"{expected.content_hash}; refusing to reuse its evidence under "
+            "changed controls"
+        )
+
+
 def prepare_cell_launch(config: CellConfig) -> CellOutcome | None:
     """Preflight a cell and short-circuit one that already completed.
 
@@ -489,6 +525,10 @@ def prepare_cell_launch(config: CellConfig) -> CellOutcome | None:
     can skip credits authorities and the DBOS runtime entirely. Preflight runs
     first regardless, because a config that cannot evaluate its own arms is
     misconfigured whether or not a prior attempt succeeded.
+
+    The skip is only sound while the cell's controls are unchanged, so a
+    completed cell's bound control is checked against this config before its
+    evidence is reused. Changed controls are a conflict, not a cheap skip.
     """
     config.official_engine.preflight(config.baseline)
     if config.ceiling is not None:
@@ -496,6 +536,7 @@ def prepare_cell_launch(config: CellConfig) -> CellOutcome | None:
     completed = _completed_record(config)
     if completed is None:
         return None
+    _verify_bound_controls(config)
     if config.event_stream is not None:
         config.event_stream.emit(
             attempt_skipped_event(
@@ -708,6 +749,22 @@ def run_cell(config: CellConfig) -> CellOutcome:
             config, arm=arm, candidate=candidate, purpose=purpose
         )
 
+    def close_invocation() -> CreditsSnapshot | None:
+        """Write this invocation's closing ``after`` snapshot, once.
+
+        Closing the pair is what makes the invocation's spend accounting
+        complete and retires the open ``before`` that
+        :func:`_open_initial_spend` recovers as the stop-loss baseline. Every
+        exit from the paid region runs through here, so an invocation that
+        stopped early is still bounded evidence rather than an open interval.
+        """
+        snapshot = config.credits_fetcher() if config.credits_fetcher else None
+        if snapshot is not None:
+            config.ledger.append_spend(
+                _spend_record(config, phase="after", snapshot=snapshot)
+            )
+        return snapshot
+
     try:
         baseline = evaluate_arm(
             "baseline", config.baseline, "official_baseline"
@@ -744,6 +801,12 @@ def run_cell(config: CellConfig) -> CellOutcome:
             else None
         )
     except Exception as exc:
+        # Close the spend pair before propagating. A cell that stopped inside
+        # its paid region has still spent money, and leaving its ``before``
+        # open would make the next invocation recover this invocation's
+        # baseline and re-trip the same durable stop-loss checkpoint forever,
+        # stranding the cell with no way to record what it spent.
+        close_invocation()
         if config.event_stream is not None:
             config.event_stream.emit(
                 cell_failed_event(
@@ -754,18 +817,14 @@ def run_cell(config: CellConfig) -> CellOutcome:
             )
         raise
 
-    after = config.credits_fetcher() if config.credits_fetcher else None
-    if after is not None:
-        config.ledger.append_spend(
-            _spend_record(config, phase="after", snapshot=after)
-        )
+    after = close_invocation()
     spend = (
         max(0.0, before.remaining_usd - after.remaining_usd)
         if before is not None
         and after is not None
         and before.remaining_usd is not None
         and after.remaining_usd is not None
-        else 0.0
+        else None
     )
 
     baseline_score = _reportable_score(baseline)
@@ -883,7 +942,11 @@ def run_cell(config: CellConfig) -> CellOutcome:
         },
         internal_evals_count=_internal_evaluation_count(result),
         optimizer_steps=len(result.step_results),
-        spend_usd=spend,
+        # ``spend_usd`` is the ledger's accounting column and is always a
+        # number; unknown spend contributes nothing to a sum. The finalized
+        # event carries the honest ``None`` for unknown, so a reader can tell
+        # "measured zero" from "never measured".
+        spend_usd=spend if spend is not None else 0.0,
         wall_s=duration,
         lane=config.lane,
         status=status,
