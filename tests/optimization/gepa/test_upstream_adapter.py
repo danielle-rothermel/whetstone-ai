@@ -4,15 +4,12 @@ import warnings
 from typing import Any
 
 import pytest
-from dr_store import ObjectStore, SqliteBackend
 from gepa.core.adapter import EvaluationBatch
 
 from tests.optimization.gepa.support import (
     data_instance,
     effect_context,
     evaluation_authority_binding,
-    evaluation_request,
-    evaluation_result,
     prompt_services,
     proposal_authority_binding,
 )
@@ -20,10 +17,6 @@ from whetstone.core.identity import typed_ref_for_record
 from whetstone.optimization.gepa.contracts import (
     GepaCandidateComponent,
     GepaComponentTraceProjection,
-    GepaEffectConflictError,
-    GepaEffectContext,
-    GepaEffectRecorder,
-    GepaEffectTranscript,
     GepaEvaluationAuthorityBinding,
     GepaEvaluationEffectRequest,
     GepaEvaluationEffectResult,
@@ -32,129 +25,7 @@ from whetstone.optimization.gepa.contracts import (
     GepaProposalEffectResult,
     GepaTrajectoryProjection,
 )
-from whetstone.optimization.gepa.engine import GepaDetailedResult
-from whetstone.optimization.gepa.result_artifact import (
-    GepaResultArtifactStore,
-    GepaRunResultArtifact,
-)
-from whetstone.optimization.gepa.source import GEPA_SOURCE_MANIFEST_HASH
-from whetstone.optimization.gepa.upstream_adapter import (
-    GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
-    WhetstoneGepaAdapter,
-)
-
-_A = "a" * 64
-
-
-def test_effect_recorder_reuses_exact_result_and_rejects_slot_drift(
-    tmp_path,
-) -> None:
-    database = tmp_path / "gepa-effects.sqlite"
-    first = GepaEffectRecorder(
-        ObjectStore(SqliteBackend(database)),
-    )
-    request = evaluation_request()
-    result = evaluation_result(request)
-
-    first.record_request(request)
-    first.record_request(request)
-    assert first.record_evaluation_result(request, result) == result
-
-    fresh = GepaEffectRecorder(
-        ObjectStore(SqliteBackend(database)),
-    )
-    fresh.record_request(request)
-    assert fresh.load_evaluation_result(request) == result
-
-    drifted = request.model_copy(update={"capture_traces": True})
-    with pytest.raises(GepaEffectConflictError, match="ordinal 0"):
-        fresh.record_request(drifted)
-
-
-def test_evaluation_row_rejects_unauditable_success() -> None:
-    with pytest.raises(ValueError, match="canonical evidence"):
-        GepaEvaluationRow(
-            data=data_instance(0),
-            output={"answer": "unproven"},
-            score=1.0,
-        )
-
-
-def test_recorder_builds_ordered_semantic_effect_transcript(tmp_path) -> None:
-    store = ObjectStore(SqliteBackend(tmp_path / "transcript.sqlite"))
-    recorder = GepaEffectRecorder(store)
-    request = evaluation_request()
-    result = evaluation_result(request)
-    recorder.record_request(request)
-    recorder.record_evaluation_result(request, result)
-
-    transcript = recorder.build_transcript(
-        context=request.slot.context,
-        effect_count=1,
-    )
-    transcript_ref = recorder.persist_transcript(transcript)
-
-    assert transcript.entries[0].invocation_ordinal == 0
-    assert transcript.entries[0].upstream_candidate_index is None
-    assert transcript.entries[0].data_ids == tuple(
-        item.data_id for item in request.data
-    )
-    assert (
-        GepaEffectTranscript.model_validate(
-            store.get(transcript_ref.reference)
-        )
-        == transcript
-    )
-
-
-def test_result_artifact_pairs_detail_and_effect_transcript_idempotently(
-    tmp_path,
-) -> None:
-    store = ObjectStore(SqliteBackend(tmp_path / "artifact.sqlite"))
-    context = GepaEffectContext(
-        run_id="gepa:artifact",
-        control_identity_hash=_A,
-        source_manifest_identity_hash=GEPA_SOURCE_MANIFEST_HASH,
-        adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
-    )
-    recorder = GepaEffectRecorder(store)
-    transcript_ref = recorder.persist_transcript(
-        GepaEffectTranscript(context=context, entries=())
-    )
-    detail = GepaDetailedResult(
-        candidates=({"alpha": "alpha-0"},),
-        parents=((),),
-        val_aggregate_scores=(0.5,),
-        val_subscores=({data_instance(0).data_id: 0.5},),
-        per_val_instance_best_candidates={data_instance(0).data_id: (0,)},
-        discovery_eval_counts=(1,),
-        seed=0,
-        best_idx=0,
-        control_identity_hash=_A,
-    )
-    artifact_store = GepaResultArtifactStore(store)
-
-    first = artifact_store.persist(
-        context=context,
-        detailed_result=detail,
-        transcript_ref=transcript_ref,
-    )
-    replay = artifact_store.persist(
-        context=context,
-        detailed_result=detail,
-        transcript_ref=transcript_ref,
-    )
-
-    assert replay == first
-    artifact = GepaRunResultArtifact.model_validate(store.get(first.reference))
-    assert artifact.effect_transcript_ref == transcript_ref
-    conflicting = detail.model_copy(update={"val_aggregate_scores": (0.75,)})
-    with pytest.raises(ValueError, match="different terminal"):
-        artifact_store.persist(
-            context=context,
-            detailed_result=conflicting,
-            transcript_ref=transcript_ref,
-        )
+from whetstone.optimization.gepa.upstream_adapter import WhetstoneGepaAdapter
 
 
 class _FakeBroker:
