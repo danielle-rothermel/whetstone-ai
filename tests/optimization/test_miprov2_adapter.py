@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import cast
 
@@ -26,7 +27,12 @@ from whetstone.optimization.proposer import (
     ProposalExecutorDurabilityContract,
     _durable_proposal_executor,
 )
-from whetstone.optimization.schema import StepMode, candidate_reference
+from whetstone.optimization.schema import (
+    StepMode,
+    TemplateRenderContract,
+    TemplateRenderKind,
+    candidate_reference,
+)
 
 
 class _UnusedResolver:
@@ -185,13 +191,78 @@ def test_composition_is_deterministic_and_json_is_format_literal() -> None:
         "demo_set": {"query": "literal", "answer": "value"},
     }
 
-    first = compose_user_prompt_template((component,))
-    second = compose_user_prompt_template((component,))
+    contract = python_format_contract()
+    first = compose_user_prompt_template(
+        (component,), template_render_contract=contract
+    )
+    second = compose_user_prompt_template(
+        (component,), template_render_contract=contract
+    )
 
     assert first == second
     assert "Encode {query}." in first
     assert '{{"component_id":"encode"' in first
-    python_format_contract().validate_template(first)
+    contract.validate_template(first)
+
+
+@pytest.mark.parametrize(
+    "kind",
+    (
+        TemplateRenderKind.PYTHON_FORMAT_V1,
+        TemplateRenderKind.LITERAL_REPLACE_V1,
+        TemplateRenderKind.LITERAL_BODY_V1,
+    ),
+)
+def test_composed_json_survives_rendering_under_every_contract(
+    kind: TemplateRenderKind,
+) -> None:
+    """Rendered metadata and demonstrations must reach the task model as JSON.
+
+    ``{{``/``}}`` are brace escapes only under ``python_format/v1``; the
+    literal contracts pass them through verbatim, so escaping there would
+    deliver malformed JSON.
+    """
+
+    literal_body = kind is TemplateRenderKind.LITERAL_BODY_V1
+    contract = TemplateRenderContract(
+        kind=kind,
+        available_fields=() if literal_body else ("query",),
+    )
+    instruction = (
+        "Answer plainly."
+        if literal_body
+        else (
+            "Answer {{style}} for {query}."
+            if kind is TemplateRenderKind.PYTHON_FORMAT_V1
+            else "Answer {style} for {query}."
+        )
+    )
+    template = compose_user_prompt_template(
+        (
+            {
+                "component_id": "encode",
+                "instruction": instruction,
+                "instruction_index": 0,
+                "instruction_identity_hash": "a" * 64,
+                "demo_index": 0,
+                "demo_identity_hash": "b" * 64,
+                "demo_set": [{"answer": "ok"}],
+            },
+        ),
+        template_render_contract=contract,
+    )
+
+    rendered = contract.render(
+        template, {} if literal_body else {"query": "blue"}
+    )
+    metadata, _, remainder = rendered.split("### Metadata\n")[1].partition(
+        "\n### Instruction\n"
+    )
+    demonstrations = remainder.split("### Demonstrations\n")[1]
+
+    assert json.loads(metadata)["component_id"] == "encode"
+    assert json.loads(demonstrations) == [{"answer": "ok"}]
+    assert "{{" not in rendered and "}}" not in rendered
 
 
 def test_rendering_rejects_empty_or_multiple_components() -> None:

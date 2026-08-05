@@ -12,24 +12,34 @@ from whetstone.optimization.schema import (
     Candidate,
     CandidateRef,
     TemplateRenderContract,
+    TemplateRenderKind,
 )
 
 
-def _format_literal_json(value: object) -> str:
-    """Encode JSON as literal text inside a Python-format template."""
+def _format_literal_json(value: object, *, escape_braces: bool) -> str:
+    """Encode JSON that renders back to itself under the run's contract.
 
-    return (
-        json.dumps(value, sort_keys=True, separators=(",", ":"))
-        .replace("{", "{{")
-        .replace("}", "}}")
-    )
+    Only ``python_format/v1`` consumes ``{{``/``}}`` as brace escapes. Under
+    the literal contracts those pairs survive rendering verbatim, so doubling
+    them there would deliver malformed JSON to the task model.
+    """
+
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    if not escape_braces:
+        return encoded
+    return encoded.replace("{", "{{").replace("}", "}}")
 
 
 def compose_user_prompt_template(
     components: Sequence[Mapping[str, Any]],
+    *,
+    template_render_contract: TemplateRenderContract,
 ) -> str:
     """Compose ordered instructions, metadata, and demonstrations exactly."""
 
+    escape_braces = (
+        template_render_contract.kind is TemplateRenderKind.PYTHON_FORMAT_V1
+    )
     if len(components) != 1:
         raise ValueError(
             "MIPROv2 rendering requires exactly one optimizable component"
@@ -57,14 +67,16 @@ def compose_user_prompt_template(
             (
                 f"## Component {ordinal + 1}: {component_id}",
                 "### Metadata",
-                _format_literal_json(metadata),
+                _format_literal_json(metadata, escape_braces=escape_braces),
                 "### Instruction",
                 instruction,
                 "### Demonstrations",
                 (
                     "[]"
                     if demonstrations is None
-                    else _format_literal_json(demonstrations)
+                    else _format_literal_json(
+                        demonstrations, escape_braces=escape_braces
+                    )
                 ),
             )
         )
@@ -83,7 +95,12 @@ def candidate_from_components(
     candidate = candidate_from_draft(
         base=base.record,
         candidate_id=candidate_id,
-        draft=ProposalDraft(template=compose_user_prompt_template(components)),
+        draft=ProposalDraft(
+            template=compose_user_prompt_template(
+                components,
+                template_render_contract=template_render_contract,
+            )
+        ),
         run=template_render_contract,
     )
     if candidate.base_ref != base.record_ref:
