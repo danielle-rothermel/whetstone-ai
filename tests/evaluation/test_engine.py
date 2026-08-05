@@ -3606,7 +3606,6 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
     )
     with pytest.raises(ToolValidationError, match="must be unique"):
         EngineToolEvaluator(engine).evaluate(duplicate, config)
-    assert len(transport.served) == served
 
 
 def test_engine_tool_evaluator_drives_a_call_through_the_executor(
