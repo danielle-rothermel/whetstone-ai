@@ -296,14 +296,17 @@ def test_completed_terminal_survives_spawned_restart(tmp_path) -> None:
         target=load_terminal_result_once,
         args=(str(database), call.model_dump(mode="json"), queue),
     )
-    process.start()
-    process.join(timeout=30)
-
-    assert process.exitcode == 0
-    record = queue.get(timeout=5)
-    assert "error" not in record
-    assert record["entry"] == completed.model_dump(mode="json")
-    assert record["result"] == result.model_dump(mode="json")
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        join_processes(started, timeout=30)
+        record = queue.get(timeout=5)
+        assert "error" not in record
+        assert record["entry"] == completed.model_dump(mode="json")
+        assert record["result"] == result.model_dump(mode="json")
+    finally:
+        terminate_processes(started, timeout=30)
 
 
 def test_poisoned_admission_terminal_fails_bound_authority_verification(
