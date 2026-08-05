@@ -158,7 +158,7 @@ jobs:
       contents: read
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_PASSWORD: whetstone
           POSTGRES_USER: whetstone
