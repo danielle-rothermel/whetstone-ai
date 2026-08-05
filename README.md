@@ -30,3 +30,27 @@ these areas:
 - **Authority and orchestration** coordinate durable proposal and evaluation
   effects, ownership claims, and terminal result binding across replay and
   recovery.
+
+## Testing
+
+The authoritative unit lane is serial:
+
+```bash
+uv run pytest tests/ -q \
+  -m "not process_integration and not sqlite_time_integration and not sqlite_contention"
+```
+
+For a faster local iteration loop, the same selection can use a fixed four
+workers with load balancing:
+
+```bash
+uv run pytest tests/ -q \
+  -m "not process_integration and not sqlite_time_integration and not sqlite_contention" \
+  -n 4 --dist=load
+```
+
+The parallel command is a local convenience, not the CI default. Keep the
+worker count bounded; do not replace it with `-n auto`. Run the complete serial
+suite with `uv run pytest -q`. Live PostgreSQL tests additionally require
+`WHETSTONE_TEST_POSTGRES_DSN`. CI separately exercises process, SQLite timing,
+SQLite contention, installed-wheel, and Python 3.14 compatibility contracts.
