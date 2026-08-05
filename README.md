@@ -406,3 +406,48 @@ atomic pidfd-equivalent signaling handle, so abrupt-failure cleanup cannot
 guarantee that a late signal still identifies the original process. Run these
 tests in an isolated local or CI environment; their process-group assertions
 exercise observed behavior, not a strict containment guarantee.
+
+## The validation runner
+
+`whetstone.runner` drives validation runs and records their durable evidence.
+
+A **cell** is one attempt at one `(optimizer, environment)` pair. Its identity
+is `optimizer:env:aN`, and the ledger keys resumability on it: a completed cell
+is skipped on resume, an interrupted one is re-driven.
+
+**Durable, runner-owned.** `cells.jsonl` and `spend.jsonl` are append-only
+JSONL under the run root. Each cell line records the official arm scores, the
+paired confidence intervals its status is read off, the accounting, and
+references to the artifacts it published. Spend snapshots bracket each cell so
+cumulative spend is auditable and the budget guards key off persisted numbers.
+Terminal artifacts -- the immutable per-cell viewer directory and the
+official-anchor projection -- are fsynced and committed atomically before the
+cell line that cites them becomes durable.
+
+**Durable, harness-owned.** The optimization run binding, the ordered step
+results, the terminal optimization result, candidates, and evaluation and tool
+evidence all live content-addressed in the ObjectStore. The ledger references
+them; it never restates them.
+
+**Derived.** Confidence intervals, status strings, and the human-readable
+trace are recomputable from the durable evidence and are never authoritative.
+`whetstone.runner.refinalize` recomputes a recorded status from a line's own
+persisted evidence and appends a corrected line, preserving the original.
+
+**Budget guards.** A canonical cell refuses to start below the reserve, and a
+cell whose spend crosses its per-cell stop-loss halts.
+
+### Run lifecycle
+
+The runner owns the DBOS workflow context. At startup, before `DBOS.launch()`,
+it builds persistence, registers the proposer transport, constructs the durable
+proposal executor from the returned registry key, builds the adapters against
+that one executor, and registers the run controller. Each run then executes
+inside exactly one parent workflow, keyed by the run request's identity hash,
+so a recovered process resumes that run rather than starting a second one.
+
+Two consequences are load-bearing. The proposal executor refuses to run outside
+a workflow body, so driving steps from the parent satisfies it by construction
+and the optimization harness stays DBOS-unaware. And the harness requires its
+configured replay policy to equal each adapter's exactly, so the runner builds
+one harness, and one controller, per optimizer.
