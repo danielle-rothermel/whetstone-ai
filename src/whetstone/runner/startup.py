@@ -1,4 +1,4 @@
-"""The one place the runner binds its durable capabilities before DBOS launch.
+"""The one place the runner registers durable capabilities before DBOS launch.
 
 Everything a recovered workflow may need must already be registered when
 ``DBOS.launch()`` returns, because recovery starts immediately and resolves its
@@ -14,6 +14,15 @@ ran last wins silently. The proposal transport is registered here, once, for
 every optimizer that proposes -- COPRO, MIPROv2, and GEPA alike -- and the GEPA
 adapter factory is registered here too rather than inside
 ``CanonicalGepaAdapterFactory.create``.
+
+``RunnerLaunch`` supplies controllers and GEPA factories that are already
+constructed. :func:`register_runtime` registers the proposal transport, mints
+and returns a durable proposal executor for that transport, then registers
+those preconstructed capabilities. The public zero-argument CLI factory path
+constructs the whole launch before registration and does not feed the returned
+executor back into controller or factory construction. The registration site
+therefore does not currently establish that those supplied capabilities use
+the executor it minted.
 
 **Two parent-workflow paths, deliberately.** Harness-driven optimizers run
 through :class:`HarnessRunController` under the optimizer-agnostic parent run
@@ -54,10 +63,11 @@ __all__ = ["RegisteredRuntime", "register_runtime"]
 class RegisteredRuntime:
     """What the single registration site bound, and under which identities.
 
-    ``proposal_executor`` is the one executor instance every proposing adapter
-    is constructed with; ``transport_registry_key`` is the key the executor
-    resolves its transport under at call time. The identity hashes are recorded
-    so a caller can assert what was bound rather than infer it.
+    ``proposal_executor`` is the executor minted for the registered transport;
+    ``transport_registry_key`` is the key it resolves at call time. Controllers
+    and GEPA factories arrive preconstructed, so this result records what was
+    bound but does not establish which executor those objects use. The identity
+    hashes let a caller assert the registrations rather than infer them.
     """
 
     transport_registry_key: str
@@ -72,7 +82,12 @@ def register_runtime(
     controllers: tuple[RunController, ...] = (),
     gepa_factories: tuple[CanonicalGepaAdapterFactory, ...] = (),
 ) -> RegisteredRuntime:
-    """Bind every durable capability this process may recover into.
+    """Register supplied durable capabilities and mint a proposal executor.
+
+    ``controllers`` and ``gepa_factories`` are preconstructed. This function
+    registers them but neither constructs nor rewires them; the returned
+    result exposes the executor but does not apply it to those supplied
+    objects.
 
     Call once, before ``DBOS.launch()``. Registering the identical object again
     is a no-op; binding a different object to an already-bound identity is

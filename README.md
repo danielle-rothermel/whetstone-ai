@@ -443,25 +443,33 @@ cell whose spend crosses its per-cell stop-loss halts.
 
 ### Run lifecycle
 
-The runner owns the DBOS workflow context. At startup, before `DBOS.launch()`,
-it builds persistence, registers the proposer transport, constructs the durable
-proposal executor from the returned registry key, builds the adapters against
-that one executor, and registers the run controller. Each run then executes
-through `whetstone.coordination.run_workflow` inside exactly one parent
-workflow, keyed by the run request's identity hash, so a recovered process
-resumes that run rather than starting a second one.
+The runner owns the DBOS workflow context. The public CLI first invokes its
+zero-argument factory, which returns a fully assembled `RunnerLaunch` whose
+controllers and GEPA factories are already constructed. After the completed
+cell preflight, `register_runtime` registers the proposer transport, mints and
+returns a `DurableProposalExecutor`, and registers those preconstructed
+capabilities before `DBOS.launch()`. The CLI does not feed the returned executor
+back into their construction. This is a current limitation: CLI startup does
+not establish that the factory-built controllers and factories use the
+executor minted by `register_runtime`.
+
+Each harness-driven run then executes through
+`whetstone.coordination.run_workflow` inside exactly one parent workflow, keyed
+by the run request's identity hash, so a recovered process resumes that run
+rather than starting a second one.
 
 Two consequences are load-bearing. The proposal executor refuses to run outside
 a workflow body, so driving steps from the parent satisfies it by construction
-and the optimization harness stays DBOS-unaware. And the harness requires its
-configured replay policy to equal each adapter's exactly, so the runner builds
-one harness, and one controller, per optimizer.
+and the shared optimization harness stays DBOS-unaware. GEPA's algorithm-owned
+runtime is the separate DBOS path. The harness requires its configured replay
+policy to equal each adapter's exactly, so the launch factory builds one
+harness, and one controller, per optimizer.
 
 `whetstone.runner.startup.register_runtime` is the single registration site.
-It binds the proposer transport, mints the one durable proposal executor every
-proposing adapter is constructed with, and registers the run controllers and
-GEPA's adapter factories. Registration happens strictly before `DBOS.launch()`,
-because recovery begins at launch and resolves its dependencies by identity.
+It binds the proposer transport, returns the durable proposal executor it
+mints, and registers the run controllers and GEPA adapter factories supplied by
+`RunnerLaunch`. Registration happens strictly before `DBOS.launch()`, because
+recovery begins at launch and resolves its dependencies by identity.
 
 ### Optimizers the runner drives
 
@@ -491,3 +499,8 @@ The DBOS system database defaults to a per-cell SQLite file under
 `<ledger>/dbos/`, and is overridable by `--dbos-system-database-url` or
 `$WHETSTONE_DBOS_SYSTEM_DATABASE_URL`; `--dbos-application-database-url` and
 `--dbos-application-version` have matching `WHETSTONE_DBOS_*` variables.
+
+The DBOS application version and the importable model paths referenced by its
+checkpoints are part of recovery compatibility. An incompatible package
+cutover uses a distinct application version and a fresh system database; the
+previous database is archived rather than reused or destroyed.

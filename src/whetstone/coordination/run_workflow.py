@@ -17,8 +17,9 @@ which is that layer's contract and not something this boundary multiplies.
 **Why the boundary lives here.** The proposal executor refuses to run outside a
 workflow body and refuses to start a child workflow from inside a step. Driving
 the optimizer from this parent body satisfies both conditions by construction,
-which is what lets the optimization harness stay DBOS-unaware: nothing under
-``whetstone.optimization`` imports dbos.
+which lets the shared optimization root and harness stay DBOS-unaware.
+Algorithm-specific GEPA owns its own DBOS effect runtime and parent workflow
+under ``whetstone.optimization.gepa``.
 
 Guarantee, stated honestly. The parent gives replay from run start: a recovered
 parent re-enters the body and re-drives the controller, which resolves already
