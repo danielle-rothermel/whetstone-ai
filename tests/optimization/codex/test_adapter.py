@@ -9,64 +9,64 @@ import pytest
 from dr_store import ObjectStore, SqliteBackend
 
 from tests.envs.support import execution_policy, process_row_job_factory
-from whetstone.envs.factory import build_env_experiment
-from whetstone.evaluation import EngineToolEvaluator, EvaluationEngine
-from whetstone.execution.mode import EvaluationRuntimeConfig
-from whetstone.execution.partials import PartialLog
-from whetstone.optimization import (
-    CODEX_OUTPUT_ARTIFACT_SCHEMA,
-    Candidate,
-    CodexAdapter,
-    CodexOutputArtifact,
-    EffectAuthority,
-    EvaluateCandidateServer,
-    EvaluatingToolExecutor,
-    FakeCodexRunner,
-    InProcessMcpProcess,
-    JsonRpcClient,
-    McpError,
-    OpaqueStepError,
-    OptimizationRun,
-    OptimizationStepRequest,
-    OutputContract,
-    ReplayPolicy,
-    ScriptedAgentCall,
-    StepKind,
-    StepMode,
-    StepStatus,
-    SubprocessCodexRunner,
-    ToolCapacity,
-    ToolConfig,
-    ToolDefinition,
-    TypedRef,
-    serve_stdio,
-)
-from whetstone.optimization.codex_runner import (
-    _CODEX_DENIED_FEATURES,
-    _MCP_TOOLS_APPROVAL_MODE,
-    _MacOsProcessIsolation,
-    build_codex_command,
-)
-from whetstone.optimization.mcp_server import build_server_from_env
-from whetstone.optimization.schema import (
-    BudgetState,
-    candidate_reference,
-    optimization_run_reference,
-)
-from whetstone.optimization.tools import (
-    ToolCapacityScope,
-    tool_capacity_binding,
-    tool_config_reference,
-    tool_definition_reference,
-)
-
-from .support import (
+from tests.optimization.support import (
     make_harness,
     memory_tool_call_store,
     optimizer_config_ref,
     python_format_contract,
     registry,
 )
+from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
+from whetstone.core.identity import TypedRef
+from whetstone.envs.factory import build_env_experiment
+from whetstone.evaluation.engine import EvaluationEngine
+from whetstone.execution.partials import PartialLog
+from whetstone.experiment.candidate import Candidate, candidate_reference
+from whetstone.optimization.codex.adapter import (
+    CODEX_OUTPUT_ARTIFACT_SCHEMA,
+    CodexAdapter,
+    CodexOutputArtifact,
+    OpaqueStepError,
+)
+from whetstone.optimization.codex.mcp_bridge import (
+    EvaluateCandidateServer,
+    InProcessMcpProcess,
+    JsonRpcClient,
+    McpError,
+    serve_stdio,
+)
+from whetstone.optimization.codex.mcp_server import build_server_from_env
+from whetstone.optimization.codex.runner import (
+    _CODEX_DENIED_FEATURES,
+    _MCP_TOOLS_APPROVAL_MODE,
+    FakeCodexRunner,
+    ScriptedAgentCall,
+    SubprocessCodexRunner,
+    _MacOsProcessIsolation,
+    build_codex_command,
+)
+from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
+from whetstone.optimization.contracts import (
+    BudgetState,
+    OptimizationRun,
+    OptimizationStepRequest,
+    OutputContract,
+    StepKind,
+    StepMode,
+    StepStatus,
+    optimization_run_reference,
+)
+from whetstone.optimization.tools.contracts import (
+    ToolCapacity,
+    ToolCapacityScope,
+    ToolConfig,
+    ToolDefinition,
+    tool_capacity_binding,
+    tool_config_reference,
+    tool_definition_reference,
+)
+from whetstone.optimization.tools.evaluator import EngineToolEvaluator
+from whetstone.optimization.tools.execution import EvaluatingToolExecutor
 
 ROW_JOB_ENTRYPOINT = "tests.envs.process_workers:drive_internal_success"
 MODEL_ROUTE = "openai/test"
@@ -435,7 +435,7 @@ def _subprocess_boundary(tmp_path, mode: str):
     executable.write_text(
         (
             f"#!{sys.executable}\n"
-            "from tests.optimization.fake_codex_cli import app\n"
+            "from tests.optimization.codex.fake_cli import app\n"
             "app()\n"
         ),
         encoding="utf-8",

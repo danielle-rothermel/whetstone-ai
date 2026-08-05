@@ -8,19 +8,18 @@ from typing import Any, Protocol
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
+from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.identity import TerminalFailure, TypedRef
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optimization.adapters import AdapterOutput
-from whetstone.optimization.effect_authority import ReplayPolicy
-from whetstone.optimization.identity import TerminalFailure, TypedRef
-from whetstone.optimization.mutation import DiffCheckError, diff_check
-from whetstone.optimization.schema import (
-    Candidate,
+from whetstone.optimization.contracts import (
     OptimizationStepRequest,
     StepMode,
     StepStatus,
-    candidate_reference,
 )
-from whetstone.optimization.tool_store import ToolCallStore
-from whetstone.optimization.tools import RuntimeToolHandle
+from whetstone.optimization.proposal.mutation import DiffCheckError, diff_check
+from whetstone.optimization.tools.contracts import RuntimeToolHandle
+from whetstone.optimization.tools.facade import ToolCallStore
 
 CODEX_ADAPTER_KEY = "codex"
 CODEX_OUTPUT_ARTIFACT_SCHEMA = "whetstone.codex_output_artifact"

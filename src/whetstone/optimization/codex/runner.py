@@ -16,23 +16,24 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import ValidationError
 
-from whetstone.optimization.codex import (
+from whetstone.core.identity import TypedRef
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.reward import RewardPolicy
+from whetstone.optimization.codex.adapter import (
     CodexOutputArtifact,
     CodexRunResult,
     OpaqueStepError,
 )
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.mcp_bridge import (
+from whetstone.optimization.codex.mcp_bridge import (
     EvaluateCandidateServer,
     InProcessMcpProcess,
     JsonRpcClient,
 )
-from whetstone.optimization.reward import RewardPolicy
-from whetstone.optimization.schema import Candidate, OptimizationStepRequest
-from whetstone.optimization.tools import RuntimeToolHandle
+from whetstone.optimization.contracts import OptimizationStepRequest
+from whetstone.optimization.tools.contracts import RuntimeToolHandle
 
 if TYPE_CHECKING:
-    from whetstone.execution.mode import EvaluationRuntimeConfig
+    from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
 
 _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 # Codex 0.146 parses mcp_servers.<name>.default_tools_approval_mode as one of
@@ -285,7 +286,7 @@ def build_codex_command(
             f"mcp_servers.whetstone.command={json.dumps(sys.executable)}",
             "-c",
             "mcp_servers.whetstone.args="
-            + json.dumps(["-m", "whetstone.optimization.mcp_server"]),
+            + json.dumps(["-m", "whetstone.optimization.codex.mcp_server"]),
             # stdin is closed, so an approval prompt for the one evaluation
             # tool would stall or cancel the measurement instead of asking.
             # This server is the only sanctioned measurement path and is
@@ -485,7 +486,7 @@ class SubprocessCodexRunner:
                 shutil.copy2(candidate, destination / name)
 
     def _stage_runtime(self, destination: Path) -> None:
-        package_root = Path(__file__).resolve().parents[1]
+        package_root = Path(__file__).resolve().parents[2]
         shutil.copytree(
             package_root,
             destination / package_root.name,

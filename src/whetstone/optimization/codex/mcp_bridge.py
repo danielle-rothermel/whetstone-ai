@@ -7,8 +7,8 @@ from collections.abc import Callable
 from io import StringIO
 from typing import Any, TextIO
 
-from whetstone.optimization.identity import ImmutableJsonObject, NonEmptyId
-from whetstone.optimization.tools import (
+from whetstone.core.identity import ImmutableJsonObject, NonEmptyId
+from whetstone.optimization.tools.contracts import (
     RuntimeToolHandle,
     ToolCall,
     ToolResult,

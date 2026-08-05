@@ -9,15 +9,13 @@ from pathlib import Path
 
 import typer
 
-from whetstone.optimization.mcp_bridge import (
+from whetstone.experiment.candidate import candidate_reference
+from whetstone.optimization.codex.mcp_bridge import (
     InProcessMcpProcess,
     JsonRpcClient,
 )
-from whetstone.optimization.mcp_server import build_server_from_env
-from whetstone.optimization.schema import (
-    OptimizationStepRequest,
-    candidate_reference,
-)
+from whetstone.optimization.codex.mcp_server import build_server_from_env
+from whetstone.optimization.contracts import OptimizationStepRequest
 
 _MODEL_ROUTE = "openai/test"
 

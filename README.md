@@ -25,8 +25,8 @@ these areas:
   capture component traces, and aggregate correctness, compression, reward,
   and statistical evidence.
 - **Optimization** provides a shared candidate-evaluation harness and native
-  COPRO, MIPROv2, and GEPA flows, including proposal generation, tool use,
-  algorithm state, and result artifacts.
+  COPRO, MIPROv2, and GEPA flows, plus a Codex adapter with one MCP evaluation
+  tool, a typed output artifact, and a fail-closed macOS filesystem boundary.
 - **Authority and coordination** govern durable proposal and evaluation
   effects, ownership claims, and terminal result binding across replay and
   recovery.
@@ -41,7 +41,7 @@ The repository boundaries follow the same shape:
 | Provider | `whetstone.provider` | Provider requests, attempt evidence, classification, and retry policy |
 | Execution | `whetstone.execution` | Process fanout, partial progress, prompt caching, and resume behavior |
 | Evaluation | `whetstone.evaluation` | Evaluation drivers, traces, evidence, scoring, and aggregates |
-| Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, and tool use |
+| Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, Codex, and tool use |
 | Coordination | `whetstone.coordination` | Durable claims, official authority, and proposal/evaluation services |
 
 The authoritative repository vocabulary and standing rules are

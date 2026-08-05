@@ -7,23 +7,26 @@ import sys
 
 from dr_store import ObjectStore, SqliteBackend
 
-from whetstone.evaluation.tool import EngineToolEvaluator
-from whetstone.execution.mode import EvaluationRuntimeConfig
-from whetstone.optimization.effect_authority import (
+from whetstone.core.effects.authority import (
     EffectAuthority,
     ReplayPolicy,
 )
-from whetstone.optimization.mcp_bridge import (
+from whetstone.experiment.reward import RewardPolicy
+from whetstone.optimization.codex.mcp_bridge import (
     EvaluateCandidateServer,
     serve_stdio,
 )
-from whetstone.optimization.reward import RewardPolicy
-from whetstone.optimization.tool_eval import EvaluatingToolExecutor
-from whetstone.optimization.tool_store import (
+from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
+from whetstone.optimization.tools.contracts import (
+    ToolCapacityBinding,
+    ToolConfig,
+)
+from whetstone.optimization.tools.evaluator import EngineToolEvaluator
+from whetstone.optimization.tools.execution import EvaluatingToolExecutor
+from whetstone.optimization.tools.facade import (
     ToolAdmissionAuthority,
     ToolCallStore,
 )
-from whetstone.optimization.tools import ToolCapacityBinding, ToolConfig
 
 
 def build_server_from_env(

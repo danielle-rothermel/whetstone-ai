@@ -14,8 +14,8 @@ from pydantic import (
 )
 
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.internal_eval import InternalRowRequest
 from whetstone.envs.sampling import INTERNAL_EVAL, Completeness
+from whetstone.evaluation.drivers.internal import InternalRowRequest
 from whetstone.evaluation.engine import EvaluationEngine
 from whetstone.execution.fanout import ProcessJob
 from whetstone.execution.partials import PartialLog
