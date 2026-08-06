@@ -88,6 +88,6 @@ def test_env_task_over_real_instances(env_name: str) -> None:
     pool = env.generate_pool(n_per_stratum=1)
     inst = pool.instances[0]
     task = EnvTask.from_instance(env_name, inst)
-    assert task.gold not in task.prompt_inputs_dict().values() or (True)
+    assert task.gold not in task.prompt_inputs_dict().values()
     assert len(task.task_identity()) == 64
     assert task.instance_content_hash
