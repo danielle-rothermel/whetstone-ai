@@ -34,6 +34,7 @@ from whetstone.envs.ed1 import (
     validate_ed1_body,
 )
 from whetstone.envs.ed1_scoring import (
+    BatchScoringDeadlineExceeded,
     CodeBatchScorer,
     CodeScore,
     CodeScoringInput,
@@ -855,23 +856,48 @@ def run_d1_eval(
             for generated in (driven[(instance_id, _index)],)
             if isinstance(generated, D1GeneratedRowOutcome)
         )
-        scores = tuple(batch_scorer(scoring_inputs))
-        if len(scores) != len(generated_keys):
-            raise ValueError("D1 batch scorer returned the wrong result count")
-        for key, score in zip(generated_keys, scores, strict=True):
-            generated = driven[key]
-            if not isinstance(generated, D1GeneratedRowOutcome):
-                raise AssertionError("generated D1 row changed before scoring")
-            outcome = _finish_generated_row(generated, score)
-            driven[key] = outcome
-            request = completed_requests[key]
-            _persist(
-                by_instance[key[0]],
-                key[1],
-                outcome,
-                request_identity=request.request_identity,
-                redrive_pending=False,
-            )
+        remaining_wall_seconds = remaining_phase_wall_seconds(phase_deadline)
+        if remaining_wall_seconds == 0.0:
+            scores = None
+        else:
+            try:
+                scores = tuple(
+                    batch_scorer(
+                        scoring_inputs,
+                        max_wall_seconds=remaining_wall_seconds,
+                    )
+                )
+            except BatchScoringDeadlineExceeded:
+                scores = None
+        if scores is None:
+            for key in generated_keys:
+                driven[key] = D1RowOutcome(
+                    submission_score=None,
+                    output_text=None,
+                    row_state=ExecutedRowState.MISSING,
+                    executed_component_steps=(),
+                )
+        else:
+            if len(scores) != len(generated_keys):
+                raise ValueError(
+                    "D1 batch scorer returned the wrong result count"
+                )
+            for key, score in zip(generated_keys, scores, strict=True):
+                generated = driven[key]
+                if not isinstance(generated, D1GeneratedRowOutcome):
+                    raise AssertionError(
+                        "generated D1 row changed before scoring"
+                    )
+                outcome = _finish_generated_row(generated, score)
+                driven[key] = outcome
+                request = completed_requests[key]
+                _persist(
+                    by_instance[key[0]],
+                    key[1],
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=False,
+                )
 
     submission_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []

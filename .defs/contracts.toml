@@ -52,7 +52,10 @@ such rows to one batch scorer, and accepts exactly one result per input before
 aggregation or terminal partial persistence. One caller-owned checkpointed
 execution cache remains open across coordinator batches; persistent prefetch
 and checkpoint operations are bulk boundaries, while per-request reads and
-writes stay in memory. ED1M retains its mutant-specific scoring path."""
+writes stay in memory. Coordinator scoring shares the evaluation phase wall:
+an exhausted wall starts no batch work, each execution is clamped to the
+remaining wall, and rows left unscored at expiry are missing. ED1M retains its
+mutant-specific scoring path."""
 rationale = """
 Keeping persistent storage outside per-row workers prevents SQLite reads,
 canonicalization, and trace validation from dominating preprocessing and test

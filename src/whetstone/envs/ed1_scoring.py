@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+import math
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
+from time import monotonic
 from types import TracebackType
+from typing import Protocol
 
 from dr_code.caching import CheckpointedExecutionCache
 from dr_code.humaneval import (
@@ -17,7 +20,13 @@ from dr_code.humaneval import (
     score_humaneval_submission,
     score_humaneval_submissions_batch,
 )
-from dr_exec import Executor
+from dr_exec import (
+    CancelToken,
+    CompletedExecution,
+    ExecutionJob,
+    Executor,
+    FiniteDurationLimit,
+)
 from dr_serialize import IdentityDocument
 from dr_store import SqliteRecordCache
 
@@ -84,9 +93,71 @@ class CodeScoringInput:
     task: HumanEvalTask
 
 
-type CodeBatchScorer = Callable[
-    [Sequence[CodeScoringInput]], Sequence[CodeScore]
-]
+class BatchScoringDeadlineExceeded(RuntimeError):
+    """The shared evaluation phase wall expired during code scoring."""
+
+
+class CodeBatchScorer(Protocol):
+    def __call__(
+        self,
+        inputs: Sequence[CodeScoringInput],
+        *,
+        max_wall_seconds: float | None = None,
+    ) -> Sequence[CodeScore]: ...
+
+
+class _DeadlineExecutor:
+    """Clamp every execution job to one shared batch deadline."""
+
+    def __init__(self, executor: Executor, deadline: float) -> None:
+        self._executor = executor
+        self._deadline = deadline
+        self.expired = False
+
+    def run(
+        self,
+        job: ExecutionJob,
+        /,
+        *,
+        cancellation: CancelToken | None = None,
+    ) -> CompletedExecution:
+        remaining_seconds = self._deadline - monotonic()
+        if remaining_seconds <= 0:
+            self.expired = True
+            raise BatchScoringDeadlineExceeded
+        remaining_ns = max(1, math.ceil(remaining_seconds * 1_000_000_000))
+        wall_time = job.budgets.wall_time
+        if isinstance(wall_time, FiniteDurationLimit):
+            remaining_ns = min(remaining_ns, wall_time.max_ns)
+        bounded_job = replace(
+            job,
+            budgets=job.budgets.model_copy(
+                update={"wall_time": FiniteDurationLimit(max_ns=remaining_ns)}
+            ),
+        )
+        try:
+            return self._executor.run(
+                bounded_job,
+                cancellation=cancellation,
+            )
+        finally:
+            if monotonic() >= self._deadline:
+                self.expired = True
+
+
+def _batch_deadline(max_wall_seconds: float | None) -> float | None:
+    if max_wall_seconds is None:
+        return None
+    if type(max_wall_seconds) not in (int, float):
+        raise ValueError(
+            "max_wall_seconds must be a finite nonnegative real number"
+        )
+    seconds = float(max_wall_seconds)
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError(
+            "max_wall_seconds must be a finite nonnegative real number"
+        )
+    return monotonic() + seconds
 
 
 class CheckpointedCodeBatchScorer:
@@ -138,11 +209,22 @@ class CheckpointedCodeBatchScorer:
         self.close()
 
     def __call__(
-        self, inputs: Sequence[CodeScoringInput]
+        self,
+        inputs: Sequence[CodeScoringInput],
+        *,
+        max_wall_seconds: float | None = None,
     ) -> tuple[CodeScore, ...]:
         cache = self._cache
         if cache is None:
             raise RuntimeError("checkpointed code batch scorer is not open")
+        deadline = _batch_deadline(max_wall_seconds)
+        if deadline is not None and monotonic() >= deadline:
+            raise BatchScoringDeadlineExceeded
+        executor: Executor = self._executor
+        deadline_executor: _DeadlineExecutor | None = None
+        if deadline is not None:
+            deadline_executor = _DeadlineExecutor(executor, deadline)
+            executor = deadline_executor
         requests = tuple(
             HumanEvalSubmissionRequest(
                 raw_submission=item.raw_submission,
@@ -154,9 +236,15 @@ class CheckpointedCodeBatchScorer:
         )
         results = score_humaneval_submissions_batch(
             requests,
-            executor=self._executor,
+            executor=executor,
             execution_cache=cache,
         )
+        cache.checkpoint()
+        if deadline is not None and (
+            monotonic() >= deadline
+            or (deadline_executor is not None and deadline_executor.expired)
+        ):
+            raise BatchScoringDeadlineExceeded
         projected = tuple(
             _project_submission_score(result) for result in results
         )
@@ -164,7 +252,6 @@ class CheckpointedCodeBatchScorer:
             raise ValueError(
                 "dr-code batch scorer returned the wrong result count"
             )
-        cache.checkpoint()
         return projected
 
     def close(self) -> None:
@@ -230,6 +317,7 @@ def score_ed1_submission(
 __all__ = [
     "ED1_SCORING_PROFILE_ID",
     "ED1_SCORING_PROFILE_VERSION",
+    "BatchScoringDeadlineExceeded",
     "CheckpointedCodeBatchScorer",
     "CodeBatchScorer",
     "CodeScore",

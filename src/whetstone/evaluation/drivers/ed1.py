@@ -37,6 +37,7 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_blended import blend_per_task
 from whetstone.envs.ed1_scoring import (
+    BatchScoringDeadlineExceeded,
     CodeBatchScorer,
     CodeScore,
     CodeScoringInput,
@@ -1270,27 +1271,52 @@ def run_ed1_eval(
             for generated in (driven[(instance_id, index)],)
             if isinstance(generated, Ed1GeneratedRowOutcome)
         )
-        scores = tuple(batch_scorer(scoring_inputs))
-        if len(scores) != len(generated_keys):
-            raise ValueError(
-                "ED1 batch scorer returned the wrong result count"
-            )
-        for key, score in zip(generated_keys, scores, strict=True):
-            generated = driven[key]
-            if not isinstance(generated, Ed1GeneratedRowOutcome):
-                raise AssertionError(
-                    "generated ED1 row changed before scoring"
+        remaining_wall_seconds = remaining_phase_wall_seconds(phase_deadline)
+        if remaining_wall_seconds == 0.0:
+            scores = None
+        else:
+            try:
+                scores = tuple(
+                    batch_scorer(
+                        scoring_inputs,
+                        max_wall_seconds=remaining_wall_seconds,
+                    )
                 )
-            outcome = _finish_generated_row(generated, score)
-            driven[key] = outcome
-            request = completed_requests[key]
-            _persist(
-                by_instance[key[0]],
-                key[1],
-                outcome,
-                request_identity=request.request_identity,
-                redrive_pending=False,
-            )
+            except BatchScoringDeadlineExceeded:
+                scores = None
+        if scores is None:
+            for key in generated_keys:
+                driven[key] = Ed1RowOutcome(
+                    primary_value=None,
+                    compression_value=None,
+                    encoder_text=None,
+                    decoder_text=None,
+                    row_state=ExecutedRowState.MISSING,
+                    executed_component_steps=(),
+                    max_budget=None,
+                    encoder_len=None,
+                )
+        else:
+            if len(scores) != len(generated_keys):
+                raise ValueError(
+                    "ED1 batch scorer returned the wrong result count"
+                )
+            for key, score in zip(generated_keys, scores, strict=True):
+                generated = driven[key]
+                if not isinstance(generated, Ed1GeneratedRowOutcome):
+                    raise AssertionError(
+                        "generated ED1 row changed before scoring"
+                    )
+                outcome = _finish_generated_row(generated, score)
+                driven[key] = outcome
+                request = completed_requests[key]
+                _persist(
+                    by_instance[key[0]],
+                    key[1],
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=False,
+                )
 
     # Assemble per-task rows (primary + compression) + outputs, instance/repeat
     # order.

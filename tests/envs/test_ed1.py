@@ -40,6 +40,7 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import (
+    BatchScoringDeadlineExceeded,
     CheckpointedCodeBatchScorer,
     CodeScore,
     CodeScoringInput,
@@ -161,7 +162,8 @@ def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
             decoder_text=f"# {instance.id} repeat {repeat}",
         )
 
-    def score_batch(inputs):
+    def score_batch(inputs, *, max_wall_seconds: float | None = None):
+        assert max_wall_seconds is None
         batch_sizes.append(len(inputs))
         return tuple(
             CodeScore(
@@ -299,6 +301,39 @@ def test_checkpointed_batch_scorer_restores_execution_without_reexecuting(
     assert [score.row_value for score in first_scores] == [1.0, 1.0]
     assert [score.row_value for score in restored_scores] == [1.0]
     assert unexpected_calls == []
+
+
+def test_checkpointed_batch_scorer_rejects_expired_wall_before_execution(
+    tmp_path: Path,
+) -> None:
+    task = _tasks(1)[0].humaneval_task
+    execution_calls: list[object] = []
+
+    def unexpected_execution(job, _cancellation):
+        execution_calls.append(job)
+        raise AssertionError("expired batch must not execute")
+
+    with CheckpointedCodeBatchScorer(
+        tmp_path / "expired-execution-cache.sqlite3",
+        runtime_identity=IdentityDocument(
+            schema="tests/runtime",
+            schema_version=1,
+            payload={"runtime": "expired"},
+        ),
+        executor=FakeExecutor(responder=unexpected_execution),
+    ) as scorer:
+        with pytest.raises(BatchScoringDeadlineExceeded):
+            scorer(
+                (
+                    CodeScoringInput(
+                        raw_submission=task.ground_truth_code,
+                        task=task,
+                    ),
+                ),
+                max_wall_seconds=0.0,
+            )
+
+    assert execution_calls == []
 
 
 def _evaluate(
