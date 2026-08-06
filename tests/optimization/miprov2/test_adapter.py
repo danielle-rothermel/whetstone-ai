@@ -8,7 +8,11 @@ from dr_store import MemoryBackend, ObjectStore
 
 import whetstone.optimization as optimization
 from tests.optimization.miprov2.support import miprov2_injected_defaults
-from tests.optimization.support import candidate, python_format_contract
+from tests.optimization.support import (
+    candidate,
+    proposal_run,
+    python_format_contract,
+)
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.experiment.candidate import (
     TemplateRenderContract,
@@ -158,7 +162,7 @@ def test_candidate_rendering_mutates_only_user_prompt_template() -> None:
                 "demo_set": {"examples": [{"query": "q", "answer": "a"}]},
             },
         ),
-        template_render_contract=python_format_contract(),
+        run=proposal_run(),
     )
 
     assert rendered.base_ref == base_ref.record_ref
@@ -245,6 +249,29 @@ def test_composed_json_survives_rendering_under_every_contract(
     assert "{{" not in rendered and "}}" not in rendered
 
 
+def test_literal_replace_rejects_placeholder_looking_demo_content() -> None:
+    contract = TemplateRenderContract(
+        kind=TemplateRenderKind.LITERAL_REPLACE_V1,
+        available_fields=("query",),
+        required_fields=("query",),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"cannot losslessly compose.*demonstrations.*'\{query\}'",
+    ):
+        compose_user_prompt_template(
+            (
+                {
+                    "component_id": "encode",
+                    "instruction": "Answer {query}.",
+                    "demo_set": [{"answer": "literal {query}"}],
+                },
+            ),
+            template_render_contract=contract,
+        )
+
+
 def test_rendering_rejects_empty_or_multiple_components() -> None:
     base = candidate_reference(candidate("base", text="Initial {query}."))
 
@@ -253,7 +280,7 @@ def test_rendering_rejects_empty_or_multiple_components() -> None:
             base=base,
             candidate_id="empty",
             components=(),
-            template_render_contract=python_format_contract(),
+            run=proposal_run(),
         )
     with pytest.raises(ValueError, match="exactly one"):
         candidate_from_components(
@@ -263,5 +290,5 @@ def test_rendering_rejects_empty_or_multiple_components() -> None:
                 {"component_id": "generate", "instruction": "One {query}"},
                 {"component_id": "encode", "instruction": "Two {query}"},
             ),
-            template_render_contract=python_format_contract(),
+            run=proposal_run(),
         )

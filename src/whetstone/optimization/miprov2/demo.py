@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
@@ -117,7 +117,17 @@ class BootstrapAcceptance(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        return {
+            "source_task_identity": self.source_task_identity,
+            "source_rollout_identity": self.source_rollout_identity,
+            "source_trace_identity": self.source_trace_identity,
+            "source_output_identity": self.source_output_identity,
+            "source_score_identity": self.source_score_identity,
+            "metric_present": self.metric_present,
+            "score": self.score,
+            "metric_threshold": self.metric_threshold,
+            "accepted": self.accepted,
+        }
 
     def identity_hash(self) -> str:
         return compute_identity_hash(
@@ -162,6 +172,29 @@ class ObservedTraceStep(BaseModel):
         default_factory=lambda: ImmutableJsonObject({})
     )
 
+    def model_post_init(self, _context: Any) -> None:
+        self._freeze_json_fields()
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied._freeze_json_fields()
+        return copied
+
+    def _freeze_json_fields(self) -> None:
+        for field in ("inputs", "outputs"):
+            value = getattr(self, field)
+            if not isinstance(value, ImmutableJsonObject):
+                object.__setattr__(self, field, ImmutableJsonObject(value))
+
     @model_validator(mode="after")
     def _validate_step(self) -> ObservedTraceStep:
         if self.trace_index < 0:
@@ -172,7 +205,12 @@ class ObservedTraceStep(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        return {
+            "trace_index": self.trace_index,
+            "component_id": self.component_id,
+            "inputs": self.inputs.to_json(),
+            "outputs": self.outputs.to_json(),
+        }
 
 
 class ComponentDemo(BaseModel):
@@ -198,6 +236,29 @@ class ComponentDemo(BaseModel):
     source_trace_index: StrictInt | None
     score: MetricValue | None
     acceptance_identity_hash: StrictStr
+
+    def model_post_init(self, _context: Any) -> None:
+        self._freeze_json_fields()
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied._freeze_json_fields()
+        return copied
+
+    def _freeze_json_fields(self) -> None:
+        for field in ("inputs", "outputs"):
+            value = getattr(self, field)
+            if not isinstance(value, ImmutableJsonObject):
+                object.__setattr__(self, field, ImmutableJsonObject(value))
 
     @model_validator(mode="after")
     def _validate_demo(self) -> ComponentDemo:
@@ -232,7 +293,21 @@ class ComponentDemo(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        return {
+            "component_id": self.component_id,
+            "source_kind": self.source_kind.value,
+            "inputs": self.inputs.to_json(),
+            "outputs": self.outputs.to_json(),
+            "augmented": self.augmented,
+            "source_task_identity": self.source_task_identity,
+            "source_rollout_identity": self.source_rollout_identity,
+            "source_trace_identity": self.source_trace_identity,
+            "source_output_identity": self.source_output_identity,
+            "source_score_identity": self.source_score_identity,
+            "source_trace_index": self.source_trace_index,
+            "score": self.score,
+            "acceptance_identity_hash": self.acceptance_identity_hash,
+        }
 
     def identity_hash(self) -> str:
         return compute_identity_hash(
@@ -250,6 +325,29 @@ class LabeledTaskDemo(BaseModel):
     source_task_identity: StrictStr
     inputs_by_component: ImmutableJsonObject
     outputs_by_component: ImmutableJsonObject
+
+    def model_post_init(self, _context: Any) -> None:
+        self._freeze_json_fields()
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied._freeze_json_fields()
+        return copied
+
+    def _freeze_json_fields(self) -> None:
+        for field in ("inputs_by_component", "outputs_by_component"):
+            value = getattr(self, field)
+            if not isinstance(value, ImmutableJsonObject):
+                object.__setattr__(self, field, ImmutableJsonObject(value))
 
     @model_validator(mode="after")
     def _validate_task(self) -> LabeledTaskDemo:
@@ -372,6 +470,16 @@ class ComponentDemoSet(BaseModel):
             if sequence.component_id == component_id:
                 return sequence.demos
         raise KeyError(component_id)
+
+
+def _json_object_at(
+    value: ImmutableJsonObject,
+    key: str,
+) -> dict[str, Any]:
+    nested = value[key]
+    if not isinstance(nested, ImmutableJsonObject):
+        raise ValueError(f"{key!r} must address a JSON object")
+    return nested.to_json()
 
 
 def proposal_demo_context(

@@ -8,7 +8,6 @@ from dr_serialize import canonical_json
 if TYPE_CHECKING:
     from whetstone.experiment.candidate import (
         Candidate,
-        TemplateRenderContract,
     )
     from whetstone.optimization.contracts import (
         OptimizationRun,
@@ -60,12 +59,31 @@ class ProposalValidationError(DiffCheckError):
     """A typed proposer draft cannot become a valid candidate."""
 
 
+def _validated_optimization_run(
+    run: OptimizationRun | OptimizationRunRef,
+) -> OptimizationRun:
+    """Revalidate an exact run authority at its mutation boundary."""
+
+    from whetstone.optimization.contracts import (
+        OptimizationRun,
+        OptimizationRunRef,
+    )
+
+    if type(run) is OptimizationRun:
+        return OptimizationRun.model_validate(run.model_dump(mode="python"))
+    if type(run) is OptimizationRunRef:
+        return OptimizationRunRef.model_validate(
+            run.model_dump(mode="python")
+        ).record
+    raise TypeError("run must be an exact OptimizationRun or RunRef")
+
+
 def candidate_from_draft(
     *,
     base: Candidate,
     candidate_id: str,
     draft: ProposalDraft,
-    run: OptimizationRun | OptimizationRunRef | TemplateRenderContract,
+    run: OptimizationRun | OptimizationRunRef,
 ) -> Candidate:
     """The sole draft-to-candidate validation path.
 
@@ -73,6 +91,7 @@ def candidate_from_draft(
     placeholders and then pass the same mutation-surface diff check as every
     other proposal. There is no base-template fallback.
     """
+    exact_run = _validated_optimization_run(run)
     if draft.failed:
         failure = draft.terminal_failure
         if failure is None:
@@ -82,26 +101,11 @@ def candidate_from_draft(
         raise ProposalValidationError(failure.message)
     from whetstone.experiment.candidate import (
         Candidate,
-        TemplateRenderContract,
         candidate_reference,
     )
-    from whetstone.optimization.contracts import (
-        OptimizationRun,
-        OptimizationRunRef,
-    )
 
-    if type(run) is OptimizationRun:
-        contract = run.template_render_contract
-    elif type(run) is OptimizationRunRef:
-        contract = run.record.template_render_contract
-    elif type(run) is TemplateRenderContract:
-        contract = run
-    else:
-        raise TypeError(
-            "run must be an exact OptimizationRun, RunRef, or render contract"
-        )
     try:
-        contract.validate_template(draft.template)
+        exact_run.template_render_contract.validate_template(draft.template)
     except ValueError as error:
         raise ProposalValidationError(
             f"proposal template violates its render contract: {error}"
@@ -123,17 +127,7 @@ def validate_candidate_template(
     run: OptimizationRun | OptimizationRunRef,
 ) -> None:
     """Validate one candidate template under an exact run's authority."""
-    from whetstone.optimization.contracts import (
-        OptimizationRun,
-        OptimizationRunRef,
-    )
-
-    if type(run) is OptimizationRun:
-        exact_run = run
-    elif type(run) is OptimizationRunRef:
-        exact_run = run.record
-    else:
-        raise TypeError("run must be an exact OptimizationRun or RunRef")
+    exact_run = _validated_optimization_run(run)
     exact_run.template_render_contract.validate_template(
         candidate.payload.get(MUTATION_FIELD)
     )

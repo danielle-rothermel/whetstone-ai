@@ -1,6 +1,8 @@
 from inspect import signature
+from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from whetstone.experiment.candidate import (
     Candidate,
@@ -16,6 +18,7 @@ from whetstone.optimization.contracts import (
     OptimizationRun,
     OutputContract,
     StepMode,
+    optimization_run_reference,
 )
 from whetstone.optimization.proposal.mutation import (
     DiffCheckError,
@@ -286,12 +289,33 @@ def test_draft_clones_nested_payload_before_mutating() -> None:
     }
 
 
-def test_draft_accepts_exact_render_contract_authority() -> None:
-    proposed = candidate_from_draft(
-        base=candidate(),
-        candidate_id="P1",
-        draft=ProposalDraft(template="{query}"),
-        run=python_format_contract(),
+def test_draft_requires_exact_run_authority() -> None:
+    with pytest.raises(TypeError, match="exact OptimizationRun"):
+        candidate_from_draft(
+            base=candidate(),
+            candidate_id="P1",
+            draft=ProposalDraft(template="{query}"),
+            run=cast(Any, python_format_contract()),
+        )
+
+
+def test_draft_revalidates_copied_and_constructed_run_authority() -> None:
+    exact_run = proposal_run()
+    invalid_run = exact_run.model_copy(update={"mode": StepMode.PURE})
+    invalid_ref = optimization_run_reference(exact_run).model_copy(
+        update={"identity_hash": "0" * 64}
+    )
+    constructed_ref = type(invalid_ref).model_construct(
+        record=exact_run,
+        record_ref=base_ref("not-the-run"),
+        identity_hash=exact_run.identity_hash(),
     )
 
-    assert proposed.payload["user_prompt_template"] == "{query}"
+    for authority in (invalid_run, invalid_ref, constructed_ref):
+        with pytest.raises(ValidationError):
+            candidate_from_draft(
+                base=candidate(),
+                candidate_id="P1",
+                draft=ProposalDraft(template="{query}"),
+                run=authority,
+            )

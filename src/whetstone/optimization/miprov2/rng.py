@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any, Literal, Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     StrictInt,
     StrictStr,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -65,16 +67,39 @@ class Miprov2RngDraw(BaseModel):
 
     @field_validator("arguments", "result", mode="before")
     @classmethod
-    def _normalize_json_sequences(cls, value: Any) -> Any:
-        return _lists_for_tuples(value)
+    def _freeze_json(cls, value: Any) -> Any:
+        return _freeze_json_value(value)
+
+    @field_serializer("arguments", "result")
+    def _serialize_json(self, value: Any) -> Any:
+        return _json_value(value)
+
+    def model_post_init(self, _context: Any) -> None:
+        object.__setattr__(
+            self,
+            "arguments",
+            tuple(_freeze_json_value(item) for item in self.arguments),
+        )
+        object.__setattr__(self, "result", _freeze_json_value(self.result))
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied.model_post_init(None)
+        return copied
 
     @model_validator(mode="after")
     def _validate_draw(self) -> Miprov2RngDraw:
         if self.ordinal < 0:
             raise ValueError("RNG draw ordinal cannot be negative")
-        dumped = self.model_dump(mode="json")
-        ImmutableJsonObject({"value": dumped["arguments"]})
-        ImmutableJsonObject({"value": dumped["result"]})
         return self
 
 
@@ -98,7 +123,7 @@ class Miprov2RngCheckpoint(BaseModel):
         rng = random.Random(self.seed)
         for draw in self.draws:
             actual = _replay_draw(rng, draw)
-            if _lists_for_tuples(actual) != draw.result:
+            if _lists_for_tuples(actual) != _lists_for_tuples(draw.result):
                 raise ValueError(
                     f"RNG draw {draw.ordinal} result does not match replay"
                 )
@@ -192,6 +217,8 @@ class Miprov2DurableBindings(BaseModel):
     task_route_identity_hash: StrictStr
     execution_policy_identity_hash: StrictStr
     prompt_adapter_identity_hash: StrictStr
+    proposal_executor_policy_identity_hash: StrictStr
+    proposal_transport_durability_identity_hash: StrictStr
     base_candidate_identity_hash: StrictStr
     teacher_candidate_identity_hash: StrictStr
     demo_bridge_version: Literal["whetstone_component_demo_bridge/v1"] = (
@@ -206,6 +233,8 @@ class Miprov2DurableBindings(BaseModel):
             "task_route_identity_hash",
             "execution_policy_identity_hash",
             "prompt_adapter_identity_hash",
+            "proposal_executor_policy_identity_hash",
+            "proposal_transport_durability_identity_hash",
             "base_candidate_identity_hash",
             "teacher_candidate_identity_hash",
         ):
@@ -260,12 +289,33 @@ def _replay_draw(rng: random.Random, draw: Miprov2RngDraw) -> Any:
 
 
 def _lists_for_tuples(value: Any) -> Any:
+    if isinstance(value, ImmutableJsonObject):
+        return value.to_json()
     if isinstance(value, tuple):
         return [_lists_for_tuples(item) for item in value]
     if isinstance(value, list):
         return [_lists_for_tuples(item) for item in value]
     if isinstance(value, dict):
         return {key: _lists_for_tuples(item) for key, item in value.items()}
+    return value
+
+
+def _freeze_json_value(value: Any) -> Any:
+    """Defensively freeze one strict JSON value without changing its shape."""
+
+    if isinstance(value, ImmutableJsonObject):
+        return value
+    if isinstance(value, tuple):
+        return tuple(_freeze_json_value(item) for item in value)
+    wrapper = ImmutableJsonObject({"value": value})
+    return wrapper["value"]
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, ImmutableJsonObject):
+        return value.to_json()
+    if isinstance(value, tuple):
+        return [_json_value(item) for item in value]
     return value
 
 

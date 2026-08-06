@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import math
 import re
-import string
 from collections import Counter
-from typing import Any, Literal
+from collections.abc import Mapping
+from typing import Any, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -22,6 +22,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
+from whetstone.experiment.candidate import TemplateRenderContract
 from whetstone.optimization.miprov2.demo import (
     ComponentDemo,
     ComponentDemoSet,
@@ -36,7 +37,7 @@ from whetstone.optimization.miprov2.rng import (
 )
 
 MIPROV2_PROPOSAL_SCHEMA = "whetstone.miprov2_grounded_proposal"
-MIPROV2_PROPOSAL_SCHEMA_VERSION = 1
+MIPROV2_PROPOSAL_SCHEMA_VERSION = 2
 DATASET_INITIAL_SCHEMA_TAG = "miprov2-dataset-initial/v1"
 DATASET_FOLLOWUP_SCHEMA_TAG = "miprov2-dataset-followup/v1"
 DATASET_FINAL_SCHEMA_TAG = "miprov2-dataset-final/v1"
@@ -92,23 +93,6 @@ Miprov2ProposalEffect = Literal[
 ]
 
 
-def _template_placeholder_fields(template: str) -> tuple[str, ...]:
-    """Parse native placeholders without importing the candidate runtime."""
-
-    fields: list[str] = []
-    for _literal, field_name, _spec, _conversion in string.Formatter().parse(
-        template
-    ):
-        if field_name is None:
-            continue
-        if field_name == "":
-            fields.append("<positional>")
-            continue
-        head = field_name.replace("[", ".").split(".", 1)[0]
-        fields.append("<positional>" if head.isdigit() else head)
-    return tuple(fields)
-
-
 class Miprov2PromptField(BaseModel):
     """One ordered semantic field in a proposal-model request."""
 
@@ -131,7 +115,7 @@ class Miprov2PromptComponent(BaseModel):
 
     component_id: StrictStr
     template: StrictStr
-    allowed_placeholders: tuple[StrictStr, ...]
+    template_render_contract: TemplateRenderContract
     rendering_rules: StrictStr
     example_execution: StrictStr
 
@@ -139,21 +123,7 @@ class Miprov2PromptComponent(BaseModel):
     def _validate(self) -> Miprov2PromptComponent:
         if not self.component_id or not self.template:
             raise ValueError("component id and template must not be empty")
-        if len(set(self.allowed_placeholders)) != len(
-            self.allowed_placeholders
-        ):
-            raise ValueError("allowed component placeholders must be unique")
-        parsed = _template_placeholder_fields(self.template)
-        unavailable = tuple(
-            name
-            for name in parsed
-            if name not in set(self.allowed_placeholders)
-        )
-        if unavailable:
-            raise ValueError(
-                "component template contains unavailable placeholders: "
-                + ", ".join(unavailable)
-            )
+        self.template_render_contract.validate_template(self.template)
         return self
 
 
@@ -322,6 +292,7 @@ class Miprov2ProposalRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bindings: Miprov2DurableBindings
+    optimization_run_identity_hash: StrictStr
     effect_ordinal: StrictInt
     effect: Miprov2ProposalEffect
     schema_tag: StrictStr
@@ -337,6 +308,10 @@ class Miprov2ProposalRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Miprov2ProposalRequest:
+        require_full_hash(
+            self.optimization_run_identity_hash,
+            field="optimization_run_identity_hash",
+        )
         if self.effect_ordinal < 0:
             raise ValueError("proposal effect ordinal cannot be negative")
         if not math.isfinite(self.temperature):
@@ -402,12 +377,33 @@ class Miprov2ProposalRequest(BaseModel):
             raise ValueError("proposal prompt does not match semantic fields")
         return self
 
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract.
+        return {
+            "bindings": self.bindings.model_dump(mode="json"),
+            "optimization_run_identity_hash": (
+                self.optimization_run_identity_hash
+            ),
+            "effect_ordinal": self.effect_ordinal,
+            "effect": self.effect,
+            "schema_tag": self.schema_tag,
+            "temperature": self.temperature,
+            "rollout_id": self.rollout_id,
+            "component_index": self.component_index,
+            "component_id": self.component_id,
+            "proposal_index": self.proposal_index,
+            "demo_set_index": self.demo_set_index,
+            "selected_tip_key": self.selected_tip_key,
+            "fields": [field.model_dump(mode="json") for field in self.fields],
+            "prompt": self.prompt,
+        }
+
     @property
     def identity_hash(self) -> str:
         return compute_identity_hash(
             schema=MIPROV2_PROPOSAL_SCHEMA,
             schema_version=MIPROV2_PROPOSAL_SCHEMA_VERSION,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
 
 
@@ -420,7 +416,27 @@ class Miprov2ProposalResponse(BaseModel):
     text: StrictStr = ""
     failed: StrictBool = False
     failure_detail: StrictStr | None = None
-    evidence: dict[str, Any] = Field(default_factory=dict)
+    evidence: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
+
+    def model_post_init(self, _context: Any) -> None:
+        if not isinstance(self.evidence, ImmutableJsonObject):
+            object.__setattr__(
+                self,
+                "evidence",
+                ImmutableJsonObject(self.evidence),
+            )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        payload = self.model_dump(mode="json")
+        payload.update(update or {})
+        return type(self).model_validate(payload)
 
     @model_validator(mode="after")
     def _validate(self) -> Miprov2ProposalResponse:
@@ -428,7 +444,6 @@ class Miprov2ProposalResponse(BaseModel):
             self.request_identity_hash,
             field="proposal request_identity_hash",
         )
-        ImmutableJsonObject(self.evidence)
         if self.failed and not self.failure_detail:
             raise ValueError("failed proposal response requires detail")
         if not self.failed and self.failure_detail is not None:
@@ -457,6 +472,9 @@ class Miprov2ProposalEvidence(BaseModel):
 
 
 def _validate_proposal_evidence(item: Miprov2ProposalEvidence) -> None:
+    Miprov2ProposalResponse.model_validate(
+        item.response.model_dump(mode="json")
+    )
     if item.response.request_identity_hash != item.request.identity_hash:
         raise ValueError(
             "proposal evidence response belongs to another request"
@@ -519,6 +537,7 @@ class Miprov2ProposalState(BaseModel):
     tip_aware: StrictBool
     fewshot_aware: StrictBool
     bindings: Miprov2DurableBindings
+    optimization_run_identity_hash: StrictStr
     initial_rng_checkpoint: Miprov2RngCheckpoint
     rng_checkpoint: Miprov2RngCheckpoint
 
@@ -548,6 +567,10 @@ class Miprov2ProposalState(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Miprov2ProposalState:
+        require_full_hash(
+            self.optimization_run_identity_hash,
+            field="optimization_run_identity_hash",
+        )
         if not self.components:
             raise ValueError(
                 "MIPROv2 proposer requires at least one component"
@@ -587,6 +610,13 @@ class Miprov2ProposalState(BaseModel):
                 )
             if self.pending_request.bindings != self.bindings:
                 raise ValueError("pending request bindings do not match state")
+            if (
+                self.pending_request.optimization_run_identity_hash
+                != self.optimization_run_identity_hash
+            ):
+                raise ValueError(
+                    "pending request run identity does not match state"
+                )
         elif self.stage in {
             "program_description",
             "component_description",
@@ -626,6 +656,14 @@ class Miprov2ProposalState(BaseModel):
             item.request.bindings != self.bindings for item in self.evidence
         ):
             raise ValueError("proposal evidence bindings do not match state")
+        if any(
+            item.request.optimization_run_identity_hash
+            != self.optimization_run_identity_hash
+            for item in self.evidence
+        ):
+            raise ValueError(
+                "proposal evidence run identity does not match state"
+            )
         for item in self.evidence:
             # Re-run the evidence-level identity and decision invariants after
             # loading a checkpoint, including one built through model_copy.
@@ -696,6 +734,7 @@ class Miprov2ProposalPlan(BaseModel):
 def start_miprov2_proposal(
     *,
     bindings: Miprov2DurableBindings,
+    optimization_run_identity_hash: str,
     components: tuple[Miprov2PromptComponent, ...],
     trainset: tuple[Miprov2DatasetExample, ...],
     demo_candidates: tuple[Miprov2ComponentDemoCandidates, ...] | None,
@@ -712,6 +751,7 @@ def start_miprov2_proposal(
 
     return Miprov2ProposalState(
         bindings=bindings,
+        optimization_run_identity_hash=optimization_run_identity_hash,
         components=components,
         trainset=trainset,
         demo_candidates=demo_candidates,
@@ -809,6 +849,9 @@ def fold_proposal_response(
     """Fold exactly one pending external result into immutable state."""
 
     _require_canonical_proposal_state(state)
+    response = Miprov2ProposalResponse.model_validate(
+        response.model_dump(mode="json")
+    )
     request = state.pending_request
     if request is None:
         raise ValueError("proposal state has no pending request")
@@ -922,6 +965,7 @@ def _request(
     component = state.components[state.component_index]
     return Miprov2ProposalRequest(
         bindings=state.bindings,
+        optimization_run_identity_hash=state.optimization_run_identity_hash,
         effect_ordinal=state.effect_count,
         effect=effect,
         schema_tag=schema_tag,
@@ -979,6 +1023,7 @@ def _require_canonical_proposal_state(state: Miprov2ProposalState) -> None:
         tip_aware=state.tip_aware,
         fewshot_aware=state.fewshot_aware,
         bindings=state.bindings,
+        optimization_run_identity_hash=state.optimization_run_identity_hash,
         initial_rng_checkpoint=state.initial_rng_checkpoint,
         rng_checkpoint=state.initial_rng_checkpoint,
         stage=(
@@ -1122,7 +1167,9 @@ def _program_graph(state: Miprov2ProposalState) -> str:
                 + (
                     ", ".join(
                         f"{{{name}}}"
-                        for name in component.allowed_placeholders
+                        for name in (
+                            component.template_render_contract.available_fields
+                        )
                     )
                     or "(none)"
                 ),
@@ -1142,7 +1189,10 @@ def _component_spec(component: Miprov2PromptComponent) -> str:
             "Allowed placeholders: "
             + (
                 ", ".join(
-                    f"{{{name}}}" for name in component.allowed_placeholders
+                    f"{{{name}}}"
+                    for name in (
+                        component.template_render_contract.available_fields
+                    )
                 )
                 or "(none)"
             ),
@@ -1562,22 +1612,19 @@ def _validate_instruction(
     component: Miprov2PromptComponent,
     instruction: str,
 ) -> str | None:
+    if not instruction:
+        return "empty proposed instruction"
+    contract = component.template_render_contract
     try:
-        proposed = Counter(_template_placeholder_fields(instruction))
+        proposed = Counter(contract.validate_template(instruction))
+        required = Counter(contract.placeholder_fields(component.template))
     except ValueError as exc:
-        return f"malformed placeholders: {exc}"
-    allowed = set(component.allowed_placeholders)
-    unavailable = tuple(name for name in proposed if name not in allowed)
-    if unavailable:
-        return "contains unavailable placeholders: " + ", ".join(unavailable)
-    required = Counter(_template_placeholder_fields(component.template))
+        return f"violates template render contract: {exc}"
     missing = tuple(
         name for name, count in required.items() if proposed[name] < count
     )
     if missing:
         return "removes required placeholders: " + ", ".join(missing)
-    if not instruction:
-        return "empty proposed instruction"
     return None
 
 

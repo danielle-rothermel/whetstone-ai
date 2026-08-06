@@ -5,8 +5,10 @@ import io
 import math
 import pickle
 import random
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Self
 
 from pydantic import (
     BaseModel,
@@ -15,6 +17,7 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StrictStr,
+    field_serializer,
     model_validator,
 )
 
@@ -205,11 +208,41 @@ class FewshotCandidatePlan(BaseModel):
             raise ValueError("MIPROv2 trace selection projection is fixed")
         return self
 
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract. Nested
+        # records use their canonical JSON projection.
+        return {
+            "candidate_ordinal": self.candidate_ordinal,
+            "candidate_seed": self.candidate_seed,
+            "bindings": self.bindings.model_dump(mode="json"),
+            "kind": self.kind.value,
+            "component_ids": list(self.component_ids),
+            "trainset_task_identities": list(self.trainset_task_identities),
+            "max_bootstrapped_demos": self.max_bootstrapped_demos,
+            "max_labeled_demos": self.max_labeled_demos,
+            "max_rounds": self.max_rounds,
+            "max_errors": self.max_errors,
+            "metric_threshold": self.metric_threshold,
+            "teacher": (
+                None
+                if self.teacher is None
+                else self.teacher.model_dump(mode="json")
+            ),
+            "labels_only_selection": (
+                None
+                if self.labels_only_selection is None
+                else self.labels_only_selection.model_dump(mode="json")
+            ),
+            "trace_selection_projection_version": (
+                self.trace_selection_projection_version
+            ),
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
             schema=MIPROV2_BOOTSTRAP_PLAN_SCHEMA,
             schema_version=MIPROV2_BOOTSTRAP_SCHEMA_VERSION,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
 
 
@@ -557,11 +590,48 @@ class BootstrapCompilerState(BaseModel):
     error_count: StrictInt = 0
     attempt_count: StrictInt = 0
     bootstrapped_task_indices: tuple[StrictInt, ...] = ()
-    augmented_demos: dict[str, tuple[ComponentDemo, ...]] = Field(
-        default_factory=dict
+    augmented_demos: Mapping[StrictStr, tuple[ComponentDemo, ...]] = Field(
+        default_factory=lambda: MappingProxyType({})
     )
     evidence: tuple[BootstrapFoldEvidence, ...] = ()
     terminal_failure: BootstrapTerminalFailure | None = None
+
+    def model_post_init(self, _context: Any) -> None:
+        if not isinstance(self.augmented_demos, MappingProxyType):
+            object.__setattr__(
+                self,
+                "augmented_demos",
+                MappingProxyType(
+                    {
+                        component_id: tuple(demos)
+                        for component_id, demos in self.augmented_demos.items()
+                    }
+                ),
+            )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied.model_post_init(None)
+        return copied
+
+    @field_serializer("augmented_demos")
+    def _serialize_augmented_demos(
+        self,
+        value: Mapping[str, tuple[ComponentDemo, ...]],
+    ) -> dict[str, list[dict[str, Any]]]:
+        return {
+            component_id: [demo.model_dump(mode="json") for demo in demos]
+            for component_id, demos in value.items()
+        }
 
     @model_validator(mode="after")
     def _validate_state(self) -> BootstrapCompilerState:
@@ -651,11 +721,31 @@ class BootstrapAttemptPlan(BaseModel):
             )
         return self
 
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract. The durable
+        # bindings use their canonical JSON projection.
+        return {
+            "bindings": self.bindings.model_dump(mode="json"),
+            "plan_identity_hash": self.plan_identity_hash,
+            "task_index": self.task_index,
+            "task_identity": self.task_identity,
+            "round_index": self.round_index,
+            "exclude_equal_task_from_all_teacher_components": (
+                self.exclude_equal_task_from_all_teacher_components
+            ),
+            "restore_teacher_demos_after_effect": (
+                self.restore_teacher_demos_after_effect
+            ),
+            "copy_task_model": self.copy_task_model,
+            "rollout_id": self.rollout_id,
+            "temperature": self.temperature,
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
             schema=MIPROV2_BOOTSTRAP_ATTEMPT_SCHEMA,
             schema_version=MIPROV2_BOOTSTRAP_SCHEMA_VERSION,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
 
 

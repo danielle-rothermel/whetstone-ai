@@ -38,6 +38,7 @@ def _request(*, request_ordinal: int = 0) -> ProposalRequest:
     return ProposalRequest(
         proposal_mode="instruction_proposal",
         request_ordinal=request_ordinal,
+        proposal_authority_identity_hash=FULL_A,
         base_candidate=candidate_reference(candidate("provider-base")),
         context={"proposal_prompt": "Improve this prompt."},
     )
@@ -99,7 +100,7 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
             request=_request(),
             count=1,
         )
-        == "d28a3ad93d790e4bcee510ad3620ca8aa5ec5b5681aca2bdd4d3e68afff3ce72"
+        == "85724dc3ba2d8b3796098fa858e032ad1e144be50a6b1bfe5e4b4de7ad00ba9e"
     )
 
 

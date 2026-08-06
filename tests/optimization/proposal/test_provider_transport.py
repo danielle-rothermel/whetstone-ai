@@ -37,6 +37,7 @@ def _proposal_request(
     return ProposalRequest(
         proposal_mode="seed_proposal",
         request_ordinal=0,
+        proposal_authority_identity_hash="f" * 64,
         base_candidate=candidate_reference(
             Candidate(
                 candidate_id="base",
@@ -369,6 +370,9 @@ def test_proposal_request_binds_exact_base_candidate() -> None:
     second = ProposalRequest(
         proposal_mode=first.proposal_mode,
         request_ordinal=first.request_ordinal,
+        proposal_authority_identity_hash=(
+            first.proposal_authority_identity_hash
+        ),
         base_candidate=candidate_reference(other_base),
         context=first.context.to_json(),
     )

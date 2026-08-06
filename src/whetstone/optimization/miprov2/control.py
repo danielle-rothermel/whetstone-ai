@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import math
 import random
+from collections.abc import Mapping
 from copy import deepcopy
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -12,6 +13,7 @@ from pydantic import (
     StrictBool,
     StrictInt,
     StrictStr,
+    TypeAdapter,
     model_validator,
 )
 
@@ -40,6 +42,8 @@ from whetstone.optimization.miprov2.proposal import (
     DATASET_FOLLOWUP_SCHEMA_TAG,
     DATASET_INITIAL_SCHEMA_TAG,
     INSTRUCTION_PROPOSAL_SCHEMA_TAG,
+    MIPROV2_PROPOSAL_SCHEMA,
+    MIPROV2_PROPOSAL_SCHEMA_VERSION,
     PROGRAM_DESCRIPTION_SCHEMA_TAG,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
@@ -53,7 +57,7 @@ MIPROV2_ALGORITHM_VERSION = "dspy_miprov2/v2"
 MIPROV2_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 MIPROV2_OPTUNA_VERSION = "4.8.0"
 MIPROV2_CONTROL_SCHEMA = "whetstone.miprov2_optimizer_config"
-MIPROV2_CONTROL_SCHEMA_VERSION = 4
+MIPROV2_CONTROL_SCHEMA_VERSION = 6
 MIPROV2_COMPONENT_SPEC_SCHEMA = "whetstone.miprov2_component_spec"
 MIPROV2_COMPONENT_SPEC_SCHEMA_VERSION = 1
 MIPROV2_PROGRAM_LAYOUT_SCHEMA = "whetstone.miprov2_program_layout"
@@ -65,11 +69,11 @@ MIPROV2_PROPOSER_OUTPUT_PARSER_SCHEMA = (
 )
 MIPROV2_PROPOSER_OUTPUT_PARSER_SCHEMA_VERSION = 1
 MIPROV2_STATE_SCHEMA = "whetstone.miprov2_runtime"
-MIPROV2_STATE_SCHEMA_VERSION = 1
+MIPROV2_STATE_SCHEMA_VERSION = 4
 MIPROV2_RESULT_SCHEMA = "whetstone.miprov2_result"
 MIPROV2_RESULT_SCHEMA_VERSION = 1
 MIPROV2_PHASE_SCHEMA_MANIFEST: tuple[tuple[str, int], ...] = (
-    ("whetstone.miprov2_grounded_proposal", 1),
+    (MIPROV2_PROPOSAL_SCHEMA, MIPROV2_PROPOSAL_SCHEMA_VERSION),
     (DATASET_INITIAL_SCHEMA_TAG, 1),
     (DATASET_FOLLOWUP_SCHEMA_TAG, 1),
     (DATASET_FINAL_SCHEMA_TAG, 1),
@@ -82,12 +86,12 @@ MIPROV2_PHASE_SCHEMA_MANIFEST: tuple[tuple[str, int], ...] = (
     ("whetstone.miprov2_component_demo_set", 1),
     ("whetstone.miprov2_candidate_rendering", 1),
     ("whetstone.miprov2_candidate_program", 1),
-    ("whetstone.miprov2_candidate_assembly", 2),
+    ("whetstone.miprov2_candidate_assembly", 4),
     ("whetstone.miprov2_evaluation_execution_policy", 1),
     ("whetstone.miprov2_eval_binding_request", 1),
     ("whetstone.miprov2_eval_binding", 1),
     ("whetstone.miprov2_intent_context", 2),
-    ("whetstone.miprov2_study_transcript", 3),
+    ("whetstone.miprov2_study_transcript", 5),
 )
 
 Miprov2AutoMode = Literal["light", "medium", "heavy"]
@@ -98,6 +102,50 @@ _AUTO_RUN_SETTINGS: dict[Miprov2AutoMode, tuple[int, int]] = {
     "heavy": (18, 1000),
 }
 _MIN_MINIBATCH_SIZE = 50
+
+
+def _deep_revalidate_json[ValidatedValue](
+    adapter: TypeAdapter[ValidatedValue],
+    value: Any,
+) -> ValidatedValue:
+    """Detach nested validated values through canonical JSON data."""
+
+    def plain_data(item: Any) -> Any:
+        if isinstance(item, BaseModel):
+            return {
+                field_name: plain_data(getattr(item, field_name))
+                for field_name in type(item).model_fields
+            }
+        if isinstance(item, Mapping):
+            return {key: plain_data(nested) for key, nested in item.items()}
+        if isinstance(item, (list, tuple)):
+            return [plain_data(nested) for nested in item]
+        return deepcopy(item)
+
+    validated = adapter.validate_python(plain_data(value))
+    return adapter.validate_json(
+        adapter.dump_json(validated, warnings="error")
+    )
+
+
+def _deep_revalidate_model[ValidatedModel: BaseModel](
+    model_type: type[ValidatedModel],
+    values: Mapping[str, Any],
+) -> ValidatedModel:
+    """Detach every supplied model field before cross-field validation."""
+
+    normalized: dict[str, Any] = {}
+    for field_name, value in values.items():
+        field = model_type.model_fields.get(field_name)
+        normalized[field_name] = (
+            value
+            if field is None
+            else _deep_revalidate_json(
+                TypeAdapter(field.rebuild_annotation()),
+                value,
+            )
+        )
+    return model_type.model_validate(normalized)
 
 
 class Miprov2ComponentSpec(BaseModel):
@@ -121,7 +169,11 @@ class Miprov2ComponentSpec(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        # Persisted identity keys are an explicit wire contract.
+        return {
+            "component_id": self.component_id,
+            "prompt_format_identity_hash": self.prompt_format_identity_hash,
+        }
 
     def identity_hash(self) -> str:
         return compute_identity_hash(
@@ -138,6 +190,30 @@ class Miprov2ProgramLayout(BaseModel):
 
     layout_id: StrictStr
     component_specs: tuple[Miprov2ComponentSpec, ...]
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        """Revalidate copies so trusted updates cannot retain mutable lists."""
+
+        del deep
+        payload = self.model_dump(mode="json")
+        payload.update(update or {})
+        return _deep_revalidate_model(type(self), payload)
+
+    @classmethod
+    def model_construct(
+        cls,
+        _fields_set: set[str] | None = None,
+        **values: Any,
+    ) -> Self:
+        """Validate construction and defensively freeze all containers."""
+
+        del _fields_set
+        return _deep_revalidate_model(cls, values)
 
     @model_validator(mode="after")
     def _validate_layout(self) -> Miprov2ProgramLayout:
@@ -291,6 +367,32 @@ class Miprov2Control(BaseModel):
     state_schema_version: StrictInt = MIPROV2_STATE_SCHEMA_VERSION
     result_schema: StrictStr = MIPROV2_RESULT_SCHEMA
     result_schema_version: StrictInt = MIPROV2_RESULT_SCHEMA_VERSION
+
+    def model_post_init(self, _context: Any) -> None:
+        if not isinstance(self.teacher_settings, ImmutableJsonObject):
+            object.__setattr__(
+                self,
+                "teacher_settings",
+                ImmutableJsonObject(deepcopy(self.teacher_settings)),
+            )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        """Copy through the complete validation boundary.
+
+        Pydantic's default update path trusts replacement values and skips
+        validators. A control copy is itself a persisted authority, so every
+        field and cross-field invariant must be revalidated.
+        """
+
+        del deep
+        payload = self.model_dump(mode="json")
+        payload.update(update or {})
+        return type(self).model_validate(payload)
 
     @model_validator(mode="after")
     def _validate_resolved_control(self) -> Miprov2Control:

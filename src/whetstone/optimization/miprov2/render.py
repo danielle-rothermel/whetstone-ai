@@ -10,25 +10,52 @@ from whetstone.experiment.candidate import (
     TemplateRenderContract,
     TemplateRenderKind,
 )
+from whetstone.optimization.contracts import (
+    OptimizationRun,
+    OptimizationRunRef,
+)
 from whetstone.optimization.proposal.mutation import (
+    _validated_optimization_run,
     candidate_from_draft,
     diff_check,
 )
 from whetstone.optimization.proposal.proposer import ProposalDraft
 
 
-def _format_literal_json(value: object, *, escape_braces: bool) -> str:
-    """Encode JSON that renders back to itself under the run's contract.
+def _format_literal_text(
+    value: str,
+    *,
+    template_render_contract: TemplateRenderContract,
+    context: str,
+) -> str:
+    """Protect non-instruction text under the exact renderer semantics."""
 
-    Only ``python_format/v1`` consumes ``{{``/``}}`` as brace escapes. Under
-    the literal contracts those pairs survive rendering verbatim, so doubling
-    them there would deliver malformed JSON to the task model.
-    """
+    if template_render_contract.kind is TemplateRenderKind.PYTHON_FORMAT_V1:
+        return value.replace("{", "{{").replace("}", "}}")
+    if template_render_contract.kind is TemplateRenderKind.LITERAL_REPLACE_V1:
+        field = template_render_contract.available_fields[0]
+        token = f"{{{field}}}"
+        if token in value:
+            raise ValueError(
+                "literal_replace/v1 cannot losslessly compose MIPROv2 "
+                f"{context} containing active token {token!r}"
+            )
+    return value
 
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
-    if not escape_braces:
-        return encoded
-    return encoded.replace("{", "{{").replace("}", "}}")
+
+def _format_literal_json(
+    value: object,
+    *,
+    template_render_contract: TemplateRenderContract,
+    context: str,
+) -> str:
+    """Encode JSON as protected literal text under the exact renderer."""
+
+    return _format_literal_text(
+        json.dumps(value, sort_keys=True, separators=(",", ":")),
+        template_render_contract=template_render_contract,
+        context=context,
+    )
 
 
 def compose_user_prompt_template(
@@ -38,9 +65,6 @@ def compose_user_prompt_template(
 ) -> str:
     """Compose ordered instructions, metadata, and demonstrations exactly."""
 
-    escape_braces = (
-        template_render_contract.kind is TemplateRenderKind.PYTHON_FORMAT_V1
-    )
     if len(components) != 1:
         raise ValueError(
             "MIPROv2 rendering requires exactly one optimizable component"
@@ -64,11 +88,20 @@ def compose_user_prompt_template(
             "ordinal": ordinal,
         }
         demonstrations = component.get("demo_set")
+        rendered_component_id = _format_literal_text(
+            component_id,
+            template_render_contract=template_render_contract,
+            context="component id",
+        )
         sections.extend(
             (
-                f"## Component {ordinal + 1}: {component_id}",
+                f"## Component {ordinal + 1}: {rendered_component_id}",
                 "### Metadata",
-                _format_literal_json(metadata, escape_braces=escape_braces),
+                _format_literal_json(
+                    metadata,
+                    template_render_contract=template_render_contract,
+                    context="metadata",
+                ),
                 "### Instruction",
                 instruction,
                 "### Demonstrations",
@@ -76,7 +109,9 @@ def compose_user_prompt_template(
                     "[]"
                     if demonstrations is None
                     else _format_literal_json(
-                        demonstrations, escape_braces=escape_braces
+                        demonstrations,
+                        template_render_contract=template_render_contract,
+                        context="demonstrations",
                     )
                 ),
             )
@@ -89,10 +124,13 @@ def candidate_from_components(
     base: CandidateRef,
     candidate_id: str,
     components: Sequence[Mapping[str, Any]],
-    template_render_contract: TemplateRenderContract,
+    run: OptimizationRun | OptimizationRunRef,
 ) -> Candidate:
     """Create one exact candidate through the canonical mutation boundary."""
 
+    template_render_contract = _validated_optimization_run(
+        run
+    ).template_render_contract
     candidate = candidate_from_draft(
         base=base.record,
         candidate_id=candidate_id,
@@ -102,7 +140,7 @@ def candidate_from_components(
                 template_render_contract=template_render_contract,
             )
         ),
-        run=template_render_contract,
+        run=run,
     )
     if candidate.base_ref != base.record_ref:
         raise AssertionError("canonical candidate did not bind the exact base")

@@ -11,7 +11,11 @@ from tests.optimization.miprov2.support import (
     configure_test_miprov2,
     make_miprov2_evidence_fixture,
 )
-from tests.optimization.support import candidate, internal_reward_policy
+from tests.optimization.support import (
+    candidate,
+    internal_reward_policy,
+    optimizer_config_ref,
+)
 from whetstone.core.identity import (
     TypedRef,
     compute_identity_hash,
@@ -27,6 +31,12 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.experiment.reward import apply_reward_policy, reward_reference
+from whetstone.optimization.contracts import (
+    OptimizationRun,
+    OutputContract,
+    StepMode,
+    optimization_run_reference,
+)
 from whetstone.optimization.miprov2.eval_config import (
     Miprov2EvalConfigBinding,
 )
@@ -35,6 +45,7 @@ from whetstone.optimization.miprov2.study import (
     MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION,
     MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
     MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
+    MIPROV2_STUDY_SCHEMA,
     MIPROV2_STUDY_SCHEMA_VERSION,
     Miprov2CandidateAssemblyBinding,
     Miprov2CandidateRendering,
@@ -52,6 +63,38 @@ FULL_A = "a" * 64
 FULL_B = "b" * 64
 
 
+def _configure():
+    return configure_test_miprov2()
+
+
+def _run(
+    control,
+    *,
+    run_id: str = "study-run",
+    optimizer_config=None,
+    reward_policy=None,
+):
+    return optimization_run_reference(
+        OptimizationRun(
+            run_id=run_id,
+            optimizer_config=(
+                control.reference()
+                if optimizer_config is None
+                else optimizer_config
+            ),
+            adapter_key="miprov2",
+            mode=StepMode.PROPOSAL_ONLY,
+            terminal_output_contract=OutputContract(returned_proposal_count=1),
+            template_render_contract=control.template_render_contract,
+            reward_policy=(
+                control.reward_policy
+                if reward_policy is None
+                else reward_policy
+            ),
+        )
+    )
+
+
 def _space() -> Miprov2ParameterSpace:
     return Miprov2ParameterSpace(
         instruction_pool_identity_hashes=(("1" * 64, "2" * 64, "3" * 64),),
@@ -60,12 +103,12 @@ def _space() -> Miprov2ParameterSpace:
 
 
 def test_parameter_order_is_instruction_then_demo_for_one_component() -> None:
-    assert MIPROV2_STUDY_SCHEMA_VERSION == 3
+    assert MIPROV2_STUDY_SCHEMA_VERSION == 5
     assert MIPROV2_CANDIDATE_PROGRAM_SCHEMA == (
         "whetstone.miprov2_candidate_program"
     )
     assert MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION == 1
-    assert MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION == 2
+    assert MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION == 4
     space = _space()
 
     assert space.parameter_names == (
@@ -254,7 +297,7 @@ def test_candidate_assembly_recomputes_exact_native_candidate() -> None:
         base=control.base_candidate,
         candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
         components=rendering.model_dump(mode="json")["components"],
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
     exact_ref = candidate_reference(exact)
     program_hash = compute_identity_hash(
@@ -268,11 +311,11 @@ def test_candidate_assembly_recomputes_exact_native_candidate() -> None:
         candidate=exact_ref,
         program_identity_hash=program_hash,
         rendering=rendering,
-        control_identity_hash=control.identity_hash(),
+        optimizer_config=control.reference(),
         base_candidate=control.base_candidate,
         program_layout=control.program_layout,
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
 
     assert assembly.candidate == exact_ref
@@ -300,6 +343,80 @@ def test_candidate_assembly_recomputes_exact_native_candidate() -> None:
                 "program_identity_hash": foreign_program_hash,
             }
         )
+
+
+@pytest.mark.parametrize("forged_ref", (False, True))
+def test_candidate_assembly_rejects_foreign_run_control_authority(
+    forged_ref: bool,
+) -> None:
+    control = _configure()
+    space = Miprov2ParameterSpace(
+        instruction_pool_identity_hashes=(
+            (
+                compute_identity_hash(
+                    schema="whetstone.miprov2_instruction",
+                    schema_version=1,
+                    payload={"instruction": "Baseline {query}."},
+                ),
+            ),
+        )
+    )
+    assembly = _study_assembly(
+        control,
+        space,
+        (("0_predictor_instruction", 0),),
+        instructions=("Baseline {query}.",),
+    )
+    foreign_run = _run(
+        control,
+        optimizer_config=optimizer_config_ref("foreign-miprov2-control"),
+    )
+    if forged_ref:
+        foreign_run = assembly.run.model_copy(
+            update={"record": foreign_run.record}
+        )
+    payload = assembly.model_dump(mode="json")
+    payload["run"] = foreign_run.model_dump(mode="json")
+
+    message = "record_ref" if forged_ref else "exact MIPROv2 control"
+    with pytest.raises(ValidationError, match=message):
+        Miprov2CandidateAssemblyBinding.model_validate(payload)
+
+
+def test_candidate_assembly_rejects_same_hash_foreign_control_address() -> (
+    None
+):
+    control = _configure()
+    space = Miprov2ParameterSpace(
+        instruction_pool_identity_hashes=(
+            (
+                compute_identity_hash(
+                    schema="whetstone.miprov2_instruction",
+                    schema_version=1,
+                    payload={"instruction": "Baseline {query}."},
+                ),
+            ),
+        )
+    )
+    assembly = _study_assembly(
+        control,
+        space,
+        (("0_predictor_instruction", 0),),
+        instructions=("Baseline {query}.",),
+    )
+    foreign_optimizer_config = control.reference().model_copy(
+        update={
+            "record_ref": optimizer_config_ref(
+                "foreign-miprov2-address"
+            ).record_ref
+        }
+    )
+    foreign_run = _run(control, optimizer_config=foreign_optimizer_config)
+    payload = assembly.model_dump(mode="json")
+    payload["run"] = foreign_run.model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match="exact MIPROv2 control"):
+        Miprov2CandidateAssemblyBinding.model_validate(payload)
 
 
 def _study_observation(
@@ -376,7 +493,7 @@ def _study_assembly(
     ]
     combination = space.combination_identity_hash(params)
     rendering = Miprov2CandidateRendering(
-        control_identity_hash=FULL_A,
+        control_identity_hash=control.identity_hash(),
         base_candidate_identity_hash=control.base_candidate.identity_hash,
         categorical_combination_identity_hash=combination,
         components=(
@@ -395,7 +512,7 @@ def _study_assembly(
         base=control.base_candidate,
         candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
         components=rendering.model_dump(mode="json")["components"],
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
     assembled_ref = candidate_reference(assembled)
     return Miprov2CandidateAssemblyBinding(
@@ -408,11 +525,11 @@ def _study_assembly(
             payload={"candidate": assembled_ref.model_dump(mode="json")},
         ),
         rendering=rendering,
-        control_identity_hash=FULL_A,
+        optimizer_config=control.reference(),
         base_candidate=control.base_candidate,
         program_layout=control.program_layout,
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
 
 
@@ -425,11 +542,12 @@ def _study_case(
     seed: int = 23,
 ):
     store = ObjectStore(SqliteBackend(tmp_path / "study-case.sqlite"))
+    control = configure_test_miprov2()
     _, context = make_miprov2_evidence_fixture(
         store,
         reward_policy_hash=internal_reward_policy().identity_hash(),
+        control_identity_hash=control.identity_hash(),
     )
-    control = configure_test_miprov2()
     instructions = tuple(
         f"Instruction {index} {{query}}." for index in range(4)
     )
@@ -460,11 +578,11 @@ def _study_case(
             context.eval_config_binding.request.source_eval_config
         ),
         reward_policy_hash=internal_reward_policy().identity_hash(),
-        control_identity_hash=FULL_A,
+        optimizer_config=control.reference(),
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
         expected_base_candidate=control.base_candidate,
         program_layout=control.program_layout,
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
     transcript = study.initial_transcript(
         baseline_score=0.0,
@@ -539,11 +657,12 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "study-flow.sqlite"))
+    control = configure_test_miprov2()
     _, context = make_miprov2_evidence_fixture(
         store,
         reward_policy_hash=internal_reward_policy().identity_hash(),
+        control_identity_hash=control.identity_hash(),
     )
-    control = configure_test_miprov2()
     instruction_hashes = tuple(
         compute_identity_hash(
             schema="whetstone.miprov2_instruction",
@@ -571,11 +690,11 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
             context.eval_config_binding.request.source_eval_config
         ),
         reward_policy_hash=internal_reward_policy().identity_hash(),
-        control_identity_hash=FULL_A,
+        optimizer_config=control.reference(),
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
         expected_base_candidate=control.base_candidate,
         program_layout=control.program_layout,
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
     baseline = _study_observation(
         context=context,
@@ -646,7 +765,7 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
         payload={"instruction": foreign_instruction},
     )
     foreign_rendering = Miprov2CandidateRendering(
-        control_identity_hash=FULL_A,
+        control_identity_hash=control.identity_hash(),
         base_candidate_identity_hash=control.base_candidate.identity_hash,
         categorical_combination_identity_hash=(
             suggestion.candidate_combination_identity_hash
@@ -670,7 +789,7 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
             base=control.base_candidate,
             candidate_id=f"miprov2-{foreign_rendering.identity_hash()[:24]}",
             components=foreign_rendering.model_dump(mode="json")["components"],
-            template_render_contract=control.template_render_contract,
+            run=_run(control),
         )
     )
     foreign_assembly = Miprov2CandidateAssemblyBinding(
@@ -685,11 +804,11 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
             payload={"candidate": foreign_candidate.model_dump(mode="json")},
         ),
         rendering=foreign_rendering,
-        control_identity_hash=FULL_A,
+        optimizer_config=control.reference(),
         base_candidate=control.base_candidate,
         program_layout=control.program_layout,
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
-        template_render_contract=control.template_render_contract,
+        run=_run(control),
     )
     tampered: Any = completed.model_dump(mode="json")
     tampered_sample = tampered["samples"][0]
@@ -974,6 +1093,100 @@ def test_study_records_are_frozen_and_reject_unknown_fields(tmp_path) -> None:
         StudyTranscript.model_validate({**dumped, "runtime_handle": "no"})
     with pytest.raises(ValidationError, match="frozen"):
         transcript.run_id = "other"
+
+
+def test_study_transcript_identity_envelope_is_v5_only(tmp_path) -> None:
+    *_, transcript = _study_case(
+        tmp_path,
+        num_trials=1,
+        minibatch=False,
+    )
+    assert MIPROV2_STUDY_SCHEMA == "whetstone.miprov2_study_transcript"
+    assert MIPROV2_STUDY_SCHEMA_VERSION == 5
+    assert transcript._identity_schema == "whetstone.miprov2_study_transcript"
+    assert transcript._identity_schema_version == 5
+    payload = transcript.model_dump(mode="json")
+
+    for legacy_version in (1, 2, 3, 4):
+        legacy_payload = {**payload, "schema_version": legacy_version}
+        with pytest.raises(ValidationError, match="schema_version"):
+            StudyTranscript.model_validate(legacy_payload)
+        assert (
+            compute_identity_hash(
+                schema="whetstone.miprov2_study_transcript",
+                schema_version=legacy_version,
+                payload=payload,
+            )
+            != transcript.identity_hash()
+        )
+
+
+@pytest.mark.parametrize("authority", ("optimizer_config", "reward_policy"))
+def test_transcript_rejects_foreign_run_authorities(
+    tmp_path,
+    authority: str,
+) -> None:
+    *_, control, _, _, study, transcript = _study_case(
+        tmp_path,
+        num_trials=1,
+        minibatch=False,
+    )
+    if authority == "optimizer_config":
+        foreign_run = _run(
+            control,
+            optimizer_config=optimizer_config_ref("foreign-study-control"),
+        )
+        message = "exact MIPROv2 control"
+    else:
+        foreign_run = _run(
+            control,
+            reward_policy=control.reward_policy.model_copy(
+                update={"policy_name": "foreign-study-policy/v1"}
+            ),
+        )
+        message = "exact MIPROv2 reward policy"
+    payload = transcript.model_dump(mode="json")
+    payload["run"] = foreign_run.model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match=message):
+        StudyTranscript.model_validate(payload)
+
+    bypassed = transcript.model_copy(update={"run": foreign_run})
+    with pytest.raises(
+        StudyTranscriptMismatch,
+        match="identity and evidence contract",
+    ):
+        study.reconstruct_study(bypassed)
+
+
+def test_transcript_rejects_same_hash_foreign_control_address(
+    tmp_path,
+) -> None:
+    *_, control, _, _, study, transcript = _study_case(
+        tmp_path,
+        num_trials=1,
+        minibatch=False,
+    )
+    foreign_optimizer_config = control.reference().model_copy(
+        update={
+            "record_ref": optimizer_config_ref(
+                "foreign-study-address"
+            ).record_ref
+        }
+    )
+    foreign_run = _run(control, optimizer_config=foreign_optimizer_config)
+    payload = transcript.model_dump(mode="json")
+    payload["run"] = foreign_run.model_dump(mode="json")
+
+    with pytest.raises(ValidationError, match="exact MIPROv2 control"):
+        StudyTranscript.model_validate(payload)
+
+    bypassed = transcript.model_copy(update={"run": foreign_run})
+    with pytest.raises(
+        StudyTranscriptMismatch,
+        match="identity and evidence contract",
+    ):
+        study.reconstruct_study(bypassed)
 
 
 def test_score_is_bound_at_observation_and_transcript_layers(tmp_path) -> None:

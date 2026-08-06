@@ -10,6 +10,7 @@ FUNCTIONAL_PACKAGES = {
     "experiment",
     "optimization",
     "provider",
+    "runner",
 }
 
 
@@ -26,7 +27,7 @@ def test_source_and_test_trees_share_functional_packages() -> None:
     assert _package_directories(Path("tests")) == FUNCTIONAL_PACKAGES
 
 
-def test_optimization_root_contains_only_shared_orchestration() -> None:
+def test_optimization_root_contains_only_shared_contracts() -> None:
     root = Path("src/whetstone/optimization")
     assert {
         module.name

@@ -7,10 +7,15 @@ from typing import Any
 import pytest
 
 from whetstone.optimization.miprov2.bootstrap import (
+    MIPROV2_BOOTSTRAP_ATTEMPT_SCHEMA,
+    MIPROV2_BOOTSTRAP_PLAN_SCHEMA,
+    MIPROV2_BOOTSTRAP_SCHEMA_VERSION,
     MIPROV2_TRACE_SELECTION_PROJECTION_VERSION,
     ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL,
+    BootstrapAttemptPlan,
     BootstrapErrorLimitReached,
     BootstrapRolloutResult,
+    FewshotCandidatePlan,
     FewshotSeedKind,
     TeacherSource,
     _frozen_dspy_demo_tuple_pickle,
@@ -51,8 +56,26 @@ def _bindings() -> Miprov2DurableBindings:
         task_route_identity_hash=_identity("task-route"),
         execution_policy_identity_hash=_identity("execution-policy"),
         prompt_adapter_identity_hash=_identity("prompt-adapter"),
+        proposal_executor_policy_identity_hash=_identity("proposal-executor"),
+        proposal_transport_durability_identity_hash=_identity(
+            "proposal-transport"
+        ),
         base_candidate_identity_hash=_identity("base"),
         teacher_candidate_identity_hash=_identity("teacher"),
+    )
+
+
+def _golden_bindings() -> Miprov2DurableBindings:
+    return Miprov2DurableBindings(
+        control_identity_hash="a" * 64,
+        prompt_route_identity_hash="b" * 64,
+        task_route_identity_hash="c" * 64,
+        execution_policy_identity_hash="d" * 64,
+        prompt_adapter_identity_hash="e" * 64,
+        proposal_executor_policy_identity_hash="f" * 64,
+        proposal_transport_durability_identity_hash="1" * 64,
+        base_candidate_identity_hash="2" * 64,
+        teacher_candidate_identity_hash="3" * 64,
     )
 
 
@@ -120,6 +143,107 @@ def _result(
         score=score,
         trace_steps=trace_steps,
         error=error,
+    )
+
+
+def test_fewshot_candidate_plan_identity_payload_and_digest_are_pinned() -> (
+    None
+):
+    assert MIPROV2_BOOTSTRAP_PLAN_SCHEMA == "whetstone.miprov2_bootstrap_plan"
+    assert MIPROV2_BOOTSTRAP_SCHEMA_VERSION == 1
+    plan = FewshotCandidatePlan(
+        candidate_ordinal=4,
+        candidate_seed=-3,
+        bindings=_golden_bindings(),
+        kind=FewshotSeedKind.RESET,
+        component_ids=("generate",),
+        trainset_task_identities=("4" * 64,),
+        max_bootstrapped_demos=0,
+        max_labeled_demos=0,
+        max_rounds=1,
+        max_errors=2,
+        metric_threshold=None,
+        teacher=None,
+        labels_only_selection=None,
+    )
+
+    assert plan.identity_payload() == {
+        "candidate_ordinal": 4,
+        "candidate_seed": -3,
+        "bindings": {
+            "control_identity_hash": "a" * 64,
+            "prompt_route_identity_hash": "b" * 64,
+            "task_route_identity_hash": "c" * 64,
+            "execution_policy_identity_hash": "d" * 64,
+            "prompt_adapter_identity_hash": "e" * 64,
+            "proposal_executor_policy_identity_hash": "f" * 64,
+            "proposal_transport_durability_identity_hash": "1" * 64,
+            "base_candidate_identity_hash": "2" * 64,
+            "teacher_candidate_identity_hash": "3" * 64,
+            "demo_bridge_version": "whetstone_component_demo_bridge/v1",
+        },
+        "kind": "reset",
+        "component_ids": ["generate"],
+        "trainset_task_identities": ["4" * 64],
+        "max_bootstrapped_demos": 0,
+        "max_labeled_demos": 0,
+        "max_rounds": 1,
+        "max_errors": 2,
+        "metric_threshold": None,
+        "teacher": None,
+        "labels_only_selection": None,
+        "trace_selection_projection_version": (
+            "dspy_example_pickle_protocol4_cpython/v1"
+        ),
+    }
+    assert plan.identity_hash() == (
+        "ec30974f9a747bae4a37eb0485e74c4c91b93fdf8f56b0f30c78434d709c22c8"
+    )
+
+
+def test_bootstrap_attempt_plan_identity_payload_and_digest_are_pinned() -> (
+    None
+):
+    assert MIPROV2_BOOTSTRAP_ATTEMPT_SCHEMA == (
+        "whetstone.miprov2_bootstrap_attempt"
+    )
+    assert MIPROV2_BOOTSTRAP_SCHEMA_VERSION == 1
+    attempt = BootstrapAttemptPlan(
+        bindings=_golden_bindings(),
+        plan_identity_hash="5" * 64,
+        task_index=2,
+        task_identity="6" * 64,
+        round_index=1,
+        copy_task_model=True,
+        rollout_id=1,
+        temperature=1.0,
+    )
+
+    assert attempt.identity_payload() == {
+        "bindings": {
+            "control_identity_hash": "a" * 64,
+            "prompt_route_identity_hash": "b" * 64,
+            "task_route_identity_hash": "c" * 64,
+            "execution_policy_identity_hash": "d" * 64,
+            "prompt_adapter_identity_hash": "e" * 64,
+            "proposal_executor_policy_identity_hash": "f" * 64,
+            "proposal_transport_durability_identity_hash": "1" * 64,
+            "base_candidate_identity_hash": "2" * 64,
+            "teacher_candidate_identity_hash": "3" * 64,
+            "demo_bridge_version": "whetstone_component_demo_bridge/v1",
+        },
+        "plan_identity_hash": "5" * 64,
+        "task_index": 2,
+        "task_identity": "6" * 64,
+        "round_index": 1,
+        "exclude_equal_task_from_all_teacher_components": True,
+        "restore_teacher_demos_after_effect": True,
+        "copy_task_model": True,
+        "rollout_id": 1,
+        "temperature": 1.0,
+    }
+    assert attempt.identity_hash() == (
+        "52ff6e6d1e0d9c3ab7d5268b6e5cd4a0ae206aad24cba11e18e267c268518bab"
     )
 
 

@@ -134,3 +134,34 @@ replay. Removing this caller restriction requires an all-or-nothing \
 multi-binding transaction in dr-store that publishes the claim and slot \
 together, retries only ordinal conflicts, and publishes no losing slot."""
 date = "2026-08-06"
+
+[[contracts]]
+title = "MIPROv2 replay binds one exact run and proposal route"
+statement = """
+Every persisted MIPROv2 runtime, proposal request, candidate assembly, and \
+study transcript binds the exact optimization run and optimizer configuration. \
+The runtime also binds the proposal executor policy and proposer transport \
+durability identity used for paid proposal effects."""
+rationale = """
+Run IDs and route configuration alone do not prove which authority produced a \
+candidate. Exact content-addressed bindings make replay reject a different \
+run, optimizer record, executor policy, or transport before external work."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/optimization/miprov2 tests/optimization/proposal/test_proposer.py tests/optimization/test_template_validation.py"
+
+[[contracts]]
+title = "MIPROv2 effects preserve row budgets and renderable evidence"
+statement = """
+MIPROv2 records task-row consumption with every bootstrap and evaluation \
+effect, verifies the durable budget ceiling at each entry, and preflights the \
+next row batch before resolver, storage, or provider activity. Candidate \
+rendering protects literal JSON under the exact render contract and rejects \
+literal-replacement content containing an active field token outside the \
+instruction surface."""
+rationale = """
+Evaluation counts without row counts can overspend batched work, while lossy \
+template composition can silently turn recorded evidence into live input. \
+Failing before either boundary keeps replay accounting and candidate meaning \
+stable."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/optimization/miprov2/test_adapter.py tests/optimization/miprov2/test_replay_policy.py tests/optimization/miprov2/test_runtime.py"

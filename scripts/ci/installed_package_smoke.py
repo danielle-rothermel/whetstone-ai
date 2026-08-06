@@ -27,6 +27,7 @@ EXPECTED_PACKAGE_ROOTS = {
     "whetstone.experiment",
     "whetstone.optimization",
     "whetstone.provider",
+    "whetstone.runner",
 }
 REPRESENTATIVE_TYPES = (
     EvaluationClaims,

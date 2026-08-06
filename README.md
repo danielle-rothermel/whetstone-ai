@@ -33,6 +33,9 @@ these areas:
 - **[Coordination and authority](src/whetstone/coordination/)** arbitrate
   durable proposal and evaluation work, official selection, ownership claims,
   and terminal result binding across recovery.
+- **[Validation runner](src/whetstone/runner/)** drives
+  optimizer-environment cells, enforces budget guards, and publishes resumable
+  ledgers and viewer projections from durable evidence.
 
 The repository boundaries follow the same shape:
 
@@ -46,6 +49,7 @@ The repository boundaries follow the same shape:
 | Evaluation | `whetstone.evaluation` | Evaluation drivers, traces, evidence, scoring, and aggregates |
 | Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, Codex, and tool use |
 | Coordination | `whetstone.coordination` | Durable claims, official authority, and proposal/evaluation services |
+| Validation runner | `whetstone.runner` | Resumable validation cells, budgets, ledgers, and viewer projections |
 
 The excerpts below show stable contract shapes; validation and implementation
 details are omitted so this overview can remain useful as internals evolve.
@@ -406,3 +410,106 @@ atomic pidfd-equivalent signaling handle, so abrupt-failure cleanup cannot
 guarantee that a late signal still identifies the original process. Run these
 tests in an isolated local or CI environment; their process-group assertions
 exercise observed behavior, not a strict containment guarantee.
+
+## The validation runner
+
+`whetstone.runner` drives validation runs and records their durable evidence.
+
+A **cell** is one attempt at one `(optimizer, environment)` pair. Its identity
+is `optimizer:env:aN`, and the ledger keys resumability on it: a completed cell
+is skipped on resume, an interrupted one is re-driven.
+
+**Durable, runner-owned.** `cells.jsonl` and `spend.jsonl` are append-only
+JSONL under the run root. Each cell line records the official arm scores, the
+paired confidence intervals its status is read off, the accounting, and
+references to the artifacts it published. Spend snapshots bracket each cell so
+cumulative spend is auditable and the budget guards key off persisted numbers.
+Terminal artifacts -- the immutable per-cell viewer directory and the
+official-anchor projection -- are fsynced and committed atomically before the
+cell line that cites them becomes durable.
+
+**Durable, harness-owned.** The optimization run binding, the ordered step
+results, the terminal optimization result, candidates, and evaluation and tool
+evidence all live content-addressed in the ObjectStore. The ledger references
+them; it never restates them.
+
+**Derived.** Confidence intervals, status strings, and the human-readable
+trace are recomputable from the durable evidence and are never authoritative.
+`whetstone.runner.refinalize` recomputes a recorded status from a line's own
+persisted evidence and appends a corrected line, preserving the original.
+
+**Budget guards.** A canonical cell refuses to start below the reserve, and a
+cell whose spend crosses its per-cell stop-loss halts.
+
+### Run lifecycle
+
+The runner owns the DBOS workflow context. The public CLI first invokes its
+zero-argument factory, which returns a fully assembled `RunnerLaunch` whose
+controllers and GEPA factories are already constructed. After the completed
+cell preflight, `register_runtime` registers the proposer transport, mints and
+returns a `DurableProposalExecutor`, and registers those preconstructed
+capabilities before `DBOS.launch()`. The CLI does not feed the returned executor
+back into their construction. This is a current limitation: CLI startup does
+not establish that the factory-built controllers and factories use the
+executor minted by `register_runtime`.
+
+Each harness-driven run then executes through
+`whetstone.coordination.run_workflow` inside exactly one parent workflow, keyed
+by the run request's identity hash, so a recovered process resumes that run
+rather than starting a second one.
+
+Two consequences are load-bearing. The proposal executor refuses to run outside
+a workflow body, so driving steps from the parent satisfies it by construction
+and the shared optimization harness stays DBOS-unaware. GEPA's algorithm-owned
+runtime is the separate DBOS path. The harness requires its configured replay
+policy to equal each adapter's exactly, so the launch factory builds one
+harness, and one controller, per optimizer.
+
+`whetstone.runner.startup.register_runtime` is the single registration site.
+It binds the proposer transport, returns the durable proposal executor it
+mints, and registers the run controllers and GEPA adapter factories supplied by
+`RunnerLaunch`. Registration happens strictly before `DBOS.launch()`, because
+recovery begins at launch and resolves its dependencies by identity.
+
+### Optimizers the runner drives
+
+Harness-driven optimizers -- MIPROv2, Codex, and identity -- run through
+`HarnessRunController` under the shared parent run workflow. GEPA runs through
+its own `DbosGepaRunner` parent workflow, which replays a frozen engine run
+from ordinal 0; the runner registers GEPA's factories at the same startup site
+so both paths share one registration invariant.
+
+MIPROv2 persists the exact optimization run, optimizer configuration,
+proposal-executor policy, and proposer-transport durability identity in its
+runtime state. Its durable effect budget accounts for task rows alongside
+rollouts, proposal calls, and evaluations; the adapter verifies the persisted
+ceiling and preflights the next row batch before resolving an Eval Config,
+publishing an Evaluation Intent, or invoking a proposal effect. Candidate
+assembly uses the run's render contract and rejects literal-replacement input
+that would make instruction and demonstration text indistinguishable.
+
+COPRO is not among them. `CoproAdapter.invoke` reports `CONTINUE` on every
+successful round and `terminalize` refuses a continuing tail, so a COPRO run
+reaches a terminal Optimization Result only once a controller folds each
+round's resolved evaluation intents back into the adapter's `attempt_history`
+pool. That folding capability has no implementation outside the optimization
+layer's own tests, so the runner does not drive COPRO.
+
+### CLI
+
+`whetstone-validate` has three commands. `cell --factory module:callable`
+resolves a typed `RunnerLaunch`, registers capabilities, owns the DBOS
+lifecycle, and prints the resulting cell line; a completed cell short-circuits
+before any runtime is constructed. `status --root <dir>` prints the validated
+ledger lines. `refinalize --root <dir> --optimizer … --env … --attempt …`
+appends an evidence-only corrected line.
+
+The DBOS system database defaults to a per-cell SQLite file under
+`<ledger>/dbos/`, and is overridable by `--dbos-system-database-url` or
+`$WHETSTONE_DBOS_SYSTEM_DATABASE_URL`; `--dbos-application-database-url` and
+`--dbos-application-version` have matching `WHETSTONE_DBOS_*` variables.
+
+The DBOS application version and the importable model paths referenced by its
+checkpoints are part of recovery compatibility. An incompatible package
+cutover uses a distinct application version and a fresh system database; the
+previous database is archived rather than reused or destroyed.

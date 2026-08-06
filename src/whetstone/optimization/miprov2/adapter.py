@@ -8,6 +8,7 @@ from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import (
     TerminalFailure,
     TypedRef,
+    require_full_hash,
 )
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import candidate_reference
@@ -48,6 +49,7 @@ from whetstone.optimization.miprov2.runtime import (
 )
 from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
+    ProposalExecutorDurabilityContract,
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
@@ -148,6 +150,27 @@ class Miprov2Adapter:
         self._store = store
         self._eval_config_resolver = eval_config_resolver
         self._proposal_executor = proposal_executor
+        executor_contract = proposal_executor.durability_contract
+        if (
+            executor_contract.recovery_policy
+            is not ReplayPolicy.DURABLE_WORKFLOW
+        ):
+            raise ValueError(
+                "MIPROv2 proposal executor must provide durable-workflow "
+                "recovery"
+            )
+        transport_durability_identity_hash = transport.durability_identity_hash
+        require_full_hash(
+            transport_durability_identity_hash,
+            field="proposal_transport_durability_identity_hash",
+        )
+        self._proposal_executor_policy_identity_hash = (
+            executor_contract.policy_identity_hash
+        )
+        self._proposal_executor_contract = executor_contract
+        self._proposal_transport_durability_identity_hash = (
+            transport_durability_identity_hash
+        )
         self._driver = driver or Miprov2Driver()
         self._evidence = Miprov2EvidenceResolver(store)
 
@@ -161,7 +184,7 @@ class Miprov2Adapter:
 
     @property
     def required_replay_policy(self) -> ReplayPolicy:
-        return self._proposal_executor.recovery_policy
+        return ReplayPolicy.DURABLE_WORKFLOW
 
     @property
     def proposal_executor(self) -> DurableProposalExecutor:
@@ -231,6 +254,8 @@ class Miprov2Adapter:
             raise ValueError(
                 "run optimizer config differs from MIPROv2 control"
             )
+        if exact_run != state.run:
+            raise ValueError("run differs from the MIPROv2 state authority")
         if (
             exact_run.record.template_render_contract
             != state.control.template_render_contract
@@ -243,6 +268,7 @@ class Miprov2Adapter:
             or exact_run.record.reward_policy != state.control.reward_policy
         ):
             raise ValueError("run Reward Policy differs from MIPROv2 control")
+        self._require_budget_agreement(budget, state)
         if state.phase == MIPROV2_FAILED:
             # The prior Step's resolutions terminalized the run.  This Step
             # exists only to persist the terminal failed Step Result.
@@ -286,8 +312,17 @@ class Miprov2Adapter:
         if request.adapter_key != self.key or request.mode is not self.mode:
             raise ValueError("request is not bound to the MIPROv2 adapter")
         state, prior = self._load_request_state(request)
+        if prior is not None and request.budget != prior.budget:
+            raise ValueError(
+                "MIPROv2 continuation must carry the prior exact budget"
+            )
+        self._require_transport_bindings(state)
         if request.run_id != state.run_id:
             raise ValueError("request run_id conflicts with MIPROv2 state")
+        if request.run != state.run:
+            raise ValueError(
+                "request run conflicts with MIPROv2 state authority"
+            )
         if request.run.record.optimizer_config != state.control.reference():
             raise ValueError("request run conflicts with MIPROv2 control")
         if request.run.record.reward_policy != state.control.reward_policy:
@@ -312,6 +347,10 @@ class Miprov2Adapter:
         plan = self._driver.plan(state)
         if plan.kind == "eval_config_binding":
             assert plan.eval_config_binding is not None
+            self._preflight_task_rows(
+                request.budget,
+                len(plan.eval_config_binding.task_batch_identities),
+            )
             binding = self._eval_config_resolver.resolve(
                 plan.eval_config_binding
             )
@@ -340,6 +379,7 @@ class Miprov2Adapter:
             assert plan.state.resolved_eval_binding is not None
             assert plan.state.pending_bootstrap_candidate is not None
             attempt = plan.bootstrap_rollout
+            self._preflight_task_rows(request.budget, 1)
             teacher_candidate = plan.state.pending_bootstrap_candidate
             intent_id = (
                 f"{request.run_id}:miprov2:bootstrap:{attempt.identity_hash()}"
@@ -404,6 +444,10 @@ class Miprov2Adapter:
             )
         assert plan.evaluation is not None
         effect = plan.evaluation
+        self._preflight_task_rows(
+            request.budget,
+            len(effect.task_batch_identities),
+        )
         if plan.state.resolved_eval_binding is None:
             raise ValueError("evaluation has no exact Eval Config binding")
         intent_id = (
@@ -470,6 +514,12 @@ class Miprov2Adapter:
         )
 
     @staticmethod
+    def _preflight_task_rows(budget: BudgetState, row_count: int) -> None:
+        """Reject an underfunded intent before resolving or persisting it."""
+
+        budget.debit(BudgetDelta(consumed={"task_rows": row_count}))
+
+    @staticmethod
     def _require_budget_agreement(
         request_budget: BudgetState,
         state: Miprov2State,
@@ -480,6 +530,7 @@ class Miprov2Adapter:
             "bootstrap_rollouts",
             "proposal_calls",
             "evaluations",
+            "task_rows",
         ):
             consumed = state.effect_counts[label]
             ceiling = getattr(state.budget, label)
@@ -501,7 +552,6 @@ class Miprov2Adapter:
     def _proposal_output(self, plan: Miprov2DriverPlan) -> AdapterOutput:
         native = plan.proposal_request
         assert native is not None
-        self._require_transport_bindings(plan.state)
         generic = self._generic_request(plan.state, native)
         config = self._proposer_config.model_copy(
             update={"temperature": native.temperature}
@@ -688,6 +738,43 @@ class Miprov2Adapter:
         return state
 
     def _require_transport_bindings(self, state: Miprov2State) -> None:
+        current_executor_contract: ProposalExecutorDurabilityContract = (
+            self._proposal_executor.durability_contract
+        )
+        if current_executor_contract != self._proposal_executor_contract:
+            raise ValueError(
+                "proposal executor policy changed after adapter construction"
+            )
+        if (
+            current_executor_contract.recovery_policy
+            is not ReplayPolicy.DURABLE_WORKFLOW
+        ):
+            raise ValueError(
+                "proposal executor no longer provides durable-workflow "
+                "recovery"
+            )
+        if (
+            self._transport.durability_identity_hash
+            != self._proposal_transport_durability_identity_hash
+        ):
+            raise ValueError(
+                "proposal transport durability changed after adapter "
+                "construction"
+            )
+        if (
+            self._proposal_executor_policy_identity_hash
+            != state.bindings.proposal_executor_policy_identity_hash
+        ):
+            raise ValueError(
+                "proposal executor policy conflicts with MIPROv2 state"
+            )
+        if (
+            self._proposal_transport_durability_identity_hash
+            != state.bindings.proposal_transport_durability_identity_hash
+        ):
+            raise ValueError(
+                "proposal transport durability conflicts with MIPROv2 state"
+            )
         if (
             self._proposer_config.identity_hash()
             != state.bindings.prompt_route_identity_hash
@@ -718,6 +805,9 @@ class Miprov2Adapter:
         return ProposalRequest(
             proposal_mode=native.effect,
             request_ordinal=native.effect_ordinal,
+            proposal_authority_identity_hash=(
+                native.optimization_run_identity_hash
+            ),
             base_candidate=state.control.base_candidate,
             context={
                 "native_miprov2_request": native.model_dump(mode="json"),
