@@ -13,6 +13,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType
 
+from dr_serialize import decode_strict_json_bytes
 from pydantic import JsonValue
 
 from whetstone.execution.fanout import (
@@ -91,7 +92,13 @@ def _write_dispatch_marker(
 
 
 def _load_job(path: Path) -> ProcessJob:
-    return ProcessJob.model_validate_json(path.read_text(encoding="utf-8"))
+    raw = path.read_bytes()
+    decode_strict_json_bytes(
+        raw,
+        max_bytes=len(raw),
+        max_depth=len(raw),
+    )
+    return ProcessJob.model_validate_json(raw)
 
 
 def _failure(error: Exception) -> _ProcessWorkerResult:

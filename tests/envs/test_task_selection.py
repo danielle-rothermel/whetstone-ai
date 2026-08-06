@@ -54,6 +54,19 @@ def test_parse_accepts_json_bytes_and_hashes_canonical_content() -> None:
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        b'{"schema":"first","schema":"second"}',
+        b'{"value":NaN}',
+        b'{"value":"\xff"}',
+    ],
+)
+def test_parse_rejects_non_strict_json_bytes(payload: bytes) -> None:
+    with pytest.raises(TaskSplitManifestError, match="not valid JSON"):
+        parse_task_split_manifest(payload)
+
+
+@pytest.mark.parametrize(
     "payload, match",
     [
         (b"{bad", "valid JSON"),

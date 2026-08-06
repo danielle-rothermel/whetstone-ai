@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
 
+from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -401,8 +402,13 @@ class _ActiveProcess[K: Hashable, R]:
                 f"could not read dispatch marker for key {self.spec.key!r}"
             ) from error
         try:
+            decode_strict_json_bytes(
+                payload,
+                max_bytes=len(payload),
+                max_depth=len(payload),
+            )
             marker = _ProcessDispatchMarker.model_validate_json(payload)
-        except ValidationError as error:
+        except (StrictJsonDecodeError, ValidationError) as error:
             raise ProcessWorkerError(
                 f"worker for key {self.spec.key!r} wrote an invalid "
                 "dispatch marker"
@@ -763,7 +769,7 @@ def _read_worker_result[K: Hashable, R](
     process: _ActiveProcess[K, R],
 ) -> _ProcessWorkerResult:
     try:
-        raw = process.result_path.read_text(encoding="utf-8")
+        raw = process.result_path.read_bytes()
     except OSError as error:
         stderr = _read_stderr(process.stderr_path)
         raise ProcessWorkerError(
@@ -772,8 +778,13 @@ def _read_worker_result[K: Hashable, R](
             f"{stderr}"
         ) from error
     try:
+        decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
+        )
         result = _ProcessWorkerResult.model_validate_json(raw)
-    except ValidationError as error:
+    except (StrictJsonDecodeError, ValidationError) as error:
         raise ProcessWorkerError(
             f"worker for key {process.spec.key!r} wrote an invalid result "
             "envelope"

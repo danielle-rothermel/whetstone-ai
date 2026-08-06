@@ -602,6 +602,19 @@ def test_stored_entry_identity_mismatch_fails_loudly(
         cache.get_result(key)
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [b'{"schema":"first","schema":"second"}', b'{"hits":NaN}', b"\xff"],
+)
+def test_stats_reject_non_strict_json(tmp_path: Path, raw: bytes) -> None:
+    cache = PromptResultCache(root=tmp_path)
+    cache.store_dir.mkdir()
+    cache._stats_path.write_bytes(raw)
+
+    with pytest.raises(PromptCacheError, match="stats invalid"):
+        cache._read_stats()
+
+
 def test_atomic_publication_fsyncs_entry_and_stats_directories(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

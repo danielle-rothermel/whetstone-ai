@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Self, cast
 
+from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -326,29 +327,6 @@ def _encode_frame(record: PartialCallRecord) -> bytes:
     return _canonical_json_bytes(frame) + b"\n"
 
 
-class _DuplicateKeyError(ValueError):
-    pass
-
-
-class _NonFiniteJSONNumberError(ValueError):
-    pass
-
-
-def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    decoded: dict[str, object] = {}
-    for key, value in pairs:
-        if key in decoded:
-            raise _DuplicateKeyError(f"duplicate JSON key {key!r}")
-        decoded[key] = value
-    return decoded
-
-
-def _reject_json_constant(value: str) -> None:
-    raise _NonFiniteJSONNumberError(
-        f"non-finite JSON number is not allowed: {value}"
-    )
-
-
 def _decode_frame(
     raw: bytes,
     *,
@@ -357,17 +335,12 @@ def _decode_frame(
 ) -> PartialCallRecord:
     location = f"{path}:{line_number}"
     try:
-        decoded = json.loads(
+        decoded = decode_strict_json_bytes(
             raw,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_json_constant,
+            max_bytes=len(raw),
+            max_depth=len(raw),
         )
-    except (
-        json.JSONDecodeError,
-        UnicodeDecodeError,
-        _DuplicateKeyError,
-        _NonFiniteJSONNumberError,
-    ) as exc:
+    except StrictJsonDecodeError as exc:
         raise ValueError(f"invalid partial JSON at {location}") from exc
     if not isinstance(decoded, dict):
         raise ValueError(f"partial frame must be an object at {location}")

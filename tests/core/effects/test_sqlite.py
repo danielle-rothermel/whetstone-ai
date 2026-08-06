@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Event
 
 import pytest
+from dr_serialize import StrictJsonDecodeError
 
 from tests.core.effects.authority_spawn import acquire_then_exit, spawn_result
 from tests.core.effects.authority_sqlite_scenarios import (
@@ -24,6 +25,7 @@ from tests.optimization.processes import (
     terminate_processes,
 )
 from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
+from whetstone.core.effects import _storage as storage_module
 from whetstone.core.effects.authority import (
     AcquireOutcome,
     EffectAuthority,
@@ -33,6 +35,26 @@ from whetstone.core.effects.authority import (
     StaleLeaseError,
     TerminalOutcome,
 )
+
+
+@pytest.mark.parametrize(
+    "terminal_json",
+    ['{"value":1,"value":2}', '{"value":NaN}'],
+)
+def test_terminal_row_rejects_non_strict_json(terminal_json: str) -> None:
+    raw = (
+        "a" * 64,
+        ReplayPolicy.IDEMPOTENT.value,
+        TerminalOutcome.SUCCEEDED.value,
+        "owner",
+        "attempt",
+        1,
+        None,
+        terminal_json,
+    )
+
+    with pytest.raises(StrictJsonDecodeError):
+        storage_module._decode_row("semantic-key", raw)
 
 
 def test_persisted_authority_literals_and_sqlite_schema_are_pinned(

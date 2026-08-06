@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import pytest
+from dr_serialize import StrictJsonDecodeError
+
 from whetstone.optimization.tools import _postgres as postgres_store_module
 from whetstone.optimization.tools import _sqlite as sqlite_store_module
 from whetstone.optimization.tools import admission as admission_store_module
@@ -13,6 +16,15 @@ from whetstone.optimization.tools.contracts import (
 
 FULL_A = "a" * 64
 FULL_B = "b" * 64
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['{"value":1,"value":2}', '{"value":NaN}'],
+)
+def test_persisted_entry_rejects_non_strict_json(raw: str) -> None:
+    with pytest.raises(StrictJsonDecodeError):
+        admission_store_module._decode_entry(raw)
 
 
 def test_tool_admission_persisted_literals_are_pinned() -> None:

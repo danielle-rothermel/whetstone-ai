@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from dr_serialize import StrictJsonDecodeError
 
 from whetstone.runner.budget import (
     DEFAULT_EXPECTED_CELL_USD,
@@ -11,6 +12,7 @@ from whetstone.runner.budget import (
     ReserveError,
     StopLossError,
     credits_from_payload,
+    openrouter_credits_fetcher,
 )
 
 
@@ -59,6 +61,33 @@ def test_credits_from_nested_payload() -> None:
 def test_credits_from_flat_payload() -> None:
     snap = credits_from_payload({"total_credits": 100.0, "total_usage": 40.0})
     assert snap.remaining_usd == pytest.approx(60.0)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'{"data":{},"data":{}}',
+        b'{"data":{"total_credits":NaN}}',
+        b"\xff",
+    ],
+)
+def test_live_credits_fetcher_rejects_non_strict_json(
+    content: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __init__(self, body: bytes) -> None:
+            self.content = body
+
+        def raise_for_status(self) -> None:
+            pass
+
+    response = Response(content)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setattr("httpx.get", lambda *args, **kwargs: response)
+
+    with pytest.raises(StrictJsonDecodeError):
+        openrouter_credits_fetcher()()
 
 
 def test_credits_missing_fields_remaining_none() -> None:

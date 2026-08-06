@@ -5,6 +5,8 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from typing import Any, Protocol, TypeVar
 
+from dr_serialize import decode_strict_json_bytes
+
 from whetstone.core.effects.models import (
     EffectRequest,
     EffectTerminal,
@@ -159,11 +161,15 @@ def _decode_row(
         if expires_at_text is None
         else datetime.fromisoformat(expires_at_text)
     )
-    terminal = (
-        None
-        if terminal_text is None
-        else EffectTerminal.model_validate_json(terminal_text)
-    )
+    terminal = None
+    if terminal_text is not None:
+        terminal_raw = terminal_text.encode()
+        decode_strict_json_bytes(
+            terminal_raw,
+            max_bytes=len(terminal_raw),
+            max_depth=len(terminal_raw),
+        )
+        terminal = EffectTerminal.model_validate_json(terminal_raw)
     row = _EffectRow(
         request=request,
         state=_StoredState(state_text),

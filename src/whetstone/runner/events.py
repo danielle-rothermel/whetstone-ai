@@ -48,8 +48,9 @@ import traceback as traceback_mod
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
+from dr_serialize import decode_strict_json_bytes
 from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr
 
 __all__ = [
@@ -228,8 +229,16 @@ class RunEvent(BaseModel):
         return " ".join(parts)
 
     @classmethod
-    def from_line(cls, line: str) -> RunEvent:
-        data = json.loads(line)
+    def from_line(cls, line: bytes | str) -> RunEvent:
+        raw = line if isinstance(line, bytes) else line.encode()
+        data = cast(
+            dict[str, Any],
+            decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            ),
+        )
         if "schema" in data:
             data["schema_"] = data.pop("schema")
         return cls.model_validate(data)
@@ -497,7 +506,7 @@ class EventStream:
         if not self.path.exists():
             return []
         events: list[RunEvent] = []
-        for raw in self.path.read_text().splitlines():
+        for raw in self.path.read_bytes().splitlines():
             line = raw.strip()
             if not line:
                 continue

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from dr_serialize import StrictJsonDecodeError
 
 from whetstone.runner.events import (
     CELL_FAILED,
@@ -48,6 +49,15 @@ def test_event_stream_appends_validated_jsonl(tmp_path) -> None:
     loaded = RunEvent.from_line(stream.path.read_text().strip())
     assert loaded == event
     assert loaded.event == CELL_FINALIZED
+
+
+@pytest.mark.parametrize(
+    "line",
+    [b'{"schema":"first","schema":"second"}', b'{"value":NaN}', b"\xff"],
+)
+def test_event_reader_rejects_non_strict_json(line: bytes) -> None:
+    with pytest.raises(StrictJsonDecodeError):
+        RunEvent.from_line(line)
 
 
 def test_failed_event_preserves_typed_reason() -> None:

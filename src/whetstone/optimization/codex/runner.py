@@ -13,6 +13,7 @@ from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import ValidationError
 
 from whetstone.experiment.reward import RewardPolicy
@@ -440,21 +441,20 @@ class SubprocessCodexRunner:
                 command,
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
-                text=True,
                 timeout=self._timeout,
                 cwd=working_directory,
                 env=isolated_environment,
                 check=False,
             )
+            stderr = _decode_stderr(completed.stderr)
             if completed.returncode:
                 raise OpaqueStepError(
-                    f"Codex exited {completed.returncode}: "
-                    f"{completed.stderr[-2000:]}"
+                    f"Codex exited {completed.returncode}: {stderr[-2000:]}"
                 )
             artifact = _parse_output_artifact(
                 artifact_path,
                 stdout=completed.stdout,
-                stderr=completed.stderr,
+                stderr=stderr,
                 run_id=request.run_id,
                 isolation={
                     "strategy": "macos_sandbox_exec",
@@ -579,14 +579,18 @@ def _default_prompt(
     )
 
 
-def _parse_jsonl_events(stdout: str) -> tuple[dict[str, Any], ...]:
+def _parse_jsonl_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
     events: list[dict[str, Any]] = []
     for ordinal, raw in enumerate(stdout.splitlines(), start=1):
         if not raw.strip():
             continue
         try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
+            value = decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            )
+        except StrictJsonDecodeError as exc:
             raise OpaqueStepError(
                 f"Codex JSONL event {ordinal} is malformed"
             ) from exc
@@ -601,7 +605,7 @@ def _parse_jsonl_events(stdout: str) -> tuple[dict[str, Any], ...]:
 def _parse_output_artifact(
     path: Path,
     *,
-    stdout: str,
+    stdout: bytes,
     stderr: str,
     run_id: str,
     isolation: dict[str, Any] | None = None,
@@ -609,10 +613,14 @@ def _parse_output_artifact(
     if not path.is_file():
         raise OpaqueStepError("Codex produced no final output artifact")
     try:
-        artifact = CodexOutputArtifact.model_validate_json(
-            path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
+        decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
         )
-    except (OSError, ValidationError) as exc:
+        artifact = CodexOutputArtifact.model_validate_json(raw)
+    except (OSError, StrictJsonDecodeError, ValidationError) as exc:
         raise OpaqueStepError(
             "Codex final output artifact failed schema validation"
         ) from exc
@@ -627,6 +635,13 @@ def _parse_output_artifact(
     return artifact.model_copy(
         update={"conversation_evidence": process_evidence}
     )
+
+
+def _decode_stderr(stderr: bytes) -> str:
+    try:
+        return stderr.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OpaqueStepError("Codex stderr is not valid UTF-8") from exc
 
 
 __all__ = [

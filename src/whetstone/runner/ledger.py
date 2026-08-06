@@ -32,7 +32,16 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import cast
 
+from dr_serialize import (
+    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+    Jsonable,
+    StrictJsonDecodeError,
+    canonical_json_bytes,
+    decode_strict_json_bytes,
+)
+from dr_store import CanonicalJsonFile
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -461,8 +470,14 @@ class CellRecord(BaseModel):
         )
 
     @classmethod
-    def from_line(cls, line: str) -> CellRecord:
-        return cls.model_validate_json(line)
+    def from_line(cls, line: bytes | str) -> CellRecord:
+        raw = line if isinstance(line, bytes) else line.encode()
+        decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
+        )
+        return cls.model_validate_json(raw)
 
 
 class OfficialAnchorRecord(BaseModel):
@@ -657,8 +672,14 @@ class SpendRecord(BaseModel):
         )
 
     @classmethod
-    def from_line(cls, line: str) -> SpendRecord:
-        return cls.model_validate_json(line)
+    def from_line(cls, line: bytes | str) -> SpendRecord:
+        raw = line if isinstance(line, bytes) else line.encode()
+        decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
+        )
+        return cls.model_validate_json(raw)
 
 
 def cell_key(optimizer: str, env: str, attempt: int) -> tuple[str, str, int]:
@@ -873,10 +894,10 @@ class Ledger:
                     "official-anchor projection is not a regular file at "
                     f"{path}; refusing to replace it"
                 )
-            with os.fdopen(target_descriptor, encoding="utf-8") as handle:
+            with os.fdopen(target_descriptor, "rb") as handle:
                 target_descriptor = -1
                 body = handle.read()
-        except (OSError, UnicodeError) as exc:
+        except OSError as exc:
             raise RuntimeError(
                 "official-anchor projection is invalid at "
                 f"{path}; refusing to replace it"
@@ -906,8 +927,13 @@ class Ledger:
             )
 
         try:
+            decode_strict_json_bytes(
+                body,
+                max_bytes=len(body),
+                max_depth=len(body),
+            )
             return OfficialAnchorRecord.model_validate_json(body)
-        except ValidationError as exc:
+        except (StrictJsonDecodeError, ValidationError) as exc:
             raise RuntimeError(
                 "official-anchor projection is invalid at "
                 f"{path}; refusing to replace it"
@@ -1481,8 +1507,16 @@ class Ledger:
         """
         self.optimization_traces_dir.mkdir(parents=True, exist_ok=True)
         path = self.optimization_trace_path(cell_id)
-        path.write_text(json.dumps(trace, indent=2, sort_keys=True) + "\n")
-        return path
+        document = cast(Jsonable, trace)
+        encoded = canonical_json_bytes(document)
+        trace_file = CanonicalJsonFile(
+            self.optimization_traces_dir,
+            path.name,
+            max_bytes=len(encoded),
+            max_depth=CANONICAL_JSON_MAX_CONTAINER_DEPTH,
+        )
+        trace_file.publish(document)
+        return trace_file.path
 
     def _append_jsonl_durable(self, filename: str, line: str) -> None:
         """Append one complete line under a file lock and fsync it."""

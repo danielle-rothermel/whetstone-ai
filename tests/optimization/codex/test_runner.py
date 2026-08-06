@@ -29,7 +29,10 @@ from whetstone.optimization.codex.runner import (
     _CODEX_DENIED_FEATURES,
     _MCP_TOOLS_APPROVAL_MODE,
     SubprocessCodexRunner,
+    _decode_stderr,
     _MacOsProcessIsolation,
+    _parse_jsonl_events,
+    _parse_output_artifact,
 )
 from whetstone.optimization.contracts import OptimizationStepRequest
 from whetstone.optimization.tools.contracts import (
@@ -235,6 +238,40 @@ def test_subprocess_rejects_missing_or_malformed_artifact(
 
     with pytest.raises(OpaqueStepError):
         boundary.runner.run(boundary.request, boundary.handle)
+
+
+@pytest.mark.parametrize(
+    "stdout",
+    [b'{"value":1,"value":2}\n', b'{"value":NaN}\n', b"\xff\n"],
+)
+def test_jsonl_events_reject_non_strict_json(stdout: bytes) -> None:
+    with pytest.raises(OpaqueStepError, match="JSONL event 1 is malformed"):
+        _parse_jsonl_events(stdout)
+
+
+@pytest.mark.parametrize(
+    "artifact_bytes",
+    [b'{"value":1,"value":2}', b'{"value":NaN}', b"\xff"],
+)
+def test_output_artifact_rejects_non_strict_json(
+    tmp_path: Path,
+    artifact_bytes: bytes,
+) -> None:
+    path = tmp_path / "artifact.json"
+    path.write_bytes(artifact_bytes)
+
+    with pytest.raises(OpaqueStepError, match="schema validation"):
+        _parse_output_artifact(
+            path,
+            stdout=b"",
+            stderr="",
+            run_id="run",
+        )
+
+
+def test_stderr_requires_utf8() -> None:
+    with pytest.raises(OpaqueStepError, match="stderr is not valid UTF-8"):
+        _decode_stderr(b"\xff")
 
 
 def test_subprocess_proposal_uses_the_mcp_evaluation_path(

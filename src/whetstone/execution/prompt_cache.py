@@ -14,7 +14,12 @@ from typing import Any, Literal, NewType, Self
 from uuid import uuid4
 
 from dr_providers import ProviderCallRequest
-from dr_serialize import build_identity_document, identity_document_hash
+from dr_serialize import (
+    StrictJsonDecodeError,
+    build_identity_document,
+    decode_strict_json_bytes,
+    identity_document_hash,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -467,7 +472,7 @@ class PromptResultCache:
     def _read_stats(self) -> _StoredStats:
         path = self._stats_path
         try:
-            raw = self._read_private_text(path)
+            raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return _StoredStats()
         except OSError as exc:  # pragma: no cover - filesystem failure
@@ -475,8 +480,13 @@ class PromptResultCache:
                 f"prompt-cache stats unreadable at {path}: {exc}"
             ) from exc
         try:
+            decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            )
             return _StoredStats.model_validate_json(raw)
-        except ValidationError as exc:
+        except (StrictJsonDecodeError, ValidationError) as exc:
             raise PromptCacheError(
                 f"prompt-cache stats invalid at {path}: {exc}"
             ) from exc
@@ -657,14 +667,19 @@ class PromptResultCache:
         key: PromptCacheKey,
     ) -> _AccountingJournal:
         try:
-            raw = self._read_private_text(path)
+            raw = self._read_private_bytes(path)
         except OSError as exc:  # pragma: no cover - filesystem failure
             raise PromptCacheError(
                 f"prompt-cache accounting journal unreadable at {path}: {exc}"
             ) from exc
         try:
+            decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            )
             journal = _AccountingJournal.model_validate_json(raw)
-        except ValidationError as exc:
+        except (StrictJsonDecodeError, ValidationError) as exc:
             raise PromptCacheError(
                 f"prompt-cache accounting journal invalid at {path}: {exc}"
             ) from exc
@@ -742,7 +757,7 @@ class PromptResultCache:
         validated = _validate_cache_key(key)
         path = self._path_for(validated)
         try:
-            raw = self._read_private_text(path)
+            raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return None
         except OSError as exc:  # pragma: no cover - filesystem failure
@@ -750,8 +765,13 @@ class PromptResultCache:
                 f"prompt-cache entry unreadable at {path}: {exc}"
             ) from exc
         try:
+            decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            )
             entry = _StoredEntry.model_validate_json(raw)
-        except ValidationError as exc:
+        except (StrictJsonDecodeError, ValidationError) as exc:
             raise PromptCacheError(
                 f"prompt-cache entry invalid at {path}: {exc}"
             ) from exc
@@ -762,10 +782,10 @@ class PromptResultCache:
         return entry
 
     @staticmethod
-    def _read_private_text(path: Path) -> str:
+    def _read_private_bytes(path: Path) -> bytes:
         fd = open_private_regular_file(path, os.O_RDONLY)
         try:
-            with os.fdopen(fd, encoding="utf-8") as handle:
+            with os.fdopen(fd, "rb") as handle:
                 fd = -1
                 return handle.read()
         finally:

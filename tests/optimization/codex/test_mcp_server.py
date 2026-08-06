@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from dr_serialize import StrictJsonDecodeError
 from dr_store import ObjectStore, SqliteBackend
 
 from tests.envs.support import execution_policy
@@ -16,7 +17,10 @@ from tests.optimization.codex.support import (
 )
 from whetstone.envs.factory import EnvExperiment
 from whetstone.optimization.codex.mcp_environment import McpEnvironmentKey
-from whetstone.optimization.codex.mcp_server import build_server_from_env
+from whetstone.optimization.codex.mcp_server import (
+    _strict_env_json,
+    build_server_from_env,
+)
 from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
 from whetstone.optimization.tools.contracts import (
     ToolCapacityBinding,
@@ -43,6 +47,15 @@ def _server_environment(
             experiment.reward_policy.model_dump_json()
         ),
     }
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ['{"value":1,"value":2}', '{"value":NaN}'],
+)
+def test_environment_json_rejects_non_strict_values(raw: str) -> None:
+    with pytest.raises(StrictJsonDecodeError):
+        _strict_env_json(raw)
 
 
 def test_serialized_environment_reconstructs_evaluation_server(
