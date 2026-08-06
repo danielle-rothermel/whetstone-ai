@@ -805,7 +805,7 @@ class Miprov2Adapter:
         return ProposalRequest(
             proposal_mode=native.effect,
             request_ordinal=native.effect_ordinal,
-            optimization_run_identity_hash=(
+            proposal_authority_identity_hash=(
                 native.optimization_run_identity_hash
             ),
             base_candidate=state.control.base_candidate,

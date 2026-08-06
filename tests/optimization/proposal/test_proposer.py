@@ -164,7 +164,7 @@ def _golden_proposal_request() -> ProposalRequest:
     return ProposalRequest(
         proposal_mode="seed_proposal",
         request_ordinal=3,
-        optimization_run_identity_hash="f" * 64,
+        proposal_authority_identity_hash="f" * 64,
         base_candidate=_base_candidate_ref(),
         context={"proposal_prompt": "Improve this prompt."},
     )
@@ -174,7 +174,7 @@ def test_proposal_request_identity_payload_is_golden() -> None:
     assert _golden_proposal_request().identity_payload() == {
         "proposal_mode": "seed_proposal",
         "request_ordinal": 3,
-        "optimization_run_identity_hash": "f" * 64,
+        "proposal_authority_identity_hash": "f" * 64,
         "base_candidate": {
             "record_ref": {
                 "schema_name": "whetstone.optimization_candidate",
@@ -195,7 +195,7 @@ def test_proposal_request_identity_payload_is_golden() -> None:
 def test_proposal_request_identity_digest_is_golden() -> None:
     assert (
         _golden_proposal_request().identity_hash()
-        == "518f1bd891b318dd306a9f6bf091141a30fc519cbc31d2ddedfa823f49ea2d47"
+        == "40c01150145269f42e08158bee66c5f910a2b18077dfa5dddc64ad63ec7af398"
     )
 
 
@@ -205,7 +205,7 @@ def test_proposal_request_identity_payload_carries_no_extra_keys() -> None:
     assert sorted(payload) == [
         "base_candidate",
         "context",
-        "optimization_run_identity_hash",
+        "proposal_authority_identity_hash",
         "proposal_mode",
         "request_ordinal",
     ]
@@ -233,7 +233,7 @@ def test_fake_transport_is_scripted_and_records_calls() -> None:
     request = ProposalRequest(
         proposal_mode="seed_proposal",
         request_ordinal=0,
-        optimization_run_identity_hash="f" * 64,
+        proposal_authority_identity_hash="f" * 64,
         base_candidate=_base_candidate_ref(),
     )
     drafts = transport.draft(pc, request, 3)
@@ -243,7 +243,7 @@ def test_fake_transport_is_scripted_and_records_calls() -> None:
     other = ProposalRequest(
         proposal_mode="history_proposal",
         request_ordinal=7,
-        optimization_run_identity_hash="f" * 64,
+        proposal_authority_identity_hash="f" * 64,
         base_candidate=_base_candidate_ref(),
     )
     fallback = transport.draft(pc, other, 1)
@@ -255,7 +255,7 @@ def test_proposal_context_evidence_and_usage_are_deeply_immutable() -> None:
     request = ProposalRequest(
         proposal_mode="history_proposal",
         request_ordinal=0,
-        optimization_run_identity_hash="f" * 64,
+        proposal_authority_identity_hash="f" * 64,
         base_candidate=_base_candidate_ref(),
         context=context,
     )
@@ -304,7 +304,7 @@ def test_proposal_request_owns_exact_base_and_derives_template() -> None:
     request = ProposalRequest(
         proposal_mode="proposal",
         request_ordinal=0,
-        optimization_run_identity_hash="f" * 64,
+        proposal_authority_identity_hash="f" * 64,
         base_candidate=base_candidate,
     )
     assert request.base_candidate == base_candidate
@@ -325,7 +325,7 @@ def test_proposal_request_requires_string_mutation_field(
         ProposalRequest(
             proposal_mode="proposal",
             request_ordinal=0,
-            optimization_run_identity_hash="f" * 64,
+            proposal_authority_identity_hash="f" * 64,
             base_candidate=_base_candidate_ref(payload),
         )
 
@@ -350,6 +350,6 @@ def test_proposal_request_rejects_invalid_ordinal() -> None:
         ProposalRequest(
             proposal_mode="proposal",
             request_ordinal=True,
-            optimization_run_identity_hash="f" * 64,
+            proposal_authority_identity_hash="f" * 64,
             base_candidate=_base_candidate_ref(),
         )

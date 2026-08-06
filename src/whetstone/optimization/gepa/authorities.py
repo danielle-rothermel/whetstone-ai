@@ -921,7 +921,7 @@ class CanonicalGepaProposalAuthority:
         generic = ProposalRequest(
             proposal_mode="gepa_reflection",
             request_ordinal=request.slot.invocation_ordinal,
-            optimization_run_identity_hash=(
+            proposal_authority_identity_hash=(
                 request.authority.authority_identity_hash
             ),
             base_candidate=self._reflection_base_candidate(request, current),

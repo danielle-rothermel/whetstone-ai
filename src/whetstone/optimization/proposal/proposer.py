@@ -115,7 +115,7 @@ class ProposalRequest(BaseModel):
 
     proposal_mode: NonEmptyId
     request_ordinal: NonNegativeInt
-    optimization_run_identity_hash: IdentityHash
+    proposal_authority_identity_hash: IdentityHash
     base_candidate: CandidateRef
     context: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
@@ -148,8 +148,8 @@ class ProposalRequest(BaseModel):
         return {
             "proposal_mode": str(self.proposal_mode),
             "request_ordinal": int(self.request_ordinal),
-            "optimization_run_identity_hash": str(
-                self.optimization_run_identity_hash
+            "proposal_authority_identity_hash": str(
+                self.proposal_authority_identity_hash
             ),
             "base_candidate": {
                 "record_ref": {
