@@ -1,0 +1,106 @@
+#:schema ./terms.schema.json
+
+# Shared vocabulary for Whetstone. Definitions stay conceptual; code mappings
+# live only in exported_symbols.
+
+[[terms]]
+name = "graph definition"
+definition = """
+A native dr-graph template whose declared variables are assigned to produce a \
+concrete graph config."""
+categories = ["experiment identity"]
+
+[[terms]]
+name = "graph config"
+definition = """
+The complete static, output-affecting configuration of a computation graph."""
+categories = ["experiment identity"]
+
+[[terms]]
+name = "graph hash"
+definition = """
+The native full identity hash of a graph config. Whetstone carries this \
+identity; it does not create a parallel graph identity."""
+categories = ["experiment identity"]
+part_of = ["evaluation evidence"]
+
+[[terms]]
+name = "evaluation role"
+definition = """
+The closed internal or official role carried by an evaluation binding. An \
+official role requires named authority; an internal role forbids it."""
+exported_symbols = ["whetstone.core.roles.EvaluationRole"]
+categories = ["evaluation"]
+part_of = ["evaluation binding"]
+
+[[terms]]
+name = "evaluation binding"
+definition = """
+The immutable policy and realized-environment context for an evaluation, \
+including its exact evaluation config, role, campaign, authority, execution \
+policies, and environment fingerprint."""
+exported_symbols = ["whetstone.experiment.binding.EvaluationBinding"]
+categories = ["evaluation", "experiment identity"]
+part_of = ["evaluation intent", "evaluation evidence"]
+
+[[terms]]
+name = "evaluation intent"
+definition = """
+An immutable measurement request that binds an exact candidate, target \
+evaluation config, evaluation binding, purpose, run, and step before execution."""
+exported_symbols = ["whetstone.optimization.contracts.EvaluationIntent"]
+categories = ["evaluation", "optimization"]
+
+[[terms]]
+name = "evaluation evidence"
+definition = """
+The content-addressed terminal record for one candidate evaluation, binding \
+its graph, dataset, task-and-repeat plan, outputs, component traces, aggregate, \
+and optional reward to the exact evaluation context."""
+exported_symbols = ["whetstone.evaluation.schema.EvaluationEvidence"]
+categories = ["evaluation", "experiment identity"]
+
+[[terms]]
+name = "provider call attempt"
+definition = """
+One completed logical provider attempt whose call identity, ordinal, execution \
+policy, timing, transport evidence, and semantic classification agree exactly."""
+exported_symbols = ["whetstone.provider.ProviderCallAttempt"]
+categories = ["provider execution"]
+part_of = ["provider call result"]
+
+[[terms]]
+name = "provider call result"
+definition = """
+The terminal semantic result of one logical provider call, containing its \
+ordered completed attempts and exactly one final generation or semantic \
+failure."""
+exported_symbols = ["whetstone.provider.ProviderCallResult"]
+categories = ["provider execution"]
+
+[[terms]]
+name = "rollout aggregate"
+definition = """
+A provenance-bearing aggregate over an explicit planned task-and-repeat matrix \
+whose present, missing, failed, and invalid rows are completely accounted for."""
+exported_symbols = ["whetstone.evaluation.code.aggregate.RolloutAggregate"]
+categories = ["evaluation", "aggregation"]
+part_of = ["evaluation evidence"]
+
+[[terms]]
+name = "objective"
+definition = """
+A named, direction-bearing official-selection criterion derived \
+deterministically from an eligible score or rollout aggregate. Not reward, \
+which is optimizer-facing."""
+exported_symbols = ["whetstone.experiment.Objective"]
+categories = ["optimization", "selection"]
+
+[[terms]]
+name = "reward"
+definition = """
+An optimizer-facing value bound to its reward policy and the exact aggregate \
+evidence it scalarizes. It is not an objective and is never an \
+official-selection criterion."""
+exported_symbols = ["whetstone.experiment.reward.RewardRef"]
+categories = ["optimization", "evaluation"]

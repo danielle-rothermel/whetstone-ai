@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml)
 
-| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | [whetstone-envs](https://github.com/danielle-rothermel/whetstone-envs) |
-| --- | --- | --- | --- | --- | --- | --- |
+| [Terms](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml) | [Contracts](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml) | [Changelog](https://github.com/danielle-rothermel/whetstone-ai/blob/main/CHANGELOG.md) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | whetstone-envs (private) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 **Whetstone evaluates and optimizes prompt candidates through typed,
 reproducible experiment contracts.** Its functionality is organized into
@@ -30,6 +30,27 @@ these areas:
 - **Authority and coordination** govern durable proposal and evaluation
   effects, ownership claims, and terminal result binding across replay and
   recovery.
+
+The repository boundaries follow the same shape:
+
+| Boundary | Package | Responsibility |
+| --- | --- | --- |
+| Core | `whetstone.core` | Shared identity, roles, and effect primitives |
+| Experiment | `whetstone.experiment` | Candidates, bindings, graph identity, objectives, and rewards |
+| Environments | `whetstone.envs` | Task pools, sampling, rollout definitions, and environment-specific policy |
+| Provider | `whetstone.provider` | Provider requests, attempt evidence, classification, and retry policy |
+| Execution | `whetstone.execution` | Process fanout, partial progress, prompt caching, and resume behavior |
+| Evaluation | `whetstone.evaluation` | Evaluation drivers, traces, evidence, scoring, and aggregates |
+| Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, and tool use |
+| Coordination | `whetstone.coordination` | Durable claims, official authority, and proposal/evaluation services |
+
+The authoritative repository vocabulary and standing rules are
+[`terms.toml`](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml)
+and
+[`contracts.toml`](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml).
+The client-side definitions page in `.defs/index.html` renders those files
+directly rather than maintaining a generated copy. It is a repository-local
+viewer until GitHub Pages is configured; serve `.defs/` over HTTP to use it.
 
 ## Testing
 

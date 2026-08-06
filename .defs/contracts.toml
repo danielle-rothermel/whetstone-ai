@@ -1,0 +1,70 @@
+# Binding contracts for Whetstone. Statements are present-tense rules; checks
+# name the repository commands that verify them.
+
+[[contracts]]
+title = "Evaluation roles bind authority and reward semantics"
+statement = """
+Every evaluation binding spells its role explicitly: official bindings require \
+an authority principal and internal bindings forbid one; internal evaluation \
+intents require their expected reward-policy hash and official intents forbid \
+one."""
+rationale = """
+Role, authority, and optimizer-facing reward policy change the meaning of an \
+evaluation. Keeping them in one validated binding prevents reporting or replay \
+from relabeling internal evidence as official evidence."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/experiment/test_binding.py tests/optimization/test_schema_semantics.py"
+
+[[contracts]]
+title = "Provider results preserve exact attempt evidence"
+statement = """
+Each provider attempt contains exactly one generation or semantic failure that \
+reclassifies its transport evidence, and each provider result contains \
+contiguous attempts with one shared call and policy identity whose last \
+classification is the terminal result."""
+rationale = """
+Retry history is evidence, not incidental logging. Preserving its order and \
+identity keeps terminal outcomes attributable to the exact request and policy \
+that produced them."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/provider/test_attempt_result.py"
+
+[[contracts]]
+title = "Evaluation matrices have complete row accounting"
+statement = """
+Every planned task-and-repeat cell appears exactly once in evaluation outputs \
+and is accounted for exactly once in aggregate row counts: scored rows are \
+present, while unscored rows are exactly one of missing, failed, or invalid; \
+numeric zero remains a scored value."""
+rationale = """
+Silently dropping absent or failed work changes denominators and can turn \
+incomplete execution into apparently better measurements. Explicit states \
+keep reductions and provenance faithful to the full plan."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/evaluation/code/test_aggregate.py tests/evaluation/test_engine.py"
+
+[[contracts]]
+title = "Persisted evaluation references address exact records"
+statement = """
+Evaluation bindings, outputs, component traces, aggregates, rewards, and \
+terminal evidence use their declared schemas and content-address the exact \
+serialized records they reference."""
+rationale = """
+Schema labels without content agreement allow forged or drifted records to \
+reuse trusted identities. Exact record references make replay and recovery \
+validate the same evidence that originally completed the evaluation."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/experiment/test_binding.py tests/evaluation/test_engine.py"
+
+[[contracts]]
+title = "Reward is not an objective"
+statement = """
+Reward remains optimizer-facing and is never accepted as an official-selection \
+objective, including under case variants of its reserved name."""
+rationale = """
+An optimizer may train against a reward policy, while official selection must \
+remain attributable to direction-bearing criteria derived from eligible \
+evaluation evidence. Treating reward as an objective collapses those distinct \
+authorities."""
+date = "2026-08-05"
+check = "uv run pytest -q tests/experiment/test_objectives.py"
