@@ -159,12 +159,14 @@ def build_ed1m_experiment(
 ) -> Ed1mExperiment:
     """Build the ed1m experiment (mutant enc-dec + dual scoring).
 
-    Authenticates the caller-provided published dataset, packs its canonical
-    ``MutantRecord`` values as Instances, and builds the same enc-dec rollout,
-    configs, and blended reward as ed1 with the mutant oracle as scorer.
-    ``budget_ratio=None`` (the default) uses the no-budget frame. The
-    manifest's dataset identity is carried as the experiment and split dataset
-    revision.
+    Verifies the retained artifact schemas, hashes, identities, ordering, and
+    internal consistency, then packs its ``MutantRecord`` values as Instances
+    and builds the same enc-dec rollout, configs, and blended reward as ed1
+    with the mutant oracle as scorer. The manifest's
+    ``canonical_suite_digest`` is opaque recorded provenance; the external
+    canonical suite is not independently reauthenticated. ``budget_ratio=None``
+    (the default) uses the no-budget frame. The manifest's dataset identity is
+    carried as the experiment and split dataset revision.
     """
     if not isinstance(artifact_dir, Path):
         raise TypeError("artifact_dir must be pathlib.Path")

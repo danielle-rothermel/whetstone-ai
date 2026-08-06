@@ -1,4 +1,9 @@
-"""Authenticated loading for the persisted ED1M behavioral-mutant seam."""
+"""Load and verify retained ED1M behavioral-mutant artifacts.
+
+The loader verifies artifact schemas, hashes, identities, ordering, and
+internal consistency. ``canonical_suite_digest`` is opaque recorded
+provenance; the external canonical suite is not independently reauthenticated.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from pathlib import Path
 from typing import Final, Literal
 
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
+from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from whetstone.envs._ed1m_mutation import (
@@ -236,7 +242,7 @@ def load_dataset(
     *,
     expected_config_identity: str | None = None,
 ) -> LoadedDataset:
-    """Load one complete authenticated immutable ED1M dataset directory."""
+    """Load one retained ED1M dataset and verify its internal artifacts."""
 
     if not output_dir.is_dir():
         raise DatasetValidationError(
@@ -250,11 +256,15 @@ def load_dataset(
             f"{sorted(expected_names)}"
         )
     records_bytes = (output_dir / RECORDS_FILENAME).read_bytes()
+    manifest_bytes = (output_dir / MANIFEST_FILENAME).read_bytes()
     try:
-        manifest = DatasetManifest.model_validate_json(
-            (output_dir / MANIFEST_FILENAME).read_bytes()
+        decode_strict_json_bytes(
+            manifest_bytes,
+            max_bytes=len(manifest_bytes),
+            max_depth=len(manifest_bytes),
         )
-    except ValidationError as exc:
+        manifest = DatasetManifest.model_validate_json(manifest_bytes)
+    except (StrictJsonDecodeError, ValidationError) as exc:
         raise DatasetValidationError("invalid mutant manifest") from exc
     records = _decode_records(records_bytes)
     _validate_components(
@@ -598,9 +608,15 @@ def _decode_records(content: bytes) -> tuple[MutantRecord, ...]:
             raise DatasetValidationError(
                 f"mutants.jsonl line {line_number} is blank"
             )
+        raw = line.encode("utf-8")
         try:
-            records.append(MutantRecord.model_validate_json(line))
-        except ValidationError as exc:
+            decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            )
+            records.append(MutantRecord.model_validate_json(raw))
+        except (StrictJsonDecodeError, ValidationError) as exc:
             raise DatasetValidationError(
                 f"invalid mutants.jsonl line {line_number}"
             ) from exc

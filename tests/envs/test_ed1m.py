@@ -105,6 +105,37 @@ def test_canonical_loader_authenticates_fixture(
     assert len(loaded.manifest.dataset_identity) == 64
 
 
+def test_loader_rejects_duplicate_manifest_key(
+    mutant_dataset_dir: Path,
+) -> None:
+    manifest_path = mutant_dataset_dir / "manifest.json"
+    manifest = manifest_path.read_bytes()
+    field = b'  "manifest_schema_version": 1,\n'
+    assert field in manifest
+    manifest_path.write_bytes(manifest.replace(field, field + field, 1))
+
+    with pytest.raises(
+        DatasetValidationError, match="invalid mutant manifest"
+    ):
+        load_dataset(mutant_dataset_dir)
+
+
+def test_loader_rejects_duplicate_record_key(
+    mutant_dataset_dir: Path,
+) -> None:
+    records_path = mutant_dataset_dir / "mutants.jsonl"
+    records = records_path.read_bytes()
+    identity = _mutant_record().content_identity.encode()
+    field = b'"content_identity":"' + identity + b'",'
+    assert field in records
+    records_path.write_bytes(records.replace(field, field + field, 1))
+
+    with pytest.raises(
+        DatasetValidationError, match=r"invalid mutants\.jsonl line 1"
+    ):
+        load_dataset(mutant_dataset_dir)
+
+
 def test_build_requires_explicit_path() -> None:
     from whetstone.envs.ed1m import build_ed1m_experiment
 
