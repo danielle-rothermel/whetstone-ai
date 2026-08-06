@@ -81,6 +81,21 @@ class TestProviderCallAttempt:
         assert attempt.succeeded
         assert attempt.latency_ms == 250
         assert attempt.evidence is not None
+        stable = attempt.to_stable_dict()
+        assert stable["schema_version"] == 2
+        assert "schema_version" not in attempt.evidence.identity_payload()
+
+    def test_rejects_v1_schema(self) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        attempt = _attempt(
+            number=1,
+            outcome=s.response_outcome(text="ok"),
+            policy_hash=policy_hash,
+        )
+        with pytest.raises(ValueError, match="schema_version"):
+            ProviderCallAttempt.model_validate(
+                {**attempt.to_stable_dict(), "schema_version": 1}
+            )
 
     def test_exactly_one_classification_side(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
@@ -233,10 +248,32 @@ class TestProviderCallResult:
         assert result.succeeded
         assert result.attempt_count == 2
 
-        rebuilt = ProviderCallResult.model_validate(
-            result.model_dump(mode="json")
+        stable = result.to_stable_dict()
+        assert stable["schema_version"] == 2
+        assert all(
+            attempt["schema_version"] == 2 for attempt in stable["attempts"]
         )
+        rebuilt = ProviderCallResult.model_validate(stable)
         assert rebuilt == result
+
+    def test_rejects_v1_schema(self) -> None:
+        policy_hash = s.build_execution_policy().identity_hash
+        attempt = _attempt(
+            number=1,
+            outcome=s.response_outcome(text="ok"),
+            policy_hash=policy_hash,
+        )
+        result = ProviderCallResult(
+            logical_call_id="lc-1",
+            request_identity=s.build_request().identity_payload(),
+            execution_policy_hash=policy_hash,
+            attempts=(attempt,),
+            generation=attempt.generation,
+        )
+        with pytest.raises(ValueError, match="schema_version"):
+            ProviderCallResult.model_validate(
+                {**result.to_stable_dict(), "schema_version": 1}
+            )
 
     def test_requires_contiguous_attempt_numbers(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash

@@ -119,9 +119,9 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
     from dr_code.humaneval import HumanEvalTask
     from dr_providers import (
         FailureClass,
+        ProviderHttpRequestEvidence,
         ProviderInvocationEvidence,
         ProviderTransportFailure,
-        RawHttpRequest,
     )
 
     from tests.envs.support import FakeTransport
@@ -204,7 +204,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
     if transient_first and request.drive_ordinal == 0:
 
         def transient_transport(provider_request):
-            raw_request = RawHttpRequest.build(
+            http_request = ProviderHttpRequestEvidence.build(
                 url="https://example.test/v1/chat/completions",
                 headers={"content-type": "application/json"},
                 body={"model": "test-model"},
@@ -212,7 +212,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
             return ProviderInvocationEvidence.build(
                 request=provider_request,
                 policy=request.execution_policy.transport_policy,
-                raw_request=raw_request,
+                http_request=http_request,
                 outcome=ProviderTransportFailure(
                     failure_class=FailureClass.TRANSIENT,
                     code="transport_error",

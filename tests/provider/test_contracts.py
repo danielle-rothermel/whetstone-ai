@@ -75,11 +75,11 @@ class TestNoCredentialMaterialInPersistedShapes:
 
         def leaky_transport(req):
             from dr_providers import (
+                ProviderHttpRequestEvidence,
                 ProviderInvocationEvidence,
-                RawHttpRequest,
             )
 
-            raw_request = RawHttpRequest.build(
+            http_request = ProviderHttpRequestEvidence.build(
                 url="https://example.test/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {SECRET_TOKEN}",
@@ -90,7 +90,7 @@ class TestNoCredentialMaterialInPersistedShapes:
             return ProviderInvocationEvidence.build(
                 request=req,
                 policy=transport_policy,
-                raw_request=raw_request,
+                http_request=http_request,
                 outcome=s.response_outcome(text="ok"),
             )
 

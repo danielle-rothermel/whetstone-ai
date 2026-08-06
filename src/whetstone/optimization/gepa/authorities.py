@@ -82,7 +82,7 @@ GEPA_PROPOSAL_AUTHORITY_SCHEMA_VERSION = 1
 GEPA_EVALUATION_REJECTION_SCHEMA = "whetstone.gepa.evaluation_rejection"
 GEPA_EVALUATION_ROW_FAILURE_SCHEMA = "whetstone.gepa.evaluation_row_failure"
 GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA = (
-    "whetstone.gepa.proposal_provider_attempt"
+    "whetstone.gepa.proposal_provider_attempt/v2"
 )
 #: Persisted contract literal naming the coarsest evidence boundary GEPA
 #: records: one whole logical proposal call.

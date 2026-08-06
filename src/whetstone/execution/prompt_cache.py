@@ -65,7 +65,7 @@ __all__ = [
 
 PROMPT_CACHE_KEY_SCHEMA = "whetstone.execution.prompt_cache_key"
 PROMPT_CACHE_KEY_SCHEMA_VERSION = 2
-PROMPT_CACHE_ENTRY_SCHEMA = "whetstone.execution.prompt_cache_entry/v2"
+PROMPT_CACHE_ENTRY_SCHEMA = "whetstone.execution.prompt_cache_entry/v3"
 PROMPT_CACHE_STATS_SCHEMA = "whetstone.execution.prompt_cache_stats/v1"
 PROMPT_CACHE_ACCOUNTING_SCHEMA = (
     "whetstone.execution.prompt_cache_accounting/v1"
@@ -217,7 +217,7 @@ class _StoredEntry(BaseModel):
         populate_by_name=True,
     )
 
-    schema_name: Literal["whetstone.execution.prompt_cache_entry/v2"] = Field(
+    schema_name: Literal["whetstone.execution.prompt_cache_entry/v3"] = Field(
         default=PROMPT_CACHE_ENTRY_SCHEMA,
         alias="schema",
     )

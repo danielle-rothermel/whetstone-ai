@@ -324,7 +324,7 @@ def test_internal_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "f40bb1bb5488c3165fa714f87498291ab2a6abc487434a7d6b2967cc978ff583"
+        "30eb57933112de2db096d00fd69b9074d1cad64aa7d217bfe937bbbbdd55b673"
     )
 
 

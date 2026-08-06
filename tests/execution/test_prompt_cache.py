@@ -200,7 +200,7 @@ def test_v2_key_pins_all_semantic_identity_components() -> None:
     assert prompt_cache_key(request, policy, 0, 0) == base
     assert (
         base
-        == "45a8ae33314d1fb81405fd4df3aa629ecab49e3fe91167e713efb425d1d34928"
+        == "22a01e3a5c8dbda3e782885852cb93b7f8b83519964d80e9834d45bdcb6ac0d0"
     )
 
 
@@ -313,7 +313,7 @@ def test_hit_preserves_original_entry_provenance_and_nulls_latency(
         "provenance",
         "result",
     }
-    assert stored["schema"] == "whetstone.execution.prompt_cache_entry/v2"
+    assert stored["schema"] == "whetstone.execution.prompt_cache_entry/v3"
     assert stored["key"] == key
     assert stored["request_identity"] == request.identity_payload()
     assert stored["execution_policy_hash"] == stored["result_policy_hash"]

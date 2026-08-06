@@ -11,7 +11,7 @@ FULL_HASH = "0" * 64
 def transport_response(*, text: str) -> ProviderTransportResponse:
     return ProviderTransportResponse(
         text=text,
-        raw_body={"choices": [{"message": {"content": text}}]},
+        response_body={"choices": [{"message": {"content": text}}]},
         response_id="resp-1",
         model="test-model",
         finish_reason="stop",

@@ -28,6 +28,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Pin the released graph, serialization, and storage foundations; publish
   optimization traces atomically and admit persisted JSON only through the
   strict decoder boundary.
+- Adopt the released provider evidence identities and version affected
+  Whetstone provider-result persistence schemas.
 - Reorganize production and test packages around the canonical core,
   experiment, environment, provider, execution, evaluation, optimization, and
   coordination boundaries, with a hard cutover to the new imports.

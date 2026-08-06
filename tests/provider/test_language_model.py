@@ -287,7 +287,7 @@ class TestProviderResultFromResponse:
             response_id="resp-1",
             model="m-actual",
             usage=TokenUsage(total_tokens=3),
-            raw_body={"id": "resp-1"},
+            response_body={"id": "resp-1"},
         )
         result = provider_result_from_response(response)
         assert result.text == "hello"

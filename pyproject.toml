@@ -11,7 +11,7 @@ dependencies = [
     "dbos>=2.25.0",
     "dr-code",
     "dr-graph==0.1.2",
-    "dr-providers>=0.2.1,<0.3",
+    "dr-providers==0.2.2",
     "dr-serialize==0.1.2",
     "dr-store==0.1.4",
     "gepa==0.1.1",

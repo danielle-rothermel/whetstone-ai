@@ -241,11 +241,11 @@ def provider_result_from_response(
     """Project a native Provider Transport Response onto the whetstone
     ``ProviderResult`` surface.
 
-    The transport response's least-processed ``raw_body`` becomes the base
+    The transport response's decoded ``response_body`` becomes the base
     of ``response_metadata``; conformance warnings and Responses diagnostics
     ride alongside it. Usage and cost are read from the native typed fields.
     """
-    metadata: dict[str, Any] = dict(response.raw_body)
+    metadata: dict[str, Any] = dict(response.response_body)
     if response.diagnostics is not None:
         metadata["diagnostics"] = response.diagnostics.model_dump(mode="json")
     if response.warnings:
