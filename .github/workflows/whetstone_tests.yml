@@ -8,10 +8,15 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: whetstone-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     name: Lint
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -33,13 +38,14 @@ jobs:
       - name: Install dr-code build toolchain
         run: npm install --global pnpm@11.9.0
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --locked
       - name: Lint
         run: ./scripts/ci/lint.sh
 
   unit:
     name: Unit tests
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -66,6 +72,7 @@ jobs:
   process-integration:
     name: Process integration tests
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -92,6 +99,7 @@ jobs:
   sqlite-time-integration:
     name: SQLite time integration tests
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -118,6 +126,7 @@ jobs:
   sqlite-contention:
     name: SQLite contention tests
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -144,6 +153,7 @@ jobs:
   postgres-integration:
     name: PostgreSQL and DBOS integration tests
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     services:
@@ -186,6 +196,7 @@ jobs:
   dspy-pickle-compatibility:
     name: Python 3.14 compatibility
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -207,7 +218,7 @@ jobs:
       - name: Install dr-code build toolchain
         run: npm install --global pnpm@11.9.0
       - name: Install dependencies
-        run: uv sync --frozen --python 3.14
+        run: uv sync --locked --python 3.14
       - name: Verify frozen DSPy Example pickle bytes
         run: uv run --python 3.14 pytest -q tests/optimization/miprov2/test_bootstrap.py -k repeated_trace_pickle
       - name: Verify deterministic Python 3.14 contracts
@@ -216,6 +227,7 @@ jobs:
   built-wheel-smoke:
     name: Built wheel smoke (Python 3.13)
     runs-on: depot-ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:

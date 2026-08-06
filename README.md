@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml)
 
-| [Terms](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml) | [Contracts](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml) | [Changelog](https://github.com/danielle-rothermel/whetstone-ai/blob/main/CHANGELOG.md) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | whetstone-envs (private) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [Terms](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml) | [Contracts](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml) | [Changelog](https://github.com/danielle-rothermel/whetstone-ai/blob/main/CHANGELOG.md) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | whetstone-envs (private) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 **Whetstone evaluates and optimizes prompt candidates through typed,
 reproducible experiment contracts.** Its functionality is organized into
@@ -48,11 +48,23 @@ The authoritative repository vocabulary and standing rules are
 [`terms.toml`](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml)
 and
 [`contracts.toml`](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml).
-The client-side definitions page in `.defs/index.html` renders those files
-directly rather than maintaining a generated copy. It is a repository-local
-viewer until GitHub Pages is configured; serve `.defs/` over HTTP to use it.
+The [published definitions page](https://danielle-rothermel.github.io/whetstone-ai/)
+renders those files directly rather than maintaining a generated copy. To view
+it locally, serve `.defs/` over HTTP.
 
 ## Testing
+
+Run the complete local gate before committing or pushing:
+
+```bash
+./scripts/pre-check.sh
+```
+
+Install the same gate for both Git hooks with:
+
+```bash
+uv run pre-commit install
+```
 
 The authoritative unit lane is serial:
 

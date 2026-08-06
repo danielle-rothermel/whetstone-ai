@@ -10,7 +10,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Added
 
 - Add code-grounded repository terms and binding contracts under `.defs/`,
-  with a client-side page that renders both authoritative TOML files.
+  with semantic validation and a GitHub Pages reference that renders both
+  authoritative TOML files.
+- Add one local pre-check entrypoint shared by pre-commit and pre-push hooks.
 - Add isolated PostgreSQL/DBOS, process, SQLite-time, and SQLite-contention CI
   lanes alongside installed-wheel smoke and Python 3.14 contract checks.
 - Expand deterministic coverage for recovery, conflict, cache-accounting,
@@ -23,6 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   coordination boundaries, with a hard cutover to the new imports.
 - Rewrite the README and package metadata around the current system,
   repository boundaries, and complete local test entrypoints.
+- Require locked CI environments, cancel superseded Depot runs, and bound every
+  CI job with an explicit watchdog.
 - Preserve structured prompt identity and immutability, use canonical UTC
   partial timestamps, and apply one character-budget rounding rule.
 

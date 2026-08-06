@@ -1,12 +1,12 @@
-# Local hooks mirror ./scripts/ci/lint.sh so pre-commit/pre-push match CI.
+# Pre-commit and pre-push run the repository's complete local gate.
 default_install_hook_types: [pre-commit, pre-push]
 
 repos:
   - repo: local
     hooks:
-      - id: ci-lint
-        name: CI lint (ruff format + ruff check + ty)
-        entry: bash scripts/ci/lint.sh
+      - id: pre-check
+        name: Pre-check (defs + ruff + ty + pytest)
+        entry: scripts/pre-check.sh
         language: system
         pass_filenames: false
         always_run: true
