@@ -1,5 +1,3 @@
-"""External and fake-process runners for the opaque Codex step."""
-
 from __future__ import annotations
 
 import importlib.util
@@ -9,26 +7,21 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
 
-from whetstone.core.identity import TypedRef
-from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.optimization.codex.adapter import (
     CodexOutputArtifact,
     CodexRunResult,
     OpaqueStepError,
 )
-from whetstone.optimization.codex.mcp_bridge import (
-    EvaluateCandidateServer,
-    InProcessMcpProcess,
-    JsonRpcClient,
-)
+from whetstone.optimization.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optimization.contracts import OptimizationStepRequest
 from whetstone.optimization.tools.contracts import RuntimeToolHandle
 
@@ -40,50 +33,76 @@ _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 # "auto", "prompt", "writes", "approve"; "auto" runs the server's tools
 # without an interactive approval turn.
 _MCP_TOOLS_APPROVAL_MODE = "auto"
+
+
+@verify(UNIQUE)
+class _CodexDeniedFeature(StrEnum):
+    APPS = "apps"
+    BROWSER_USE = "browser_use"
+    BROWSER_USE_EXTERNAL = "browser_use_external"
+    CODE_MODE = "code_mode"
+    CODE_MODE_HOST = "code_mode_host"
+    CODE_MODE_ONLY = "code_mode_only"
+    COLLABORATION_MODES = "collaboration_modes"
+    COMPUTER_USE = "computer_use"
+    DEFAULT_MODE_REQUEST_USER_INPUT = "default_mode_request_user_input"
+    GOALS = "goals"
+    HOOKS = "hooks"
+    IMAGE_GENERATION = "image_generation"
+    IN_APP_BROWSER = "in_app_browser"
+    MEMORIES = "memories"
+    MULTI_AGENT = "multi_agent"
+    MULTI_AGENT_V2 = "multi_agent_v2"
+    PLUGINS = "plugins"
+    REMOTE_PLUGIN = "remote_plugin"
+    REQUEST_PERMISSIONS_TOOL = "request_permissions_tool"
+    SHELL_SNAPSHOT = "shell_snapshot"
+    SHELL_TOOL = "shell_tool"
+    SKILL_MCP_DEPENDENCY_INSTALL = "skill_mcp_dependency_install"
+    SKILL_SEARCH = "skill_search"
+    STANDALONE_WEB_SEARCH = "standalone_web_search"
+    TOOL_CALL_MCP_ELICITATION = "tool_call_mcp_elicitation"
+    TOOL_SUGGEST = "tool_suggest"
+    UNIFIED_EXEC = "unified_exec"
+    WEB_SEARCH_CACHED = "web_search_cached"
+    WEB_SEARCH_REQUEST = "web_search_request"
+    WORKSPACE_DEPENDENCIES = "workspace_dependencies"
+
+
+# Do not build this payload by iterating over the enum; deny-list changes must
+# remain visible in review.
 _CODEX_DENIED_FEATURES = (
-    "apps",
-    "browser_use",
-    "browser_use_external",
-    "code_mode",
-    "code_mode_host",
-    "code_mode_only",
-    "collaboration_modes",
-    "computer_use",
-    "default_mode_request_user_input",
-    "goals",
-    "hooks",
-    "image_generation",
-    "in_app_browser",
-    "memories",
-    "multi_agent",
-    "multi_agent_v2",
-    "plugins",
-    "remote_plugin",
-    "request_permissions_tool",
-    "shell_snapshot",
-    "shell_tool",
-    "skill_mcp_dependency_install",
-    "skill_search",
-    "standalone_web_search",
-    "tool_call_mcp_elicitation",
-    "tool_suggest",
-    "unified_exec",
-    "web_search_cached",
-    "web_search_request",
-    "workspace_dependencies",
+    _CodexDeniedFeature.APPS,
+    _CodexDeniedFeature.BROWSER_USE,
+    _CodexDeniedFeature.BROWSER_USE_EXTERNAL,
+    _CodexDeniedFeature.CODE_MODE,
+    _CodexDeniedFeature.CODE_MODE_HOST,
+    _CodexDeniedFeature.CODE_MODE_ONLY,
+    _CodexDeniedFeature.COLLABORATION_MODES,
+    _CodexDeniedFeature.COMPUTER_USE,
+    _CodexDeniedFeature.DEFAULT_MODE_REQUEST_USER_INPUT,
+    _CodexDeniedFeature.GOALS,
+    _CodexDeniedFeature.HOOKS,
+    _CodexDeniedFeature.IMAGE_GENERATION,
+    _CodexDeniedFeature.IN_APP_BROWSER,
+    _CodexDeniedFeature.MEMORIES,
+    _CodexDeniedFeature.MULTI_AGENT,
+    _CodexDeniedFeature.MULTI_AGENT_V2,
+    _CodexDeniedFeature.PLUGINS,
+    _CodexDeniedFeature.REMOTE_PLUGIN,
+    _CodexDeniedFeature.REQUEST_PERMISSIONS_TOOL,
+    _CodexDeniedFeature.SHELL_SNAPSHOT,
+    _CodexDeniedFeature.SHELL_TOOL,
+    _CodexDeniedFeature.SKILL_MCP_DEPENDENCY_INSTALL,
+    _CodexDeniedFeature.SKILL_SEARCH,
+    _CodexDeniedFeature.STANDALONE_WEB_SEARCH,
+    _CodexDeniedFeature.TOOL_CALL_MCP_ELICITATION,
+    _CodexDeniedFeature.TOOL_SUGGEST,
+    _CodexDeniedFeature.UNIFIED_EXEC,
+    _CodexDeniedFeature.WEB_SEARCH_CACHED,
+    _CodexDeniedFeature.WEB_SEARCH_REQUEST,
+    _CodexDeniedFeature.WORKSPACE_DEPENDENCIES,
 )
-
-
-class JsonRpcProcess(Protocol):
-    def exchange(self, raw: str) -> str | None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ScriptedAgentCall:
-    call_id: str
-    base_ref: TypedRef
-    model_route: str
-    template: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +156,12 @@ class _MacOsProcessIsolation:
                 f"(allow {operation} ({selector} {json.dumps(str(resolved))}))"
             )
 
+        def literal_rule(operation: str, path: Path) -> str:
+            return (
+                f"(allow {operation} (literal "
+                f"{json.dumps(str(path.resolve()))}))"
+            )
+
         platform_reads = (
             Path("/System"),
             Path("/Library/Apple"),
@@ -156,6 +181,17 @@ class _MacOsProcessIsolation:
         read_rules = [
             rule("file-read* file-test-existence", path)
             for path in (*platform_reads, *readable_paths, *writable_paths)
+        ]
+        # Descriptor-relative storage walks each ancestor as a distinct open;
+        # literal grants permit traversal without exposing sibling file data.
+        traversal_paths = {
+            parent
+            for path in (*readable_paths, *writable_paths)
+            for parent in path.resolve().parents
+        }
+        traversal_rules = [
+            literal_rule("file-read* file-test-existence", path)
+            for path in sorted(traversal_paths, key=str)
         ]
         executable_rules = [
             rule("file-map-executable", path)
@@ -179,68 +215,12 @@ class _MacOsProcessIsolation:
                 '(allow file-read-metadata file-test-existence (subpath "/"))',
                 '(allow file-read* file-test-existence (literal "/"))',
                 '(allow file-read* file-write* file-ioctl (subpath "/dev"))',
+                *traversal_rules,
                 *read_rules,
                 *executable_rules,
                 *write_rules,
                 "",
             ]
-        )
-
-
-class FakeCodexRunner:
-    """Fake only the opaque process; speak real serialized MCP JSON-RPC."""
-
-    def __init__(
-        self,
-        *,
-        process: JsonRpcProcess | None = None,
-        scripted_calls: Sequence[ScriptedAgentCall],
-        final_proposals: Sequence[Candidate],
-    ) -> None:
-        self._process = process
-        self._calls = tuple(scripted_calls)
-        self._proposals = tuple(final_proposals)
-        self.observed_payloads: list[dict[str, Any]] = []
-
-    def bind_process(self, process: JsonRpcProcess) -> None:
-        """Attach the fake process boundary for one exact Tool Handle."""
-        self._process = process
-
-    def _boundary(self, handle: RuntimeToolHandle) -> JsonRpcProcess:
-        if self._process is not None:
-            return self._process
-        return InProcessMcpProcess(EvaluateCandidateServer(handle=handle))
-
-    def run(
-        self, request: OptimizationStepRequest, handle: RuntimeToolHandle
-    ) -> CodexRunResult:
-        client = JsonRpcClient(
-            self._boundary(handle).exchange,
-            tool_name=handle.config.tool_name,
-        )
-        client.initialize()
-        tools = client.list_tools()
-        if not any(tool["name"] == client.tool_name for tool in tools):
-            raise OpaqueStepError("external MCP process omitted the tool")
-        for call in self._calls:
-            self.observed_payloads.append(
-                client.evaluate(
-                    call_id=call.call_id,
-                    base_ref=call.base_ref.model_dump(mode="json"),
-                    model_route=call.model_route,
-                    template=call.template,
-                )
-            )
-        return CodexRunResult(
-            artifact=CodexOutputArtifact(
-                run_id=request.run_id,
-                proposals=self._proposals,
-                conversation_evidence={
-                    "process": "fake",
-                    "jsonrpc_call_count": len(self._calls),
-                },
-                control_cost={"agent_tokens": 0},
-            )
         )
 
 
@@ -327,7 +307,7 @@ def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
 
 
 class SubprocessCodexRunner:
-    """Launch Codex through the macOS-only, fail-closed MCP sandbox."""
+    """Launch Codex behind a fail-closed macOS filesystem boundary."""
 
     def __init__(
         self,
@@ -421,13 +401,17 @@ class SubprocessCodexRunner:
                 codex_binary=resolved_binary,
                 model=self._model,
                 mcp_env={
-                    "WS_MCP_SQLITE_PATH": self._sqlite_path,
-                    "WS_MCP_TOOL_CONFIG": handle.config.model_dump_json(),
-                    "WS_MCP_CAPACITY_BINDING": (
+                    McpEnvironmentKey.SQLITE_PATH: self._sqlite_path,
+                    McpEnvironmentKey.TOOL_CONFIG: (
+                        handle.config.model_dump_json()
+                    ),
+                    McpEnvironmentKey.CAPACITY_BINDING: (
                         handle.binding.model_dump_json()
                     ),
-                    "WS_MCP_RUNTIME_CONFIG": self._runtime.model_dump_json(),
-                    "WS_MCP_REWARD_POLICY": (
+                    McpEnvironmentKey.RUNTIME_CONFIG: (
+                        self._runtime.model_dump_json()
+                    ),
+                    McpEnvironmentKey.REWARD_POLICY: (
                         self._reward_policy.model_dump_json()
                     ),
                     "PYTHONPATH": str(runtime_root),
@@ -548,10 +532,9 @@ class SubprocessCodexRunner:
                     "Codex partial-log parent directory does not exist"
                 )
             state_paths.add(partial_path)
-            # PartialLog serializes writers on a sidecar lock next to the
-            # record directory, and creates the record directory itself
-            # through the parent descriptor. Both the sidecar and the parent
-            # entry must be writable or the child's first append is denied.
+            # PartialLog opens its record path and sibling lock through the
+            # parent descriptor, so callers must keep unrelated state
+            # elsewhere.
             state_paths.add(
                 partial_path.with_name(f".{partial_path.name}.lock")
             )
@@ -637,9 +620,6 @@ def _parse_output_artifact(
 
 
 __all__ = [
-    "FakeCodexRunner",
-    "JsonRpcProcess",
-    "ScriptedAgentCall",
     "SubprocessCodexRunner",
     "build_codex_command",
 ]

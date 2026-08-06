@@ -1,10 +1,6 @@
-"""Minimal actual JSON-RPC bridge for the external Codex MCP step."""
-
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from io import StringIO
 from typing import Any, TextIO
 
 from whetstone.core.identity import ImmutableJsonObject, NonEmptyId
@@ -54,7 +50,7 @@ def tool_result_to_mcp_content(result: ToolResult) -> dict[str, Any]:
 
 
 class EvaluateCandidateServer:
-    """Expose exactly one externally modeled evaluation tool."""
+    """Expose one admitted evaluation tool over JSON-RPC."""
 
     def __init__(self, *, handle: RuntimeToolHandle) -> None:
         self.tool_config = handle.config
@@ -62,7 +58,6 @@ class EvaluateCandidateServer:
 
     @property
     def handle(self) -> RuntimeToolHandle:
-        """The exact admitted Tool Handle this server dispatches through."""
         return self._handle
 
     def handle_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -156,102 +151,6 @@ class EvaluateCandidateServer:
         return tool_result_to_mcp_content(self._handle(call))
 
 
-class JsonRpcClient:
-    """MCP client over an injected line-oriented process boundary."""
-
-    def __init__(
-        self,
-        exchange: Callable[[str], str | None],
-        *,
-        tool_name: str,
-    ) -> None:
-        self._exchange = exchange
-        self._tool_name = tool_name
-        self._next_id = 0
-
-    @property
-    def tool_name(self) -> str:
-        """The exact server-advertised tool name this client calls."""
-        return self._tool_name
-
-    def _send(
-        self, method: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        self._next_id += 1
-        message: dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "id": self._next_id,
-            "method": method,
-        }
-        if params is not None:
-            message["params"] = params
-        raw = self._exchange(json.dumps(message))
-        if raw is None:
-            raise McpError(-32603, "MCP process returned no response")
-        response = json.loads(raw)
-        if "error" in response:
-            error = response["error"]
-            raise McpError(int(error["code"]), str(error["message"]))
-        return response["result"]
-
-    def initialize(self) -> None:
-        self._send(
-            "initialize",
-            {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "codex", "version": "1"},
-            },
-        )
-        self._exchange(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                }
-            )
-        )
-
-    def list_tools(self) -> tuple[dict[str, Any], ...]:
-        return tuple(self._send("tools/list")["tools"])
-
-    def evaluate(
-        self,
-        *,
-        call_id: str,
-        base_ref: dict[str, Any],
-        model_route: str,
-        template: str,
-    ) -> dict[str, Any]:
-        result = self._send(
-            "tools/call",
-            {
-                "name": self._tool_name,
-                "arguments": {
-                    "call_id": call_id,
-                    "base_ref": base_ref,
-                    "model_route": model_route,
-                    "template": template,
-                },
-            },
-        )
-        return json.loads(result["content"][0]["text"])
-
-
-class InProcessMcpProcess:
-    """Fake process boundary through the actual stdio JSON-RPC server."""
-
-    def __init__(self, server: EvaluateCandidateServer) -> None:
-        self._server = server
-
-    def exchange(self, raw: str) -> str | None:
-        stdin = StringIO(raw + "\n")
-        stdout = StringIO()
-        serve_stdio(self._server, stdin=stdin, stdout=stdout)
-        response = stdout.getvalue().strip()
-        return response or None
-
-
 def _protocol_error(code: int, message: str) -> dict[str, Any]:
     return {
         "jsonrpc": "2.0",
@@ -263,7 +162,7 @@ def _protocol_error(code: int, message: str) -> dict[str, Any]:
 def serve_stdio(
     server: EvaluateCandidateServer, *, stdin: TextIO, stdout: TextIO
 ) -> None:
-    """Serve one request per line; malformed lines never end the session."""
+    """Return protocol errors for invalid JSON and non-object requests."""
     for raw in stdin:
         if not raw.strip():
             continue
@@ -287,8 +186,6 @@ def serve_stdio(
 __all__ = [
     "MCP_PROTOCOL_VERSION",
     "EvaluateCandidateServer",
-    "InProcessMcpProcess",
-    "JsonRpcClient",
     "McpError",
     "serve_stdio",
     "tool_result_to_mcp_content",

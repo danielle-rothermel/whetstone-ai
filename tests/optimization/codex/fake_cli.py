@@ -1,5 +1,3 @@
-"""Typer-backed fake executable for Codex subprocess-boundary tests."""
-
 from __future__ import annotations
 
 import json
@@ -9,11 +7,11 @@ from pathlib import Path
 
 import typer
 
-from whetstone.experiment.candidate import candidate_reference
-from whetstone.optimization.codex.mcp_bridge import (
+from tests.optimization.codex.mcp_client import (
     InProcessMcpProcess,
     JsonRpcClient,
 )
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.codex.mcp_server import build_server_from_env
 from whetstone.optimization.contracts import OptimizationStepRequest
 

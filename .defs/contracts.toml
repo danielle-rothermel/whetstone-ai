@@ -70,6 +70,39 @@ date = "2026-08-05"
 check = "uv run pytest -q tests/experiment/test_objectives.py"
 
 [[contracts]]
+title = "Codex filesystem isolation fails closed on unsupported hosts"
+statement = """
+The subprocess Codex runner refuses to execute unless macOS sandbox-exec is \
+available, requires absolute paths for durable state, and builds a filesystem \
+profile for its staged runtime and declared state paths. A configured partial \
+log grants write access to its parent directory. The boundary does not claim \
+network containment or secrecy of an explicitly supplied provider credential."""
+rationale = """
+Codex and its MCP child need a small runtime, exact durable stores, and provider \
+access, but they must not inherit ambient host filesystem authority. Refusing \
+unsupported platforms keeps that guarantee truthful; network and credential \
+containment require a separate execution design and are not implied by the \
+filesystem profile. Partial-log parent authority remains explicit because the \
+durable log opens records and its sibling lock through that directory."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/optimization/codex/test_runner.py"
+
+[[contracts]]
+title = "Codex artifacts are accepted on proposal shape"
+statement = """
+The Codex adapter accepts a typed artifact only when its run identity, proposal \
+count, requested base references, configured base distinctness, and allowed \
+mutation surface are valid. MCP measurement is optional; calls that occur are \
+admitted and accounted by the tool store rather than matched to proposals."""
+rationale = """
+The Codex step is an opaque optimizer boundary whose durable output is its typed \
+proposal artifact. Requiring one successful MCP call per proposal is a stronger \
+measurement protocol than this adapter implements, so the standing contract \
+states the structural acceptance rule instead of implying that guarantee."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/optimization/codex/test_adapter.py"
+
+[[contracts]]
 title = "Issued tool call IDs identify one exact call"
 statement = """
 Within one durable optimization step, every call_id identifies exactly one \

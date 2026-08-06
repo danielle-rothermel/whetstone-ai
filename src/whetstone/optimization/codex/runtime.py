@@ -1,5 +1,3 @@
-"""Serializable composition for rebuilding evaluation in an MCP child."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,8 +22,6 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 
 class EvaluationRuntimeConfig(BaseModel):
-    """Complete JSON boundary for reconstructing the canonical engine."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     env_name: StrictStr

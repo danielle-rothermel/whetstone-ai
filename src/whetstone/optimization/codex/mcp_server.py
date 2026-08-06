@@ -1,5 +1,3 @@
-"""Stdio MCP child reconstructed from serialized canonical runtime config."""
-
 from __future__ import annotations
 
 import os
@@ -16,6 +14,7 @@ from whetstone.optimization.codex.mcp_bridge import (
     EvaluateCandidateServer,
     serve_stdio,
 )
+from whetstone.optimization.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
 from whetstone.optimization.tools.contracts import (
     ToolCapacityBinding,
@@ -33,17 +32,19 @@ def build_server_from_env(
     environ: dict[str, str] | None = None,
 ) -> EvaluateCandidateServer:
     env = environ if environ is not None else dict(os.environ)
-    sqlite_path = env["WS_MCP_SQLITE_PATH"]
+    sqlite_path = env[McpEnvironmentKey.SQLITE_PATH]
     store = ObjectStore(SqliteBackend(sqlite_path))
-    tool_config = ToolConfig.model_validate_json(env["WS_MCP_TOOL_CONFIG"])
+    tool_config = ToolConfig.model_validate_json(
+        env[McpEnvironmentKey.TOOL_CONFIG]
+    )
     binding = ToolCapacityBinding.model_validate_json(
-        env["WS_MCP_CAPACITY_BINDING"]
+        env[McpEnvironmentKey.CAPACITY_BINDING]
     )
     runtime = EvaluationRuntimeConfig.model_validate_json(
-        env["WS_MCP_RUNTIME_CONFIG"]
+        env[McpEnvironmentKey.RUNTIME_CONFIG]
     )
     reward_policy = RewardPolicy.model_validate_json(
-        env["WS_MCP_REWARD_POLICY"]
+        env[McpEnvironmentKey.REWARD_POLICY]
     )
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:

@@ -1,5 +1,3 @@
-"""One opaque external Codex step over the canonical MCP evaluation tool."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -26,12 +24,10 @@ CODEX_OUTPUT_ARTIFACT_SCHEMA = "whetstone.codex_output_artifact"
 
 
 class OpaqueStepError(RuntimeError):
-    """The external agent failed to produce its typed opaque result."""
+    pass
 
 
 class CodexOutputArtifact(BaseModel):
-    """Required serialized output of the external Codex process."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
@@ -54,25 +50,10 @@ class CodexRunner(Protocol):
 
 
 class CodexAdapter:
-    """Persist the typed Codex artifact and check its proposal contract.
+    """Persist the typed artifact and enforce its proposal-shape contract.
 
-    Every proposal in the artifact is checked against exactly four rules,
-    enforced by `_validate_proposals`: the proposal count equals the Step
-    output contract's `returned_proposal_count`; each `base_ref` names a
-    candidate supplied in the request; bases are distinct when the contract
-    requires it; and each proposal passes `diff_check` against its base. A
-    violation of any rule fails the whole Step.
-
-    Per-proposal MCP evaluation evidence is deliberately not required: a
-    schema-valid proposal set satisfying those four rules is accepted even
-    when the external agent measured nothing through the Tool Handle. Spend
-    and admission for the MCP calls the agent does make are owned by the
-    Tool Call Store and the harness ledger, not by this adapter.
-
-    The `harness_store_accepted_call_count` state key reports calls admitted
-    into this harness-side Tool Call Store only. A runner that evaluates in
-    a separate process writes to that process's own store, so the key reads
-    0 for such a run regardless of how many calls the agent made.
+    MCP measurement is optional; tool admission and spend remain owned by the
+    tool store rather than being matched to individual proposals here.
     """
 
     def __init__(
