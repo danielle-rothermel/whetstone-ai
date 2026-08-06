@@ -25,6 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Launch the sandbox-wrapped Codex command through pinned `dr-exec` typed
+  `PROCESS_BOUNDARY_ONLY` execution with caller-owned durable run records.
 - Own generic evaluation configuration, planning, aggregation, measurement,
   compression, and ED1M dataset contracts in Whetstone; use released
   `dr-code` HumanEval/trace APIs and explicit `dr-exec` executors.

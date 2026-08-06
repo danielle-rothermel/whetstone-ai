@@ -292,10 +292,15 @@ class CodexOutputArtifact(BaseModel):
 ```
 
 The subprocess Codex runner uses the pinned official MCP SDK to validate the
-protocol and tool-input boundary. It fails closed without macOS `sandbox-exec`
-and limits filesystem access to staged runtime and declared state paths. It
-accepts the configured Codex executable without enforcing a CLI version and
-does not claim network, credential, or descendant-process containment.
+protocol and tool-input boundary. Callers supply its executor; production
+composition requires a pinned `dr-exec` `ProcessExecutor` with an isolated
+host Python runtime and a caller-owned, absolute, durable directory run store.
+The sandbox-wrapped Codex command is declared as typed
+`PROCESS_BOUNDARY_ONLY` execution, and the run-store root is not granted to
+the child. The runner fails closed without macOS `sandbox-exec` and limits
+filesystem access to staged runtime and declared state paths. It accepts the
+configured Codex executable without enforcing a CLI version and does not claim
+network, credential, full descendant-process, or hermetic containment.
 Proposal acceptance validates the typed artifact and mutation contract; it
 does not require matching MCP evidence for every proposal. A configured
 partial log grants write access to its parent directory, so that directory
