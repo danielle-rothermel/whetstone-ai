@@ -4,7 +4,12 @@ import hashlib
 import random
 
 import pytest
+from pydantic import BaseModel
 
+from whetstone.experiment.candidate import (
+    TemplateRenderContract,
+    TemplateRenderKind,
+)
 from whetstone.optimization.miprov2.demo import (
     ComponentDemo,
     ComponentDemoSequence,
@@ -23,6 +28,7 @@ from whetstone.optimization.miprov2.proposal import (
     Miprov2InstructionGenerationFailed,
     Miprov2PromptComponent,
     Miprov2ProposalDemo,
+    Miprov2ProposalEvidence,
     Miprov2ProposalRequest,
     Miprov2ProposalResponse,
     Miprov2ProposalState,
@@ -49,6 +55,10 @@ def _bindings() -> Miprov2DurableBindings:
         task_route_identity_hash=_identity("task-route"),
         execution_policy_identity_hash=_identity("execution-policy"),
         prompt_adapter_identity_hash=_identity("prompt-adapter"),
+        proposal_executor_policy_identity_hash=_identity("proposal-executor"),
+        proposal_transport_durability_identity_hash=_identity(
+            "proposal-transport"
+        ),
         base_candidate_identity_hash=_identity("base"),
         teacher_candidate_identity_hash=_identity("teacher"),
     )
@@ -57,11 +67,19 @@ def _bindings() -> Miprov2DurableBindings:
 def _component(
     component_id: str = "user_prompt_template",
     template: str = "Answer {input}.",
+    *,
+    template_render_contract: TemplateRenderContract | None = None,
 ) -> Miprov2PromptComponent:
     return Miprov2PromptComponent(
         component_id=component_id,
         template=template,
-        allowed_placeholders=("input",),
+        template_render_contract=(
+            template_render_contract
+            or TemplateRenderContract(
+                kind=TemplateRenderKind.PYTHON_FORMAT_V1,
+                available_fields=("input",),
+            )
+        ),
         rendering_rules=(
             "Substitute the named input without DSPy field labels."
         ),
@@ -91,9 +109,13 @@ def _start(
     tip_aware: bool = True,
     fewshot_aware: bool = True,
     batch_size: int = 10,
+    optimization_run_identity_hash: str | None = None,
 ) -> Miprov2ProposalState:
     return start_miprov2_proposal(
         bindings=_bindings(),
+        optimization_run_identity_hash=(
+            optimization_run_identity_hash or _identity("optimization-run")
+        ),
         components=components or (_component(),),
         trainset=_dataset(dataset_count),
         demo_candidates=demos,
@@ -502,6 +524,43 @@ def test_placeholder_rejection_is_charged_without_entering_pool() -> None:
     )
 
 
+def test_literal_instruction_validation_treats_json_braces_as_literal() -> (
+    None
+):
+    contract = TemplateRenderContract(
+        kind=TemplateRenderKind.LITERAL_REPLACE_V1,
+        available_fields=("input",),
+        required_fields=("input",),
+    )
+    state = _start(
+        components=(
+            _component(
+                template='Return {"answer":"{input}"}',
+                template_render_contract=contract,
+            ),
+        ),
+        candidates=2,
+        program_aware=False,
+        tip_aware=False,
+    )
+    state, first = _next(state)
+    state = _fold(
+        state,
+        first,
+        'Return {"answer":"{input}","schema":{"answer":"string"}}',
+    )
+    state, second = _next(state)
+    proposed = 'Emit {"answer":"{input}","schema":{"answer":"string"}}'
+    state = _fold(state, second, proposed)
+    state = plan_next_proposal_request(state).state
+
+    assert state.stage == "complete"
+    assert state.instruction_slots[1].rejection_reason is None
+    assert state.instruction_pools == (
+        ('Return {"answer":"{input}"}', proposed),
+    )
+
+
 def test_response_binding_and_pending_request_are_replay_safe() -> None:
     state = _start(
         candidates=1,
@@ -583,6 +642,7 @@ def test_shared_rng_transcript_is_appended_without_reset() -> None:
     )
     state = start_miprov2_proposal(
         bindings=_bindings(),
+        optimization_run_identity_hash=_identity("optimization-run"),
         components=(_component(),),
         trainset=_dataset(1),
         demo_candidates=None,
@@ -600,6 +660,128 @@ def test_shared_rng_transcript_is_appended_without_reset() -> None:
         "proposal",
         "proposal",
     ]
+
+
+def test_rng_and_response_json_are_deeply_immutable_across_bypass_apis() -> (
+    None
+):
+    caller = {"nested": {"items": [1]}}
+    response = Miprov2ProposalResponse(
+        request_identity_hash=_identity("request"),
+        evidence=caller,
+    )
+    caller["nested"]["items"].append(2)
+    assert response.evidence.to_json() == {"nested": {"items": [1]}}
+
+    copied = response.model_copy(update={"evidence": caller})
+    caller["nested"]["items"].append(3)
+    assert copied.evidence.to_json() == {"nested": {"items": [1, 2]}}
+
+    draw_source = {"nested": {"items": [4]}}
+    draw = Miprov2RngDraw.model_construct(
+        ordinal=0,
+        phase="proposal",
+        operation="choice",
+        arguments=((draw_source,),),
+        result=draw_source,
+    )
+    draw_source["nested"]["items"].append(5)
+    assert draw.model_dump(mode="json")["result"] == {"nested": {"items": [4]}}
+    with pytest.raises(TypeError):
+        draw.result["nested"] = {}  # type: ignore[index]
+
+
+def test_forged_response_copy_rejects_before_fold_and_after_restart() -> None:
+    state = _start(
+        candidates=1,
+        data_aware=False,
+        program_aware=False,
+        tip_aware=False,
+        fewshot_aware=False,
+    )
+    pending, request = _next(state)
+    response = Miprov2ProposalResponse(
+        request_identity_hash=request.identity_hash,
+        text="Improved {input}",
+    )
+    forged = BaseModel.model_copy(
+        response,
+        update={"failed": True, "failure_detail": None},
+    )
+
+    with pytest.raises(ValueError, match="requires detail"):
+        fold_proposal_response(pending, forged)
+
+    folded = fold_proposal_response(pending, response)
+    item = folded.evidence[0]
+    forged_item = BaseModel.model_copy(item, update={"response": forged})
+    assert isinstance(forged_item, Miprov2ProposalEvidence)
+    forged_state = BaseModel.model_copy(
+        folded,
+        update={"evidence": (forged_item,)},
+    )
+    with pytest.raises(ValueError, match="requires detail"):
+        Miprov2ProposalState.model_validate(
+            forged_state.model_dump(mode="json")
+        )
+
+
+def test_proposal_request_identity_payload_and_digest_are_pinned() -> None:
+    state = _start(
+        candidates=1,
+        data_aware=False,
+        program_aware=False,
+        tip_aware=False,
+        fewshot_aware=False,
+    )
+    _pending, request = _next(state)
+
+    assert request.identity_payload() == {
+        "bindings": _bindings().model_dump(mode="json"),
+        "optimization_run_identity_hash": _identity("optimization-run"),
+        "effect_ordinal": 0,
+        "effect": "instruction_proposal",
+        "schema_tag": "miprov2-instruction-proposal/v1",
+        "temperature": 0.7,
+        "rollout_id": request.rollout_id,
+        "component_index": 0,
+        "component_id": "user_prompt_template",
+        "proposal_index": 0,
+        "demo_set_index": 0,
+        "selected_tip_key": None,
+        "fields": [field.model_dump(mode="json") for field in request.fields],
+        "prompt": request.prompt,
+    }
+    assert request.identity_hash == (
+        "ee3de3e21d9c396deca205b688af3f61ff94ec85369e50c0ea271fb0810db69a"
+    )
+
+
+def test_native_proposal_identity_binds_exact_optimization_run() -> None:
+    first_state = _start(
+        candidates=1,
+        data_aware=False,
+        program_aware=False,
+        tip_aware=False,
+        fewshot_aware=False,
+        optimization_run_identity_hash=_identity("run-a"),
+    )
+    second_state = _start(
+        candidates=1,
+        data_aware=False,
+        program_aware=False,
+        tip_aware=False,
+        fewshot_aware=False,
+        optimization_run_identity_hash=_identity("run-b"),
+    )
+
+    _first_pending, first = _next(first_state)
+    _second_pending, second = _next(second_state)
+
+    assert first.optimization_run_identity_hash != (
+        second.optimization_run_identity_hash
+    )
+    assert first.identity_hash != second.identity_hash
 
 
 def test_bootstrap_demo_bridge_preserves_order_fields_and_key_presence() -> (

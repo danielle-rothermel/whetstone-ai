@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 
+from tests.optimization.support import python_format_contract
 from whetstone.core.identity import compute_identity_hash
 from whetstone.optimization.miprov2.bootstrap import (
     FewshotSeedKind,
@@ -50,6 +51,10 @@ def _bindings() -> Miprov2DurableBindings:
         task_route_identity_hash=_hash("task-route"),
         execution_policy_identity_hash=_hash("execution-policy"),
         prompt_adapter_identity_hash=PROMPT_ADAPTER_HASH,
+        proposal_executor_policy_identity_hash=_hash("proposal-executor"),
+        proposal_transport_durability_identity_hash=_hash(
+            "proposal-transport"
+        ),
         base_candidate_identity_hash=_hash("base"),
         teacher_candidate_identity_hash=_hash("teacher"),
     )
@@ -60,7 +65,9 @@ def _components(count: int) -> tuple[Miprov2PromptComponent, ...]:
         Miprov2PromptComponent(
             component_id=f"component-{index}",
             template=f"Current component {index}: {{input}}",
-            allowed_placeholders=("input",),
+            template_render_contract=python_format_contract(
+                available_fields=("input",)
+            ),
             rendering_rules="Substitute the named native input.",
             example_execution=f"Current component {index}: example",
         )
@@ -116,6 +123,7 @@ def _proposal_trace(
     )
     state = start_miprov2_proposal(
         bindings=_bindings(),
+        optimization_run_identity_hash=_hash("optimization-run"),
         components=components,
         trainset=(
             Miprov2DatasetExample(

@@ -203,11 +203,40 @@ class Miprov2IntentContext(BaseModel):
             )
         return self
 
+    def identity_payload(self) -> dict[str, object]:
+        # Persisted identity keys are an explicit wire contract.
+        return {
+            "schema_version": self.schema_version,
+            "control_identity_hash": self.control_identity_hash,
+            "run_id": self.run_id,
+            "effect_kind": self.effect_kind,
+            "effect_identity_hash": self.effect_identity_hash,
+            "intent_id": self.intent_id,
+            "candidate": self.candidate.model_dump(mode="json"),
+            "task_batch_identities": list(self.task_batch_identities),
+            "eval_config": self.eval_config.model_dump(mode="json"),
+            "eval_config_binding": self.eval_config_binding.model_dump(
+                mode="json"
+            ),
+            "evaluation_binding": self.evaluation_binding.model_dump(
+                mode="json"
+            ),
+            "execution_policy": self.execution_policy.model_dump(mode="json"),
+            "reward_policy_hash": self.reward_policy_hash,
+            "bootstrap_attempt": (
+                None
+                if self.bootstrap_attempt is None
+                else self.bootstrap_attempt.model_dump(mode="json")
+            ),
+            "optimizable_component_id": self.optimizable_component_id,
+            "optimizable_trace_index": self.optimizable_trace_index,
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
             schema=MIPROV2_INTENT_CONTEXT_SCHEMA,
             schema_version=MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
 
 

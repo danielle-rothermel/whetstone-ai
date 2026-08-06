@@ -479,6 +479,15 @@ its own `DbosGepaRunner` parent workflow, which replays a frozen engine run
 from ordinal 0; the runner registers GEPA's factories at the same startup site
 so both paths share one registration invariant.
 
+MIPROv2 persists the exact optimization run, optimizer configuration,
+proposal-executor policy, and proposer-transport durability identity in its
+runtime state. Its durable effect budget accounts for task rows alongside
+rollouts, proposal calls, and evaluations; the adapter verifies the persisted
+ceiling and preflights the next row batch before resolving an Eval Config,
+publishing an Evaluation Intent, or invoking a proposal effect. Candidate
+assembly uses the run's render contract and rejects literal-replacement input
+that would make instruction and demonstration text indistinguishable.
+
 COPRO is not among them. `CoproAdapter.invoke` reports `CONTINUE` on every
 successful round and `terminalize` refuses a continuing tail, so a COPRO run
 reaches a terminal Optimization Result only once a controller folds each

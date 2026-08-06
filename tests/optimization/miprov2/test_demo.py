@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import operator
 from typing import Any, cast
 
 import pytest
@@ -76,7 +77,20 @@ def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
         accepted=True,
     )
 
-    assert len(acceptance.identity_hash()) == 64
+    assert acceptance.identity_payload() == {
+        "source_task_identity": _identity("task-1"),
+        "source_rollout_identity": _identity("rollout-1"),
+        "source_trace_identity": _identity("trace-1"),
+        "source_output_identity": _identity("output-1"),
+        "source_score_identity": _identity("score-1"),
+        "metric_present": True,
+        "score": 0.75,
+        "metric_threshold": 0.5,
+        "accepted": True,
+    }
+    assert acceptance.identity_hash() == (
+        "27485dfdf414685caccbb24781a8922fe568d22b599699051d577992651070a3"
+    )
     changed = acceptance.model_copy(
         update={"source_output_identity": _identity("output-2")}
     )
@@ -116,6 +130,56 @@ def test_observed_trace_step_is_strict_json_and_allows_unknown_component() -> (
             inputs={"bad": object()},
             outputs={},
         )
+
+
+def test_demo_json_is_deeply_immutable_and_isolated_from_callers() -> None:
+    caller_inputs = {"nested": {"items": [1, 2]}}
+    step = ObservedTraceStep(
+        trace_index=0,
+        component_id="answerer",
+        inputs=caller_inputs,
+        outputs={"answer": "a"},
+    )
+    caller_inputs["nested"]["items"].append(3)
+
+    assert step.inputs.to_json() == {"nested": {"items": [1, 2]}}
+    nested = step.inputs["nested"]
+    assert not isinstance(nested, dict)
+    with pytest.raises(TypeError):
+        operator.setitem(cast("Any", step.inputs), "new", "value")
+    with pytest.raises(AttributeError):
+        cast("Any", nested)["items"].append(3)
+
+
+def test_demo_copy_and_construct_refreeze_json_and_stabilize_identity() -> (
+    None
+):
+    task = LabeledTaskDemo(
+        source_task_identity=_identity("task-immutable"),
+        inputs_by_component={"first": {"question": "q"}},
+        outputs_by_component={"first": {"answer": "a"}},
+    )
+    demo = task.for_component("first")
+    copied_inputs = {"nested": {"items": [1]}}
+    copied = demo.model_copy(update={"inputs": copied_inputs}, deep=True)
+    copied_hash = copied.identity_hash()
+    copied_inputs["nested"]["items"].append(2)
+    assert copied.identity_hash() == copied_hash
+
+    constructed_inputs = {"nested": {"items": [3]}}
+    constructed = ComponentDemo.model_construct(
+        **{
+            field: getattr(demo, field)
+            for field in ComponentDemo.model_fields
+            if field != "inputs"
+        },
+        inputs=constructed_inputs,
+    )
+    constructed_hash = constructed.identity_hash()
+    constructed_inputs["nested"]["items"].append(4)
+    assert constructed.identity_hash() == constructed_hash
+    with pytest.raises(TypeError):
+        operator.setitem(cast("Any", constructed.inputs), "nested", {})
 
 
 def test_labeled_demo_adapts_to_component_without_fake_rollout_data() -> None:
@@ -291,7 +355,12 @@ def test_component_demo_set_is_component_ordered_and_identity_bearing() -> (
     assert demo_set.demos_for("first")[0].source_task_identity == _identity(
         "task-1"
     )
-    assert len(demo_set.identity_hash()) == 64
+    assert demo_set.demos_for("first")[0].identity_hash() == (
+        "094c495d09976e247b22c6f331ad6c24984c5501cece210eec0f49dff3dafe83"
+    )
+    assert demo_set.identity_hash() == (
+        "9b60bb128ae60c328e0a44120d01430340bf0f98dc87fc139437774a1b9e29bd"
+    )
     with pytest.raises(KeyError):
         demo_set.demos_for("missing")
 

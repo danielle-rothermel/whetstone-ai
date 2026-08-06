@@ -32,7 +32,13 @@ from whetstone.experiment.binding import (
     eval_config_reference,
 )
 from whetstone.experiment.candidate import candidate_reference
-from whetstone.optimization.contracts import EvaluationIntent
+from whetstone.optimization.contracts import (
+    EvaluationIntent,
+    OptimizationRun,
+    OutputContract,
+    StepMode,
+    optimization_run_reference,
+)
 from whetstone.optimization.miprov2.bootstrap import BootstrapAttemptPlan
 from whetstone.optimization.miprov2.control import (
     Miprov2InjectedDefaults,
@@ -59,7 +65,10 @@ from whetstone.optimization.miprov2.runtime import (
     Miprov2EffectBudget,
     Miprov2State,
 )
-from whetstone.optimization.proposal.proposer import ProposerConfig
+from whetstone.optimization.proposal.proposer import (
+    FakeProposerTransport,
+    ProposerConfig,
+)
 from whetstone.provider.language_model import PlainPromptAdapter
 
 MIPROV2_TASK_IDENTITIES = tuple(f"{index:064x}" for index in range(1, 8))
@@ -156,14 +165,18 @@ def miprov2_evidence_source_eval_config():
     )
 
 
-def miprov2_evidence_bindings() -> Miprov2DurableBindings:
+def miprov2_evidence_bindings(
+    control_identity_hash: str = FULL_A,
+) -> Miprov2DurableBindings:
 
     return Miprov2DurableBindings(
-        control_identity_hash=FULL_A,
+        control_identity_hash=control_identity_hash,
         prompt_route_identity_hash=FULL_B,
         task_route_identity_hash=FULL_C,
         execution_policy_identity_hash=FULL_D,
         prompt_adapter_identity_hash=FULL_A,
+        proposal_executor_policy_identity_hash=FULL_B,
+        proposal_transport_durability_identity_hash=FULL_C,
         base_candidate_identity_hash=FULL_B,
         teacher_candidate_identity_hash=FULL_C,
     )
@@ -173,10 +186,11 @@ def make_miprov2_evidence_fixture(
     store: ObjectStore,
     *,
     reward_policy_hash: str,
+    control_identity_hash: str = FULL_A,
 ) -> tuple[EvaluationIntent, Miprov2IntentContext]:
 
     attempt = BootstrapAttemptPlan(
-        bindings=miprov2_evidence_bindings(),
+        bindings=miprov2_evidence_bindings(control_identity_hash),
         plan_identity_hash=FULL_D,
         task_index=0,
         task_identity=MIPROV2_EVIDENCE_TASK_IDENTITY,
@@ -193,7 +207,7 @@ def make_miprov2_evidence_fixture(
         provider_execution_policy_hash=FULL_D,
     )
     request = Miprov2EvalConfigBindingRequest(
-        control_identity_hash=FULL_A,
+        control_identity_hash=control_identity_hash,
         source_eval_config=miprov2_evidence_source_eval_config(),
         purpose="bootstrap",
         effect_identity_hash=attempt.identity_hash(),
@@ -251,7 +265,7 @@ def make_miprov2_evidence_fixture(
         expected_reward_policy_hash=reward_policy_hash,
     )
     context = Miprov2IntentContext(
-        control_identity_hash=FULL_A,
+        control_identity_hash=control_identity_hash,
         run_id="run",
         effect_kind="bootstrap",
         effect_identity_hash=attempt.identity_hash(),
@@ -354,12 +368,33 @@ def make_minimal_miprov2_runtime(
             control.provider_execution_policy_hash
         ),
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
+        proposal_executor_policy_identity_hash="c" * 64,
+        proposal_transport_durability_identity_hash=(
+            FakeProposerTransport(
+                {},
+                execution_policy_hash=(control.provider_execution_policy_hash),
+                prompt_adapter_identity_hash=(
+                    control.prompt_adapter_identity_hash
+                ),
+            ).durability_identity_hash
+        ),
         base_candidate_identity_hash=control.base_candidate.identity_hash,
         teacher_candidate_identity_hash=control.teacher_candidate.identity_hash,
     )
     driver = Miprov2Driver()
+    run = optimization_run_reference(
+        OptimizationRun(
+            run_id="miprov2-runtime-test",
+            optimizer_config=control.reference(),
+            adapter_key="miprov2",
+            mode=StepMode.PROPOSAL_ONLY,
+            terminal_output_contract=OutputContract(returned_proposal_count=1),
+            template_render_contract=control.template_render_contract,
+            reward_policy=control.reward_policy,
+        )
+    )
     state = driver.start(
-        run_id="miprov2-runtime-test",
+        run=run,
         control=control,
         bindings=bindings,
         labeled_trainset=labeled,
@@ -369,7 +404,7 @@ def make_minimal_miprov2_runtime(
                 template=control.base_candidate.record.payload[
                     "user_prompt_template"
                 ],
-                allowed_placeholders=("query",),
+                template_render_contract=control.template_render_contract,
                 rendering_rules="Substitute the native query field.",
                 example_execution="Answer q-0.",
             ),
@@ -380,6 +415,7 @@ def make_minimal_miprov2_runtime(
             bootstrap_rollouts=0,
             proposal_calls=proposal_calls,
             evaluations=2,
+            task_rows=6,
         ),
     )
     return driver, Miprov2State.model_validate_json(state.model_dump_json())

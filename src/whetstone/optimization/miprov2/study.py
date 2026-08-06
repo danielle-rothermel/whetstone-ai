@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 from whetstone.core.identity import (
+    IdentityRef,
     TypedRef,
     compute_identity_hash,
     require_full_hash,
@@ -33,10 +34,10 @@ from whetstone.experiment.binding import (
 )
 from whetstone.experiment.candidate import (
     CandidateRef,
-    TemplateRenderContract,
     candidate_reference,
 )
 from whetstone.experiment.reward import RewardRef
+from whetstone.optimization.contracts import OptimizationRunRef
 from whetstone.optimization.miprov2.control import (
     MIPROV2_ALGORITHM_VERSION,
     MIPROV2_CANDIDATE_RENDERER_VERSION,
@@ -52,10 +53,10 @@ from whetstone.optimization.miprov2.render import candidate_from_components
 from whetstone.optimization.proposal.mutation import diff_check
 
 MIPROV2_STUDY_SCHEMA = "whetstone.miprov2_study_transcript"
-MIPROV2_STUDY_SCHEMA_VERSION = 3
+MIPROV2_STUDY_SCHEMA_VERSION = 5
 OPTUNA_VERSION = MIPROV2_OPTUNA_VERSION
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA = "whetstone.miprov2_candidate_assembly"
-MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 2
+MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 4
 MIPROV2_CANDIDATE_RENDERING_SCHEMA = "whetstone.miprov2_candidate_rendering"
 MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION = 1
 MIPROV2_CANDIDATE_PROGRAM_SCHEMA = "whetstone.miprov2_candidate_program"
@@ -84,11 +85,14 @@ class _IdentityRecord(BaseModel):
     _identity_schema: ClassVar[str]
     _identity_schema_version: ClassVar[int] = 1
 
+    def identity_payload(self) -> dict[str, Any]:
+        raise NotImplementedError
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
             schema=self._identity_schema,
             schema_version=self._identity_schema_version,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
 
 
@@ -99,6 +103,18 @@ class Miprov2ParameterSpace(_IdentityRecord):
 
     instruction_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...]
     demo_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...] | None = None
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "instruction_pool_identity_hashes": [
+                list(pool) for pool in self.instruction_pool_identity_hashes
+            ],
+            "demo_pool_identity_hashes": (
+                None
+                if self.demo_pool_identity_hashes is None
+                else [list(pool) for pool in self.demo_pool_identity_hashes]
+            ),
+        }
 
     @model_validator(mode="after")
     def _validate_pools(self) -> Miprov2ParameterSpace:
@@ -275,6 +291,15 @@ class Miprov2StudySchedule(_IdentityRecord):
     valset_size: StrictInt
     minibatch_full_eval_steps: StrictInt
 
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "num_trials": self.num_trials,
+            "minibatch": self.minibatch,
+            "minibatch_size": self.minibatch_size,
+            "valset_size": self.valset_size,
+            "minibatch_full_eval_steps": self.minibatch_full_eval_steps,
+        }
+
     @model_validator(mode="after")
     def _validate_schedule(self) -> Miprov2StudySchedule:
         if self.num_trials <= 0:
@@ -331,6 +356,33 @@ class Miprov2EvaluationObservation(_IdentityRecord):
     expected_reward_policy_hash: StrictStr
     reward_ref: RewardRef | None
     normalized_score: float
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "intent_id": self.intent_id,
+            "effect_identity_hash": self.effect_identity_hash,
+            "purpose": self.purpose,
+            "candidate": self.candidate.model_dump(mode="json"),
+            "task_batch_identities": list(self.task_batch_identities),
+            "eval_config": self.eval_config.model_dump(mode="json"),
+            "eval_config_binding": self.eval_config_binding.model_dump(
+                mode="json"
+            ),
+            "evaluation_binding": self.evaluation_binding.model_dump(
+                mode="json"
+            ),
+            "evaluation_result_ref": self.evaluation_result_ref.model_dump(
+                mode="json"
+            ),
+            "expected_reward_policy_hash": (self.expected_reward_policy_hash),
+            "reward_ref": (
+                None
+                if self.reward_ref is None
+                else self.reward_ref.model_dump(mode="json")
+            ),
+            "normalized_score": self.normalized_score,
+        }
 
     @model_validator(mode="after")
     def _validate_evidence(self) -> Miprov2EvaluationObservation:
@@ -417,6 +469,18 @@ class BaselineObservation(_IdentityRecord):
     evaluated_base_candidate: CandidateRef
     score: float
     evaluation: Miprov2EvaluationObservation
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "categorical_combination_identity_hash": (
+                self.categorical_combination_identity_hash
+            ),
+            "evaluated_base_candidate": (
+                self.evaluated_base_candidate.model_dump(mode="json")
+            ),
+            "score": self.score,
+            "evaluation": self.evaluation.model_dump(mode="json"),
+        }
 
     @model_validator(mode="after")
     def _validate_baseline(self) -> BaselineObservation:
@@ -505,6 +569,20 @@ class Miprov2CandidateRendering(_IdentityRecord):
     )
     components: tuple[Miprov2ComponentSelection, ...]
 
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "control_identity_hash": self.control_identity_hash,
+            "base_candidate_identity_hash": self.base_candidate_identity_hash,
+            "categorical_combination_identity_hash": (
+                self.categorical_combination_identity_hash
+            ),
+            "renderer_version": self.renderer_version,
+            "components": [
+                component.model_dump(mode="json")
+                for component in self.components
+            ],
+        }
+
     @model_validator(mode="after")
     def _validate_rendering(self) -> Miprov2CandidateRendering:
         for field in (
@@ -520,6 +598,34 @@ class Miprov2CandidateRendering(_IdentityRecord):
         return self
 
 
+def _require_run_authorities(
+    run: OptimizationRunRef,
+    *,
+    optimizer_config: IdentityRef,
+    reward_policy_hash: str | None = None,
+) -> None:
+    if run.record.optimizer_config != optimizer_config:
+        raise ValueError(
+            "optimization run optimizer_config does not bind the exact "
+            "MIPROv2 control"
+        )
+    if reward_policy_hash is None:
+        return
+    require_full_hash(
+        reward_policy_hash,
+        field="reward_policy_hash",
+    )
+    run_reward_policy = run.record.reward_policy
+    if (
+        run_reward_policy is None
+        or run_reward_policy.identity_hash() != reward_policy_hash
+    ):
+        raise ValueError(
+            "optimization run reward policy does not bind the exact "
+            "MIPROv2 reward policy"
+        )
+
+
 class Miprov2CandidateAssemblyBinding(_IdentityRecord):
     """Canonical params-to-native-program assembly persisted for evaluation."""
 
@@ -531,21 +637,42 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
     candidate: CandidateRef
     program_identity_hash: StrictStr
     rendering: Miprov2CandidateRendering
-    control_identity_hash: StrictStr
+    optimizer_config: IdentityRef
     base_candidate: CandidateRef
     program_layout: Miprov2ProgramLayout
     prompt_adapter_identity_hash: StrictStr
-    template_render_contract: TemplateRenderContract
+    run: OptimizationRunRef
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "params": [[name, value] for name, value in self.params],
+            "categorical_combination_identity_hash": (
+                self.categorical_combination_identity_hash
+            ),
+            "candidate": self.candidate.model_dump(mode="json"),
+            "program_identity_hash": self.program_identity_hash,
+            "rendering": self.rendering.model_dump(mode="json"),
+            "optimizer_config": self.optimizer_config.model_dump(mode="json"),
+            "base_candidate": self.base_candidate.model_dump(mode="json"),
+            "program_layout": self.program_layout.model_dump(mode="json"),
+            "prompt_adapter_identity_hash": (
+                self.prompt_adapter_identity_hash
+            ),
+            "run": self.run.model_dump(mode="json"),
+        }
 
     @model_validator(mode="after")
     def _validate_assembly(self) -> Miprov2CandidateAssemblyBinding:
         for field in (
             "categorical_combination_identity_hash",
             "program_identity_hash",
-            "control_identity_hash",
             "prompt_adapter_identity_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
+        _require_run_authorities(
+            self.run,
+            optimizer_config=self.optimizer_config,
+        )
         diff_check(
             base=self.base_candidate.record,
             proposed=self.candidate.record,
@@ -553,7 +680,8 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
         if self.candidate.record.base_ref != self.base_candidate.record_ref:
             raise ValueError("assembled candidate must bind its exact base")
         if (
-            self.rendering.control_identity_hash != self.control_identity_hash
+            self.rendering.control_identity_hash
+            != self.optimizer_config.identity_hash
             or self.rendering.base_candidate_identity_hash
             != self.base_candidate.identity_hash
             or self.rendering.categorical_combination_identity_hash
@@ -566,7 +694,7 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
             base=self.base_candidate,
             candidate_id=f"miprov2-{self.rendering.identity_hash()[:24]}",
             components=self.rendering.model_dump(mode="json")["components"],
-            template_render_contract=self.template_render_contract,
+            run=self.run,
         )
         if candidate_reference(expected_candidate) != self.candidate:
             raise ValueError(
@@ -598,6 +726,25 @@ class Promotion(_IdentityRecord):
     minibatch_mean: float
     full_score: float
     evaluation: Miprov2EvaluationObservation
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "trial_number": self.trial_number,
+            "params": [[name, value] for name, value in self.params],
+            "candidate_combination_identity_hash": (
+                self.candidate_combination_identity_hash
+            ),
+            "evaluated_candidate_identity_hash": (
+                self.evaluated_candidate_identity_hash
+            ),
+            "candidate_assembly": self.candidate_assembly.model_dump(
+                mode="json"
+            ),
+            "source_sample_trial_number": self.source_sample_trial_number,
+            "minibatch_mean": self.minibatch_mean,
+            "full_score": self.full_score,
+            "evaluation": self.evaluation.model_dump(mode="json"),
+        }
 
     @model_validator(mode="after")
     def _validate_promotion(self) -> Promotion:
@@ -653,6 +800,29 @@ class SampleObservation(_IdentityRecord):
     batch_full_evaluation: StrictBool
     promotion: Promotion | None = None
 
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "trial_number": self.trial_number,
+            "params": [[name, value] for name, value in self.params],
+            "candidate_combination_identity_hash": (
+                self.candidate_combination_identity_hash
+            ),
+            "evaluated_candidate_identity_hash": (
+                self.evaluated_candidate_identity_hash
+            ),
+            "candidate_assembly": self.candidate_assembly.model_dump(
+                mode="json"
+            ),
+            "score": self.score,
+            "evaluation": self.evaluation.model_dump(mode="json"),
+            "batch_full_evaluation": self.batch_full_evaluation,
+            "promotion": (
+                None
+                if self.promotion is None
+                else self.promotion.model_dump(mode="json")
+            ),
+        }
+
     @model_validator(mode="after")
     def _validate_sample(self) -> SampleObservation:
         if self.trial_number < 1:
@@ -691,11 +861,12 @@ class StudyTranscript(_IdentityRecord):
     """Complete information required to reconstruct and verify the study."""
 
     _identity_schema = MIPROV2_STUDY_SCHEMA
+    _identity_schema_version = MIPROV2_STUDY_SCHEMA_VERSION
 
     schema_name: Literal["whetstone.miprov2_study_transcript"] = (
         MIPROV2_STUDY_SCHEMA
     )
-    schema_version: Literal[3] = MIPROV2_STUDY_SCHEMA_VERSION
+    schema_version: Literal[5] = MIPROV2_STUDY_SCHEMA_VERSION
     algorithm_version: Literal["dspy_miprov2/v2"] = MIPROV2_ALGORITHM_VERSION
     reference_commit: Literal["6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"] = (
         MIPROV2_REFERENCE_COMMIT
@@ -706,11 +877,11 @@ class StudyTranscript(_IdentityRecord):
     validation_task_identities: tuple[StrictStr, ...]
     validation_eval_source: EvalConfigRef
     reward_policy_hash: StrictStr
-    control_identity_hash: StrictStr
+    optimizer_config: IdentityRef
     prompt_adapter_identity_hash: StrictStr
     expected_base_candidate: CandidateRef
     program_layout: Miprov2ProgramLayout
-    template_render_contract: TemplateRenderContract
+    run: OptimizationRunRef
     instruction_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...]
     demo_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...] | None = None
     parameter_space_identity_hash: StrictStr
@@ -719,11 +890,57 @@ class StudyTranscript(_IdentityRecord):
     baseline: BaselineObservation
     samples: tuple[SampleObservation, ...] = ()
 
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "schema_name": self.schema_name,
+            "schema_version": self.schema_version,
+            "algorithm_version": self.algorithm_version,
+            "reference_commit": self.reference_commit,
+            "optuna_version": self.optuna_version,
+            "seed": self.seed,
+            "run_id": self.run_id,
+            "validation_task_identities": list(
+                self.validation_task_identities
+            ),
+            "validation_eval_source": self.validation_eval_source.model_dump(
+                mode="json"
+            ),
+            "reward_policy_hash": self.reward_policy_hash,
+            "optimizer_config": self.optimizer_config.model_dump(mode="json"),
+            "prompt_adapter_identity_hash": (
+                self.prompt_adapter_identity_hash
+            ),
+            "expected_base_candidate": (
+                self.expected_base_candidate.model_dump(mode="json")
+            ),
+            "program_layout": self.program_layout.model_dump(mode="json"),
+            "run": self.run.model_dump(mode="json"),
+            "instruction_pool_identity_hashes": [
+                list(pool) for pool in self.instruction_pool_identity_hashes
+            ],
+            "demo_pool_identity_hashes": (
+                None
+                if self.demo_pool_identity_hashes is None
+                else [list(pool) for pool in self.demo_pool_identity_hashes]
+            ),
+            "parameter_space_identity_hash": (
+                self.parameter_space_identity_hash
+            ),
+            "distribution_identity_hash": self.distribution_identity_hash,
+            "schedule": self.schedule.model_dump(mode="json"),
+            "baseline": self.baseline.model_dump(mode="json"),
+            "samples": [
+                sample.model_dump(mode="json") for sample in self.samples
+            ],
+        }
+
     @model_validator(mode="after")
     def _validate_contract(self) -> StudyTranscript:
         space = self.parameter_space
         if not self.run_id:
             raise ValueError("run_id must be non-empty")
+        if self.run.record.run_id != self.run_id:
+            raise ValueError("study run_id conflicts with the exact run")
         if not self.validation_task_identities:
             raise ValueError("validation_task_identities must not be empty")
         for index, identity_hash in enumerate(self.validation_task_identities):
@@ -744,10 +961,6 @@ class StudyTranscript(_IdentityRecord):
             field="reward_policy_hash",
         )
         require_full_hash(
-            self.control_identity_hash,
-            field="control_identity_hash",
-        )
-        require_full_hash(
             self.prompt_adapter_identity_hash,
             field="prompt_adapter_identity_hash",
         )
@@ -758,6 +971,11 @@ class StudyTranscript(_IdentityRecord):
         require_full_hash(
             self.distribution_identity_hash,
             field="distribution_identity_hash",
+        )
+        _require_run_authorities(
+            self.run,
+            optimizer_config=self.optimizer_config,
+            reward_policy_hash=self.reward_policy_hash,
         )
         if self.parameter_space_identity_hash != space.identity_hash():
             raise ValueError(
@@ -909,11 +1127,11 @@ class StudyTranscript(_IdentityRecord):
             space=self.parameter_space,
             expected_params=expected_params,
             expected_combination=expected_combination,
-            control_identity_hash=self.control_identity_hash,
+            optimizer_config=self.optimizer_config,
             expected_base_candidate=self.expected_base_candidate,
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
             program_layout=self.program_layout,
-            template_render_contract=self.template_render_contract,
+            run=self.run,
         )
 
     def _validate_evaluation_binding(
@@ -936,7 +1154,8 @@ class StudyTranscript(_IdentityRecord):
         request = derivation.request
         expected_derivation_purpose = expected_purpose.removeprefix("miprov2_")
         if (
-            request.control_identity_hash != self.control_identity_hash
+            request.control_identity_hash
+            != self.optimizer_config.identity_hash
             or request.source_eval_config != self.validation_eval_source
             or request.purpose != expected_derivation_purpose
             or request.effect_identity_hash != binding.effect_identity_hash
@@ -969,11 +1188,11 @@ def _require_candidate_assembly(
     space: Miprov2ParameterSpace,
     expected_params: TrialParams,
     expected_combination: str,
-    control_identity_hash: str,
+    optimizer_config: IdentityRef,
     expected_base_candidate: CandidateRef,
     prompt_adapter_identity_hash: str,
     program_layout: Miprov2ProgramLayout,
-    template_render_contract: TemplateRenderContract,
+    run: OptimizationRunRef,
 ) -> None:
     """Verify one rendered program against its exact durable study inputs."""
 
@@ -986,12 +1205,12 @@ def _require_candidate_assembly(
             "candidate assembly does not match the categorical combination"
         )
     expected_context = (
-        control_identity_hash,
+        optimizer_config,
         expected_base_candidate.identity_hash,
         prompt_adapter_identity_hash,
     )
     actual_context = (
-        assembly.control_identity_hash,
+        assembly.optimizer_config,
         assembly.base_candidate.identity_hash,
         assembly.prompt_adapter_identity_hash,
     )
@@ -1007,9 +1226,9 @@ def _require_candidate_assembly(
         raise ValueError(
             "candidate assembly does not bind the exact program topology"
         )
-    if assembly.template_render_contract != template_render_contract:
+    if assembly.run != run:
         raise ValueError(
-            "candidate assembly does not bind the render contract"
+            "candidate assembly does not bind the exact optimization run"
         )
     components = assembly.rendering.components
     if tuple(component.component_id for component in components) != tuple(
@@ -1062,6 +1281,15 @@ class StudySuggestion(_IdentityRecord):
     params: TrialParams
     candidate_combination_identity_hash: StrictStr
 
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "trial_number": self.trial_number,
+            "params": [[name, value] for name, value in self.params],
+            "candidate_combination_identity_hash": (
+                self.candidate_combination_identity_hash
+            ),
+        }
+
     @model_validator(mode="after")
     def _validate_suggestion(self) -> StudySuggestion:
         if self.trial_number < 1:
@@ -1084,6 +1312,22 @@ class PromotionCandidate(_IdentityRecord):
     candidate_assembly: Miprov2CandidateAssemblyBinding
     source_sample_trial_number: StrictInt
     minibatch_mean: float
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "params": [[name, value] for name, value in self.params],
+            "candidate_combination_identity_hash": (
+                self.candidate_combination_identity_hash
+            ),
+            "evaluated_candidate_identity_hash": (
+                self.evaluated_candidate_identity_hash
+            ),
+            "candidate_assembly": self.candidate_assembly.model_dump(
+                mode="json"
+            ),
+            "source_sample_trial_number": self.source_sample_trial_number,
+            "minibatch_mean": self.minibatch_mean,
+        }
 
     @model_validator(mode="after")
     def _validate_candidate(self) -> PromotionCandidate:
@@ -1119,6 +1363,20 @@ class FullEvaluation(_IdentityRecord):
     candidate_combination_identity_hash: StrictStr
     evaluated_candidate_identity_hash: StrictStr
     score: float
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "source": self.source,
+            "trial_number": self.trial_number,
+            "params": [[name, value] for name, value in self.params],
+            "candidate_combination_identity_hash": (
+                self.candidate_combination_identity_hash
+            ),
+            "evaluated_candidate_identity_hash": (
+                self.evaluated_candidate_identity_hash
+            ),
+            "score": self.score,
+        }
 
     @model_validator(mode="after")
     def _validate_full_evaluation(self) -> FullEvaluation:
@@ -1187,11 +1445,11 @@ class Miprov2Study:
         validation_task_identities: tuple[str, ...],
         validation_eval_source: EvalConfigRef,
         reward_policy_hash: str,
-        control_identity_hash: str,
+        optimizer_config: IdentityRef,
         prompt_adapter_identity_hash: str,
         expected_base_candidate: CandidateRef,
         program_layout: Miprov2ProgramLayout,
-        template_render_contract: TemplateRenderContract,
+        run: OptimizationRunRef,
     ) -> None:
         self.seed = seed
         self.space = space
@@ -1200,11 +1458,18 @@ class Miprov2Study:
         self.validation_task_identities = validation_task_identities
         self.validation_eval_source = validation_eval_source
         self.reward_policy_hash = reward_policy_hash
-        self.control_identity_hash = control_identity_hash
+        self.optimizer_config = optimizer_config
         self.prompt_adapter_identity_hash = prompt_adapter_identity_hash
         self.expected_base_candidate = expected_base_candidate
         self.program_layout = program_layout
-        self.template_render_contract = template_render_contract
+        self.run = run
+        if self.run.record.run_id != self.run_id:
+            raise ValueError("study run_id conflicts with the exact run")
+        _require_run_authorities(
+            self.run,
+            optimizer_config=self.optimizer_config,
+            reward_policy_hash=self.reward_policy_hash,
+        )
 
     def initial_transcript(
         self,
@@ -1230,11 +1495,11 @@ class Miprov2Study:
             validation_task_identities=self.validation_task_identities,
             validation_eval_source=self.validation_eval_source,
             reward_policy_hash=self.reward_policy_hash,
-            control_identity_hash=self.control_identity_hash,
+            optimizer_config=self.optimizer_config,
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
             expected_base_candidate=self.expected_base_candidate,
             program_layout=self.program_layout,
-            template_render_contract=self.template_render_contract,
+            run=self.run,
             instruction_pool_identity_hashes=(
                 self.space.instruction_pool_identity_hashes
             ),
@@ -1480,11 +1745,11 @@ class Miprov2Study:
             expected_combination=(
                 suggestion.candidate_combination_identity_hash
             ),
-            control_identity_hash=self.control_identity_hash,
+            optimizer_config=self.optimizer_config,
             expected_base_candidate=self.expected_base_candidate,
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
             program_layout=self.program_layout,
-            template_render_contract=self.template_render_contract,
+            run=self.run,
         )
         expected_batch_size = (
             self.schedule.minibatch_size
@@ -1545,7 +1810,8 @@ class Miprov2Study:
             )
         request = binding.eval_config_binding.request
         if (
-            request.control_identity_hash != self.control_identity_hash
+            request.control_identity_hash
+            != self.optimizer_config.identity_hash
             or request.source_eval_config != self.validation_eval_source
             or request.purpose != expected_purpose.removeprefix("miprov2_")
             or request.effect_identity_hash != binding.effect_identity_hash
@@ -1581,11 +1847,11 @@ class Miprov2Study:
             self.validation_task_identities,
             self.validation_eval_source,
             self.reward_policy_hash,
-            self.control_identity_hash,
+            self.optimizer_config,
             self.prompt_adapter_identity_hash,
             self.expected_base_candidate,
             self.program_layout,
-            self.template_render_contract,
+            self.run,
             self.space.instruction_pool_identity_hashes,
             self.space.demo_pool_identity_hashes,
             self.space.identity_hash(),
@@ -1598,11 +1864,11 @@ class Miprov2Study:
             transcript.validation_task_identities,
             transcript.validation_eval_source,
             transcript.reward_policy_hash,
-            transcript.control_identity_hash,
+            transcript.optimizer_config,
             transcript.prompt_adapter_identity_hash,
             transcript.expected_base_candidate,
             transcript.program_layout,
-            transcript.template_render_contract,
+            transcript.run,
             transcript.instruction_pool_identity_hashes,
             transcript.demo_pool_identity_hashes,
             transcript.parameter_space_identity_hash,

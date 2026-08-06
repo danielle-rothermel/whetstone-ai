@@ -165,6 +165,108 @@ def test_miprov2_policy_mismatch_fails_before_any_effect(
     assert transport.calls == []
 
 
+def test_task_rows_only_continuation_tamper_fails_before_next_effect(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness, request, _, adapter, recorder, transport = _case(
+        tmp_path,
+        replay_policy=ReplayPolicy.DURABLE_WORKFLOW,
+    )
+    first, first_ref = harness.run_step(request)
+    continuation = adapter.build_step_request(
+        step_index=1,
+        prior_result=first,
+        prior_result_ref=first_ref,
+    )
+    remaining = dict(continuation.budget.remaining)
+    remaining["task_rows"] += 1
+    tampered = continuation.model_copy(
+        update={
+            "budget": BudgetState(
+                consumed=continuation.budget.consumed,
+                remaining=remaining,
+            )
+        }
+    )
+    writes = 0
+    real_put = adapter._store.put
+
+    def record_put(*args, **kwargs):
+        nonlocal writes
+        writes += 1
+        return real_put(*args, **kwargs)
+
+    monkeypatch.setattr(adapter._store, "put", record_put)
+    calls_before = recorder.calls
+    transport_calls_before = list(transport.calls)
+
+    with pytest.raises(ValueError, match="prior exact budget"):
+        adapter.invoke(tampered, ())
+
+    assert writes == 0
+    assert recorder.calls == calls_before
+    assert transport.calls == transport_calls_before
+
+
+def test_underfunded_task_rows_fail_before_resolver_or_store_write(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    driver, state = make_minimal_miprov2_runtime()
+    store = make_store(tmp_path)
+    transport = FakeProposerTransport(
+        {},
+        execution_policy_hash=state.control.provider_execution_policy_hash,
+        prompt_adapter_identity_hash=(
+            state.control.prompt_adapter_identity_hash
+        ),
+    )
+    recorder = _ExecutionRecorder()
+    adapter = Miprov2Adapter(
+        store=store,
+        proposer_config=state.control.prompt_model,
+        transport=transport,
+        eval_config_resolver=cast(
+            Miprov2EvalConfigResolver,
+            _UnusedEvalConfigResolver(),
+        ),
+        proposal_executor=_recording_executor(recorder),
+        driver=driver,
+    )
+    writes = 0
+    real_put = store.put
+
+    def record_put(*args, **kwargs):
+        nonlocal writes
+        writes += 1
+        return real_put(*args, **kwargs)
+
+    monkeypatch.setattr(store, "put", record_put)
+
+    with pytest.raises(
+        ValueError,
+        match=r"'task_rows'.*expected consumed=0, remaining=6",
+    ):
+        adapter.build_step_request(
+            run=state.run,
+            step_index=0,
+            initial_state=state,
+            initial_budget=BudgetState(
+                remaining={
+                    "bootstrap_rollouts": 0,
+                    "proposal_calls": 2,
+                    "evaluations": 2,
+                    "task_rows": 5,
+                }
+            ),
+        )
+
+    assert writes == 0
+    assert recorder.calls == 0
+    assert transport.calls == []
+
+
 def test_durable_workflow_reaches_executor_and_completed_replay_is_effect_free(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

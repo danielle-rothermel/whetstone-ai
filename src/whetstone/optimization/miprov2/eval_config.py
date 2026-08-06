@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal, Protocol
+from collections.abc import Mapping
+from typing import Any, Literal, Protocol, Self
 
 from dr_code.eval import RepeatPlan, SamplingConfig, TaskSet
 from dr_code.eval.identity import (
@@ -35,6 +36,15 @@ Miprov2EvalPurpose = Literal[
     "promotion",
 ]
 
+MIPROV2_EVALUATION_EXECUTION_POLICY_SCHEMA = (
+    "whetstone.miprov2_evaluation_execution_policy"
+)
+MIPROV2_EVALUATION_EXECUTION_POLICY_SCHEMA_VERSION = 1
+MIPROV2_EVAL_BINDING_REQUEST_SCHEMA = "whetstone.miprov2_eval_binding_request"
+MIPROV2_EVAL_BINDING_REQUEST_SCHEMA_VERSION = 1
+MIPROV2_EVAL_BINDING_SCHEMA = "whetstone.miprov2_eval_binding"
+MIPROV2_EVAL_BINDING_SCHEMA_VERSION = 1
+
 
 class Miprov2EvaluationExecutionPolicy(BaseModel):
     """Effect-specific, identity-bearing evaluator and provider controls."""
@@ -67,11 +77,49 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
             require_full_hash(getattr(self, field), field=field)
         return self
 
+    def model_post_init(self, _context: Any) -> None:
+        if not isinstance(self.provider_parameters, ImmutableJsonObject):
+            object.__setattr__(
+                self,
+                "provider_parameters",
+                ImmutableJsonObject(self.provider_parameters),
+            )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied.model_post_init(None)
+        return copied
+
+    def identity_payload(self) -> dict[str, Any]:
+        return {
+            "num_threads": self.num_threads,
+            "max_errors": self.max_errors,
+            "provide_traceback": self.provide_traceback,
+            "task_model_identity_hash": self.task_model_identity_hash,
+            "provider_execution_policy_hash": (
+                self.provider_execution_policy_hash
+            ),
+            "provider_parameters": self.provider_parameters.to_json(),
+            "rollout_id": self.rollout_id,
+            "copy_task_model": self.copy_task_model,
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
-            schema="whetstone.miprov2_evaluation_execution_policy",
-            schema_version=1,
-            payload=self.model_dump(mode="json"),
+            schema=MIPROV2_EVALUATION_EXECUTION_POLICY_SCHEMA,
+            schema_version=(
+                MIPROV2_EVALUATION_EXECUTION_POLICY_SCHEMA_VERSION
+            ),
+            payload=self.identity_payload(),
         )
 
 
@@ -111,6 +159,11 @@ def _require_canonical_eval_config(
         eval_config
     ):
         raise ValueError(f"{field} has a non-canonical Eval Config identity")
+    expected_reference = eval_config_reference(record)
+    if eval_config.record_ref != expected_reference.record_ref:
+        raise ValueError(
+            f"{field} record_ref does not address its exact record"
+        )
 
 
 def _canonical_sampling_config_identity(
@@ -214,11 +267,26 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
             )
         return self
 
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract. Exact refs
+        # and the nested policy use their canonical identity projections.
+        return {
+            "control_identity_hash": self.control_identity_hash,
+            "source_eval_config": self.source_eval_config.model_dump(
+                mode="json"
+            ),
+            "purpose": self.purpose,
+            "effect_identity_hash": self.effect_identity_hash,
+            "execution_policy": self.execution_policy.identity_payload(),
+            "task_batch_identities": list(self.task_batch_identities),
+            "repeat_count": self.repeat_count,
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
-            schema="whetstone.miprov2_eval_binding_request",
-            schema_version=1,
-            payload=self.model_dump(mode="json"),
+            schema=MIPROV2_EVAL_BINDING_REQUEST_SCHEMA,
+            schema_version=MIPROV2_EVAL_BINDING_REQUEST_SCHEMA_VERSION,
+            payload=self.identity_payload(),
         )
 
 
@@ -284,11 +352,22 @@ class Miprov2EvalConfigBinding(BaseModel):
             )
         return self
 
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract. Nested
+        # records and exact refs use their canonical JSON projections.
+        return {
+            "request": self.request.identity_payload(),
+            "task_set": self.task_set.model_dump(mode="json"),
+            "repeat_plan": self.repeat_plan.model_dump(mode="json"),
+            "sampling_config": self.sampling_config.model_dump(mode="json"),
+            "eval_config": self.eval_config.model_dump(mode="json"),
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
-            schema="whetstone.miprov2_eval_binding",
-            schema_version=1,
-            payload=self.model_dump(mode="json"),
+            schema=MIPROV2_EVAL_BINDING_SCHEMA,
+            schema_version=MIPROV2_EVAL_BINDING_SCHEMA_VERSION,
+            payload=self.identity_payload(),
         )
 
 
@@ -302,6 +381,12 @@ class Miprov2EvalConfigResolver(Protocol):
 
 
 __all__ = [
+    "MIPROV2_EVALUATION_EXECUTION_POLICY_SCHEMA",
+    "MIPROV2_EVALUATION_EXECUTION_POLICY_SCHEMA_VERSION",
+    "MIPROV2_EVAL_BINDING_REQUEST_SCHEMA",
+    "MIPROV2_EVAL_BINDING_REQUEST_SCHEMA_VERSION",
+    "MIPROV2_EVAL_BINDING_SCHEMA",
+    "MIPROV2_EVAL_BINDING_SCHEMA_VERSION",
     "Miprov2EvalConfigBinding",
     "Miprov2EvalConfigBindingRequest",
     "Miprov2EvalConfigResolver",

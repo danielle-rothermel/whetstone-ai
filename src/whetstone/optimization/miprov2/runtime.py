@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Any, Literal, Self, cast
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     StrictInt,
     StrictStr,
+    TypeAdapter,
+    field_validator,
     model_validator,
 )
 
 from whetstone.core.identity import (
+    ImmutableJsonObject,
     compute_identity_hash,
     require_full_hash,
 )
@@ -22,6 +27,7 @@ from whetstone.experiment.candidate import (
     CandidateRef,
     candidate_reference,
 )
+from whetstone.optimization.contracts import OptimizationRunRef
 from whetstone.optimization.miprov2.bootstrap import (
     BootstrapAttemptPlan,
     BootstrapCompilerState,
@@ -45,6 +51,7 @@ from whetstone.optimization.miprov2.control import (
     MIPROV2_STATE_SCHEMA,
     MIPROV2_STATE_SCHEMA_VERSION,
     Miprov2Control,
+    _deep_revalidate_model,
 )
 from whetstone.optimization.miprov2.demo import (
     ComponentDemoSequence,
@@ -107,6 +114,28 @@ Miprov2Phase = Literal[
     "complete",
     "failed",
 ]
+
+
+def _validate_component_field_order(
+    value: Mapping[StrictStr, Sequence[StrictStr]],
+) -> Mapping[StrictStr, Sequence[StrictStr]]:
+    for component_id, fields in value.items():
+        if not component_id:
+            raise ValueError("component field-order ID must not be empty")
+        ordered_fields = tuple(fields)
+        if not ordered_fields or any(not field for field in ordered_fields):
+            raise ValueError("component field-order names must not be empty")
+        if len(ordered_fields) != len(set(ordered_fields)):
+            raise ValueError("component field-order names must be unique")
+    return value
+
+
+type Miprov2ComponentFieldOrder = Annotated[
+    Mapping[StrictStr, Sequence[StrictStr]],
+    AfterValidator(_validate_component_field_order),
+]
+
+_COMPONENT_FIELD_ORDER_ADAPTER = TypeAdapter(Miprov2ComponentFieldOrder)
 
 
 @dataclass(frozen=True)
@@ -290,11 +319,40 @@ class Miprov2EvaluationSpec(BaseModel):
             )
         return self
 
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract.
+        return {
+            "run_id": self.run_id,
+            "ordinal": self.ordinal,
+            "purpose": self.purpose,
+            "candidate": self.candidate.model_dump(mode="json"),
+            "categorical_combination_identity_hash": (
+                self.categorical_combination_identity_hash
+            ),
+            "task_batch_identities": list(self.task_batch_identities),
+            "execution_policy": self.execution_policy.model_dump(mode="json"),
+            "suggestion": (
+                None
+                if self.suggestion is None
+                else self.suggestion.model_dump(mode="json")
+            ),
+            "promotion_candidate": (
+                None
+                if self.promotion_candidate is None
+                else self.promotion_candidate.model_dump(mode="json")
+            ),
+            "candidate_assembly": (
+                None
+                if self.candidate_assembly is None
+                else self.candidate_assembly.model_dump(mode="json")
+            ),
+        }
+
     def identity_hash(self) -> str:
         return compute_identity_hash(
             schema="whetstone.miprov2_evaluation_spec",
             schema_version=1,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
 
 
@@ -306,6 +364,7 @@ class Miprov2EffectBudget(BaseModel):
     bootstrap_rollouts: StrictInt
     proposal_calls: StrictInt
     evaluations: StrictInt
+    task_rows: StrictInt
 
     @model_validator(mode="after")
     def _validate_budget(self) -> Miprov2EffectBudget:
@@ -314,6 +373,7 @@ class Miprov2EffectBudget(BaseModel):
                 self.bootstrap_rollouts,
                 self.proposal_calls,
                 self.evaluations,
+                self.task_rows,
             )
             < 0
         ):
@@ -427,7 +487,7 @@ class Miprov2TerminalStats(BaseModel):
     completed_effects: tuple[Miprov2CompletedEffect, ...]
     instruction_pools: tuple[tuple[StrictStr, ...], ...]
     demo_candidates: tuple[ComponentDemoSet, ...] | None
-    effect_counts: dict[StrictStr, StrictInt]
+    effect_counts: ImmutableJsonObject
     trial_logs: tuple[Miprov2TrialLog, ...]
     cumulative_evaluation_calls: StrictInt
     score_data: tuple[Miprov2ScoreObservation, ...]
@@ -435,6 +495,28 @@ class Miprov2TerminalStats(BaseModel):
     candidate_programs: tuple[Miprov2ScoredCandidate, ...]
     prompt_model_total_calls: Literal[0] = 0
     total_calls: Literal[0] = 0
+
+    def model_post_init(self, _context: Any) -> None:
+        if not isinstance(self.effect_counts, ImmutableJsonObject):
+            object.__setattr__(
+                self,
+                "effect_counts",
+                ImmutableJsonObject(self.effect_counts),
+            )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        if deep:
+            payload = self.model_dump(mode="json")
+            payload.update(update or {})
+            return type(self).model_validate(payload)
+        copied = super().model_copy(update=update, deep=deep)
+        copied.model_post_init(None)
+        return copied
 
     @model_validator(mode="after")
     def _validate_stats(self) -> Miprov2TerminalStats:
@@ -537,15 +619,16 @@ class Miprov2State(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_name: Literal["whetstone.miprov2_runtime"] = MIPROV2_RUNTIME_SCHEMA
-    schema_version: Literal[1] = MIPROV2_RUNTIME_SCHEMA_VERSION
+    schema_version: Literal[4] = MIPROV2_RUNTIME_SCHEMA_VERSION
     run_id: StrictStr
+    run: OptimizationRunRef
     control: Miprov2Control
     bindings: Miprov2DurableBindings
     rng_checkpoint: Miprov2RngCheckpoint
     labeled_trainset: tuple[LabeledTaskDemo, ...]
     proposal_components: tuple[Miprov2PromptComponent, ...]
     proposal_trainset: tuple[Miprov2DatasetExample, ...]
-    component_field_order: dict[str, tuple[StrictStr, ...]]
+    component_field_order: ImmutableJsonObject
     input_data_identity_hash: StrictStr
     budget: Miprov2EffectBudget
 
@@ -574,10 +657,95 @@ class Miprov2State(BaseModel):
     completed_effects: tuple[Miprov2CompletedEffect, ...] = ()
     failure: StrictStr | None = None
 
+    @field_validator("component_field_order", mode="before")
+    @classmethod
+    def _normalize_component_field_order(
+        cls,
+        value: Any,
+    ) -> ImmutableJsonObject:
+        if isinstance(value, ImmutableJsonObject):
+            value = value.to_json()
+        elif isinstance(value, Mapping):
+            value = dict(value.items())
+        validated = _COMPONENT_FIELD_ORDER_ADAPTER.validate_python(
+            value,
+            strict=True,
+        )
+        return ImmutableJsonObject(
+            {
+                component_id: list(fields)
+                for component_id, fields in validated.items()
+            }
+        )
+
+    def model_post_init(self, _context: Any) -> None:
+        if not isinstance(self.component_field_order, ImmutableJsonObject):
+            object.__setattr__(
+                self,
+                "component_field_order",
+                type(self)._normalize_component_field_order(
+                    self.component_field_order
+                ),
+            )
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, Any] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        del deep
+        replacements = update or {}
+        for field_name in replacements:
+            field = type(self).model_fields.get(field_name)
+            if field is None:
+                raise ValueError(f"unknown MIPROv2 state field {field_name!r}")
+        values: dict[str, Any] = {}
+        for field_name in type(self).model_fields:
+            value = replacements.get(field_name, getattr(self, field_name))
+            if field_name == "component_field_order":
+                value = type(self)._normalize_component_field_order(value)
+            values[field_name] = value
+        copied = _deep_revalidate_model(type(self), values)
+        object.__setattr__(
+            copied,
+            "__pydantic_fields_set__",
+            self.__pydantic_fields_set__ | replacements.keys(),
+        )
+        return copied
+
+    @classmethod
+    def model_construct(
+        cls,
+        _fields_set: set[str] | None = None,
+        **values: Any,
+    ) -> Self:
+        """Validate construction and defensively freeze all containers."""
+
+        del _fields_set
+        if "component_field_order" in values:
+            values["component_field_order"] = (
+                cls._normalize_component_field_order(
+                    values["component_field_order"]
+                )
+            )
+        return _deep_revalidate_model(cls, values)
+
     @model_validator(mode="after")
     def _validate_state(self) -> Miprov2State:
         if not self.run_id:
             raise ValueError("MIPROv2 run_id cannot be empty")
+        if self.run.record.run_id != self.run_id:
+            raise ValueError("MIPROv2 run_id conflicts with the exact run")
+        if self.run.record.optimizer_config != self.control.reference():
+            raise ValueError("MIPROv2 run conflicts with resolved control")
+        if (
+            self.run.record.template_render_contract
+            != self.control.template_render_contract
+        ):
+            raise ValueError(
+                "MIPROv2 run render contract conflicts with control"
+            )
         if self.input_data_identity_hash != _input_data_identity(
             control=self.control,
             labeled_trainset=self.labeled_trainset,
@@ -618,6 +786,14 @@ class Miprov2State(BaseModel):
         ):
             raise ValueError(
                 "proposal components conflict with program layout"
+            )
+        if any(
+            component.template_render_contract
+            != self.control.template_render_contract
+            for component in self.proposal_components
+        ):
+            raise ValueError(
+                "proposal component render contracts conflict with the run"
             )
         if set(self.component_field_order) != set(component_ids):
             raise ValueError("component field order conflicts with layout")
@@ -742,6 +918,14 @@ class Miprov2State(BaseModel):
                 raise ValueError(
                     "pending proposal is not the canonical proposal replay"
                 )
+        if (
+            self.proposal_state is not None
+            and self.proposal_state.optimization_run_identity_hash
+            != self.run.identity_hash
+        ):
+            raise ValueError(
+                "proposal state belongs to another optimization run"
+            )
         if self.instruction_pools != replay.instruction_pools:
             raise ValueError(
                 "instruction pools are not the canonical proposal replay"
@@ -754,6 +938,7 @@ class Miprov2State(BaseModel):
             "bootstrap_rollouts",
             "proposal_calls",
             "evaluations",
+            "task_rows",
         ):
             if self.effect_counts[label] > getattr(self.budget, label):
                 raise ValueError("completed effects exceed the durable budget")
@@ -879,8 +1064,135 @@ class Miprov2State(BaseModel):
         return compute_identity_hash(
             schema=MIPROV2_RUNTIME_SCHEMA,
             schema_version=MIPROV2_RUNTIME_SCHEMA_VERSION,
-            payload=self.model_dump(mode="json"),
+            payload=self.identity_payload(),
         )
+
+    def identity_payload(self) -> dict[str, Any]:
+        # Persisted identity keys are an explicit wire contract. Never derive
+        # them by iterating over model fields.
+        return {
+            "schema_name": self.schema_name,
+            "schema_version": self.schema_version,
+            "run_id": self.run_id,
+            "run": self.run.model_dump(mode="json"),
+            "control": self.control.model_dump(mode="json"),
+            "bindings": self.bindings.model_dump(mode="json"),
+            "rng_checkpoint": self.rng_checkpoint.model_dump(mode="json"),
+            "labeled_trainset": [
+                item.model_dump(mode="json") for item in self.labeled_trainset
+            ],
+            "proposal_components": [
+                item.model_dump(mode="json")
+                for item in self.proposal_components
+            ],
+            "proposal_trainset": [
+                item.model_dump(mode="json") for item in self.proposal_trainset
+            ],
+            "component_field_order": self.component_field_order.to_json(),
+            "input_data_identity_hash": self.input_data_identity_hash,
+            "budget": self.budget.model_dump(mode="json"),
+            "phase": self.phase,
+            "bootstrap_plans": [
+                item.model_dump(mode="json") for item in self.bootstrap_plans
+            ],
+            "bootstrap_plan_index": self.bootstrap_plan_index,
+            "bootstrap_state": (
+                None
+                if self.bootstrap_state is None
+                else self.bootstrap_state.model_dump(mode="json")
+            ),
+            "demo_candidates": [
+                item.model_dump(mode="json") for item in self.demo_candidates
+            ],
+            "bootstrap_evidence": [
+                item.model_dump(mode="json")
+                for item in self.bootstrap_evidence
+            ],
+            "proposal_state": (
+                None
+                if self.proposal_state is None
+                else self.proposal_state.model_dump(mode="json")
+            ),
+            "instruction_pools": [
+                list(pool) for pool in self.instruction_pools
+            ],
+            "study_demo_candidates": (
+                None
+                if self.study_demo_candidates is None
+                else [
+                    item.model_dump(mode="json")
+                    for item in self.study_demo_candidates
+                ]
+            ),
+            "study_transcript": (
+                None
+                if self.study_transcript is None
+                else self.study_transcript.model_dump(mode="json")
+            ),
+            "pending_bootstrap": (
+                None
+                if self.pending_bootstrap is None
+                else self.pending_bootstrap.model_dump(mode="json")
+            ),
+            "pending_bootstrap_candidate": (
+                None
+                if self.pending_bootstrap_candidate is None
+                else self.pending_bootstrap_candidate.model_dump(mode="json")
+            ),
+            "pending_proposal": (
+                None
+                if self.pending_proposal is None
+                else self.pending_proposal.model_dump(mode="json")
+            ),
+            "pending_evaluation_spec": (
+                None
+                if self.pending_evaluation_spec is None
+                else self.pending_evaluation_spec.model_dump(mode="json")
+            ),
+            "pending_eval_binding_request": (
+                None
+                if self.pending_eval_binding_request is None
+                else self.pending_eval_binding_request.model_dump(mode="json")
+            ),
+            "resolved_eval_binding": (
+                None
+                if self.resolved_eval_binding is None
+                else self.resolved_eval_binding.model_dump(mode="json")
+            ),
+            "pending_evaluation": (
+                None
+                if self.pending_evaluation is None
+                else self.pending_evaluation.model_dump(mode="json")
+            ),
+            "pending_sample": (
+                None
+                if self.pending_sample is None
+                else self.pending_sample.model_dump(mode="json")
+            ),
+            "fully_evaluated_candidates": [
+                item.model_dump(mode="json")
+                for item in self.fully_evaluated_candidates
+            ],
+            "accepted_candidate": (
+                None
+                if self.accepted_candidate is None
+                else self.accepted_candidate.model_dump(mode="json")
+            ),
+            "accepted_candidate_ref": (
+                None
+                if self.accepted_candidate_ref is None
+                else self.accepted_candidate_ref.model_dump(mode="json")
+            ),
+            "terminal_result": (
+                None
+                if self.terminal_result is None
+                else self.terminal_result.model_dump(mode="json")
+            ),
+            "completed_effects": [
+                item.model_dump(mode="json") for item in self.completed_effects
+            ],
+            "failure": self.failure,
+        }
 
     @property
     def effect_counts(self) -> dict[str, int]:
@@ -935,7 +1247,7 @@ def _input_data_identity(
     labeled_trainset: tuple[LabeledTaskDemo, ...],
     proposal_components: tuple[Miprov2PromptComponent, ...],
     proposal_trainset: tuple[Miprov2DatasetExample, ...],
-    component_field_order: dict[str, tuple[str, ...]],
+    component_field_order: Mapping[str, object],
 ) -> str:
     return compute_identity_hash(
         schema="whetstone.miprov2_runtime_inputs",
@@ -952,7 +1264,7 @@ def _input_data_identity(
                 item.model_dump(mode="json") for item in proposal_trainset
             ],
             "component_field_order": {
-                component_id: list(fields)
+                component_id: list(cast("tuple[str, ...]", fields))
                 for component_id, fields in component_field_order.items()
             },
         },
@@ -1416,6 +1728,7 @@ def _canonical_runtime_rng(
             )
         proposal_replay = start_miprov2_proposal(
             bindings=state.proposal_state.bindings,
+            optimization_run_identity_hash=state.run.identity_hash,
             components=state.proposal_state.components,
             trainset=state.proposal_state.trainset,
             demo_candidates=state.proposal_state.demo_candidates,
@@ -1759,13 +2072,14 @@ def _materialize_bootstrap_teacher(
             base=source,
             candidate_id=f"miprov2-teacher-{identity[:24]}",
             components=components,
-            template_render_contract=state.control.template_render_contract,
+            run=state.run,
         )
     )
 
 
 def render_miprov2_candidate(
     *,
+    run: OptimizationRunRef,
     control: Miprov2Control,
     instruction_pools: tuple[tuple[str, ...], ...],
     demo_candidates: tuple[ComponentDemoSet, ...] | None,
@@ -1787,7 +2101,7 @@ def render_miprov2_candidate(
         base=control.base_candidate,
         candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
         components=rendering.model_dump(mode="json")["components"],
-        template_render_contract=control.template_render_contract,
+        run=run,
     )
 
 
@@ -1887,7 +2201,7 @@ class Miprov2Driver:
     def start(
         self,
         *,
-        run_id: str,
+        run: OptimizationRunRef,
         control: Miprov2Control,
         bindings: Miprov2DurableBindings,
         labeled_trainset: tuple[LabeledTaskDemo, ...],
@@ -1923,7 +2237,8 @@ class Miprov2Driver:
             zeroshot_opt=control.zeroshot_opt,
         )
         return Miprov2State(
-            run_id=run_id,
+            run_id=run.record.run_id,
+            run=run,
             control=control,
             bindings=bindings,
             rng_checkpoint=planned.rng_checkpoint,
@@ -1956,6 +2271,8 @@ class Miprov2Driver:
                 accepted_candidate=state.accepted_candidate,
             )
         if state.pending_eval_binding_request is not None:
+            if state.pending_eval_binding_request.purpose != "bootstrap":
+                self._require_budget(state, "evaluations")
             return Miprov2DriverPlan(
                 state=state,
                 kind="eval_config_binding",
@@ -2240,24 +2557,31 @@ class Miprov2Driver:
         self,
         state: Miprov2State,
     ) -> Miprov2DriverPlan:
-        while state.bootstrap_plan_index < len(state.bootstrap_plans):
-            plan = state.bootstrap_plans[state.bootstrap_plan_index]
+        plan_index = state.bootstrap_plan_index
+        compiler_state = state.bootstrap_state
+        demo_candidates = state.demo_candidates
+        while plan_index < len(state.bootstrap_plans):
+            plan = state.bootstrap_plans[plan_index]
             ordered = self._ordered_labeled_trainset(state, plan)
             if plan.kind is FewshotSeedKind.RESET:
                 demos = materialize_reset_demo_set(
                     plan=plan,
                     component_ids=state.control.component_ids,
                 )
-                state = self._finish_bootstrap_plan(state, demos)
+                plan_index += 1
+                compiler_state = None
+                demo_candidates = (*demo_candidates, demos)
                 continue
             if plan.kind is FewshotSeedKind.LABELS_ONLY:
                 demos = materialize_labels_only_demo_set(
                     plan=plan,
                     labeled_trainset=ordered,
                 )
-                state = self._finish_bootstrap_plan(state, demos)
+                plan_index += 1
+                compiler_state = None
+                demo_candidates = (*demo_candidates, demos)
                 continue
-            compiler = state.bootstrap_state or initial_compiler_state(plan)
+            compiler = compiler_state or initial_compiler_state(plan)
             attempt = next_bootstrap_attempt(plan, compiler)
             if attempt is None:
                 demos = materialize_bootstrap_demo_set(
@@ -2266,7 +2590,9 @@ class Miprov2Driver:
                     labeled_trainset=ordered,
                     component_ids=state.control.component_ids,
                 )
-                state = self._finish_bootstrap_plan(state, demos)
+                plan_index += 1
+                compiler_state = None
+                demo_candidates = (*demo_candidates, demos)
                 continue
             self._require_budget(state, "bootstrap_rollouts")
             binding_request = Miprov2EvalConfigBindingRequest(
@@ -2282,7 +2608,9 @@ class Miprov2Driver:
             )
             planned = state.model_copy(
                 update={
+                    "bootstrap_plan_index": plan_index,
                     "bootstrap_state": compiler,
+                    "demo_candidates": demo_candidates,
                     "pending_bootstrap": attempt,
                     "pending_bootstrap_candidate": (
                         _materialize_bootstrap_teacher(
@@ -2300,21 +2628,16 @@ class Miprov2Driver:
                 eval_config_binding=binding_request,
             )
         return self._plan_proposal(
-            state.model_copy(update={"phase": "proposal"})
-        )
-
-    def _finish_bootstrap_plan(
-        self,
-        state: Miprov2State,
-        demos: ComponentDemoSet,
-    ) -> Miprov2State:
-        return state.model_copy(
-            update={
-                "bootstrap_plan_index": state.bootstrap_plan_index + 1,
-                "bootstrap_state": None,
-                "pending_bootstrap": None,
-                "demo_candidates": (*state.demo_candidates, demos),
-            }
+            state.model_copy(
+                update={
+                    "phase": "proposal",
+                    "bootstrap_plan_index": plan_index,
+                    "bootstrap_state": None,
+                    "pending_bootstrap": None,
+                    "pending_bootstrap_candidate": None,
+                    "demo_candidates": demo_candidates,
+                }
+            )
         )
 
     def _plan_proposal(
@@ -2330,10 +2653,16 @@ class Miprov2Driver:
             bridged = proposal_candidates_from_demo_sets(
                 context,
                 components=state.proposal_components,
-                component_field_order=state.component_field_order,
+                component_field_order={
+                    component_id: cast("tuple[str, ...]", fields)
+                    for component_id, fields in (
+                        state.component_field_order.items()
+                    )
+                },
             )
             proposal_state = start_miprov2_proposal(
                 bindings=state.bindings,
+                optimization_run_identity_hash=state.run.identity_hash,
                 components=state.proposal_components,
                 trainset=state.proposal_trainset,
                 demo_candidates=bridged,
@@ -2478,8 +2807,9 @@ class Miprov2Driver:
             candidate_assembly=assembly,
         )
         return self._plan_evaluation_spec(
-            state.model_copy(update={"rng_checkpoint": checkpoint}),
+            state,
             spec,
+            rng_checkpoint=checkpoint,
         )
 
     def _plan_promotion(
@@ -2520,7 +2850,10 @@ class Miprov2Driver:
         self,
         state: Miprov2State,
         spec: Miprov2EvaluationSpec,
+        *,
+        rng_checkpoint: Miprov2RngCheckpoint | None = None,
     ) -> Miprov2DriverPlan:
+        self._require_budget(state, "evaluations")
         binding = state.resolved_eval_binding
         if binding is None:
             if spec.purpose == "miprov2_baseline":
@@ -2537,12 +2870,13 @@ class Miprov2Driver:
                 execution_policy=spec.execution_policy,
                 task_batch_identities=spec.task_batch_identities,
             )
-            planned = state.model_copy(
-                update={
-                    "pending_evaluation_spec": spec,
-                    "pending_eval_binding_request": request,
-                }
-            )
+            updates: dict[str, Any] = {
+                "pending_evaluation_spec": spec,
+                "pending_eval_binding_request": request,
+            }
+            if rng_checkpoint is not None:
+                updates["rng_checkpoint"] = rng_checkpoint
+            planned = state.model_copy(update=updates)
             return Miprov2DriverPlan(
                 state=planned,
                 kind="eval_config_binding",
@@ -2574,12 +2908,13 @@ class Miprov2Driver:
             candidate_assembly=spec.candidate_assembly,
         )
         self._require_budget(state, "evaluations")
-        planned = state.model_copy(
-            update={
-                "pending_evaluation_spec": spec,
-                "pending_evaluation": effect,
-            }
-        )
+        updates = {
+            "pending_evaluation_spec": spec,
+            "pending_evaluation": effect,
+        }
+        if rng_checkpoint is not None:
+            updates["rng_checkpoint"] = rng_checkpoint
+        planned = state.model_copy(update=updates)
         kind: Miprov2EffectKind
         if spec.purpose == "miprov2_baseline":
             kind = "baseline_evaluation"
@@ -2612,13 +2947,13 @@ class Miprov2Driver:
             validation_task_identities=state.control.valset_task_identities,
             validation_eval_source=state.control.validation_eval_source,
             reward_policy_hash=state.control.reward_policy_hash,
-            control_identity_hash=state.control.identity_hash(),
+            optimizer_config=state.control.reference(),
             prompt_adapter_identity_hash=(
                 state.control.prompt_adapter_identity_hash
             ),
             expected_base_candidate=state.control.base_candidate,
             program_layout=state.control.program_layout,
-            template_render_contract=state.control.template_render_contract,
+            run=state.run,
         )
 
     def _space(self, state: Miprov2State) -> Miprov2ParameterSpace:
@@ -2663,7 +2998,7 @@ class Miprov2Driver:
             base=state.control.base_candidate,
             candidate_id=f"miprov2-{rendering.identity_hash()[:24]}",
             components=rendering.model_dump(mode="json")["components"],
-            template_render_contract=(state.control.template_render_contract),
+            run=state.run,
         )
         program_identity_hash = compute_identity_hash(
             schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
@@ -2680,13 +3015,13 @@ class Miprov2Driver:
             candidate=candidate_reference(candidate),
             program_identity_hash=program_identity_hash,
             rendering=rendering,
-            control_identity_hash=state.control.identity_hash(),
+            optimizer_config=state.control.reference(),
             base_candidate=state.control.base_candidate,
             program_layout=state.control.program_layout,
             prompt_adapter_identity_hash=(
                 state.control.prompt_adapter_identity_hash
             ),
-            template_render_contract=(state.control.template_render_contract),
+            run=state.run,
         )
 
     @staticmethod
