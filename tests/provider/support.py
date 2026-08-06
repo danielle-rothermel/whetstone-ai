@@ -7,13 +7,13 @@ from dr_providers import (
     MessageRole,
     PromptMessage,
     ProviderCallRequest,
+    ProviderHttpRequestEvidence,
     ProviderInvocationEvidence,
     ProviderKind,
     ProviderTransportFailure,
     ProviderTransportOutcome,
     ProviderTransportPolicy,
     ProviderTransportResponse,
-    RawHttpRequest,
     Transcript,
     openrouter_chat_config,
     policy_for,
@@ -70,7 +70,7 @@ def build_execution_policy(
 def response_outcome(*, text: str) -> ProviderTransportResponse:
     return ProviderTransportResponse(
         text=text,
-        raw_body={"choices": [{"message": {"content": text}}]},
+        response_body={"choices": [{"message": {"content": text}}]},
         response_id="resp-1",
         model="test-model",
         finish_reason="stop",
@@ -88,8 +88,8 @@ def failure_outcome(
         message=message,
         retryable=failure_class
         in (FailureClass.TRANSIENT, FailureClass.RATE_LIMITED),
-        raw_request={"model": "test-model"},
-        raw_response_body={"error": message},
+        request_body={"model": "test-model"},
+        response_body={"error": message},
         status_code=status_code,
     )
 
@@ -100,7 +100,7 @@ def build_evidence(
     policy: ProviderTransportPolicy,
     outcome: ProviderTransportOutcome,
 ) -> ProviderInvocationEvidence:
-    raw_request = RawHttpRequest.build(
+    http_request = ProviderHttpRequestEvidence.build(
         url="https://example.test/v1/chat/completions",
         headers={"Authorization": "Bearer test-key", "content-type": "json"},
         body={"model": "test-model"},
@@ -108,7 +108,7 @@ def build_evidence(
     return ProviderInvocationEvidence.build(
         request=request,
         policy=policy,
-        raw_request=raw_request,
+        http_request=http_request,
         outcome=outcome,
     )
 

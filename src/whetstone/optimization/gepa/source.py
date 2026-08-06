@@ -3,10 +3,11 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import importlib.util
-import json
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
+
+from dr_serialize import decode_strict_json_bytes
 
 from whetstone.core.identity import compute_identity_hash
 
@@ -38,7 +39,15 @@ def load_gepa_source_manifest() -> dict[str, Any]:
     resource = resources.files("whetstone.optimization.gepa").joinpath(
         _MANIFEST_RESOURCE
     )
-    manifest = json.loads(resource.read_text(encoding="utf-8"))
+    raw = resource.read_bytes()
+    manifest = cast(
+        dict[str, Any],
+        decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
+        ),
+    )
     if manifest.get("schema") != GEPA_SOURCE_MANIFEST_SCHEMA:
         raise GepaSourceMismatchError("GEPA source manifest schema drift")
     if manifest.get("schema_version") != GEPA_SOURCE_MANIFEST_SCHEMA_VERSION:

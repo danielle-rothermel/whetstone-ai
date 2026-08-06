@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from dr_code.eval import AggregationStatus
 
 from tests.envs import support as env_support
 from tests.envs.support import (
@@ -26,6 +25,7 @@ from tests.evaluation.drivers.support import (
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.rollout_definition import PromptInputError
+from whetstone.evaluation import AggregationStatus
 from whetstone.evaluation.drivers.internal import (
     InternalRowOutcome,
     InternalRowRequest,
@@ -324,7 +324,7 @@ def test_internal_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "f40bb1bb5488c3165fa714f87498291ab2a6abc487434a7d6b2967cc978ff583"
+        "b4268cbfd102d07bf950d93000bac93aa5c3e6c0da11f836d97158a99240bb23"
     )
 
 

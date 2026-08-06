@@ -5,7 +5,12 @@ from inspect import Parameter, signature
 from typing import cast
 
 import pytest
-from dr_code.eval import (
+from pydantic import JsonValue
+
+import whetstone.evaluation.code as code_eval
+from tests.envs.support import tiny_experiment
+from whetstone.core.identity import typed_ref_for_record
+from whetstone.evaluation import (
     AggregationConfig,
     AggregationOutput,
     AggregationStatus,
@@ -21,11 +26,6 @@ from dr_code.eval import (
     SelectionRule,
     TaskSet,
 )
-from pydantic import JsonValue
-
-import whetstone.evaluation.code as code_eval
-from tests.envs.support import tiny_experiment
-from whetstone.core.identity import typed_ref_for_record
 from whetstone.evaluation.code import (
     CompletenessPolicy,
     EvaluationMatrixPlan,
@@ -55,12 +55,12 @@ def _procedure_config() -> EvaluationProcedureConfig:
         steps=(
             PreprocessingStepBinding(instance_name="all", step="return_all"),
         ),
-    ).materialize()
+    ).materialize(resolved_steps=(("all", "return_all", "1"),))
     metric = MetricExtractionDefinition(
         definition_id="test.metric",
         version="1",
         questions=(MetricQuestionBinding(metric="code_leakage", on="output"),),
-    ).materialize()
+    ).materialize(resolved_operators=(("code_leakage", "1"),))
     return EvaluationProcedureDefinition(
         definition_id="test.procedure",
         version="1",

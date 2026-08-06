@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import pytest
-from dr_code.eval import Applicability, MetricFact, Score
 
 from whetstone.envs.oracle_operator import (
     ENV_EXACT_MATCH_NAME,
     ENV_EXACT_MATCH_UNIT,
     ENV_ORACLE_OPERATOR_NAME,
+    ENV_ORACLE_OPERATOR_VERSION,
     env_exact_match_fact,
     env_exact_match_score,
 )
-from whetstone.envs.procedure import env_procedure_config
+from whetstone.envs.procedure import (
+    env_metric_extraction_config,
+    env_procedure_config,
+)
 from whetstone.envs.registry import ENV_NAMES, env_spec
+from whetstone.evaluation import Applicability, MetricFact, Score
 
 _PROC_HASH = "a" * 64
 
@@ -178,7 +182,8 @@ def test_procedure_identity_is_env_distinct(env_name: str) -> None:
     assert proc.config_identity_hash not in others
 
 
-def test_operator_is_not_a_dr_code_registry_operator() -> None:
-    from dr_code.metrics.registry import REGISTRY
-
-    assert ENV_ORACLE_OPERATOR_NAME not in REGISTRY
+def test_operator_version_is_resolved_explicitly() -> None:
+    config = env_metric_extraction_config(env_spec(ENV_NAMES[0]))
+    assert config.resolved_operator_versions == (
+        (ENV_ORACLE_OPERATOR_NAME, ENV_ORACLE_OPERATOR_VERSION),
+    )

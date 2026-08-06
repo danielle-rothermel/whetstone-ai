@@ -15,9 +15,11 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
+from dr_serialize import StrictJsonDecodeError
 from pydantic import JsonValue, ValidationError
 
 import whetstone.execution.fanout as fanout_module
+import whetstone.execution.process_worker as process_worker_module
 from tests.execution.process_signals import ProcessSignals
 from whetstone.execution.fanout import (
     CallSpec,
@@ -369,11 +371,16 @@ def test_process_dispatch_marker_pins_json_contract_and_validation() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [b"{}", b'{"schema":"first","schema":"second"}', b'{"x":NaN}', b"\xff"],
+)
 def test_active_worker_rejects_any_visible_invalid_dispatch_marker(
     tmp_path: Path,
+    payload: bytes,
 ) -> None:
     dispatch_path = tmp_path / "dispatch.json"
-    dispatch_path.write_text("{}", encoding="utf-8")
+    dispatch_path.write_bytes(payload)
     process = fanout_module._ActiveProcess(
         index=0,
         spec=CallSpec(
@@ -394,6 +401,53 @@ def test_active_worker_rejects_any_visible_invalid_dispatch_marker(
 
     with pytest.raises(ProcessWorkerError, match="invalid dispatch marker"):
         process.refresh_dispatch_marker(required=False)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b'{"schema":"first","schema":"second"}', b'{"x":NaN}', b"\xff"],
+)
+def test_worker_result_rejects_non_strict_json(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    result_path = tmp_path / "result.json"
+    result_path.write_bytes(payload)
+    process = fanout_module._ActiveProcess(
+        index=0,
+        spec=CallSpec(
+            key="worker",
+            job=_job("return_payload", None),
+            decode=_identity,
+            deadline_seconds=5.0,
+        ),
+        process=cast(subprocess.Popen[bytes], object()),
+        directory=tmp_path,
+        result_path=result_path,
+        stderr_path=tmp_path / "stderr.log",
+        dispatch_path=tmp_path / "dispatch.json",
+        lifetime_writer=None,
+        guardian_reader=None,
+        start_writer=None,
+    )
+
+    with pytest.raises(ProcessWorkerError, match="invalid result envelope"):
+        fanout_module._read_worker_result(process)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b'{"schema":"first","schema":"second"}', b'{"x":NaN}', b"\xff"],
+)
+def test_process_job_rejects_non_strict_json(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    path = tmp_path / "job.json"
+    path.write_bytes(payload)
+
+    with pytest.raises(StrictJsonDecodeError):
+        process_worker_module._load_job(path)
 
 
 @pytest.mark.process_integration

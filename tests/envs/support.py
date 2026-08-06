@@ -6,11 +6,11 @@ from dataclasses import dataclass, field
 from dr_code.humaneval import HumanEvalTask
 from dr_providers import (
     ProviderCallRequest,
+    ProviderHttpRequestEvidence,
     ProviderInvocationEvidence,
     ProviderKind,
     ProviderTransportPolicy,
     ProviderTransportResponse,
-    RawHttpRequest,
     policy_for,
 )
 from pydantic import BaseModel, JsonValue
@@ -173,7 +173,7 @@ def execution_policy(*, max_attempts: int = 1) -> ProviderExecutionPolicy:
 def _response(text: str) -> ProviderTransportResponse:
     return ProviderTransportResponse(
         text=text,
-        raw_body={"choices": [{"message": {"content": text}}]},
+        response_body={"choices": [{"message": {"content": text}}]},
         response_id="resp-1",
         model="test-model",
         finish_reason="stop",
@@ -196,7 +196,7 @@ class FakeTransport:
     ) -> ProviderInvocationEvidence:
         self.served.append(request)
         text = self.reply(_prompt_of(request))
-        raw_request = RawHttpRequest.build(
+        http_request = ProviderHttpRequestEvidence.build(
             url="https://example.test/v1/chat/completions",
             headers={"Authorization": "Bearer k", "content-type": "json"},
             body={"model": "test-model"},
@@ -204,7 +204,7 @@ class FakeTransport:
         return ProviderInvocationEvidence.build(
             request=request,
             policy=self.policy,
-            raw_request=raw_request,
+            http_request=http_request,
             outcome=_response(text),
         )
 

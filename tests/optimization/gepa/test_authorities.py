@@ -129,7 +129,7 @@ def test_whole_call_evidence_boundary_literals_are_pinned(tmp_path) -> None:
 
     assert GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY == "whole_call"
     assert GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA == (
-        "whetstone.gepa.proposal_provider_attempt"
+        "whetstone.gepa.proposal_provider_attempt/v2"
     )
     store = ObjectStore(SqliteBackend(tmp_path / "whole-call.sqlite"))
     authority = cast(Any, SimpleNamespace(_store=store))

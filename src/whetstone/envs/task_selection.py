@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 TASK_SELECTION_SCHEMA = "whetstone.run.task_selection/v1"
@@ -123,14 +124,21 @@ def parse_task_split_manifest(
     """Parse and validate manifest JSON or an already-decoded mapping."""
     try:
         if isinstance(payload, bytes | str):
-            raw = json.loads(payload)
+            raw_bytes = (
+                payload if isinstance(payload, bytes) else payload.encode()
+            )
+            raw = decode_strict_json_bytes(
+                raw_bytes,
+                max_bytes=len(raw_bytes),
+                max_depth=len(raw_bytes),
+            )
         elif isinstance(payload, Mapping):
             raw = dict(payload)
         else:
             raise TaskSplitManifestError(
                 "task-selection manifest must be JSON or a mapping"
             )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeEncodeError, StrictJsonDecodeError) as exc:
         raise TaskSplitManifestError(
             "task-selection manifest is not valid JSON"
         ) from exc

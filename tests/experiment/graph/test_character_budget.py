@@ -49,7 +49,7 @@ def _graph_with_budget(ratio: float):
         ),
         "evaluate": eval_variable_assignment(
             evaluation_procedure_config_schema=(
-                "dr_code.evaluation_procedure.config"
+                "whetstone.evaluation_procedure.config"
             ),
             evaluation_procedure_config_hash=proc,
         ),

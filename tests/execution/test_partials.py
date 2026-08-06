@@ -301,6 +301,22 @@ def test_recomputed_checksum_validates_content_but_not_authenticity(
     assert [record.score for record in log.load()] == [1.0]
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [b'{"schema":"first","schema":"second"}', b'{"score":NaN}', b"\xff"],
+)
+def test_partial_frames_reject_non_strict_json(
+    tmp_path: Path,
+    raw: bytes,
+) -> None:
+    with pytest.raises(ValueError, match="invalid partial JSON"):
+        partials_module._decode_frame(
+            raw,
+            path=tmp_path / "entry.json",
+            line_number=1,
+        )
+
+
 def test_unrelated_append_does_not_bless_corrupt_record(
     tmp_path: Path,
 ) -> None:

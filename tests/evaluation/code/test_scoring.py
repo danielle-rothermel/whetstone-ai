@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import zstandard
-from dr_code.eval import (
+
+from whetstone.evaluation import (
     Applicability,
     CompressionReferenceArtifact,
 )
-
 from whetstone.evaluation.code import (
     COMPRESSED_DESCRIPTION_LENGTH_NAME,
     COMPRESSION_RATIO_NAME,

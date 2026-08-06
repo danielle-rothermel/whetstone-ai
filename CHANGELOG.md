@@ -25,6 +25,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Launch the sandbox-wrapped Codex command through pinned `dr-exec` typed
+  `PROCESS_BOUNDARY_ONLY` execution with caller-owned durable run records.
+- Own generic evaluation configuration, planning, aggregation, measurement,
+  compression, and ED1M dataset contracts in Whetstone; use released
+  `dr-code` HumanEval/trace APIs and explicit `dr-exec` executors.
+- Pin the released graph, serialization, and storage foundations; publish
+  optimization traces atomically and admit persisted JSON only through the
+  strict decoder boundary.
+- Adopt the released provider evidence identities and version affected
+  Whetstone provider-result persistence schemas.
 - Reorganize production and test packages around the canonical core,
   experiment, environment, provider, execution, evaluation, optimization, and
   coordination boundaries, with a hard cutover to the new imports.

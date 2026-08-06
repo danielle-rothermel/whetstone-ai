@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from dr_code.eval import (
+from whetstone.core.identity import (
+    TypedRef,
+    require_full_hash,
+    typed_ref_for_record,
+)
+from whetstone.evaluation import (
     AggregationConfig,
     AggregationDefinition,
     AggregationInput,
@@ -15,12 +20,6 @@ from dr_code.eval import (
     TaskSet,
     VariableSpec,
     aggregate,
-)
-
-from whetstone.core.identity import (
-    TypedRef,
-    require_full_hash,
-    typed_ref_for_record,
 )
 
 # Persisted-format contract for RolloutAggregate. Exact wire fields are pinned
@@ -45,7 +44,8 @@ class RowPolicy(StrEnum):
 class CompletenessPolicy:
     """A declared missing-data policy with an optional bounded skip tolerance.
 
-    ``row_policy`` is the dr-code ``missing_data`` rule. ``max_skip_fraction``
+    ``row_policy`` is the aggregation ``missing_data`` rule.
+    ``max_skip_fraction``
     is the DECLARED completeness tolerance: under ``SKIP`` the aggregate is
     only certified when the fraction of skipped (missing + failed + invalid)
     rows over the complete planned matrix is at or below this bound; beyond it
@@ -92,7 +92,7 @@ class CompletenessPolicy:
         """Whether ``skipped`` of ``planned`` rows is within the bound.
 
         Only meaningful under ``SKIP``; under ``PROPAGATE`` any skip is
-        already fatal to the scalar via the dr-code reduction, so this is not
+        already fatal to the scalar via the reduction, so this is not
         consulted.
         """
         if planned <= 0:
@@ -125,7 +125,7 @@ class EvaluationMatrixPlan:
         for field, value, expected_type in expected_types:
             if not isinstance(value, expected_type):
                 raise TypeError(
-                    f"{field} must be a dr-code {expected_type.__name__}"
+                    f"{field} must be a Whetstone {expected_type.__name__}"
                 )
 
         if (
@@ -217,7 +217,7 @@ class RowValue:
         return self.value is not None
 
     def to_aggregation_input(self) -> AggregationInput:
-        """Project onto a dr-code ``AggregationInput``.
+        """Project onto an ``AggregationInput``.
 
         A present row contributes its value (applicable, present). A missing
         or failed row is applicable-but-absent (``value=None``), so a
@@ -263,7 +263,7 @@ class TaskRows:
 class RolloutAggregate:
     """A provenance-bearing Rollout Aggregate.
 
-    Binds a pure dr-code :class:`AggregationOutput` to the aggregate identity
+    Binds a pure :class:`AggregationOutput` to the aggregate identity
     ``(graph_hash, eval_config_hash)``, the complete planned matrix
     (``task_count`` by ``repeat_count``), and the stated Evaluation Binding
     hash. The numeric reduction stays in the pure ``aggregation_output``;
@@ -277,7 +277,7 @@ class RolloutAggregate:
     #: Complete planned matrix shape.
     task_count: int
     repeat_count: int
-    #: The pure dr-code output (provenance-free).
+    #: The pure aggregation output (provenance-free).
     aggregation_output: AggregationOutput
     #: Explicit accounting so no row is silently dropped.
     rows_present: int
@@ -368,7 +368,7 @@ def tolerance_variable_spec() -> VariableSpec:
 def aggregation_definition(definition_id: str) -> AggregationDefinition:
     """An Aggregation Definition that additionally declares the skip tolerance.
 
-    The base dr-code definition declares reduction / missing_data /
+    The base definition declares reduction / missing_data /
     zero_denominator; this appends the identity-bearing ``max_skip_fraction``
     Variable so a declared completeness tolerance changes the config identity.
     """
@@ -429,7 +429,7 @@ def enforce_skip_tolerance(
 ) -> AggregationOutput:
     """Force ``MISSING_DATA`` when SKIP exceeds the declared skip tolerance.
 
-    Under ``SKIP`` the dr-code reduction happily certifies a value over the
+    Under ``SKIP`` the reduction happily certifies a value over the
     surviving rows no matter how many were skipped; the DECLARED completeness
     tolerance bounds that. When the skipped fraction exceeds
     ``max_skip_fraction`` the arm is out of tolerance and its scalar is set to

@@ -138,7 +138,7 @@ def test_exact_batch_uses_identical_prompt_and_temperature() -> None:
 def test_preserves_provider_response_usage_cost_and_attempt_evidence() -> None:
     response = ProviderTransportResponse(
         text="one instruction",
-        raw_body={"id": "resp-1", "output": "one instruction"},
+        response_body={"id": "resp-1", "output": "one instruction"},
         response_id="resp-1",
         model="proposal-model",
         finish_reason="stop",
@@ -200,7 +200,7 @@ def test_invalid_generation_is_an_explicit_failed_slot_not_an_underfill() -> (
 def test_rejected_response_retains_accounting_and_failure_evidence() -> None:
     response = ProviderTransportResponse(
         text="   ",
-        raw_body={"id": "rejected-1", "output": "   "},
+        response_body={"id": "rejected-1", "output": "   "},
         response_id="rejected-1",
         model="proposal-model",
         finish_reason="stop",

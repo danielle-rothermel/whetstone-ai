@@ -3,6 +3,7 @@ from __future__ import annotations
 import keyword
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dr_code.humaneval import HumanEvalTask
 from dr_graph import GraphConfig, GraphDefinition, graph_hash
@@ -354,10 +355,8 @@ class D1Experiment(EnvExperiment):
     rename_token: str = D1_DEFAULT_RENAME_TOKEN
     dataset_revision: str = ""
     #: The injectable code scorer (raw_submission, task) -> CodeScore. The
-    #: production injection runs candidate code in a LOCAL, NON-ISOLATED
-    #: subprocess (``dr_code.execution.run_python_subprocess``); tests/dry-runs
-    #: inject a fast no-subprocess scorer. Execution isolation is a
-    #: runner-layer concern, not this layer's.
+    #: production injection runs candidate code through the caller's explicit
+    #: dr-exec executor; tests may inject a controlled scorer.
     scorer: Callable[..., CodeScore] | None = None
     #: Per-Instance-id parsed HumanEval task (for the frozen input-arm render +
     #: the renamed-arm scoring task); empty for a bare shape.
@@ -374,7 +373,7 @@ def build_d1_experiment(
     input_arm: str = "original",
     rename_token: str = D1_DEFAULT_RENAME_TOKEN,
     scorer: Callable[..., CodeScore] | None = None,
-    prefer_snapshot: bool = True,
+    snapshot_path: Path | None = None,
     limit: int | None = None,
     internal_n: int | None = None,
     official_n: int | None = None,
@@ -422,7 +421,7 @@ def build_d1_experiment(
     pool = (
         tasks
         if tasks is not None
-        else load_ed1_tasks(prefer_snapshot=prefer_snapshot, limit=limit)
+        else load_ed1_tasks(snapshot_path=snapshot_path, limit=limit)
     )
     if exclude_task_ids:
         pool = tuple(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 
+from dr_serialize import decode_strict_json_bytes
 from dr_store import ObjectStore, SqliteBackend
 
 from whetstone.core.effects.authority import (
@@ -32,18 +33,14 @@ def build_server_from_env(
     env = environ if environ is not None else dict(os.environ)
     sqlite_path = env[McpEnvironmentKey.SQLITE_PATH]
     store = ObjectStore(SqliteBackend(sqlite_path))
-    tool_config = ToolConfig.model_validate_json(
-        env[McpEnvironmentKey.TOOL_CONFIG]
-    )
-    binding = ToolCapacityBinding.model_validate_json(
-        env[McpEnvironmentKey.CAPACITY_BINDING]
-    )
-    runtime = EvaluationRuntimeConfig.model_validate_json(
-        env[McpEnvironmentKey.RUNTIME_CONFIG]
-    )
-    reward_policy = RewardPolicy.model_validate_json(
-        env[McpEnvironmentKey.REWARD_POLICY]
-    )
+    tool_config_raw = _strict_env_json(env[McpEnvironmentKey.TOOL_CONFIG])
+    tool_config = ToolConfig.model_validate_json(tool_config_raw)
+    binding_raw = _strict_env_json(env[McpEnvironmentKey.CAPACITY_BINDING])
+    binding = ToolCapacityBinding.model_validate_json(binding_raw)
+    runtime_raw = _strict_env_json(env[McpEnvironmentKey.RUNTIME_CONFIG])
+    runtime = EvaluationRuntimeConfig.model_validate_json(runtime_raw)
+    reward_policy_raw = _strict_env_json(env[McpEnvironmentKey.REWARD_POLICY])
+    reward_policy = RewardPolicy.model_validate_json(reward_policy_raw)
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")
@@ -67,6 +64,16 @@ def build_server_from_env(
     return EvaluateCandidateServer(
         handle=executor.runtime_handle(tool_config, tool_store, binding)
     )
+
+
+def _strict_env_json(raw: str) -> bytes:
+    encoded = raw.encode()
+    decode_strict_json_bytes(
+        encoded,
+        max_bytes=len(encoded),
+        max_depth=len(encoded),
+    )
+    return encoded
 
 
 def main() -> None:

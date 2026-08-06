@@ -5,6 +5,7 @@ from typing import Any
 import pydantic
 import pytest
 from dr_serialize import (
+    CANONICAL_JSON_MAX_CONTAINER_DEPTH,
     JsonEncodeError,
     MaxDepthExceededError,
     ModelDumpError,
@@ -49,7 +50,7 @@ def test_ensure_recordable_wraps_encode_error() -> None:
 def test_ensure_recordable_wraps_depth_error() -> None:
     nested: list[Any] = []
     current: list[Any] = nested
-    for _ in range(101):
+    for _ in range(CANONICAL_JSON_MAX_CONTAINER_DEPTH + 1):
         inner: list[Any] = []
         current.append(inner)
         current = inner

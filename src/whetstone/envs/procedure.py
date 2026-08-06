@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from dr_code.eval import (
+from whetstone.envs.oracle_operator import (
+    ENV_EXACT_MATCH_NAME,
+    ENV_ORACLE_OPERATOR_NAME,
+    ENV_ORACLE_OPERATOR_VERSION,
+)
+from whetstone.envs.registry import EnvSpec
+from whetstone.evaluation import (
+    SCHEMA_EVALUATION_PROCEDURE_CONFIG,
     EvaluationProcedureConfig,
     EvaluationProcedureDefinition,
     MetricExtractionConfig,
@@ -9,16 +16,9 @@ from dr_code.eval import (
     PreprocessingDefinition,
 )
 
-from whetstone.envs.oracle_operator import (
-    ENV_EXACT_MATCH_NAME,
-    ENV_ORACLE_OPERATOR_NAME,
-    ENV_ORACLE_OPERATOR_VERSION,
-)
-from whetstone.envs.registry import EnvSpec
-
-#: The dr-code Evaluation Procedure Config schema name, referenced by the
+#: The Whetstone Evaluation Procedure Config schema name, referenced by the
 #: Eval Node's static Variable typed reference.
-EVALUATION_PROCEDURE_CONFIG_SCHEMA = "dr_code.evaluation_procedure.config"
+EVALUATION_PROCEDURE_CONFIG_SCHEMA = SCHEMA_EVALUATION_PROCEDURE_CONFIG
 
 _DEFINITION_VERSION = "1"
 #: The Metric Question keys onto the LLM Call Node's generation output.
@@ -29,8 +29,8 @@ def env_metric_extraction_config(env: EnvSpec) -> MetricExtractionConfig:
     """The env's Metric Extraction Config (folds in the oracle wiring).
 
     One Metric Question -- ``env_exact_match`` on the generation -- whose
-    settings name the env and its oracle entry point, built via dr-code's
-    sole-owner constructor with the whetstone operator's explicit resolved
+    settings name the env and its oracle entry point, built via Whetstone's
+    constructor with the operator's explicit resolved
     version (the operator is whetstone-owned, not registry-resolved).
     """
     definition = MetricExtractionDefinition(

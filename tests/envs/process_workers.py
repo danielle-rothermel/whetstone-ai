@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import partial
+
 from pydantic import JsonValue
 
 
@@ -59,6 +61,7 @@ def drive_internal_success(payload: JsonValue) -> JsonValue:
 
 def drive_d1_success(payload: JsonValue) -> JsonValue:
     from tests.envs.support import FakeTransport, constant_reply
+    from tests.execution.fake_python import local_python_executor
     from whetstone.envs.d1 import build_d1_experiment
     from whetstone.envs.ed1 import Ed1Instance
     from whetstone.envs.ed1_scoring import score_ed1_submission
@@ -91,7 +94,10 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
         provider_call_config=request.provider_call_config,
         execution_policy=request.execution_policy,
         transport=FakeTransport(constant_reply(task.ground_truth_code)),
-        scorer=score_ed1_submission,
+        scorer=partial(
+            score_ed1_submission,
+            executor=local_python_executor(),
+        ),
         logical_call_id=request.logical_call_id,
         repeat_index=request.repeat_index,
         drive_ordinal=request.drive_ordinal,
@@ -119,12 +125,13 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
     from dr_code.humaneval import HumanEvalTask
     from dr_providers import (
         FailureClass,
+        ProviderHttpRequestEvidence,
         ProviderInvocationEvidence,
         ProviderTransportFailure,
-        RawHttpRequest,
     )
 
     from tests.envs.support import FakeTransport
+    from tests.execution.fake_python import local_python_executor
     from whetstone.envs.ed1 import (
         DECODER_TEMPLATE,
         Ed1Experiment,
@@ -134,6 +141,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         humaneval_task_from_instance,
     )
     from whetstone.envs.ed1_scoring import score_ed1_submission
+    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
     from whetstone.evaluation.drivers.ed1 import (
         Ed1RowRequest,
         Ed1RowResult,
@@ -204,7 +212,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
     if transient_first and request.drive_ordinal == 0:
 
         def transient_transport(provider_request):
-            raw_request = RawHttpRequest.build(
+            http_request = ProviderHttpRequestEvidence.build(
                 url="https://example.test/v1/chat/completions",
                 headers={"content-type": "application/json"},
                 body={"model": "test-model"},
@@ -212,7 +220,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
             return ProviderInvocationEvidence.build(
                 request=provider_request,
                 policy=request.execution_policy.transport_policy,
-                raw_request=raw_request,
+                http_request=http_request,
                 outcome=ProviderTransportFailure(
                     failure_class=FailureClass.TRANSIENT,
                     code="transport_error",
@@ -223,6 +231,14 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
 
         transport = transient_transport
 
+    scorer = partial(
+        (
+            score_ed1m_reconstruction
+            if mutant is not None
+            else score_ed1_submission
+        ),
+        executor=local_python_executor(),
+    )
     outcome = drive_ed1_row(
         experiment=experiment,
         candidate_template=request.candidate_template,
@@ -230,7 +246,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         provider_call_config=request.provider_call_config,
         execution_policy=request.execution_policy,
         transport=transport,
-        scorer=score_ed1_submission,
+        scorer=scorer,
         logical_call_id=request.logical_call_id,
         repeat_index=request.repeat_index,
         drive_ordinal=request.drive_ordinal,

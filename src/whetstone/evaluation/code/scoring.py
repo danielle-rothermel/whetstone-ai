@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import zstandard
-from dr_code.eval import (
+
+from whetstone.evaluation import (
     Applicability,
     CompressionReferenceArtifact,
     MetricFact,
@@ -59,8 +60,8 @@ def compression_ratio_value(
 ) -> float | None:
     """The Compression Ratio value, or ``None`` for a zero denominator.
 
-    Delegates the denominator handling to dr-code's generic
-    ``compression_ratio``: a zero-length reference returns the explicit
+    Delegates denominator handling to the generic ``compression_ratio``: a
+    zero-length reference returns the explicit
     ``ZERO_DENOMINATOR`` sentinel (``None``), never coerced to ``0.0``/``1.0``.
     """
 

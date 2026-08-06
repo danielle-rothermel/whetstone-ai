@@ -3,12 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Literal, Protocol, Self
 
-from dr_code.eval import RepeatPlan, SamplingConfig, TaskSet
-from dr_code.eval.identity import (
-    SCHEMA_EVAL_CONFIG,
-    SCHEMA_SAMPLING_CONFIG,
-    identity_hash_for,
-)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -23,6 +17,12 @@ from whetstone.core.identity import (
     ImmutableJsonObject,
     compute_identity_hash,
     require_full_hash,
+)
+from whetstone.evaluation import RepeatPlan, SamplingConfig, TaskSet
+from whetstone.evaluation.config import (
+    SCHEMA_EVAL_CONFIG,
+    SCHEMA_SAMPLING_CONFIG,
+    identity_hash_for,
 )
 from whetstone.experiment.binding import (
     EvalConfigRef,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dr_code.eval import (
+from whetstone.evaluation import (
     EvalDefinition,
     EvaluationProcedureDefinition,
     MetricExtractionDefinition,
@@ -10,7 +10,6 @@ from dr_code.eval import (
     SamplingDefinition,
     TaskSet,
 )
-
 from whetstone.evaluation.code.aggregate import (
     SKIP_TOLERANCE_VARIABLE,
     CompletenessPolicy,
@@ -66,7 +65,7 @@ def aggregate_plan(*, tasks: int, repeats: int) -> EvaluationMatrixPlan:
         definition_id="selection.metric",
         version="1",
         questions=(MetricQuestionBinding(metric="code_leakage", on="output"),),
-    ).materialize()
+    ).materialize(resolved_operators=(("code_leakage", "1"),))
     procedure = EvaluationProcedureDefinition(
         definition_id="selection.procedure", version="1"
     ).materialize(

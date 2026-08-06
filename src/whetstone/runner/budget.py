@@ -18,7 +18,9 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
+
+from dr_serialize import decode_strict_json_bytes
 
 __all__ = [
     "DEFAULT_EXPECTED_CELL_USD",
@@ -137,7 +139,13 @@ def openrouter_credits_fetcher(
             timeout=30.0,
         )
         response.raise_for_status()
-        return credits_from_payload(response.json())
+        raw = response.content
+        payload = decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
+        )
+        return credits_from_payload(cast(dict[str, Any], payload))
 
     return fetch
 

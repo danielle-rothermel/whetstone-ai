@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 
 import pytest
+from dr_serialize import JsonEncodeError, StrictJsonDecodeError
 from pydantic import ValidationError
 
 from whetstone.core.identity import TypedRef
@@ -546,6 +548,17 @@ def test_a_malformed_line_is_refused_on_load(tmp_path: Path) -> None:
         ledger.load()
 
 
+@pytest.mark.parametrize(
+    "line",
+    [b'{"schema":"first","schema":"second"}', b'{"value":NaN}', b"\xff"],
+)
+def test_ledger_rows_reject_non_strict_json(line: bytes) -> None:
+    with pytest.raises(StrictJsonDecodeError):
+        CellRecord.from_line(line)
+    with pytest.raises(StrictJsonDecodeError):
+        SpendRecord.from_line(line)
+
+
 def test_append_refuses_a_symlinked_ledger_file(tmp_path: Path) -> None:
     root = tmp_path / "run"
     root.mkdir()
@@ -774,10 +787,12 @@ def test_optimization_trace_is_written_under_a_safe_name(
 ) -> None:
     ledger = Ledger(tmp_path / "run")
 
-    path = ledger.write_optimization_trace("copro:c18:a0", {"steps": []})
+    path = ledger.write_optimization_trace(
+        "copro:c18:a0", {"z": "last", "steps": [], "a": "first"}
+    )
 
     assert path.name == "copro__c18__a0.json"
-    assert json.loads(path.read_text()) == {"steps": []}
+    assert path.read_bytes() == b'{"a":"first","steps":[],"z":"last"}'
 
 
 def test_rewriting_a_trace_supersedes_the_prior_one(tmp_path: Path) -> None:
@@ -787,6 +802,20 @@ def test_rewriting_a_trace_supersedes_the_prior_one(tmp_path: Path) -> None:
     path = ledger.write_optimization_trace("copro:c18:a0", {"steps": [1, 2]})
 
     assert json.loads(path.read_text()) == {"steps": [1, 2]}
+
+
+def test_invalid_trace_preserves_valid_target_and_leaves_no_temp(
+    tmp_path: Path,
+) -> None:
+    ledger = Ledger(tmp_path / "run")
+    path = ledger.write_optimization_trace("copro:c18:a0", {"steps": [1]})
+    original = path.read_bytes()
+
+    with pytest.raises(JsonEncodeError):
+        ledger.write_optimization_trace("copro:c18:a0", {"steps": [math.nan]})
+
+    assert path.read_bytes() == original
+    assert [entry.name for entry in path.parent.iterdir()] == [path.name]
 
 
 # --------------------------------------------------------------------------

@@ -4,8 +4,6 @@ from collections.abc import Callable
 from enum import UNIQUE, StrEnum, verify
 from typing import Any
 
-from dr_code.eval import EvalConfig
-from dr_code.eval.identity import SCHEMA_EVAL_CONFIG
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -27,6 +25,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     typed_ref_for_record,
 )
+from whetstone.evaluation import SCHEMA_EVAL_CONFIG, EvalConfig
 from whetstone.experiment.reward import RewardRef
 
 __all__ = [

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from dr_code.eval import EvalConfig
 from dr_graph import GraphConfig, GraphDefinition, graph_hash
 
 from tests.experiment.graph.support import (
@@ -12,6 +11,7 @@ from tests.experiment.graph.support import (
     fake_hash,
     procedure_config,
 )
+from whetstone.evaluation import EvalConfig
 from whetstone.experiment.graph.eval_identity import (
     EvalIdentityMismatchError,
     EvalNodeError,
@@ -161,7 +161,7 @@ def test_sampling_or_aggregation_change_alters_only_eval_config_hash() -> None:
     assert eval_config_hash(base_ec) != eval_config_hash(changed_ec)
 
 
-def test_eval_config_hash_is_dr_code_composite_identity() -> None:
+def test_eval_config_hash_is_native_composite_identity() -> None:
     ec = eval_config()
     assert eval_config_hash(ec) == ec.config_identity_hash
     assert len(eval_config_hash(ec)) == 64

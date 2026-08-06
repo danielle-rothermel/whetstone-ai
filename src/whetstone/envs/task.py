@@ -28,12 +28,12 @@ def _instance_content_hash(instance: Instance) -> str:
 
 @dataclass(frozen=True, slots=True)
 class EnvTask:
-    """One whetstone-env instance wrapped as a dr-code Task-role value.
+    """One whetstone-env instance wrapped as a Task-role value.
 
     Frozen. Carries the stable task identity, the env name, the Graph
     External Inputs (rendered prompt inputs), and the evaluation input
     (gold). There is deliberately no generic Task superclass: this is a
-    dataset-specific Task-role type, exactly as dr-code's ``HumanEvalTask``.
+    dataset-specific Task-role type, like ``HumanEvalTask`` for code tasks.
     """
 
     env_name: str

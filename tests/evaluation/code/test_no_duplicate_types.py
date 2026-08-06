@@ -4,9 +4,9 @@ import importlib
 import pkgutil
 from dataclasses import is_dataclass
 
-import dr_code.eval as dr_eval
 import dr_code.trace as dr_trace
 
+import whetstone.evaluation as local_evaluation
 import whetstone.evaluation.code as code_package
 from whetstone.evaluation.code import (
     BootstrapCI,
@@ -30,22 +30,24 @@ from whetstone.evaluation.code import (
 from .support import generation, operator_lineage
 
 
-def test_boundary_reuses_dr_code_text_artifact() -> None:
+def test_boundary_reuses_released_text_artifact() -> None:
     assert submission.TextArtifact is dr_trace.TextArtifact
 
 
-def test_scoring_returns_dr_code_score_and_fact_types() -> None:
+def test_scoring_returns_whetstone_score_and_fact_types() -> None:
     fact = compressed_description_length_fact(
         "code", lineage=operator_lineage()
     )
-    assert type(fact) is dr_eval.MetricFact
+    assert type(fact) is local_evaluation.MetricFact
 
     ratio_score = compression_ratio_score(
         compressed_description_length=1,
-        reference=dr_eval.CompressionReferenceArtifact(content=b"abcd"),
+        reference=local_evaluation.CompressionReferenceArtifact(
+            content=b"abcd"
+        ),
         evaluation_procedure_config_hash="0" * 64,
     )
-    assert type(ratio_score) is dr_eval.Score
+    assert type(ratio_score) is local_evaluation.Score
 
 
 def test_compression_selection_returns_generic_types() -> None:
@@ -55,14 +57,14 @@ def test_compression_selection_returns_generic_types() -> None:
         gt_code_wo_comments: str
 
     artifact = select_compression_reference(_Task(gt_code_wo_comments="x"))
-    assert type(artifact) is dr_eval.CompressionReferenceArtifact
+    assert type(artifact) is local_evaluation.CompressionReferenceArtifact
 
 
-def test_no_package_module_defines_a_dr_code_kernel_type() -> None:
-    dr_code_type_names = {
+def test_code_package_does_not_duplicate_evaluation_contract_types() -> None:
+    evaluation_type_names = {
         name
-        for name in dr_eval.__all__
-        if isinstance(getattr(dr_eval, name), type)
+        for name in local_evaluation.__all__
+        if isinstance(getattr(local_evaluation, name), type)
     } | {"TextArtifact"}
     modules = (
         code_package,
@@ -77,7 +79,7 @@ def test_no_package_module_defines_a_dr_code_kernel_type() -> None:
         f"{module.__name__}.{name}"
         for module in modules
         for name, value in vars(module).items()
-        if name in dr_code_type_names
+        if name in evaluation_type_names
         and isinstance(value, type)
         and value.__module__ == module.__name__
     }
@@ -141,8 +143,8 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     assert hasattr(EvaluationMatrixPlan, "__slots__")
     assert EvaluationMatrixPlan.__dataclass_params__.frozen
 
-    output = dr_eval.AggregationOutput(
-        status=dr_eval.AggregationStatus.NOT_APPLICABLE,
+    output = local_evaluation.AggregationOutput(
+        status=local_evaluation.AggregationStatus.NOT_APPLICABLE,
         value=None,
         count_total=0,
         count_applicable=0,

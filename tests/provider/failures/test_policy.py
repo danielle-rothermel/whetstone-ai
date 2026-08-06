@@ -6,6 +6,7 @@ from dr_providers import (
     FailureClass,
     ProviderFailureError,
     failure_record,
+    raise_failure,
 )
 from psycopg import OperationalError
 
@@ -82,7 +83,7 @@ def test_provider_failure_record_defines_policy(
     failure_class: FailureClass,
     expected_retry: bool,
 ) -> None:
-    error = ProviderFailureError(
+    error = raise_failure(
         failure_record(
             failure_class=failure_class,
             message="provider failed",
@@ -93,7 +94,7 @@ def test_provider_failure_record_defines_policy(
 
     assert classify_exception(error) is failure_class
     assert summary.failure_class is failure_class
-    assert summary.failure_exception_type.endswith("ProviderFailureError")
+    assert isinstance(error, ProviderFailureError)
     assert should_retry_step(error) is expected_retry
 
 

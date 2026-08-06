@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Literal
 
 from dr_providers import ProviderInvocationEvidence
 from pydantic import (
@@ -30,9 +30,9 @@ __all__ = [
 ]
 
 PROVIDER_CALL_ATTEMPT_SCHEMA = "whetstone.provider_call_attempt"
-PROVIDER_CALL_ATTEMPT_SCHEMA_VERSION = 1
+PROVIDER_CALL_ATTEMPT_SCHEMA_VERSION = 2
 PROVIDER_CALL_RESULT_SCHEMA = "whetstone.provider_call_result"
-PROVIDER_CALL_RESULT_SCHEMA_VERSION = 1
+PROVIDER_CALL_RESULT_SCHEMA_VERSION = 2
 
 
 class ProviderCallAttempt(BaseModel):
@@ -46,7 +46,7 @@ class ProviderCallAttempt(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = PROVIDER_CALL_ATTEMPT_SCHEMA_VERSION
+    schema_version: Literal[2] = PROVIDER_CALL_ATTEMPT_SCHEMA_VERSION
     #: Stable identity of the logical call, constant across its attempts.
     logical_call_id: StrictStr
     #: 1-based attempt number within the logical call.
@@ -129,7 +129,7 @@ class ProviderCallResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: int = PROVIDER_CALL_RESULT_SCHEMA_VERSION
+    schema_version: Literal[2] = PROVIDER_CALL_RESULT_SCHEMA_VERSION
     logical_call_id: StrictStr
     #: Provider Call Request identity payload (config-ref + transcript).
     request_identity: dict[str, Any]

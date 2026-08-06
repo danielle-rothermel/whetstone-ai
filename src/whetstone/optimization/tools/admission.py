@@ -4,6 +4,7 @@ import json
 from enum import UNIQUE, StrEnum, verify
 from typing import Any, Protocol
 
+from dr_serialize import decode_strict_json_bytes
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from whetstone.core.effects.authority import (
@@ -287,7 +288,13 @@ def _entry_text(entry: ToolCallStoreEntry) -> str:
 def _decode_entry(raw: object) -> ToolCallStoreEntry:
     if type(raw) is not str:
         raise RuntimeError("persisted Tool admission entry is not JSON text")
-    return ToolCallStoreEntry.model_validate_json(raw)
+    encoded = raw.encode()
+    decode_strict_json_bytes(
+        encoded,
+        max_bytes=len(encoded),
+        max_depth=len(encoded),
+    )
+    return ToolCallStoreEntry.model_validate_json(encoded)
 
 
 def _decode_persisted_count(raw: object, *, field: str) -> int:

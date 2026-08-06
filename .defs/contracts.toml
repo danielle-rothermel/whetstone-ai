@@ -70,19 +70,26 @@ date = "2026-08-05"
 check = "uv run pytest -q tests/experiment/test_objectives.py"
 
 [[contracts]]
-title = "Codex filesystem isolation fails closed on unsupported hosts"
+title = "Codex typed execution and filesystem isolation fail closed"
 statement = """
-The subprocess Codex runner refuses to execute unless macOS sandbox-exec is \
-available, requires absolute paths for durable state, and builds a filesystem \
+The subprocess Codex runner launches its sandbox-wrapped command through the \
+pinned dr-exec typed PROCESS_BOUNDARY_ONLY execution contract. Production \
+composition requires an isolated host Python runtime and a caller-owned \
+absolute durable directory run store whose root is not granted to the child. \
+The runner refuses to execute unless macOS sandbox-exec is available, requires \
+absolute paths for declared durable Whetstone state, and builds a filesystem \
 profile for its staged runtime and declared state paths. A configured partial \
 log grants write access to its parent directory. The boundary does not claim \
 network containment, secrecy of an explicitly supplied provider credential, \
-Codex CLI version compatibility, or descendant-process cleanup."""
+Codex CLI version compatibility, full descendant-process containment, or \
+hermetic execution."""
 rationale = """
 Codex and its MCP child need a small runtime, exact durable stores, and provider \
-access, but they must not inherit ambient host filesystem authority. Refusing \
-unsupported platforms keeps that guarantee truthful; network and credential \
-containment require a separate execution design and are not implied by the \
+access, but they must not inherit ambient host filesystem authority or the \
+executor's record root. Typed process-boundary execution records the exact \
+declared scope without strengthening it. Refusing unsupported platforms keeps \
+the filesystem guarantee truthful; network, credential, descendant-process, \
+and hermetic containment require separate designs and are not implied by the \
 filesystem profile. Partial-log parent authority remains explicit because the \
 durable log opens records and its sibling lock through that directory."""
 date = "2026-08-06"

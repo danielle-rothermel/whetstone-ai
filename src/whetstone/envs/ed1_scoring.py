@@ -2,20 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from dr_code.execution import PythonSubprocessRunner, run_python_subprocess
 from dr_code.humaneval import (
-    BEST_EFFORT_HUMANEVAL_PARSER_PROFILE,
-    DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
-    CodeParserProfile,
+    HUMANEVAL_SCORING_PROFILE_ID,
+    HUMANEVAL_SCORING_PROFILE_VERSION,
     HarnessFailure,
     HumanEvalTask,
     SubmissionOutcome,
     score_humaneval_submission,
 )
+from dr_exec import Executor
 
 #: The parser contract for decoder submissions. The profile id and version are
 #: also folded into the ed1 evaluation procedure identity.
-ED1_PARSER_PROFILE = BEST_EFFORT_HUMANEVAL_PARSER_PROFILE
+ED1_SCORING_PROFILE_ID = HUMANEVAL_SCORING_PROFILE_ID
+ED1_SCORING_PROFILE_VERSION = HUMANEVAL_SCORING_PROFILE_VERSION
 
 #: The outcomes that are INFRASTRUCTURE-UNKNOWN (no definitive pass/fail): the
 #: rollout fails, never scores 0. A :class:`HarnessFailure` is handled
@@ -71,9 +71,7 @@ def score_ed1_submission(
     *,
     raw_submission: str,
     task: HumanEvalTask,
-    parser_profile: CodeParserProfile = ED1_PARSER_PROFILE,
-    run_in_subprocess: PythonSubprocessRunner = run_python_subprocess,
-    timeout_seconds: float = DEFAULT_HUMANEVAL_TIMEOUT_SECONDS,
+    executor: Executor,
 ) -> CodeScore:
     """Score one decoder submission -> :class:`CodeScore`.
 
@@ -88,9 +86,9 @@ def score_ed1_submission(
     result = score_humaneval_submission(
         raw_submission=raw_submission,
         task=task,
-        parser_profile=parser_profile,
-        timeout_seconds=timeout_seconds,
-        run_in_subprocess=run_in_subprocess,
+        scoring_profile_id=ED1_SCORING_PROFILE_ID,
+        scoring_profile_version=ED1_SCORING_PROFILE_VERSION,
+        executor=executor,
     )
     if isinstance(result, HarnessFailure):
         return CodeScore(
@@ -113,7 +111,8 @@ def score_ed1_submission(
 
 
 __all__ = [
-    "ED1_PARSER_PROFILE",
+    "ED1_SCORING_PROFILE_ID",
+    "ED1_SCORING_PROFILE_VERSION",
     "CodeScore",
     "score_ed1_submission",
 ]

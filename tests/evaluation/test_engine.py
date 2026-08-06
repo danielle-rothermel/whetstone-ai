@@ -900,13 +900,13 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
     assert outputs.schema_version == 2
     assert evidence.schema_version == 2
     assert evidence.component_traces_ref.content_hash == (
-        "42b08acde3e5aa8a0923e960d5db91fffee150cf2fbc0331d9522747af708942"
+        "67c63b912df720282e367268a621672d8dfb3285fb09f341ba4a6b809108a352"
     )
     assert evidence.outputs_ref.content_hash == (
-        "19ff32c9d9b7ed8d6c70d2d14a725c6887a38f57393f9e8338d3109d3994fc14"
+        "e8867edd5797c77a70dc26fba96c4288a99cce6dfb68594d3744c067ffaba803"
     )
     assert evaluated.evidence_ref.content_hash == (
-        "211c24740d389e1a13e8b720cb2e56c8a422c9bf0b8c1827a7f59adc53e82fa9"
+        "bd5da8a9066beb8e89c6220932e2bb5b353ea97d6222c80dba487f533e4e6619"
     )
     with pytest.raises(ValueError, match="address the exact record"):
         EvaluationComponentTracesRef(

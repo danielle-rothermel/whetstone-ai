@@ -2,17 +2,40 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import math
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from subprocess import TimeoutExpired
+from typing import TYPE_CHECKING, Any, Final
+from uuid import uuid4
 
+from dr_exec import (
+    BudgetAxis,
+    BudgetExceededOutcome,
+    Budgets,
+    ContainmentProfile,
+    EnvGrant,
+    ExecutionJob,
+    Executor,
+    ExecutorFailure,
+    ExitedOutcome,
+    FiniteDurationLimit,
+    JobId,
+    RetainedPayloadStream,
+    SignaledOutcome,
+    SpawnAbsentOutcome,
+    SpawnFailedOutcome,
+    UnbudgetedLimit,
+    UnbudgetedOutput,
+    UntrustedCommandTarget,
+)
+from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import ValidationError
 
 from whetstone.experiment.reward import RewardPolicy
@@ -33,6 +56,9 @@ _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 # "auto", "prompt", "writes", "approve"; "auto" runs the server's tools
 # without an interactive approval turn.
 _MCP_TOOLS_APPROVAL_MODE = "auto"
+_DIRECT_EXEC_SOURCE: Final = (
+    "import os,sys;os.chdir(sys.argv[1]);os.execv(sys.argv[2],sys.argv[2:])"
+)
 
 
 @verify(UNIQUE)
@@ -306,12 +332,47 @@ def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
         )
 
 
+def _codex_budgets(timeout_seconds: float) -> Budgets:
+    unbudgeted = UnbudgetedLimit()
+    return Budgets(
+        wall_time=FiniteDurationLimit(
+            max_ns=max(1, math.ceil(timeout_seconds * 1_000_000_000))
+        ),
+        input_bytes=unbudgeted,
+        payload_output=UnbudgetedOutput(),
+        memory_bytes=unbudgeted,
+        cpu_time=unbudgeted,
+        process_count=unbudgeted,
+        file_size_bytes=unbudgeted,
+        open_file_count=unbudgeted,
+        disk_bytes=unbudgeted,
+    )
+
+
+def _retained_bytes(
+    stream: RetainedPayloadStream,
+    *,
+    stream_name: str,
+) -> bytes:
+    if stream.dropped_bytes:
+        raise OpaqueStepError(
+            f"Codex {stream_name} was truncated despite unbudgeted output"
+        )
+    return stream.head + stream.tail
+
+
 class SubprocessCodexRunner:
-    """Launch Codex behind a fail-closed macOS filesystem boundary."""
+    """Adapt Codex to Whetstone through one injected typed executor.
+
+    A production caller must supply a ``ProcessExecutor`` backed by an
+    ``IsolatedHostPythonRuntime`` and a caller-owned durable
+    ``DirectoryRunStore``. The store is executor state, not child authority.
+    """
 
     def __init__(
         self,
         *,
+        executor: Executor,
         sqlite_path: str,
         runtime_config: EvaluationRuntimeConfig,
         reward_policy: RewardPolicy,
@@ -335,6 +396,7 @@ class SubprocessCodexRunner:
             optional=True,
         )
         self._sqlite_path = sqlite_path
+        self._executor = executor
         self._runtime = runtime_config
         self._reward_policy = reward_policy
         self._binary = codex_binary
@@ -427,8 +489,16 @@ class SubprocessCodexRunner:
             )
             profile_path = root / "codex.sb"
             isolation = _MacOsProcessIsolation()
-            command = isolation.wrap(
-                command,
+            direct_exec_command = [
+                sys.executable,
+                "-I",
+                "-c",
+                _DIRECT_EXEC_SOURCE,
+                working_directory,
+                *command,
+            ]
+            sandbox_wrapped_command = isolation.wrap(
+                direct_exec_command,
                 profile_path=profile_path,
                 readable_paths=self._readable_runtime_paths(
                     resolved_binary=Path(resolved_binary),
@@ -436,25 +506,61 @@ class SubprocessCodexRunner:
                 ),
                 writable_paths=self._writable_runtime_paths(root),
             )
-            completed = subprocess.run(
-                command,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout,
-                cwd=working_directory,
-                env=isolated_environment,
-                check=False,
+            job = ExecutionJob(
+                job_id=JobId(uuid4()),
+                target=UntrustedCommandTarget(
+                    argv=tuple(sandbox_wrapped_command),
+                    stdin=b"",
+                    containment_profile=(
+                        ContainmentProfile.PROCESS_BOUNDARY_ONLY
+                    ),
+                ),
+                env=EnvGrant.fixed(isolated_environment),
+                budgets=_codex_budgets(self._timeout),
             )
-            if completed.returncode:
+            try:
+                completed = self._executor.run(job)
+            except ExecutorFailure as exc:
+                raise OpaqueStepError("Codex execution failed") from exc
+            stdout = _retained_bytes(
+                completed.result.payload_outputs.stdout,
+                stream_name="stdout",
+            )
+            stderr_bytes = _retained_bytes(
+                completed.result.payload_outputs.stderr,
+                stream_name="stderr",
+            )
+            outcome = completed.result.outcome
+            if isinstance(outcome, BudgetExceededOutcome):
+                if outcome.axis is BudgetAxis.WALL_TIME:
+                    raise TimeoutExpired(
+                        sandbox_wrapped_command,
+                        self._timeout,
+                        output=stdout,
+                        stderr=stderr_bytes,
+                    )
                 raise OpaqueStepError(
-                    f"Codex exited {completed.returncode}: "
-                    f"{completed.stderr[-2000:]}"
+                    "Codex execution failed with an unexpected budget outcome"
+                )
+            if isinstance(outcome, SpawnAbsentOutcome | SpawnFailedOutcome):
+                raise OpaqueStepError("Codex process could not be spawned")
+            if isinstance(outcome, ExitedOutcome):
+                return_code = outcome.exit_code
+            elif isinstance(outcome, SignaledOutcome):
+                return_code = -outcome.signal_number
+            else:
+                raise OpaqueStepError(
+                    f"Codex execution failed with outcome {outcome.kind}"
+                )
+            stderr = _decode_stderr(stderr_bytes)
+            if return_code:
+                raise OpaqueStepError(
+                    f"Codex exited {return_code}: {stderr[-2000:]}"
                 )
             artifact = _parse_output_artifact(
                 artifact_path,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
+                stdout=stdout,
+                stderr=stderr,
                 run_id=request.run_id,
                 isolation={
                     "strategy": "macos_sandbox_exec",
@@ -579,14 +685,18 @@ def _default_prompt(
     )
 
 
-def _parse_jsonl_events(stdout: str) -> tuple[dict[str, Any], ...]:
+def _parse_jsonl_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
     events: list[dict[str, Any]] = []
     for ordinal, raw in enumerate(stdout.splitlines(), start=1):
         if not raw.strip():
             continue
         try:
-            value = json.loads(raw)
-        except json.JSONDecodeError as exc:
+            value = decode_strict_json_bytes(
+                raw,
+                max_bytes=len(raw),
+                max_depth=len(raw),
+            )
+        except StrictJsonDecodeError as exc:
             raise OpaqueStepError(
                 f"Codex JSONL event {ordinal} is malformed"
             ) from exc
@@ -601,7 +711,7 @@ def _parse_jsonl_events(stdout: str) -> tuple[dict[str, Any], ...]:
 def _parse_output_artifact(
     path: Path,
     *,
-    stdout: str,
+    stdout: bytes,
     stderr: str,
     run_id: str,
     isolation: dict[str, Any] | None = None,
@@ -609,10 +719,14 @@ def _parse_output_artifact(
     if not path.is_file():
         raise OpaqueStepError("Codex produced no final output artifact")
     try:
-        artifact = CodexOutputArtifact.model_validate_json(
-            path.read_text(encoding="utf-8")
+        raw = path.read_bytes()
+        decode_strict_json_bytes(
+            raw,
+            max_bytes=len(raw),
+            max_depth=len(raw),
         )
-    except (OSError, ValidationError) as exc:
+        artifact = CodexOutputArtifact.model_validate_json(raw)
+    except (OSError, StrictJsonDecodeError, ValidationError) as exc:
         raise OpaqueStepError(
             "Codex final output artifact failed schema validation"
         ) from exc
@@ -627,6 +741,13 @@ def _parse_output_artifact(
     return artifact.model_copy(
         update={"conversation_evidence": process_evidence}
     )
+
+
+def _decode_stderr(stderr: bytes) -> str:
+    try:
+        return stderr.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OpaqueStepError("Codex stderr is not valid UTF-8") from exc
 
 
 __all__ = [

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from dr_code.eval import DefinitionRef, EvalConfig
-
 from whetstone.coordination.official import (
     SelectedRecordMapping,
     SelectedRecordMappingEntry,
 )
 from whetstone.core.identity import TypedRef
+from whetstone.evaluation import DefinitionRef, EvalConfig
 from whetstone.experiment.binding import (
     EvalConfigRef,
     eval_config_reference,
@@ -23,7 +22,7 @@ def eval_config_ref() -> EvalConfigRef:
             definition_ref=DefinitionRef(
                 definition_id="authority-test",
                 version="1",
-                schema_name="dr_code.eval_definition",
+                schema_name="whetstone.eval.definition",
                 identity_hash="a" * 64,
             ),
             sampling_config_hash="b" * 64,

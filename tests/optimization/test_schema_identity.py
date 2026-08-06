@@ -289,7 +289,7 @@ def test_intent_resolution_v2_wire_contract_is_exact() -> None:
     assert record["reward_evidence_refs"] == []
     assert (
         typed_ref_for_record(INTENT_RESOLUTION_SCHEMA, record).content_hash
-        == "4390a1d15b03a38c06119832292033eb665909d6f0deb55025c56e84dc02f3ea"
+        == "cab35d7a23180d26126ecf4950fb9618829b7ffcb627a90f5235e6d1a948454d"
     )
 
 

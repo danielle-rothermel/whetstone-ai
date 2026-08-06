@@ -4,7 +4,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from dr_code.eval import (
+from whetstone_envs.core import Instance, PoolSplit, TaskPool
+
+from whetstone.core.roles import EvaluationRole
+from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
+from whetstone.envs.task import EnvTask
+from whetstone.evaluation import (
     AggregationConfig,
     EvalConfig,
     EvalDefinition,
@@ -14,11 +19,6 @@ from dr_code.eval import (
     SamplingDefinition,
     TaskSet,
 )
-from whetstone_envs.core import Instance, PoolSplit, TaskPool
-
-from whetstone.core.roles import EvaluationRole
-from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
-from whetstone.envs.task import EnvTask
 from whetstone.evaluation.code.aggregate import (
     CompletenessPolicy,
     EvaluationMatrixPlan,

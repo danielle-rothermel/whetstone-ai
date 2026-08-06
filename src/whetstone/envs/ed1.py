@@ -2,23 +2,24 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from dr_code.eval import (
-    EvaluationProcedureConfig,
-    EvaluationProcedureDefinition,
-    MetricExtractionConfig,
-    MetricExtractionDefinition,
-    MetricQuestionBinding,
-    PreprocessingDefinition,
+from dr_code.humaneval import (
+    HUMANEVAL_OVERRIDE_SET,
+    HumanEvalTask,
+    load_humaneval_plus,
 )
-from dr_code.humaneval import HumanEvalTask
-from dr_code.synthetic.humaneval_loader import HF_REVISION, load_humaneval_plus
+from dr_code.humaneval.plus_dataset import HF_REVISION
 from whetstone_envs.core import Instance
 
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-from whetstone.envs.ed1_scoring import ED1_PARSER_PROFILE, CodeScore
+from whetstone.envs.ed1_scoring import (
+    ED1_SCORING_PROFILE_ID,
+    ED1_SCORING_PROFILE_VERSION,
+    CodeScore,
+)
 from whetstone.envs.encdec_rollout import (
     EncDecRolloutDefinition,
     build_encdec_rollout_definition,
@@ -34,6 +35,15 @@ from whetstone.envs.sampling import (
 from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
+)
+from whetstone.evaluation import (
+    EvaluationProcedureConfig,
+    EvaluationProcedureDefinition,
+    MetricExtractionConfig,
+    MetricExtractionDefinition,
+    MetricQuestionBinding,
+    PreprocessingDefinition,
+    identity_hash_for,
 )
 from whetstone.evaluation.code.aggregate import aggregation_definition
 from whetstone.experiment.candidate import (
@@ -58,12 +68,15 @@ ED1_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 
 ED1_DEFAULT_BUDGET_RATIO = 0.5
 
-#: The pinned HumanEval+ dataset revision (dr-code ``HF_REVISION``), recorded
-#: so
-#: the ed1 Task Set is a deterministic, reproducible, offline-loadable
-#: identity.
-ED1_DATASET_REVISION = HF_REVISION
 ED1_DATASET_ID = "evalplus/humanevalplus"
+ED1_DATASET_REVISION = identity_hash_for(
+    schema="whetstone.humaneval.dataset_coordinate",
+    payload={
+        "dataset_id": ED1_DATASET_ID,
+        "upstream_revision": HF_REVISION,
+        "override_set": HUMANEVAL_OVERRIDE_SET.model_dump(mode="json"),
+    },
+)
 
 #: The per-row metric, aggregate, and Reward-term identity for ED1 correctness.
 #: Each row projects dr-code's typed submission outcome to 0.0 or 1.0; the
@@ -214,7 +227,7 @@ class Ed1Instance:
     every HumanEval field the code-eval Eval Node needs (task_id, prompt,
     canonical_solution, entry_point, test) in ``prompt_inputs``, and the
     ground-truth (with comments) in ``gold``. ``humaneval_task`` is the fully
-    parsed dr-code task (kept for the eval drive).
+    parsed HumanEval task (kept for the eval drive).
     """
 
     instance: Instance
@@ -276,16 +289,15 @@ def humaneval_task_from_instance(instance: Instance) -> HumanEvalTask:
 
 def load_ed1_tasks(
     *,
-    prefer_snapshot: bool = True,
+    snapshot_path: Path | None = None,
     limit: int | None = None,
 ) -> tuple[Ed1Instance, ...]:
-    """Load the pinned HumanEval+ pool as ordered, deterministic ed1 instances.
+    """Load the pinned live dataset or an explicit Whetstone snapshot."""
 
-    ``prefer_snapshot`` (default True) loads the committed offline snapshot.
-    ``limit`` takes a fixed, ordered first-N slice. The dataset revision is
-    :data:`ED1_DATASET_REVISION`.
-    """
-    tasks = load_humaneval_plus(prefer_snapshot=prefer_snapshot)
+    tasks = load_humaneval_plus(
+        prefer_snapshot=snapshot_path is not None,
+        snapshot_path=snapshot_path,
+    )
     if limit is not None:
         tasks = tasks[:limit]
     instances: list[Ed1Instance] = []
@@ -365,10 +377,11 @@ def build_ed1_procedure_config(
         primary_metric_name=ED1_SUBMISSION_SCORE_NAME,
         primary_metric_settings=(
             ("dataset", ED1_DATASET_ID),
-            ("revision", ED1_DATASET_REVISION),
+            ("dataset_coordinate", ED1_DATASET_REVISION),
+            ("upstream_revision", HF_REVISION),
             ("scorer", "dr_code.humaneval.score_humaneval_submission"),
-            ("parser_profile_id", ED1_PARSER_PROFILE.profile_id),
-            ("parser_profile_version", ED1_PARSER_PROFILE.version),
+            ("scoring_profile_id", ED1_SCORING_PROFILE_ID),
+            ("scoring_profile_version", ED1_SCORING_PROFILE_VERSION),
         ),
         zero_denominator=zero_denominator,
     )
@@ -566,10 +579,8 @@ class Ed1Experiment(EnvExperiment):
     #: The injectable code scorer (raw_submission, task) -> CodeScore. The
     #: scorer is INJECTED by the caller that drives rows; the production
     #: injection is :func:`whetstone.envs.ed1_scoring.score_ed1_submission`,
-    #: which runs candidate code via
-    #: ``dr_code.execution.run_python_subprocess`` -- a LOCAL, NON-ISOLATED
-    #: subprocess, not a container sandbox. Execution isolation is a
-    #: runner-layer concern, not this layer's.
+    #: which runs candidate code through the caller's explicit dr-exec
+    #: executor.
     scorer: Callable[..., CodeScore] | None = None
     #: The weighted-blend reward config, or ``None`` for primary
     #: score only.
@@ -586,7 +597,7 @@ def build_ed1_experiment(
     model: str = ED1_CANONICAL_MODEL,
     budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO,
     scorer: Callable[..., CodeScore] | None = None,
-    prefer_snapshot: bool = True,
+    snapshot_path: Path | None = None,
     limit: int | None = None,
     internal_n: int | None = None,
     official_n: int | None = None,
@@ -630,7 +641,7 @@ def build_ed1_experiment(
     pool = (
         tasks
         if tasks is not None
-        else load_ed1_tasks(prefer_snapshot=prefer_snapshot, limit=limit)
+        else load_ed1_tasks(snapshot_path=snapshot_path, limit=limit)
     )
     if exclude_task_ids:
         pool = tuple(
