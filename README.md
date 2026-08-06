@@ -107,7 +107,12 @@ integration entrypoints are `scripts/ci/process-integration.sh`,
 `scripts/ci/sqlite-time-integration.sh`,
 `scripts/ci/sqlite-contention.sh`, and
 `scripts/ci/postgres-integration.sh`. The PostgreSQL entrypoint requires
-`WHETSTONE_TEST_POSTGRES_DSN`. Run the complete serial suite with
+`WHETSTONE_TEST_POSTGRES_DSN`. For a local PostgreSQL 17 service that listens
+only on loopback, run `scripts/local/postgres-integration.sh`. It provisions a
+least-privilege `whetstone_test` role, creates a fresh database for the run,
+and removes that database after the PostgreSQL and DBOS tests finish. It never
+uses the durable runtime database as a test fallback. Run the complete serial
+suite with
 `uv run pytest -q`; CI also exercises installed-wheel and Python 3.14
 compatibility contracts.
 
