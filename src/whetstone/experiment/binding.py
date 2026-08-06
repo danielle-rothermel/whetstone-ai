@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from dr_code.eval import EvalConfig
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -22,9 +21,10 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation import SCHEMA_EVAL_CONFIG, EvalConfig
 from whetstone.provider.policy import PROVIDER_EXECUTION_POLICY_SCHEMA
 
-EVAL_CONFIG_RECORD_SCHEMA = "dr_code.eval_config"
+EVAL_CONFIG_RECORD_SCHEMA = SCHEMA_EVAL_CONFIG
 EVALUATION_BINDING_SCHEMA = "whetstone.evaluation_binding"
 EVALUATION_BINDING_SCHEMA_VERSION = 2
 

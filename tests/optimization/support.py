@@ -5,7 +5,6 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from dr_code.eval import DefinitionRef, EvalConfig
 from dr_store import ObjectStore, SqliteBackend
 
 from whetstone.core.effects.authority import (
@@ -21,6 +20,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation import DefinitionRef, EvalConfig
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
@@ -194,7 +194,7 @@ def eval_config(identity_hash: str = FULL_B) -> EvalConfig:
         definition_ref=DefinitionRef(
             definition_id="eval",
             version="1",
-            schema_name="dr_code.eval_definition",
+            schema_name="whetstone.eval.definition",
             identity_hash=FULL_A,
         ),
         sampling_config_hash=FULL_A,

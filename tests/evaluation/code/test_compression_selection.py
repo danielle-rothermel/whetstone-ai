@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import inspect
 
-import dr_code.eval.compression_reference as generic_module
-from dr_code.eval import (
+from pydantic import BaseModel
+
+import whetstone.evaluation.compression as generic_module
+from whetstone.evaluation import (
     CompressionReferenceArtifact,
     CompressionReferenceKey,
     CompressionReferenceResolver,
 )
-from pydantic import BaseModel
-
 from whetstone.evaluation.code import (
     COMPRESSION_REFERENCE_NAMESPACE,
     SELECTED_FIELD,
@@ -34,7 +34,7 @@ def test_selects_exact_utf8_bytes() -> None:
     )
 
 
-def test_key_is_generic_dr_code_key() -> None:
+def test_key_is_generic_whetstone_key() -> None:
     key = compression_reference_key(task_identity="a" * 64)
     assert type(key) is CompressionReferenceKey
     assert key.namespace == COMPRESSION_REFERENCE_NAMESPACE

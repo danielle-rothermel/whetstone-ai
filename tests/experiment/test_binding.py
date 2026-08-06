@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from dr_code.eval import DefinitionRef, EvalConfig
 from dr_providers import ProviderTransportPolicy
 from pydantic import ValidationError
 
@@ -11,6 +10,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation import DefinitionRef, EvalConfig
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA,
     EVALUATION_BINDING_SCHEMA_VERSION,
@@ -35,7 +35,7 @@ def _eval_config(identity_hash: str = FULL_B) -> EvalConfig:
         definition_ref=DefinitionRef(
             definition_id="eval",
             version="1",
-            schema_name="dr_code.eval_definition",
+            schema_name="whetstone.eval.definition",
             identity_hash=FULL_A,
         ),
         sampling_config_hash=FULL_A,
@@ -160,7 +160,7 @@ def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
     }
     assert (
         binding.identity_hash()
-        == "d77a3ea054252f78bbce949e66569a32b2f01e71c43785443597f44c731e4391"
+        == "3b204030cc8e1edefac1feccda2982d43de2901c560bf68038f3c8770601bb57"
     )
     assert (
         EvaluationBinding.model_validate(binding.model_dump(mode="json"))
@@ -215,12 +215,12 @@ def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
         legacy_identity_hash
         == {
             True: (
-                "f95ccb10ad8717c32924c1ca2355caf9"
-                "f7679ddc5b95d40472f61e1f3dc75f97"
+                "f9fa0b6b12b2d3e93f38be8a6fd3a3c3"
+                "b7159528143ce416c4ba5f409c958c14"
             ),
             False: (
-                "f182528f43640e0342fe996172213e68d"
-                "c5a7049fa75fe3d0196ac88b735309f"
+                "7f9667fd5ddf041ed8e331e0329a9c54"
+                "2fe74104b53eb3ca7f02cc26235f7b16"
             ),
         }[provider_ref_present]
     )

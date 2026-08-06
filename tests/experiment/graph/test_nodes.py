@@ -106,11 +106,13 @@ def test_procedure_reference_change_changes_graph_hash() -> None:
 
 def test_eval_variable_assignment_carries_typed_ref_and_hash() -> None:
     assignment = eval_variable_assignment(
-        evaluation_procedure_config_schema="dr_code.evaluation_procedure.config",
+        evaluation_procedure_config_schema=(
+            "whetstone.evaluation_procedure.config"
+        ),
         evaluation_procedure_config_hash=fake_hash("e"),
     )
     ref = assignment[EVALUATION_PROCEDURE_CONFIG_VARIABLE]
-    assert ref["schema_name"] == "dr_code.evaluation_procedure.config"
+    assert ref["schema_name"] == "whetstone.evaluation_procedure.config"
     assert ref["identity_hash"] == fake_hash("e")
 
 
@@ -138,7 +140,7 @@ def test_typed_config_references_require_canonical_hash(
     with pytest.raises(ValueError, match="lowercase SHA-256"):
         eval_variable_assignment(
             evaluation_procedure_config_schema=(
-                "dr_code.evaluation_procedure.config"
+                "whetstone.evaluation_procedure.config"
             ),
             evaluation_procedure_config_hash=identity_hash,
         )
@@ -148,7 +150,7 @@ def test_eval_procedure_hash_validates_deserialized_reference() -> None:
     identity_hash = fake_hash("e")
     variables = {
         EVALUATION_PROCEDURE_CONFIG_VARIABLE: {
-            "schema_name": "dr_code.evaluation_procedure.config",
+            "schema_name": "whetstone.evaluation_procedure.config",
             "identity_hash": identity_hash,
         }
     }
@@ -170,11 +172,11 @@ def test_eval_procedure_hash_requires_reference_variable() -> None:
             "identity_hash": "e" * 64,
         },
         {
-            "schema_name": "dr_code.evaluation_procedure.config",
+            "schema_name": "whetstone.evaluation_procedure.config",
             "identity_hash": None,
         },
         {
-            "schema_name": "dr_code.evaluation_procedure.config",
+            "schema_name": "whetstone.evaluation_procedure.config",
             "identity_hash": "E" * 64,
         },
     ],

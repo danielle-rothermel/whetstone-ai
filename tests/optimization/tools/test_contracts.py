@@ -7,7 +7,6 @@ import sys
 from collections.abc import Callable
 
 import pytest
-from dr_code.eval import DefinitionRef, EvalConfig
 from pydantic import ValidationError
 
 from whetstone.core.identity import (
@@ -16,6 +15,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation import DefinitionRef, EvalConfig
 from whetstone.experiment.reward import (
     REWARD_SCHEMA,
     Reward,
@@ -56,7 +56,7 @@ def _eval_config() -> EvalConfig:
         definition_ref=DefinitionRef(
             definition_id="eval",
             version="1",
-            schema_name="dr_code.eval.definition",
+            schema_name="whetstone.eval.definition",
             identity_hash="a" * 64,
         ),
         sampling_config_hash="b" * 64,
@@ -204,7 +204,7 @@ def test_tool_config_v1_payload_and_digest_are_exact() -> None:
             "definition_ref": {
                 "definition_id": "eval",
                 "version": "1",
-                "schema_name": "dr_code.eval.definition",
+                "schema_name": "whetstone.eval.definition",
                 "identity_hash": "a" * 64,
             },
             "sampling_config_hash": "b" * 64,
@@ -223,8 +223,8 @@ def test_tool_config_v1_payload_and_digest_are_exact() -> None:
         "idempotent_replay": True,
     }
     assert (
-        config.identity_hash() == "b4fb938b3d60d50f86da6246316314f"
-        "54271dcafc817ff9f800b59c96ccba6e8"
+        config.identity_hash() == "ee4cd418c66517d1cb57641e6b489fb4"
+        "b963f9b6add7830b53048d7f8186f40f"
     )
 
 

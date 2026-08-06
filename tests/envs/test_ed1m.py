@@ -5,27 +5,21 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from dr_code.execution import SubprocessStartError
-from dr_code.mutants import load_dataset
-from dr_code.mutants import provenance as provenance_module
-from dr_code.mutants.dataset import (
+from dr_code.core.execution.executor import host_process_executor
+from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
+from dr_exec import ExecutorFailure, FakeExecutor
+
+from whetstone.envs.ed1m_dataset import (
+    DatasetValidationError,
     ExpectedOutcome,
     FamilyCount,
-    GeneratedDataset,
     GenerationConfig,
     MutantRecord,
+    OperatorFamily,
+    build_manifest,
     build_record,
-    publish_dataset,
-)
-from dr_code.mutants.operators import OperatorFamily
-from dr_code.mutants.provenance import (
-    canonical_suite_digest,
-    resolve_canonical_suite,
-)
-from dr_code.synthetic.humaneval_loader import (
-    HF_DATASET_ID,
-    HF_REVISION,
-    HumanEvalPlusTask,
+    encode_records,
+    load_dataset,
 )
 
 _CANONICAL_SOURCE = "def f(x):\n    return x < 1"
@@ -68,41 +62,22 @@ def _mutant_record() -> MutantRecord:
 @pytest.fixture
 def mutant_dataset_dir(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
-    tasks = [
-        HumanEvalPlusTask(
-            task_id="HumanEval/0",
-            prompt="def f(x):\n",
-            canonical_solution="    return x < 1\n",
-            entry_point="f",
-            test=_CANONICAL_TEST,
-        )
-    ]
-    monkeypatch.setattr(
-        provenance_module,
-        "load_humaneval_plus",
-        lambda prefer_snapshot: tasks,
-    )
-    suite = resolve_canonical_suite(
-        task_ids=("HumanEval/0",),
-        max_inputs=10,
-        prefer_snapshot=True,
-    )
     record = _mutant_record()
-    generated = GeneratedDataset(
-        config=GenerationConfig(
-            dataset_id=HF_DATASET_ID,
-            dataset_revision=HF_REVISION,
-            operator_families=(OperatorFamily.COMPARISON_FLIP,),
-            seeds=1,
-            max_inputs_per_mutant=10,
-            timeout_seconds=5.0,
-            task_ids=("HumanEval/0",),
-            canonical_suite_digest=canonical_suite_digest(suite),
-            runner_identity="whetstone-test-fixture@v1",
-            runtime_identity="whetstone-test-fixture-runtime@v1",
-        ),
+    config = GenerationConfig(
+        dataset_id=HF_DATASET_ID,
+        dataset_revision=HF_REVISION,
+        operator_families=(OperatorFamily.COMPARISON_FLIP,),
+        seeds=1,
+        max_inputs_per_mutant=10,
+        timeout_seconds=5.0,
+        task_ids=("HumanEval/0",),
+        canonical_suite_digest="opaque-schema-v1-suite-provenance",
+        runner_identity="whetstone-test-fixture@v1",
+        runtime_identity="whetstone-test-fixture-runtime@v1",
+    )
+    manifest = build_manifest(
+        config=config,
         records=(record,),
         accepted_by_family=(
             FamilyCount(
@@ -110,10 +85,13 @@ def mutant_dataset_dir(
                 count=1,
             ),
         ),
-        skipped=(),
     )
     output_dir = tmp_path / "mutant-dataset"
-    publish_dataset(output_dir=output_dir, generated=generated)
+    output_dir.mkdir()
+    (output_dir / "mutants.jsonl").write_bytes(encode_records((record,)))
+    (output_dir / "manifest.json").write_text(
+        manifest.model_dump_json(indent=2) + "\n"
+    )
     return output_dir
 
 
@@ -150,8 +128,6 @@ def test_build_rejects_non_path_boundary(
 def test_build_rejects_unauthenticated_records(
     mutant_dataset_dir: Path,
 ) -> None:
-    from dr_code.mutants.dataset import DatasetValidationError
-
     from whetstone.envs.ed1m import build_ed1m_experiment
 
     records_path = mutant_dataset_dir / "mutants.jsonl"
@@ -163,13 +139,17 @@ def test_build_rejects_unauthenticated_records(
         build_ed1m_experiment(artifact_dir=mutant_dataset_dir)
 
 
-def test_oracle_faithful_reconstruction_has_zero_attractor() -> None:
+def test_oracle_faithful_reconstruction_has_zero_attractor(
+    tmp_path: Path,
+) -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
+    record_root = tmp_path / "records"
+    record_root.mkdir()
     score = score_ed1m_reconstruction(
         reconstruction=_MUTATED_SOURCE,
         mutant=_mutant_record(),
-        timeout_seconds=5.0,
+        executor=host_process_executor(record_root),
     )
 
     assert score.fidelity_to_mutant == pytest.approx(1.0)
@@ -177,26 +157,32 @@ def test_oracle_faithful_reconstruction_has_zero_attractor() -> None:
     assert score.infrastructure_unknown is False
 
 
-def test_oracle_canonical_reconstruction_has_full_attractor() -> None:
+def test_oracle_canonical_reconstruction_has_full_attractor(
+    tmp_path: Path,
+) -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
+    record_root = tmp_path / "records"
+    record_root.mkdir()
     score = score_ed1m_reconstruction(
         reconstruction=_CANONICAL_SOURCE,
         mutant=_mutant_record(),
-        timeout_seconds=5.0,
+        executor=host_process_executor(record_root),
     )
 
     assert score.fidelity_to_mutant == pytest.approx(0.5)
     assert score.attractor_pull == pytest.approx(1.0)
 
 
-def test_oracle_definitive_mismatch_scores_zero() -> None:
+def test_oracle_definitive_mismatch_scores_zero(tmp_path: Path) -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
+    record_root = tmp_path / "records"
+    record_root.mkdir()
     score = score_ed1m_reconstruction(
         reconstruction="def f(x):\n    return None\n",
         mutant=_mutant_record(),
-        timeout_seconds=5.0,
+        executor=host_process_executor(record_root),
     )
 
     assert score.fidelity_to_mutant == pytest.approx(0.0)
@@ -206,14 +192,13 @@ def test_oracle_definitive_mismatch_scores_zero() -> None:
 def test_oracle_failure_is_infrastructure_unknown() -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
-    def unavailable(*, source: str, input_text: str, timeout_seconds: float):
-        raise SubprocessStartError("subprocess unavailable")
+    def unavailable(_job, _cancellation):
+        raise ExecutorFailure("executor unavailable")
 
     score = score_ed1m_reconstruction(
         reconstruction=_MUTATED_SOURCE,
         mutant=_mutant_record(),
-        run_in_subprocess=unavailable,
-        timeout_seconds=5.0,
+        executor=FakeExecutor(responder=unavailable),
     )
 
     assert score.infrastructure_unknown is True

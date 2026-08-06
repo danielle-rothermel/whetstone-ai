@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-from dr_code.eval import AggregationStatus
 
 from tests.experiment.support import (
     GRAPH_A,
@@ -18,6 +17,7 @@ from whetstone.coordination.official.selection import (
     SelectionEvidence,
     select_official,
 )
+from whetstone.evaluation import AggregationStatus
 from whetstone.experiment.objectives import (
     Direction,
     TieBehavior,

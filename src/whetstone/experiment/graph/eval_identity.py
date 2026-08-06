@@ -10,7 +10,7 @@ from whetstone.experiment.graph.nodes import (
 )
 
 if TYPE_CHECKING:
-    from dr_code.eval import EvalConfig
+    from whetstone.evaluation import EvalConfig
 
 
 class EvalIdentityMismatchError(ValueError):
@@ -47,8 +47,8 @@ def sole_eval_node_procedure_hash(graph: GraphConfig) -> str:
 def eval_config_hash(eval_config: EvalConfig) -> str:
     """The composite Eval Config Identity Hash (``eval_config_hash``).
 
-    This is dr-code's own ``config_identity_hash``; Whetstone adds no second
-    identity for the Eval Config.
+    This is the Eval Config's native ``config_identity_hash``; Whetstone adds
+    no second identity for it.
     """
     return eval_config.config_identity_hash
 

@@ -25,6 +25,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Own generic evaluation configuration, planning, aggregation, measurement,
+  compression, and ED1M dataset contracts in Whetstone; use released
+  `dr-code` HumanEval/trace APIs and explicit `dr-exec` executors.
 - Pin the released graph, serialization, and storage foundations; publish
   optimization traces atomically and admit persisted JSON only through the
   strict decoder boundary.

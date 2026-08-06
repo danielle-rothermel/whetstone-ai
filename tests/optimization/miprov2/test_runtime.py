@@ -131,7 +131,7 @@ def test_runtime_state_and_evaluation_identity_payloads_are_pinned() -> None:
     )
     assert state.identity_payload() == state.model_dump(mode="json")
     assert state.identity_hash() == (
-        "ddabdb99f2094e20f51d5d6f1f9e62abc1defbc26565835794323083a97d0048"
+        "d145ef317349a8fe6c4850b87a956fe38c451be4543adbab9e7ade9a2f11501d"
     )
 
 

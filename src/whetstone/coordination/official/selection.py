@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from dr_code.eval import AggregationStatus
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -15,6 +14,7 @@ from pydantic import (
 )
 
 from whetstone.core.identity import require_full_hash
+from whetstone.evaluation import AggregationStatus
 from whetstone.experiment.objectives import (
     Direction,
     Objective,

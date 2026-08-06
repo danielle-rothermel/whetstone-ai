@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from dr_code.execution import SubprocessStartError
-from dr_code.humaneval import STRICT_FIELD_MARKER_PARSER_PROFILE
+from dr_code.core.execution.executor import host_process_executor
+from dr_exec import Executor, ExecutorFailure, FakeExecutor
 from dr_providers import FailureClass
 
 from tests.envs.support import (
@@ -180,19 +180,28 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
     )
 
 
-def test_humaneval_scoring_canonical_passes_wrong_fails() -> None:
+@pytest.fixture
+def code_executor(tmp_path: Path) -> Executor:
+    record_root = tmp_path / "dr-exec-records"
+    record_root.mkdir()
+    return host_process_executor(record_root)
+
+
+def test_humaneval_scoring_canonical_passes_wrong_fails(
+    code_executor: Executor,
+) -> None:
     task = _tasks(1)[0].humaneval_task
     good = score_ed1_submission(
         raw_submission=task.ground_truth_code,
         task=task,
-        timeout_seconds=30.0,
+        executor=code_executor,
     )
     bad = score_ed1_submission(
         raw_submission=(
             f"def {task.entry_point}(*args, **kwargs):\n    return None\n"
         ),
         task=task,
-        timeout_seconds=30.0,
+        executor=code_executor,
     )
     assert good.passed and not good.infrastructure_unknown
     assert not bad.passed and not bad.infrastructure_unknown
@@ -202,16 +211,21 @@ def test_humaneval_scoring_canonical_passes_wrong_fails() -> None:
     ("raw_submission", "expected_outcome"),
     [
         ("", "empty_submission"),
-        ("x = 1", "no_top_level_functions"),
+        ("x = 1", "extraction_failed"),
         ("```python\nthis is ???\n```", "extraction_failed"),
     ],
 )
 def test_humaneval_scoring_completed_rejections_are_definitive(
     raw_submission: str,
     expected_outcome: str,
+    code_executor: Executor,
 ) -> None:
     task = _tasks(1)[0].humaneval_task
-    score = score_ed1_submission(raw_submission=raw_submission, task=task)
+    score = score_ed1_submission(
+        raw_submission=raw_submission,
+        task=task,
+        executor=code_executor,
+    )
 
     assert score.outcome == expected_outcome
     assert score.infrastructure_unknown is False
@@ -220,29 +234,17 @@ def test_humaneval_scoring_completed_rejections_are_definitive(
 def test_humaneval_scoring_projects_harness_failure() -> None:
     task = _tasks(1)[0].humaneval_task
 
-    def unavailable(*, source: str, input_text: str, timeout_seconds: float):
-        raise SubprocessStartError("subprocess unavailable")
+    def unavailable(_job, _cancellation):
+        raise ExecutorFailure("executor unavailable")
 
     harness_failure = score_ed1_submission(
         raw_submission=task.ground_truth_code,
         task=task,
-        run_in_subprocess=unavailable,
+        executor=FakeExecutor(responder=unavailable),
     )
 
     assert harness_failure.outcome == "harness_failure"
     assert harness_failure.infrastructure_unknown is True
-
-
-def test_humaneval_scoring_honors_explicit_parser_profile() -> None:
-    task = _tasks(1)[0].humaneval_task
-    score = score_ed1_submission(
-        raw_submission=task.ground_truth_code,
-        task=task,
-        parser_profile=STRICT_FIELD_MARKER_PARSER_PROFILE,
-    )
-
-    assert score.outcome == "extraction_failed"
-    assert score.infrastructure_unknown is False
 
 
 def test_body_validation_rejects_before_transport() -> None:
@@ -490,7 +492,7 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "3e0fb3698ab7e68bb5498b9fddf0dda45ac9eba40cc67e0318677d3b6a98ec9f"
+        "2c802e1d605d6daf87e4d1834e84e90895de0937a82c252fd818a20c2b514b78"
     )
 
 

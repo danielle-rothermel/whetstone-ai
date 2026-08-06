@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dr_code.eval import (
+from whetstone.envs.registry import EnvSpec
+from whetstone.evaluation import (
     Applicability,
     MetricFact,
     OperatorLineage,
     Score,
 )
-
-from whetstone.envs.registry import EnvSpec
 
 #: The Metric / Score name and unit the terminal Eval Node emits.
 ENV_EXACT_MATCH_NAME = "env_exact_match"
@@ -59,7 +58,7 @@ def env_exact_match_score(
 ) -> Score:
     """Derive the ``env_exact_match`` Score from the Metric Fact.
 
-    A 0/1 dr-code Score (unit ``correct/1``) named ``env_exact_match``,
+    A 0/1 Score (unit ``correct/1``) named ``env_exact_match``,
     deterministically derived from the ``env_exact_match`` Metric Fact and
     retaining the Evaluation Procedure Config identity in its lineage.
     """

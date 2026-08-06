@@ -35,8 +35,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: Install dependencies
         run: uv sync --locked
       - name: Lint
@@ -64,8 +62,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: Unit tests
         run: ./scripts/ci/unit.sh
 
@@ -91,8 +87,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: Process integration tests
         run: ./scripts/ci/process-integration.sh
 
@@ -118,8 +112,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: SQLite time integration tests
         run: ./scripts/ci/sqlite-time-integration.sh
 
@@ -145,8 +137,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: SQLite contention tests
         run: ./scripts/ci/sqlite-contention.sh
 
@@ -186,8 +176,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: PostgreSQL and DBOS integration tests
         env:
           WHETSTONE_TEST_POSTGRES_DSN: postgresql://whetstone:whetstone@localhost:5432/whetstone
@@ -215,8 +203,6 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: Install dependencies
         run: uv sync --locked --python 3.14
       - name: Verify frozen DSPy Example pickle bytes
@@ -246,7 +232,5 @@ jobs:
           cache-dependency-glob: |
             pyproject.toml
             uv.lock
-      - name: Install dr-code build toolchain
-        run: npm install --global pnpm@11.9.0
       - name: Built wheel smoke
         run: ./scripts/ci/wheel-smoke.sh

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dr_code.eval import OperatorLineage
 from dr_providers import ProviderTransportResponse
 
+from whetstone.evaluation import OperatorLineage
 from whetstone.provider.classification import Generation
 
 FULL_HASH = "0" * 64

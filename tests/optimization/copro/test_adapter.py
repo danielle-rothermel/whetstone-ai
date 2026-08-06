@@ -485,7 +485,7 @@ def test_attempt_wire_pins_separate_result_and_ordered_reward_refs() -> None:
     assert typed_ref_for_record(
         "test.copro_attempt_wire", record
     ).content_hash == (
-        "6d6ace1d345e79006ba8d9096b390eb4621e75b06e54967f75916bf9d13371da"
+        "dc542e8b75a3d7f3febd33b53d8a8759755a0b933acef0f97a6bec0c1d4db88d"
     )
 
 

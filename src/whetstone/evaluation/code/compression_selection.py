@@ -3,19 +3,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Protocol, runtime_checkable
 
-from dr_code.eval import (
+from whetstone.evaluation import (
     CompressionReferenceArtifact,
     CompressionReferenceKey,
     CompressionReferenceResolver,
 )
 
 #: The generic-key namespace for this experiment's compression references. It
-#: is an opaque string to dr-code; the mapping to ``task.gt_code_wo_comments``
+#: is an opaque string to the generic resolver; the mapping to
+#: ``task.gt_code_wo_comments``
 #: is a Whetstone-only fact recorded here, never in the generic key.
 COMPRESSION_REFERENCE_NAMESPACE = "whetstone.eval_experiment.compression"
 
 #: The dataset field this experiment selects. Named here (Whetstone) and
-#: nowhere in the generic dr-code layer.
+#: nowhere in the generic reference layer.
 SELECTED_FIELD = "gt_code_wo_comments"
 
 
@@ -24,8 +25,8 @@ class ExperimentTaskView(Protocol):
     """Structural contract for a task carrying the experiment reference field.
 
     Any object exposing ``gt_code_wo_comments`` satisfies it. Kept a Protocol
-    (not a subclass of ``HumanEvalTask``) so the generic dr-code task type is
-    never widened with an experiment field.
+    (not a subclass of ``HumanEvalTask``) so the generic task contract is not
+    widened with an experiment field.
     """
 
     @property
@@ -35,8 +36,8 @@ class ExperimentTaskView(Protocol):
 def compression_reference_key(task_identity: str) -> CompressionReferenceKey:
     """The generic Compression Reference Key naming one task's reference.
 
-    ``task_identity`` is the dr-code Task Identity Hash. The returned key is a
-    plain namespaced dr-code key; it carries no dataset-field knowledge.
+    ``task_identity`` is the task identity. The returned key is a plain
+    namespaced key with no dataset-field knowledge.
     """
 
     return CompressionReferenceKey(
@@ -74,11 +75,11 @@ def compression_reference_binding(
 def build_resolver(
     bindings: Mapping[str, ExperimentTaskView],
 ) -> CompressionReferenceResolver:
-    """Build a generic dr-code resolver over ``{task_identity: task}``.
+    """Build a generic resolver over ``{task_identity: task}``.
 
     Each task's exact ``gt_code_wo_comments`` bytes become the resolved
     artifact for its generic key. The resulting resolver is an ordinary
-    dr-code resolver with no dataset-field knowledge.
+    resolver with no dataset-field knowledge.
     """
 
     mapping = {

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dr_code.eval.lifecycle import (
+from dr_graph import GraphConfig, GraphDefinition
+
+from whetstone.evaluation import (
     AggregationDefinition,
     EvalConfig,
     EvalDefinition,
@@ -13,8 +15,6 @@ from dr_code.eval.lifecycle import (
     SamplingConfig,
     SamplingDefinition,
 )
-from dr_graph import GraphConfig, GraphDefinition
-
 from whetstone.experiment.graph.nodes import (
     eval_node_definition,
     eval_variable_assignment,
@@ -23,7 +23,7 @@ from whetstone.experiment.graph.nodes import (
 )
 
 PROVIDER_CALL_CONFIG_SCHEMA = "dr_providers.provider_call_config"
-EVALUATION_PROCEDURE_CONFIG_SCHEMA = "dr_code.evaluation_procedure.config"
+EVALUATION_PROCEDURE_CONFIG_SCHEMA = "whetstone.evaluation_procedure.config"
 
 
 def sampling_config() -> SamplingConfig:
@@ -42,12 +42,12 @@ def procedure_config(
         steps=(
             PreprocessingStepBinding(instance_name="ra", step="return_all"),
         ),
-    ).materialize()
+    ).materialize(resolved_steps=(("ra", "return_all", "1"),))
     metric = MetricExtractionDefinition(
         definition_id="met",
         version="1",
         questions=(MetricQuestionBinding(metric="code_leakage", on="output"),),
-    ).materialize()
+    ).materialize(resolved_operators=(("code_leakage", "1"),))
     return EvaluationProcedureDefinition(
         definition_id="proc", version="1"
     ).materialize(

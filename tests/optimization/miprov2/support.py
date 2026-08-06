@@ -3,14 +3,6 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
-from dr_code.eval import (
-    DefinitionRef,
-    EvalConfig,
-    RepeatPlan,
-    SamplingDefinition,
-    TaskSet,
-)
-from dr_code.eval.identity import SCHEMA_EVAL_CONFIG, identity_hash_for
 from dr_providers import openrouter_chat_config
 from dr_serialize import Jsonable
 from dr_store import ObjectStore
@@ -27,6 +19,14 @@ from tests.optimization.support import (
 )
 from whetstone.core.identity import IdentityRef, TypedRef, typed_ref_for_record
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation import (
+    DefinitionRef,
+    EvalConfig,
+    RepeatPlan,
+    SamplingDefinition,
+    TaskSet,
+)
+from whetstone.evaluation.config import SCHEMA_EVAL_CONFIG, identity_hash_for
 from whetstone.experiment.binding import (
     EvaluationBinding,
     eval_config_reference,
@@ -142,7 +142,7 @@ def miprov2_evidence_source_eval_config():
     definition = DefinitionRef(
         definition_id="miprov2-evidence",
         version="1",
-        schema_name="dr_code.eval_definition",
+        schema_name="whetstone.eval.definition",
         identity_hash=FULL_A,
     )
     identity = identity_hash_for(
@@ -290,7 +290,7 @@ def canonical_miprov2_eval_source(sampling_hash: str):
     definition = DefinitionRef(
         definition_id="runtime-eval",
         version="1",
-        schema_name="dr_code.eval_definition",
+        schema_name="whetstone.eval.definition",
         identity_hash=FULL_A,
     )
     identity = identity_hash_for(

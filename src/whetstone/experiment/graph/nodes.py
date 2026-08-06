@@ -48,7 +48,7 @@ def _typed_config_ref(
     """A typed config reference plus Identity Hash, JSON-safe for identity.
 
     This is the static Variable value that names a native config owned by
-    another repo (a dr-providers Provider Call Config or a dr-code Evaluation
+    another boundary (for example a Provider Call Config or an Evaluation
     Procedure Config). It carries the owning schema name and the full
     64-char Identity Hash so changing the referenced config changes
     ``graph_hash``.

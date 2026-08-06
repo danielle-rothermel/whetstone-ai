@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml)
 
-| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [Terms](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml) | [Contracts](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml) | [Changelog](https://github.com/danielle-rothermel/whetstone-ai/blob/main/CHANGELOG.md) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | whetstone-envs (private) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [Terms](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml) | [Contracts](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/contracts.toml) | [Changelog](https://github.com/danielle-rothermel/whetstone-ai/blob/main/CHANGELOG.md) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-exec](https://github.com/danielle-rothermel/dr-exec) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | whetstone-envs (private) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 **Whetstone evaluates and optimizes prompt candidates through typed,
 reproducible experiment contracts.** Its functionality is organized into
@@ -24,9 +24,9 @@ these areas:
 - **[Execution and recovery](src/whetstone/execution/)** fan out process work,
   preserve partial progress, reuse prompt results, and resume completed work
   without changing its identity.
-- **[Evaluation and scoring](src/whetstone/evaluation/)** execute graphs over
-  planned tasks and repeats, capture component traces, and persist complete
-  aggregate and reward evidence.
+- **[Evaluation and scoring](src/whetstone/evaluation/)** own evaluation
+  definitions and configs, task-and-repeat plans, measurements, compression,
+  aggregation, graph execution, and complete reward evidence.
 - **[Optimization](src/whetstone/optimization/)** provides the shared harness,
   proposal and tool contracts, native COPRO, MIPROv2, and GEPA flows, and a
   Codex MCP adapter with a typed output artifact.
@@ -46,7 +46,7 @@ The repository boundaries follow the same shape:
 | Environments | `whetstone.envs` | Task pools, sampling, rollout definitions, and environment-specific policy |
 | Provider | `whetstone.provider` | Provider requests, attempt evidence, classification, and retry policy |
 | Execution | `whetstone.execution` | Process fanout, partial progress, prompt caching, and resume behavior |
-| Evaluation | `whetstone.evaluation` | Evaluation drivers, traces, evidence, scoring, and aggregates |
+| Evaluation | `whetstone.evaluation` | Evaluation configs, plans, drivers, traces, measurements, compression, scoring, evidence, and aggregates |
 | Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, Codex, and tool use |
 | Coordination | `whetstone.coordination` | Durable claims, official authority, and proposal/evaluation services |
 | Validation runner | `whetstone.runner` | Resumable validation cells, budgets, ledgers, and viewer projections |

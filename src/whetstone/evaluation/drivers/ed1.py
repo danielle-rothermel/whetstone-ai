@@ -6,7 +6,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-from dr_code.mutants.dataset import MutantRecord
 from dr_providers import (
     MessageRole,
     PromptMessage,
@@ -38,6 +37,7 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_blended import blend_per_task
 from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.ed1m_dataset import MutantRecord
 from whetstone.envs.encdec_rollout import DECODER_NODE_ID, ENCODER_NODE_ID
 from whetstone.envs.sampling import (
     EnvSplitSampling,
@@ -539,7 +539,7 @@ def drive_ed1_row(
     provider_call_config: ProviderCallConfig,
     execution_policy: ProviderExecutionPolicy,
     transport: TransportCall,
-    scorer: Callable[..., CodeScore],
+    scorer: Callable[..., object],
     logical_call_id: str,
     repeat_index: int,
     drive_ordinal: int,
@@ -734,7 +734,7 @@ def _score_row(
     experiment: Ed1Experiment,
     instance: Instance,
     decoder_text: str,
-    scorer: Callable[..., CodeScore],
+    scorer: Callable[..., object],
 ) -> CodeScore:
     """Score one reconstruction: ed1 HumanEval suite OR ed1m mutant oracle.
 
@@ -746,9 +746,17 @@ def _score_row(
     from whetstone.envs.ed1m import Ed1mExperiment, score_ed1m_row
 
     if isinstance(experiment, Ed1mExperiment):
-        return score_ed1m_row(experiment, instance, decoder_text)
+        return score_ed1m_row(
+            experiment,
+            instance,
+            decoder_text,
+            scorer,
+        )
     task = humaneval_task_from_instance(instance)
-    return scorer(raw_submission=decoder_text, task=task)
+    score = scorer(raw_submission=decoder_text, task=task)
+    if not isinstance(score, CodeScore):
+        raise TypeError("ED1 scorer returned an unsupported result")
+    return score
 
 
 def _ed1_partial_payload(outcome: Ed1RowOutcome) -> Ed1PartialPayload:

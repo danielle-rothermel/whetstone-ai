@@ -4,8 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dr_code.mutants import load_dataset
-from dr_code.mutants.dataset import MutantRecord
 from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import (
@@ -17,7 +15,8 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import CodeScore
-from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+from whetstone.envs.ed1m_dataset import MutantRecord, load_dataset
+from whetstone.envs.ed1m_oracle import MutantScore
 from whetstone.envs.encdec_rollout import build_encdec_rollout_definition
 from whetstone.envs.factory import EnvEvalConfigs
 from whetstone.envs.sampling import Completeness
@@ -106,7 +105,10 @@ class Ed1mExperiment(Ed1Experiment):
 
 
 def score_ed1m_row(
-    experiment: Ed1mExperiment, instance: Instance, reconstruction: str
+    experiment: Ed1mExperiment,
+    instance: Instance,
+    reconstruction: str,
+    scorer: Callable[..., object],
 ) -> CodeScore:
     """Score one ed1m reconstruction via the instance's mutant dual oracle.
 
@@ -120,16 +122,11 @@ def score_ed1m_row(
         raise KeyError(
             f"ed1m instance {instance.id!r} has no mutant in the map"
         )
-    scorer = experiment.scorer
-    if scorer is not None:
-        # A test/dry-run may inject a fake scorer taking the reconstruction +
-        # mutant; the production path uses the canonical dr-code oracle.
-        result = scorer(reconstruction=reconstruction, mutant=mutant)
-        if isinstance(result, CodeScore):
-            return result
-    score = score_ed1m_reconstruction(
-        reconstruction=reconstruction, mutant=mutant
-    )
+    score = scorer(reconstruction=reconstruction, mutant=mutant)
+    if isinstance(score, CodeScore):
+        return score
+    if not isinstance(score, MutantScore):
+        raise TypeError("ED1M scorer returned an unsupported result")
     if score.infrastructure_unknown or score.fidelity_to_mutant is None:
         return CodeScore(
             passed=False,
