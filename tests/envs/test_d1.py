@@ -28,6 +28,10 @@ from whetstone.envs.ed1 import (
     Ed1BodyError,
     ed1_body_rejection,
 )
+from whetstone.envs.ed1_scoring import (
+    BatchScoringDeadlineExceeded,
+    CodeScore,
+)
 from whetstone.envs.input_transform import (
     direct_prompt,
     rename_identifier,
@@ -35,6 +39,7 @@ from whetstone.envs.input_transform import (
 )
 from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.evaluation.drivers.d1 import (
+    D1GeneratedRowOutcome,
     D1RowOutcome,
     D1RowRequest,
     _input_arm_text,
@@ -70,6 +75,181 @@ def _successful_outcome() -> D1RowOutcome:
             ),
         ),
     )
+
+
+def _generated_outcome(output_text: str) -> D1GeneratedRowOutcome:
+    return D1GeneratedRowOutcome(
+        output_text=output_text,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=LLM_NODE_ID,
+                prompt="test prompt",
+                generation=output_text,
+            ),
+        ),
+    )
+
+
+def test_coordinator_scores_generated_d1_rows_in_one_batch() -> None:
+    tasks = _tasks(2)
+    experiment = build_d1_experiment(
+        tasks=tasks,
+        repeats=2,
+        internal_n=2,
+        official_n=2,
+    )
+    batch_sizes: list[int] = []
+
+    def generated(instance, repeat: int, _drive_ordinal: int):
+        return _generated_outcome(f"# {instance.id} repeat {repeat}")
+
+    def score_batch(inputs, *, max_wall_seconds: float | None = None):
+        assert max_wall_seconds is None
+        batch_sizes.append(len(inputs))
+        return tuple(
+            CodeScore(
+                passed=True,
+                infrastructure_unknown=False,
+                outcome="passed",
+            )
+            for _item in inputs
+        )
+
+    result = run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-batch",
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=row_job_factory(generated),
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
+        batch_scorer=score_batch,
+    )
+
+    assert batch_sizes == [4]
+    assert [output.score for output in result.outputs] == [1.0] * 4
+
+
+def test_d1_batch_deadline_leaves_generated_rows_missing(
+    monkeypatch,
+) -> None:
+    experiment = build_d1_experiment(
+        tasks=_tasks(1),
+        repeats=1,
+        internal_n=1,
+        official_n=1,
+    )
+
+    def completed_pool(
+        specs, *, concurrency, is_rate_limited, max_wall_seconds
+    ):
+        del is_rate_limited, max_wall_seconds
+        return PoolOutcome(
+            results=tuple(
+                FanoutResult(
+                    key=spec.key,
+                    status=FanoutStatus.COMPLETED,
+                    value=_generated_outcome("generated"),
+                )
+                for spec in specs
+            ),
+            effective_concurrency=concurrency,
+            concurrency_halved=False,
+            deadline_reached=False,
+            guard_timeouts=0,
+        )
+
+    remaining_walls = iter((1.0, 0.0))
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.run_call_pool", completed_pool
+    )
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.remaining_phase_wall_seconds",
+        lambda _deadline: next(remaining_walls),
+    )
+
+    def must_not_score(inputs, *, max_wall_seconds: float | None = None):
+        del inputs
+        raise AssertionError(
+            f"expired phase started scoring with {max_wall_seconds=}"
+        )
+
+    result = run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-batch-deadline",
+        sampling=experiment.eval_configs.official,
+        execution_policy=execution_policy(),
+        row_job_factory=_passing_jobs(),
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official,
+            official=True,
+        ),
+        max_wall_seconds=10.0,
+        batch_scorer=must_not_score,
+    )
+
+    assert result.submission_score_aggregate.rows_missing == 1
+    assert result.outputs[0].missing is True
+
+
+def test_d1_batch_deadline_exception_leaves_generated_rows_missing(
+    monkeypatch,
+) -> None:
+    experiment = build_d1_experiment(
+        tasks=_tasks(1),
+        repeats=1,
+        internal_n=1,
+        official_n=1,
+    )
+
+    def completed_pool(
+        specs, *, concurrency, is_rate_limited, max_wall_seconds
+    ):
+        del is_rate_limited, max_wall_seconds
+        return PoolOutcome(
+            results=tuple(
+                FanoutResult(
+                    key=spec.key,
+                    status=FanoutStatus.COMPLETED,
+                    value=_generated_outcome("generated"),
+                )
+                for spec in specs
+            ),
+            effective_concurrency=concurrency,
+            concurrency_halved=False,
+            deadline_reached=False,
+            guard_timeouts=0,
+        )
+
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.run_call_pool", completed_pool
+    )
+
+    def deadline(inputs, *, max_wall_seconds: float | None = None):
+        del inputs
+        assert max_wall_seconds is not None
+        raise BatchScoringDeadlineExceeded
+
+    result = run_d1_eval(
+        experiment,
+        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_id="d1-mid-batch-deadline",
+        sampling=experiment.eval_configs.official,
+        execution_policy=execution_policy(),
+        row_job_factory=_passing_jobs(),
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.official,
+            official=True,
+        ),
+        max_wall_seconds=10.0,
+        batch_scorer=deadline,
+    )
+
+    assert result.submission_score_aggregate.rows_missing == 1
 
 
 def _passing_jobs(*, served: list[str] | None = None):

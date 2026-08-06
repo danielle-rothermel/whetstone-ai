@@ -33,7 +33,12 @@ from whetstone.envs.ed1 import (
     reward_from_primary_score,
     validate_ed1_body,
 )
-from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.ed1_scoring import (
+    BatchScoringDeadlineExceeded,
+    CodeBatchScorer,
+    CodeScore,
+    CodeScoringInput,
+)
 from whetstone.envs.input_transform import (
     direct_body,
     renamed_task,
@@ -190,6 +195,47 @@ class D1RowOutcome(BaseModel):
         return self.row_state is ExecutedRowState.MISSING
 
 
+class D1GeneratedRowOutcome(BaseModel):
+    """A completed provider row awaiting coordinator-side code scoring."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+    )
+
+    output_text: str
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
+    finish_reason: str | None = None
+    cache_hit: bool = False
+    cache_source_phase: str | None = None
+    cache_source_unit: str | None = None
+    cache_source_call_id: str | None = None
+    cache_source_at: str | None = None
+
+    @model_validator(mode="after")
+    def _valid_generated_outcome(self) -> D1GeneratedRowOutcome:
+        validate_executed_component_trace(self.executed_component_steps)
+        if len(self.executed_component_steps) != 1:
+            raise ValueError("a generated D1 row requires one component")
+        _prompt, generation = _llm_component_values(
+            self.executed_component_steps[0], component_id=LLM_NODE_ID
+        )
+        if generation != self.output_text:
+            raise ValueError("D1 trace generation must match output_text")
+        if self.cache_hit != (self.cache_source_call_id is not None):
+            raise ValueError(
+                "cache_hit and original-entry provenance must be paired"
+            )
+        return self
+
+
 _D1_ROW_REQUEST_SCHEMA = "whetstone.envs.d1_row_request/v2"
 _D1_ROW_RESULT_SCHEMA = "whetstone.envs.d1_row_result/v3"
 
@@ -277,7 +323,7 @@ class D1RowResult(BaseModel):
         _D1_ROW_RESULT_SCHEMA
     )
     request_identity: str
-    outcome: D1RowOutcome
+    outcome: D1RowOutcome | D1GeneratedRowOutcome
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> D1RowResult:
@@ -327,15 +373,15 @@ def drive_d1_row(
     provider_call_config: ProviderCallConfig,
     execution_policy: ProviderExecutionPolicy,
     transport: TransportCall,
-    scorer: Callable[..., CodeScore],
+    scorer: Callable[..., CodeScore] | None,
     logical_call_id: str,
     repeat_index: int,
     drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
     cache_unit: str,
-) -> D1RowOutcome:
-    """Run one direct generate->score rollout for one (task, repeat)."""
+) -> D1RowOutcome | D1GeneratedRowOutcome:
+    """Run one direct generation, optionally scoring inside the worker."""
     input_arm, score_task = _input_arm_text(experiment, instance)
     try:
         prompt = render_d1_frame(candidate_body, input_arm=input_arm)
@@ -386,6 +432,22 @@ def drive_d1_row(
             generation=output_text,
         ),
     )
+    if scorer is None:
+        return D1GeneratedRowOutcome(
+            output_text=output_text,
+            executed_component_steps=executed_component_steps,
+            prompt_tokens=telemetry.prompt_tokens,
+            completion_tokens=telemetry.completion_tokens,
+            total_tokens=telemetry.total_tokens,
+            reasoning_tokens=telemetry.reasoning_tokens,
+            latency_s=telemetry.latency_s,
+            finish_reason=telemetry.finish_reason,
+            cache_hit=marks.cache_hit,
+            cache_source_phase=marks.cache_source_phase,
+            cache_source_unit=marks.cache_source_unit,
+            cache_source_call_id=marks.cache_source_call_id,
+            cache_source_at=marks.cache_source_at,
+        )
     code_score = scorer(raw_submission=output_text, task=score_task)
     if code_score.infrastructure_unknown:
         return D1RowOutcome(
@@ -461,6 +523,48 @@ def _should_redrive(outcome: D1RowOutcome) -> bool:
     return outcome.failure_code == "runner_timeout" or outcome.redrivable
 
 
+def _finish_generated_row(
+    outcome: D1GeneratedRowOutcome,
+    score: CodeScore,
+) -> D1RowOutcome:
+    if score.infrastructure_unknown:
+        return D1RowOutcome(
+            submission_score=None,
+            output_text=outcome.output_text,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=outcome.executed_component_steps,
+            failure_code="code_eval_infrastructure_unknown",
+            prompt_tokens=outcome.prompt_tokens,
+            completion_tokens=outcome.completion_tokens,
+            total_tokens=outcome.total_tokens,
+            reasoning_tokens=outcome.reasoning_tokens,
+            latency_s=outcome.latency_s,
+            finish_reason=outcome.finish_reason,
+            cache_hit=outcome.cache_hit,
+            cache_source_phase=outcome.cache_source_phase,
+            cache_source_unit=outcome.cache_source_unit,
+            cache_source_call_id=outcome.cache_source_call_id,
+            cache_source_at=outcome.cache_source_at,
+        )
+    return D1RowOutcome(
+        submission_score=score.row_value,
+        output_text=outcome.output_text,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=outcome.executed_component_steps,
+        prompt_tokens=outcome.prompt_tokens,
+        completion_tokens=outcome.completion_tokens,
+        total_tokens=outcome.total_tokens,
+        reasoning_tokens=outcome.reasoning_tokens,
+        latency_s=outcome.latency_s,
+        finish_reason=outcome.finish_reason,
+        cache_hit=outcome.cache_hit,
+        cache_source_phase=outcome.cache_source_phase,
+        cache_source_unit=outcome.cache_source_unit,
+        cache_source_call_id=outcome.cache_source_call_id,
+        cache_source_at=outcome.cache_source_at,
+    )
+
+
 def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
     from whetstone.execution.call_support import guard_deadline_seconds
 
@@ -482,21 +586,24 @@ def run_d1_eval(
     max_wall_seconds: float | None = None,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
+    batch_scorer: CodeBatchScorer | None = None,
 ) -> D1EvalResult:
     """Drive ``candidate_body`` over a D1 split.
 
-    Fans out one serializable direct generate->score process job per (task,
-    repeat), reduces to the HumanEval Submission Score aggregate, derives its
-    Reward for an internal Evaluation Binding, and collects per-row outputs.
+    Fans out one serializable direct-generation process job per (task, repeat),
+    batch-scores generated submissions in the coordinator when requested,
+    reduces to the HumanEval Submission Score aggregate, derives its Reward for
+    an internal Evaluation Binding, and collects per-row outputs.
     Incremental
     persistence + resume mirror the ED1 drive: each completed row appends its
     record when it finishes; a resumed drive restores only an exact request
     identity instead of re-paying. A pending ordinal-0 record resumes at the
     exact ordinal-1 request.
 
-    ``row_job_factory`` is the trusted scoring authority. It must execute the
-    exact :class:`D1RowRequest` under its declared procedure; the parent binds
-    result identity before persistence but cannot attest arbitrary worker code.
+    A worker may still return a fully scored row during the dependency cutover.
+    A generated row is not written to the partial log until coordinator scoring
+    completes, so a crash in that interval may repeat generation; the prompt
+    cache remains the available no-wire replay path.
     """
     validate_ed1_body(candidate_body)
     instances = sampling.instances
@@ -606,7 +713,8 @@ def run_d1_eval(
         phase=split_role,
         unit=candidate_id,
     )
-    driven: dict[tuple[str, int], D1RowOutcome] = {}
+    driven: dict[tuple[str, int], D1RowOutcome | D1GeneratedRowOutcome] = {}
+    completed_requests: dict[tuple[str, int], D1RowRequest] = {}
     initial_requests: list[D1RowRequest] = []
     resumed_redrive_requests: list[D1RowRequest] = []
     for key, (ordinal_0, ordinal_1) in requests_by_key.items():
@@ -626,10 +734,12 @@ def run_d1_eval(
 
     def _spec(
         request: D1RowRequest,
-    ) -> CallSpec[tuple[str, int], D1RowOutcome]:
+    ) -> CallSpec[tuple[str, int], D1RowOutcome | D1GeneratedRowOutcome]:
         instance = by_instance[request.instance.id]
 
-        def _decode(value: JsonValue) -> D1RowOutcome:
+        def _decode(
+            value: JsonValue,
+        ) -> D1RowOutcome | D1GeneratedRowOutcome:
             result = D1RowResult.from_process_payload(value)
             if result.request_identity != request.request_identity:
                 raise ValueError(
@@ -642,14 +752,18 @@ def run_d1_eval(
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=_deadline(execution_policy),
-            commit=lambda outcome: _persist(
-                instance,
-                request.repeat_index,
-                outcome,
-                request_identity=request.request_identity,
-                redrive_pending=(
-                    request.drive_ordinal == 0 and _should_redrive(outcome)
-                ),
+            commit=lambda outcome: (
+                _persist(
+                    instance,
+                    request.repeat_index,
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=(
+                        request.drive_ordinal == 0 and _should_redrive(outcome)
+                    ),
+                )
+                if isinstance(outcome, D1RowOutcome)
+                else None
             ),
         )
 
@@ -658,7 +772,7 @@ def run_d1_eval(
 
     def _drive(
         requests: list[D1RowRequest],
-    ) -> dict[tuple[str, int], D1RowOutcome]:
+    ) -> dict[tuple[str, int], D1RowOutcome | D1GeneratedRowOutcome]:
         nonlocal effective_concurrency
         specs = [_spec(request) for request in requests]
         request_by_key = {
@@ -672,10 +786,11 @@ def run_d1_eval(
             max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
         effective_concurrency = pool.effective_concurrency
-        out: dict[tuple[str, int], D1RowOutcome] = {}
+        out: dict[tuple[str, int], D1RowOutcome | D1GeneratedRowOutcome] = {}
         for res in pool.results:
             if res.status is FanoutStatus.COMPLETED and res.value is not None:
                 out[res.key] = res.value
+                completed_requests[res.key] = request_by_key[res.key]
             elif res.status is FanoutStatus.UNIT_TIMEOUT:
                 request = request_by_key[res.key]
                 outcome = D1RowOutcome(
@@ -711,15 +826,78 @@ def run_d1_eval(
     redrive_requests = resumed_redrive_requests + [
         requests_by_key[key][1]
         for key, outcome in first_driven.items()
-        if _should_redrive(outcome)
+        if isinstance(outcome, D1RowOutcome) and _should_redrive(outcome)
     ]
     if redrive_requests:
         redriven = _drive(redrive_requests)
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
-            if not outcome.missing
+            if not isinstance(outcome, D1RowOutcome) or not outcome.missing
         )
+
+    generated_keys = [
+        (str(instance.id), index)
+        for instance in instances
+        for index in range(repeats)
+        if isinstance(driven[(str(instance.id), index)], D1GeneratedRowOutcome)
+    ]
+    if generated_keys:
+        if batch_scorer is None:
+            raise ValueError(
+                "coordinator-side D1 scoring requires a batch_scorer"
+            )
+        scoring_inputs = tuple(
+            CodeScoringInput(
+                raw_submission=generated.output_text,
+                task=_input_arm_text(experiment, by_instance[instance_id])[1],
+            )
+            for instance_id, _index in generated_keys
+            for generated in (driven[(instance_id, _index)],)
+            if isinstance(generated, D1GeneratedRowOutcome)
+        )
+        remaining_wall_seconds = remaining_phase_wall_seconds(phase_deadline)
+        if remaining_wall_seconds == 0.0:
+            scores = None
+        else:
+            try:
+                scores = tuple(
+                    batch_scorer(
+                        scoring_inputs,
+                        max_wall_seconds=remaining_wall_seconds,
+                    )
+                )
+            except BatchScoringDeadlineExceeded:
+                scores = None
+        if scores is None:
+            for key in generated_keys:
+                driven[key] = D1RowOutcome(
+                    submission_score=None,
+                    output_text=None,
+                    row_state=ExecutedRowState.MISSING,
+                    executed_component_steps=(),
+                )
+        else:
+            if len(scores) != len(generated_keys):
+                raise ValueError(
+                    "D1 batch scorer returned the wrong result count"
+                )
+            for key, score in zip(generated_keys, scores, strict=True):
+                generated = driven[key]
+                if not isinstance(generated, D1GeneratedRowOutcome):
+                    raise AssertionError(
+                        "generated D1 row changed before scoring"
+                    )
+                outcome = _finish_generated_row(generated, score)
+                driven[key] = outcome
+                request = completed_requests[key]
+                _persist(
+                    by_instance[key[0]],
+                    key[1],
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=False,
+                )
 
     submission_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
@@ -730,6 +908,8 @@ def run_d1_eval(
         task_submission_rows: list[RowValue] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
+            if not isinstance(outcome, D1RowOutcome):
+                raise AssertionError("D1 row was not scored")
             if outcome.missing:
                 task_submission_rows.append(RowValue(missing=True))
             elif outcome.failed or outcome.submission_score is None:
@@ -801,6 +981,7 @@ def run_d1_eval(
 
 __all__ = [
     "D1EvalResult",
+    "D1GeneratedRowOutcome",
     "D1RowJobFactory",
     "D1RowOutcome",
     "drive_d1_row",

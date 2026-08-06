@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from dr_code.humaneval import SubmissionOutcome
 from dr_exec import Executor, ExecutorFailure, FakeExecutor
 from dr_providers import FailureClass
+from dr_serialize import IdentityDocument
 
 from tests.envs.support import (
     FakeTransport,
@@ -36,7 +39,13 @@ from whetstone.envs.ed1 import (
     validate_ed1_body,
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-from whetstone.envs.ed1_scoring import score_ed1_submission
+from whetstone.envs.ed1_scoring import (
+    BatchScoringDeadlineExceeded,
+    CheckpointedCodeBatchScorer,
+    CodeScore,
+    CodeScoringInput,
+    score_ed1_submission,
+)
 from whetstone.envs.encdec_rollout import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
@@ -47,6 +56,7 @@ from whetstone.envs.encdec_rollout import (
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness
 from whetstone.evaluation.drivers.ed1 import (
+    Ed1GeneratedRowOutcome,
     Ed1PartialPayload,
     Ed1RowOutcome,
     Ed1RowRequest,
@@ -101,6 +111,229 @@ def _successful_outcome(instance, *, encoder_text: str = "REBUILD:ok"):
         max_budget=max_budget,
         encoder_len=len(encoder_text),
     )
+
+
+def _generated_outcome(instance, *, decoder_text: str):
+    encoder_text = "REBUILD:ok"
+    max_budget = round(0.5 * len(instance.prompt_inputs["input_code"]))
+    encoder_prompt = render_encoder_frame(
+        ENCODER_BODY_A,
+        input_code=instance.prompt_inputs["input_code"],
+        max_budget=max_budget,
+    )
+    decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
+    return Ed1GeneratedRowOutcome(
+        compression_value=0.5,
+        encoder_text=encoder_text,
+        decoder_text=decoder_text,
+        executed_component_steps=(
+            _llm_component_step(
+                trace_index=0,
+                component_id=ENCODER_NODE_ID,
+                prompt=encoder_prompt,
+                generation=encoder_text,
+            ),
+            _llm_component_step(
+                trace_index=1,
+                component_id=DECODER_NODE_ID,
+                prompt=decoder_prompt,
+                generation=decoder_text,
+            ),
+        ),
+        max_budget=max_budget,
+        encoder_len=len(encoder_text),
+    )
+
+
+def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
+    tasks = _tasks(2)
+    experiment = build_ed1_experiment(
+        tasks=tasks,
+        repeats=2,
+        internal_n=2,
+        official_n=2,
+    )
+    candidate = ed1_initial_candidate()
+    batch_sizes: list[int] = []
+
+    def generated(instance, repeat: int, _drive_ordinal: int):
+        return _generated_outcome(
+            instance,
+            decoder_text=f"# {instance.id} repeat {repeat}",
+        )
+
+    def score_batch(inputs, *, max_wall_seconds: float | None = None):
+        assert max_wall_seconds is None
+        batch_sizes.append(len(inputs))
+        return tuple(
+            CodeScore(
+                passed=True,
+                infrastructure_unknown=False,
+                outcome="passed",
+            )
+            for _item in inputs
+        )
+
+    result = run_ed1_eval(
+        experiment,
+        candidate_template=str(candidate.payload[MUTATION_FIELD]),
+        candidate_id="ed1-batch",
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=row_job_factory(generated),
+        evaluation_binding=evaluation_binding(
+            experiment.eval_configs.internal
+        ),
+        batch_scorer=score_batch,
+    )
+
+    assert batch_sizes == [4]
+    assert [output.score for output in result.outputs] == [1.0] * 4
+
+
+def test_checkpointed_batch_scorer_owns_one_cache_lifecycle(
+    monkeypatch,
+) -> None:
+    import whetstone.envs.ed1_scoring as scoring_module
+
+    events: list[str] = []
+
+    class Store:
+        def __init__(self, path):
+            events.append(f"store:{path}")
+
+        def close(self):
+            events.append("store-close")
+
+    class Cache:
+        def __init__(self, store, **_kwargs):
+            events.append("cache")
+
+        def checkpoint(self):
+            events.append("checkpoint")
+
+        def close(self):
+            events.append("cache-close")
+
+    class Request:
+        def __init__(self, **values):
+            self.values = values
+
+    def score_batch(requests, *, executor, execution_cache):
+        del executor, execution_cache
+        events.append(f"score:{len(requests)}")
+        return tuple(
+            SimpleNamespace(outcome=SubmissionOutcome.PASSED)
+            for _request in requests
+        )
+
+    monkeypatch.setattr(scoring_module, "SqliteRecordCache", Store)
+    monkeypatch.setattr(scoring_module, "CheckpointedExecutionCache", Cache)
+    monkeypatch.setattr(scoring_module, "HumanEvalSubmissionRequest", Request)
+    monkeypatch.setattr(
+        scoring_module, "score_humaneval_submissions_batch", score_batch
+    )
+    task = _tasks(1)[0].humaneval_task
+
+    with CheckpointedCodeBatchScorer(
+        "execution-cache.sqlite3",
+        runtime_identity=IdentityDocument(
+            schema="tests/runtime",
+            schema_version=1,
+            payload={"runtime": "test"},
+        ),
+        executor=FakeExecutor(),
+    ) as scorer:
+        scores = scorer(
+            (
+                CodeScoringInput(raw_submission="one", task=task),
+                CodeScoringInput(raw_submission="two", task=task),
+            )
+        )
+
+    assert [score.row_value for score in scores] == [1.0, 1.0]
+    assert events == [
+        "store:execution-cache.sqlite3",
+        "cache",
+        "score:2",
+        "checkpoint",
+        "cache-close",
+        "store-close",
+    ]
+
+
+def test_checkpointed_batch_scorer_restores_execution_without_reexecuting(
+    tmp_path: Path,
+    code_executor: Executor,
+) -> None:
+    task = _tasks(1)[0].humaneval_task
+    scoring_input = CodeScoringInput(
+        raw_submission=task.ground_truth_code,
+        task=task,
+    )
+    runtime_identity = IdentityDocument(
+        schema="tests/runtime",
+        schema_version=1,
+        payload={"runtime": "local-python"},
+    )
+    cache_path = tmp_path / "execution-cache.sqlite3"
+
+    with CheckpointedCodeBatchScorer(
+        cache_path,
+        runtime_identity=runtime_identity,
+        executor=code_executor,
+    ) as scorer:
+        first_scores = scorer((scoring_input, scoring_input))
+
+    unexpected_calls: list[object] = []
+
+    def unexpected_execution(job, _cancellation):
+        unexpected_calls.append(job)
+        raise AssertionError("persisted execution should have been restored")
+
+    with CheckpointedCodeBatchScorer(
+        cache_path,
+        runtime_identity=runtime_identity,
+        executor=FakeExecutor(responder=unexpected_execution),
+    ) as scorer:
+        restored_scores = scorer((scoring_input,))
+
+    assert [score.row_value for score in first_scores] == [1.0, 1.0]
+    assert [score.row_value for score in restored_scores] == [1.0]
+    assert unexpected_calls == []
+
+
+def test_checkpointed_batch_scorer_rejects_expired_wall_before_execution(
+    tmp_path: Path,
+) -> None:
+    task = _tasks(1)[0].humaneval_task
+    execution_calls: list[object] = []
+
+    def unexpected_execution(job, _cancellation):
+        execution_calls.append(job)
+        raise AssertionError("expired batch must not execute")
+
+    with CheckpointedCodeBatchScorer(
+        tmp_path / "expired-execution-cache.sqlite3",
+        runtime_identity=IdentityDocument(
+            schema="tests/runtime",
+            schema_version=1,
+            payload={"runtime": "expired"},
+        ),
+        executor=FakeExecutor(responder=unexpected_execution),
+    ) as scorer:
+        with pytest.raises(BatchScoringDeadlineExceeded):
+            scorer(
+                (
+                    CodeScoringInput(
+                        raw_submission=task.ground_truth_code,
+                        task=task,
+                    ),
+                ),
+                max_wall_seconds=0.0,
+            )
+
+    assert execution_calls == []
 
 
 def _evaluate(
@@ -399,6 +632,7 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
         cache_unit="decoder-failure",
     )
 
+    assert isinstance(outcome, Ed1RowOutcome)
     assert outcome.row_state is ExecutedRowState.FAILED
     assert outcome.decoder_text is None
     assert outcome.encoder_text == encoder_text
@@ -453,6 +687,7 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
         cache_unit="encoder-failure",
     )
 
+    assert isinstance(outcome, Ed1RowOutcome)
     assert outcome.row_state is ExecutedRowState.FAILED
     assert outcome.encoder_text is None
     assert outcome.latency_s is not None
