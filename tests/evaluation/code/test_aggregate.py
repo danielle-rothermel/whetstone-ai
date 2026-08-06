@@ -201,6 +201,7 @@ def test_rollout_aggregate_wire_contract_is_pinned() -> None:
     )
 
 
+@pytest.mark.precheck
 def test_unweighted_task_mean_is_two_stage_not_row_weighted() -> None:
     plan = _plan(
         ("t1", "t2"),

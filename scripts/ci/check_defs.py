@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import tomllib
 from datetime import date
 from importlib import import_module
@@ -138,7 +139,7 @@ def _validate_terms() -> int:
     return len(terms)
 
 
-def _validate_contracts() -> int:
+def _validate_contracts(*, run_checks: bool) -> int:
     contracts = _entries(
         _load_document(DEFS_ROOT / "contracts.toml"), "contracts"
     )
@@ -175,8 +176,9 @@ def _validate_contracts() -> int:
             command = split(check)
             if not command:
                 raise ValueError(f"{location}.check must name a command")
-            print(f"verifying contract check: {check}", flush=True)
-            run(command, check=True, cwd=REPO_ROOT)
+            if run_checks:
+                print(f"verifying contract check: {check}", flush=True)
+                run(command, check=True, cwd=REPO_ROOT)
 
     if len(titles) != len(set(titles)):
         raise ValueError("contract titles must be unique")
@@ -184,8 +186,16 @@ def _validate_contracts() -> int:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--structural-only",
+        action="store_true",
+        help="validate definitions without running declared contract checks",
+    )
+    args = parser.parse_args()
+
     term_count = _validate_terms()
-    contract_count = _validate_contracts()
+    contract_count = _validate_contracts(run_checks=not args.structural_only)
     print(
         f"validated {term_count} terms and {contract_count} contracts "
         "including relationship and export semantics"

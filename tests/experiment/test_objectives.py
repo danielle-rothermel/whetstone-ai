@@ -42,6 +42,7 @@ def test_reward_name_rejected_at_construction() -> None:
         _obj("reward", 1.0, Direction.MAXIMIZE)
 
 
+@pytest.mark.precheck
 def test_reward_name_rejected_case_insensitively() -> None:
     with pytest.raises(RewardIsNotAnObjectiveError):
         _obj("Reward", 1.0, Direction.MAXIMIZE)

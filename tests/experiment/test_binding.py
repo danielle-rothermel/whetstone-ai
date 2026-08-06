@@ -240,6 +240,7 @@ def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
     ],
     ids=["official-without-principal", "internal-with-principal"],
 )
+@pytest.mark.precheck
 def test_evaluation_binding_rejects_invalid_role_authority_pair(
     role: EvaluationRole,
     authority_principal: str | None,
