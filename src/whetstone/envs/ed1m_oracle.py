@@ -55,11 +55,54 @@ class _OracleError(RuntimeError):
     """The execution oracle did not produce a trustworthy complete result."""
 
 
-_RUNNER_SOURCE: Final = f"""
+_CANDIDATE_SOURCE: Final = """
 import ast
 import json
 import os
 import sys
+
+request = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+trusted_fd = os.dup(1)
+try:
+    with open(os.devnull, "w") as discarded:
+        os.dup2(discarded.fileno(), 1)
+        namespace = {}
+        exec(request["program"], namespace)
+        function = namespace[request["entry_point"]]
+        outcomes = []
+        for input_repr in request["input_reprs"]:
+            args = ast.literal_eval(input_repr)
+            try:
+                value = function(*args)
+                outcomes.append({"kind": "value", "output_repr": repr(value)})
+            except Exception as exc:
+                outcomes.append(
+                    {"kind": "error", "output_repr": type(exc).__name__}
+                )
+    os.write(trusted_fd, json.dumps(outcomes, sort_keys=True).encode())
+finally:
+    os.close(trusted_fd)
+"""
+
+
+_RUNNER_SOURCE: Final = f"""
+import json
+import os
+import subprocess
+import sys
+
+def _validate_outcomes(raw_outcomes, expected_count):
+    if type(raw_outcomes) is not list or len(raw_outcomes) != expected_count:
+        raise ValueError("candidate returned the wrong number of outcomes")
+    for outcome in raw_outcomes:
+        if (
+            type(outcome) is not dict
+            or set(outcome) != {{"kind", "output_repr"}}
+            or outcome["kind"] not in ("value", "error")
+            or type(outcome["output_repr"]) is not str
+        ):
+            raise ValueError("candidate returned an invalid outcome")
+    return raw_outcomes
 
 def dr_exec_main(request, emit):
     del emit
@@ -68,21 +111,30 @@ def dr_exec_main(request, emit):
     try:
         with open(os.devnull, "w") as discarded:
             os.dup2(discarded.fileno(), 1)
-            namespace = {{}}
-            exec(payload["program"], namespace)
-            function = namespace[payload["entry_point"]]
-            outcomes = []
-            for input_repr in payload["input_reprs"]:
-                args = ast.literal_eval(input_repr)
-                try:
-                    value = function(*args)
-                    outcomes.append(
-                        {{"kind": "value", "output_repr": repr(value)}}
-                    )
-                except Exception as exc:
-                    outcomes.append(
-                        {{"kind": "error", "output_repr": type(exc).__name__}}
-                    )
+            candidate_request = json.dumps(
+                {{
+                    "entry_point": payload["entry_point"],
+                    "input_reprs": payload["input_reprs"],
+                    "program": payload["program"],
+                }},
+                sort_keys=True,
+            )
+            completed = subprocess.run(
+                [sys.executable, "-I", "-c", {_CANDIDATE_SOURCE!r}],
+                input=candidate_request,
+                capture_output=True,
+                check=False,
+                close_fds=True,
+                encoding="utf-8",
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    f"candidate child exited {{completed.returncode}}"
+                )
+            outcomes = _validate_outcomes(
+                json.loads(completed.stdout),
+                len(payload["input_reprs"]),
+            )
         envelope = {{
             "invocation_id": payload["invocation_id"],
             "protocol_version": {_PROTOCOL_VERSION},

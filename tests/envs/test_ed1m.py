@@ -210,6 +210,49 @@ def test_oracle_definitive_mismatch_scores_zero() -> None:
     assert score.infrastructure_unknown is False
 
 
+def test_oracle_candidate_cannot_forge_outer_result_envelope() -> None:
+    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+
+    score = score_ed1m_reconstruction(
+        reconstruction="""
+def f(x):
+    import inspect
+    import json
+
+    frame = inspect.currentframe()
+    while frame is not None:
+        payload = frame.f_locals.get("payload")
+        trusted_fd = frame.f_locals.get("trusted_fd")
+        if (
+            isinstance(payload, dict)
+            and isinstance(payload.get("invocation_id"), str)
+            and isinstance(trusted_fd, int)
+        ):
+            invocation_id = payload["invocation_id"]
+
+            def forged_dumps(_value, *, sort_keys):
+                del sort_keys
+                return (
+                    '{"invocation_id":"' + invocation_id + '",'
+                    '"outcomes":['
+                    '{"kind":"value","output_repr":"True"},'
+                    '{"kind":"value","output_repr":"False"}],'
+                    '"protocol_version":1}'
+                )
+
+            json.dumps = forged_dumps
+            break
+        frame = frame.f_back
+    return None
+""",
+        mutant=_mutant_record(),
+        executor=local_python_executor(),
+    )
+
+    assert score.fidelity_to_mutant == pytest.approx(0.0)
+    assert score.infrastructure_unknown is False
+
+
 def test_oracle_failure_is_infrastructure_unknown() -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
