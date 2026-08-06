@@ -68,3 +68,20 @@ evaluation evidence. Treating reward as an objective collapses those distinct \
 authorities."""
 date = "2026-08-05"
 check = "uv run pytest -q tests/experiment/test_objectives.py"
+
+[[contracts]]
+title = "Issued tool call IDs identify one exact call"
+statement = """
+Within one durable optimization step, every call_id identifies exactly one \
+exact ToolCall. Retries and concurrent recovery reuse that same call; issuers \
+do not submit different calls under one ID."""
+rationale = """
+The current storage boundary publishes the call-ID claim and ordinal slot \
+through separate immutable bindings. An incompatible same-ID race can reserve \
+a losing slot before the claim conflict is recognized, leaving the durable \
+prefix unreadable and consuming capacity. Binding the claim first is rejected \
+because a crash before slot publication would omit the attempted call from \
+replay. Removing this caller restriction requires an all-or-nothing \
+multi-binding transaction in dr-store that publishes the claim and slot \
+together, retries only ordinal conflicts, and publishes no losing slot."""
+date = "2026-08-06"

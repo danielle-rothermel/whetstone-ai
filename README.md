@@ -52,6 +52,25 @@ The [published definitions page](https://danielle-rothermel.github.io/whetstone-
 renders those files directly rather than maintaining a generated copy. To view
 it locally, serve `.defs/` over HTTP.
 
+## Known limitation: concurrent tool-call identity conflicts
+
+Within one durable optimization step, each `call_id` must identify one exact
+`ToolCall`. Retries and concurrent recovery may reuse that same call, but
+separate issuers must not submit different calls under one ID.
+
+The current storage boundary publishes the call-ID claim and ordinal slot as
+separate immutable bindings. If incompatible same-ID calls race, a losing slot
+can enter the durable prefix before the claim conflict is recognized. Later
+recovery then raises `IssuedToolCallConflictError` while reading that prefix,
+and the losing slot continues to occupy tool-call capacity.
+
+Removing this caller restriction requires an all-or-nothing multi-binding
+transaction in `dr-store`: the call-ID claim and ordinal slot must publish
+together, ordinal conflicts alone may retry, and an incompatible call-ID loser
+must publish no slot. Binding the claim first is not a safe intermediate fix,
+because a crash before slot publication would omit the attempted call from the
+replay prefix.
+
 ## Testing
 
 Run the complete local gate before committing or pushing:

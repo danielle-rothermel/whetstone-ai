@@ -27,6 +27,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   repository boundaries, and complete local test entrypoints.
 - Require locked CI environments, cancel superseded Depot runs, and bound every
   CI job with an explicit watchdog.
+- Document the current issued-call identity concurrency limitation and the
+  atomic `dr-store` multi-binding required to remove it safely.
 - Preserve structured prompt identity and immutability, use canonical UTC
   partial timestamps, and apply one character-budget rounding rule.
 
