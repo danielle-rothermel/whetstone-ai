@@ -1,11 +1,3 @@
-"""Atomic lease and terminal-outcome authority for effectful work.
-
-An authority prevents concurrent active workers and fences authoritative
-persistence. It does not make an external effect exactly once: callers must
-still use the stable semantic key at an idempotent provider boundary or place
-the physical attempt inside a durable workflow.
-"""
-
 from __future__ import annotations
 
 import hashlib

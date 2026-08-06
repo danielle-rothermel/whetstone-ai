@@ -1,5 +1,3 @@
-"""Bounded executed-component trace contracts."""
-
 from __future__ import annotations
 
 import json

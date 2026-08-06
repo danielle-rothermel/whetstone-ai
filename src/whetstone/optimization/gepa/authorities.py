@@ -1,5 +1,3 @@
-"""Canonical Whetstone authorities for durable GEPA endpoint effects."""
-
 from __future__ import annotations
 
 from collections import defaultdict

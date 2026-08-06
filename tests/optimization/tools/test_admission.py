@@ -1,5 +1,3 @@
-"""Shared persisted Tool admission contract literals."""
-
 from __future__ import annotations
 
 from whetstone.optimization.tools import _postgres as postgres_store_module

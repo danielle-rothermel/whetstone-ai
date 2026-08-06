@@ -1,22 +1,3 @@
-"""Whetstone code-eval Score / Metric Fact derivations.
-
-Two experiment-specific derivations over dr-code's kernel primitives.
-Whetstone owns these; dr-code owns the generic ``compression_ratio``,
-``MetricFact``, and ``Score`` types they build on.
-
-* **Compressed Description Length** — a Whetstone
-  :class:`~dr_code.eval.MetricFact` equal to the nonnegative integer byte
-  count produced by **zstd level 19** over the exact encoder Generation
-  encoded as **UTF-8**.
-* **Compression Ratio** — a Whetstone :class:`~dr_code.eval.Score` equal to
-  the
-  Compressed Description Length divided by the selected nonzero Compression
-  Reference Artifact byte length. A zero denominator produces the explicit
-  invalid / not-applicable behavior the Procedure/Aggregation Configs declare
-  (surfaced via dr-code's ``compression_ratio`` returning the
-  ``ZERO_DENOMINATOR`` sentinel); it is never silently coerced.
-"""
-
 from __future__ import annotations
 
 import zstandard

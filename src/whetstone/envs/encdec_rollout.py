@@ -1,36 +1,3 @@
-"""The Encoder -> Decoder -> Eval three-node Rollout Definition (enc-dec).
-
-The enc-dec HumanEval compression experiment's Rollout Definition role graph,
-per
-``design/vocab_and_defs.html`` ("Its variable-bearing shape is Encoder LLM Call
-Node -> Decoder LLM Call Node -> Eval Node, with the Eval Node as the unique
-terminal Node"):
-
-    Encoder LLM Call Node -> Decoder LLM Call Node -> Eval Node (terminal)
-
-* The **encoder** renders the Mutation-Surface encoder ``user_prompt_template``
-  against the task's ``INPUT_CODE`` and a per-task character budget
-  ``MAX_BUDGET = round(budget_ratio * chars(INPUT_CODE))``. It declares the
-  Character Budget Variable (``CharacterBudgetRule(ratio=budget_ratio)``), so
-  the ratio folds into ``graph_hash``. The concrete budget bound is used while
-  rendering the encoder prompt; that rendered prompt is the runtime Graph
-  External Input, while the bound itself is never in identity.
-* The **decoder** conditions ONLY on the encoder's description (its
-  ``prompt_source`` is the encoder Node's Generation output) and reconstructs
-  code.
-* The **Eval Node** (terminal) consumes the DECODER Generation, computes the
-  environment's concrete primary metric (ED1: HumanEval Submission Score;
-  ED1M: Fidelity to Mutant), and runs zstd-19 compression scoring on the
-  ENCODER output against the ground-truth code. The **same Model Route plays
-  both** encoder and decoder.
-
-This composes the existing closed Node primitives (``graph/nodes.py``) and the
-Character Budget binding (``graph/character_budget.py``) -- no new graph
-capability, a second LLM node between encoder and eval plus the budget
-Variable.
-The encoder ``user_prompt_template`` is the Mutation Surface optimizers mutate.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -86,8 +53,8 @@ class EncDecRolloutDefinition:
     definition: GraphDefinition
     provider_call_config: ProviderCallConfig
     procedure_config_hash: str
-    #: The Character Budget ratio, OR ``None`` for the NO-BUDGET frame variant
-    #: (task 22.4): no budget clause, no MAX_BUDGET. A ``None`` budget yields a
+    #: The Character Budget ratio, or ``None`` for the no-budget frame, which
+    #: has no budget clause or MAX_BUDGET. A ``None`` budget yields a
     #: DISTINCT ``graph_hash`` from any ratio (identity-folded).
     budget_ratio: float | None
     graph_config: GraphConfig
@@ -141,9 +108,8 @@ def encdec_graph_definition() -> GraphDefinition:
     )
 
 
-#: The encoder Character Budget identity token for the NO-BUDGET frame variant
-#: (task 22.4): a distinct sentinel so a no-budget graph never collides with
-#: ratio's graph_hash.
+#: The encoder Character Budget identity token for the no-budget frame. The
+#: distinct sentinel prevents collision with a ratio's graph hash.
 _NO_BUDGET_IDENTITY = "no_budget"
 
 

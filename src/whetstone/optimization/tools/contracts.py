@@ -1,5 +1,3 @@
-"""Exact serializable contracts for Tool definitions, calls, and results."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

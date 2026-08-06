@@ -1,5 +1,3 @@
-"""Typed, environment-neutral task-selection manifest contracts."""
-
 from __future__ import annotations
 
 import hashlib

@@ -741,8 +741,6 @@ def test_frozen_optuna_oracle_exceeds_ten_sampled_trials(tmp_path) -> None:
         )
 
     assert observed == [
-        # Frozen from optuna==4.8.0 TPESampler(seed=23, multivariate=True),
-        # after the all-zero completed baseline trial.
         (1, (1,)),
         (2, (1,)),
         (3, (3,)),
@@ -804,7 +802,6 @@ def test_frozen_optuna_oracle_interleaves_promotions(tmp_path) -> None:
         )
 
     assert observed == [
-        # DSPy ordering is ask/suggest, optional promotion add_trial, tell.
         (1, (1,), None, None),
         (2, (1,), None, None),
         (3, (3,), 4, (3,)),

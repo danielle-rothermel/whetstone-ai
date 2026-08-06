@@ -1,10 +1,3 @@
-"""The proposer route: identity, distinctness from graph routes, and the fake.
-
-Deliverable #3: the proposer model is reached through a Provider Call Config
-whose route is distinct from any encoder/decoder route, and the proposer config
-lives in the optimizer Config identity, NOT the graph identity — tested here.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -68,7 +61,6 @@ def test_proposer_config_identity_is_stable_and_route_sensitive() -> None:
     b = _pc("pcc://openai/gpt-5.4-proposer")
     assert a.identity_hash() == b.identity_hash()
     assert len(a.identity_hash()) == 64
-    # A different proposer route (or temperature) changes the identity.
     assert a.identity_hash() != _pc("pcc://other").identity_hash()
     hotter = _pc("pcc://openai/gpt-5.4-proposer", temperature=1.4)
     assert a.identity_hash() != hotter.identity_hash()
@@ -111,8 +103,6 @@ def test_proposer_config_rejects_invalid_provider_identity_hash() -> None:
 
 
 def test_proposer_config_folds_into_optimizer_config_not_graph() -> None:
-    # An optimizer Config identity that folds the proposer route: changing the
-    # proposer route changes the optimizer Config identity.
     def optimizer_config_hash(proposer: ProposerConfig) -> str:
         return compute_identity_hash(
             schema="whetstone.test.optimizer_config",
@@ -129,8 +119,6 @@ def test_proposer_config_folds_into_optimizer_config_not_graph() -> None:
     alt = _pc("pcc://openai/gpt-5.4-proposer-b")
     assert optimizer_config_hash(base) != optimizer_config_hash(alt)
 
-    # A graph identity folds the encoder/decoder Provider Call Configs, NOT the
-    # proposer route: swapping the proposer route leaves graph_hash unchanged.
     def graph_hash(encoder_route: str, decoder_route: str) -> str:
         return compute_identity_hash(
             schema="whetstone.test.graph",
@@ -143,9 +131,7 @@ def test_proposer_config_folds_into_optimizer_config_not_graph() -> None:
         )
 
     graph_a = graph_hash("pcc://enc", "pcc://dec")
-    # Same graph inputs, different proposer route -> identical graph_hash.
     assert graph_a == graph_hash("pcc://enc", "pcc://dec")
-    # The proposer route hash never appears in the graph identity payload.
     assert base.identity_hash() != graph_a
     assert alt.identity_hash() != graph_a
 
@@ -160,7 +146,6 @@ def test_proposer_route_distinct_from_encoder_decoder_routes() -> None:
         ),
         payload={"user_prompt_template": "x"},
     )
-    # The proposer route identity is not the encoder graph route.
     assert proposer.provider_call_config.record_ref != encoder.base_ref
     assert proposer.identity_hash() != encoder.base_ref
 
@@ -228,7 +213,6 @@ def test_proposal_request_identity_payload_carries_no_extra_keys() -> None:
 
 
 def test_proposal_request_identity_ignores_unaddressed_base_payload() -> None:
-    """Base identity travels by ref components, not the whole record."""
 
     payload = _golden_proposal_request().identity_payload()
 
@@ -249,12 +233,9 @@ def test_fake_transport_is_scripted_and_records_calls() -> None:
         base_candidate=_base_candidate_ref(),
     )
     drafts = transport.draft(pc, request, 3)
-    # Scripted for the first two; explicit failure for the underfilled third.
     assert [d.template for d in drafts[:2]] == ["t1", "t2"]
     assert drafts[2].failed is True
-    # It recorded the proposer route identity used (no network).
     assert transport.calls[0][0] == pc.identity_hash()
-    # A missing script key falls back to the default.
     other = ProposalRequest(
         proposal_mode="history_proposal",
         request_ordinal=7,

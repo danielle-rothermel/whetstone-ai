@@ -1,11 +1,3 @@
-"""Effect-free bootstrap planning and folding for MIPROv2.
-
-The functions here mirror the frozen DSPy ``create_n_fewshot_demo_sets`` and
-``BootstrapFewShot`` control flow while leaving every task-model rollout to a
-DBOS-owned effect.  Plans and results are immutable, identity-bearing JSON, so
-a workflow can checkpoint between every RNG decision and rollout.
-"""
-
 from __future__ import annotations
 
 import hashlib

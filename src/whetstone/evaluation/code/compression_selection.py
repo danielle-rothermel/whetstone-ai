@@ -1,27 +1,3 @@
-"""Eval Experiment Compression Reference Selection.
-
-The Whetstone experiment-specific rule that selects the exact UTF-8 bytes of
-``task.gt_code_wo_comments`` and binds them to a **generic** dr-code
-:class:`~dr_code.eval.CompressionReferenceKey`. The dataset-field knowledge
-lives **only** here: the generic dr-code key and artifact never learn the
-field name, so the generic layer stays dataset-ignorant.
-
-The seam:
-
-* :class:`ExperimentTaskView` is the structural contract this experiment rule
-  requires — any object exposing ``gt_code_wo_comments: str``. dr-code's
-  ``HumanEvalTask`` does not carry this field (it is an experiment concern), so
-  the experiment supplies the value; the generic kernel is untouched.
-* :func:`compression_reference_key` produces the *generic* namespaced key. The
-  namespace/name are opaque strings to dr-code; only Whetstone knows they
-  correspond to ``task.gt_code_wo_comments``.
-* :func:`select_compression_reference` resolves the exact UTF-8 bytes into a
-  generic :class:`~dr_code.eval.CompressionReferenceArtifact`.
-* :func:`compression_reference_binding` / :func:`build_resolver` bind the key
-  to the artifact for a dr-code
-  :class:`~dr_code.eval.CompressionReferenceResolver`.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping

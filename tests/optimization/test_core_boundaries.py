@@ -1,5 +1,3 @@
-"""The source and test trees preserve the functional package boundaries."""
-
 from pathlib import Path
 
 FUNCTIONAL_PACKAGES = {

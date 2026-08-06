@@ -1,26 +1,3 @@
-"""The ed1m env: behavioral-mutant encoder-decoder with attractor dual scoring.
-
-ed1m is the behavioral-mutant variant of ed1 (task 18). It reuses the whole ed1
-enc-dec machinery -- the immutable encoder frame + strategy-body Mutation
-Surface, the decoder, compression scoring, the task-22 weighted-blend reward,
-the no-budget frame, SKIP tolerance, telemetry, dual-score sidecars -- and it
-changes only the correctness scorer:
-
-  * The encoder's INPUT_CODE is the MUTATED HumanEval+ program (a seeded bug).
-  * The decoder reconstructs a program.
-  * The reconstruction is scored per-input against the mutant's recorded oracle
-    (:mod:`whetstone.envs.ed1m_oracle`): ``fidelity_to_mutant`` (the fraction
-    of inputs matching the mutant) is the REWARD-bearing metric (blended with
-    compression per task 22 -- ed1m is in the ed1 family, so the guard rail
-    applies); ``attractor_pull`` (the fraction of DISCRIMINATING inputs that
-    snapped to the CANONICAL behavior) is the REPORTED contamination
-    measurement, NEVER a reward objective.
-
-The caller supplies a published mutant artifact directory. The canonical
-dr-code loader authenticates its manifest and records before any experiment
-state is built.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -56,8 +33,7 @@ ED1M_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 #: The per-row metric, aggregate, and Reward-term identity for ED1M fidelity.
 ED1M_FIDELITY_NAME = "fidelity_to_mutant"
 
-#: The ed1m stratum tag (single stratum; the mutant families are recorded but
-#: not stratified for the first pass).
+#: The ed1m stratum tag; mutant families are recorded but not stratified.
 _ED1M_STRATUM = "ed1m"
 
 
@@ -259,9 +235,6 @@ def build_ed1m_experiment(
         initial_candidate=ed1_initial_candidate(),
         ceiling_candidate=ed1_ceiling_candidate(),
         eval_configs=eval_configs,
-        # The ADVERTISED policy must be the one reward time actually applies:
-        # a blend config means the blended-reward policy, not the fidelity-only
-        # one (see ``ed1_reward_from_blended``).
         reward_policy=(
             build_ed1m_reward_policy()
             if blend_config is None

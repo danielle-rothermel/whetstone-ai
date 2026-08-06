@@ -1,11 +1,3 @@
-"""Contract tests for the thin lm boundary adapter.
-
-Wire mechanics (payload building, parsing, transport, classification)
-are tested in dr-providers; these cover whetstone's adapter surface:
-caller parameters -> Provider Call Request, Provider Transport Response ->
-ProviderResult, and kernel failure translation.
-"""
-
 from __future__ import annotations
 
 import pytest

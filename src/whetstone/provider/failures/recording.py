@@ -1,10 +1,3 @@
-"""Recordability boundary for storable failure and telemetry payloads.
-
-Core classification and failure models remain free of database and DBOS
-workflow imports; these helpers convert arbitrary values into JSON-safe
-payloads and extract diagnostics from exception chains.
-"""
-
 from __future__ import annotations
 
 from typing import Any

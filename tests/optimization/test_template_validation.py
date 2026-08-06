@@ -1,5 +1,3 @@
-"""One hard-cut proposer-draft and mutation validation path."""
-
 from inspect import signature
 
 import pytest

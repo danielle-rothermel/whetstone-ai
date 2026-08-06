@@ -1,5 +1,3 @@
-"""Public Tool admission semantics shared by every backend."""
-
 from __future__ import annotations
 
 from collections.abc import Iterator

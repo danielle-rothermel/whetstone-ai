@@ -1,12 +1,9 @@
-"""Importable process jobs for environment-driver integration tests."""
-
 from __future__ import annotations
 
 from pydantic import JsonValue
 
 
 def return_payload(payload: JsonValue) -> JsonValue:
-    """Return a prevalidated row payload from a real child process."""
     return payload
 
 
@@ -21,7 +18,6 @@ def _cache(root: str | None):
 
 
 def drive_internal_success(payload: JsonValue) -> JsonValue:
-    """Run the real internal-row adapter with a child-local fake transport."""
     from tests.envs.support import FakeTransport, constant_reply
     from whetstone.envs.procedure import env_procedure_config
     from whetstone.envs.registry import env_spec
@@ -62,7 +58,6 @@ def drive_internal_success(payload: JsonValue) -> JsonValue:
 
 
 def drive_d1_success(payload: JsonValue) -> JsonValue:
-    """Run the real D1 row adapter with child-local transport and scorer."""
     from tests.envs.support import FakeTransport, constant_reply
     from whetstone.envs.d1 import build_d1_experiment
     from whetstone.envs.ed1 import Ed1Instance
@@ -111,12 +106,10 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
 
 
 def drive_ed1_success(payload: JsonValue) -> JsonValue:
-    """Run the real ED1 row adapter with child-local transport and scorer."""
     return _drive_ed1(payload, transient_first=False)
 
 
 def drive_ed1_transient_then_success(payload: JsonValue) -> JsonValue:
-    """Fail drive zero in transport, then run drive one normally."""
     return _drive_ed1(payload, transient_first=True)
 
 

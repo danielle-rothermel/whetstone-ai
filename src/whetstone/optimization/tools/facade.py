@@ -1,5 +1,3 @@
-"""Atomic admission and terminal persistence for exact Tool Calls."""
-
 from __future__ import annotations
 
 from pathlib import Path

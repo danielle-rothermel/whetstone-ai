@@ -1,5 +1,3 @@
-"""Upstream GEPA 0.1.1 adapter backed only by durable Whetstone effects."""
-
 from __future__ import annotations
 
 import random

@@ -1,10 +1,3 @@
-"""Environment-owned HumanEval input transformations.
-
-These transformations define the frozen input arms used by the direct D1
-family.  They are pure and independent of orchestration, persistence, and
-provider transport.
-"""
-
 from __future__ import annotations
 
 import re

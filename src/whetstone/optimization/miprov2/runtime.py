@@ -1,13 +1,3 @@
-"""Durable phase machine and native candidate rendering for MIPROv2.
-
-The algorithm-specific modules own the exact bootstrap, grounded-proposal,
-shared-RNG, and Optuna semantics.  This module composes those pure seams into
-one immutable run state.  It deliberately does not execute model calls or
-evaluations: every call to :meth:`Miprov2Driver.plan` exposes at most one
-identity-bearing effect, and the matching ``fold_*`` method accepts exactly
-that effect's result.
-"""
-
 from __future__ import annotations
 
 import math

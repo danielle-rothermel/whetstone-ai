@@ -1,33 +1,3 @@
-"""The per-env Rollout Definition role graph and its candidates.
-
-Rubric criterion 1 (validation plan cell definition): one LLM Call Node plus
-one terminal Eval Node.
-
-* **LLM Call Node** (``whetstone.llm-call/v1``): its Provider Call Config is a
-  static Variable (in Graph Config identity); its prompt is the only Node
-  Input Source, bound to the env task's Graph External Inputs. The
-  prompt-template is the **Mutation Surface** (the encoder
-  ``user_prompt_template``), rendered against ``task.<field>`` external
-  inputs. The naive probe is the **Initial Candidate**; the ceiling probe is
-  the **reference candidate** (headroom line).
-* **Eval Node** (``whetstone.eval/v1``, terminal): its Evaluation Procedure
-  Config is a static Variable; when executed it invokes the env oracle via
-  the whetstone metric-extraction operator, emitting the ``env_exact_match``
-  Metric Fact / Score.
-
-The prompt Node Input Source binds to a single Graph External Input,
-``task.prompt`` -- the *rendered* prompt for the selected candidate against a
-task's external inputs. Rendering is env-owned (the env ``ProbePair``); this
-adapter renders the chosen candidate's template against the task's public
-prompt inputs and supplies the result as ``task.prompt`` at runtime.
-
-The Provider Call Config is a native dr-providers Config; its Identity Hash
-is the static Variable value on the LLM Call Node, so a model/route/control
-change changes ``graph_hash``. The Evaluation Procedure Config identity is
-the Eval Node's static Variable, so a Procedure change changes ``graph_hash``
-too. Both are references (schema + Identity Hash), never Node Input Sources.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -234,7 +204,7 @@ def render_prompt(
     instance's public prompt inputs, producing the ``task.prompt`` Graph
     External Input. Rendering restricts to public inputs -- gold/oracle state
     can never be interpolated -- so a mutated or JSON-round-tripped template
-    still renders (the c19 fidelity fix).
+    still renders.
     """
     template = candidate.payload[MUTATION_FIELD]
     if type(template) is not str:

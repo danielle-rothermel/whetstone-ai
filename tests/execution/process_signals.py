@@ -1,5 +1,3 @@
-"""Explicit parent/child synchronization for execution integration tests."""
-
 from __future__ import annotations
 
 import os
@@ -17,7 +15,6 @@ _WATCHDOG_SECONDS = 10.0
 
 
 def wait_for_release(socket_path: str, key: str) -> None:
-    """Publish entry, block for release, then publish completion."""
     connection = Client(socket_path, family="AF_UNIX", authkey=_AUTHKEY)
     try:
         connection.send(("entered", key, os.getpid()))
@@ -29,7 +26,6 @@ def wait_for_release(socket_path: str, key: str) -> None:
 
 
 def publish_ready(socket_path: str, key: str) -> None:
-    """Publish one readiness record and await parent acknowledgement."""
     connection = Client(socket_path, family="AF_UNIX", authkey=_AUTHKEY)
     try:
         connection.send(("ready", key, os.getpid()))
@@ -42,8 +38,6 @@ def publish_ready(socket_path: str, key: str) -> None:
 
 
 class ProcessSignals:
-    """Collect process events and release blocked workers by stable key."""
-
     def __init__(self) -> None:
         self._directory = Path(
             tempfile.mkdtemp(prefix="whetstone-test-signals-")
@@ -198,7 +192,6 @@ class ProcessSignals:
 
 
 def json_string(payload: dict[str, JsonValue], key: str) -> str:
-    """Return one required string from a validated JSON test payload."""
     value = payload[key]
     if not isinstance(value, str):
         raise TypeError(f"{key} must be a string")

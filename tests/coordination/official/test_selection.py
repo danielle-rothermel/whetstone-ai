@@ -1,12 +1,3 @@
-"""Official selection over complete certified aggregate evidence.
-
-Proves deterministic derivation of Objective Vectors from certified aggregates,
-the deterministic Pareto Front + explicit tie behavior, the single official
-selection, the persisted derivation/order/tie/selection evidence, refusal of
-incomplete or missing evidence, and that Reward is never computed or accepted
-as an Objective on the official-selection path.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -83,7 +74,6 @@ def test_selection_derives_and_selects_non_dominated() -> None:
         ),
     ]
     evidence = select_official(candidates, objective_specs=SPECS)
-    # c0 dominates c1 (higher quality, lower compression).
     assert evidence.selected_candidate_id == "c0"
     assert [m.candidate_id for m in evidence.front.members] == ["c0"]
     assert not evidence.selected_by_tie_rule
@@ -99,7 +89,6 @@ def test_selection_persists_derivation_order_tie_selection() -> None:
         ),
     ]
     evidence = select_official(candidates, objective_specs=SPECS)
-    # Derivation: objective specs preserved; each objective carries lineage.
     assert evidence.objective_specs == SPECS
     vector = evidence.candidate_vectors[0]
     assert vector.names == ("quality", "compression")
@@ -107,14 +96,10 @@ def test_selection_persists_derivation_order_tie_selection() -> None:
         vector.objectives[0].derivation.source_name
         == SELECTION_QUALITY_AGGREGATE_NAME
     )
-    # Order: candidate order preserved.
     assert evidence.candidate_order == ("c0",)
-    # Tie: explicit behavior recorded.
     assert evidence.tie_behavior is TieBehavior.STABLE_INDEX
-    # Selection: content-addressable persisted record.
     content = evidence.record_content()
     assert content["selected_candidate_id"] == "c0"
-    # Round-trips through its own content projection.
     assert SelectionEvidence.model_validate(content) == evidence
 
 
@@ -139,8 +124,6 @@ def test_selection_is_deterministic() -> None:
 
 
 def test_selection_tie_keeps_stable_lowest_index() -> None:
-    # Identical vectors: both on the front; selection is the lowest index and
-    # the tie rule flag is set.
     candidates = [
         _candidate(
             candidate_id="c0",
@@ -168,7 +151,6 @@ def test_selection_refuses_missing_aggregate() -> None:
         graph_hash=GRAPH_A,
         aggregates={
             SELECTION_QUALITY_AGGREGATE_NAME: quality_aggregate(),
-            # mean_compression_ratio deliberately absent.
         },
     )
     with pytest.raises(IncompleteEvidenceError, match="missing aggregate"):
@@ -177,7 +159,6 @@ def test_selection_refuses_missing_aggregate() -> None:
 
 def test_selection_refuses_incomplete_evidence() -> None:
     incomplete = incomplete_quality_aggregate()
-    # Sanity: the aggregate is genuinely not OK.
     assert incomplete.aggregation_output.status is not AggregationStatus.OK
     candidate = SelectionCandidate(
         candidate_id="c0",
@@ -192,8 +173,6 @@ def test_selection_refuses_incomplete_evidence() -> None:
 
 
 def test_selection_never_names_reward_objective() -> None:
-    # An ObjectiveSpec that tries to publish under the reserved Reward name is
-    # refused when the Objective is built during selection.
     reward_spec = ObjectiveSpec(
         objective_name="reward",
         aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
@@ -209,10 +188,6 @@ def test_selection_never_names_reward_objective() -> None:
 
 
 def test_selection_requires_one_shared_eval_config_hash() -> None:
-    # The two candidates were evaluated under different Eval Configs (a
-    # different planned matrix yields a different config identity hash), so
-    # their aggregates are incomparable evidence and selection refuses them
-    # rather than ranking them against each other.
     baseline = _candidate(
         candidate_id="c0",
         graph_hash=GRAPH_A,
@@ -233,15 +208,12 @@ def test_selection_requires_one_shared_eval_config_hash() -> None:
     )
     quality = other_config.aggregates[SELECTION_QUALITY_AGGREGATE_NAME]
     baseline_quality = baseline.aggregates[SELECTION_QUALITY_AGGREGATE_NAME]
-    # Sanity: the fixtures genuinely differ in eval_config_hash.
     assert quality.eval_config_hash != baseline_quality.eval_config_hash
     with pytest.raises(ValueError, match="share one eval_config_hash"):
         select_official([baseline, other_config], objective_specs=SPECS)
 
 
 def test_selection_accepts_one_shared_eval_config_hash() -> None:
-    # The ordinary path: every aggregate of every candidate shares one Eval
-    # Config identity, so selection proceeds.
     candidates = [
         _candidate(
             candidate_id="c0",

@@ -1,12 +1,3 @@
-"""MIPROv2 stops as a terminal failed Step instead of wedging the run.
-
-Two causes leave the pure phase machine with no reachable next effect: a
-proposal call whose durable executor gives up, and an Evaluation Intent the
-evaluation service refuses before execution.  Both persist one FAILED Step
-Result naming the exact cause so the run reaches a terminal Optimization
-Result rather than replanning an impossible effect forever.
-"""
-
 from __future__ import annotations
 
 from typing import cast
@@ -79,7 +70,6 @@ def _pass_through_executor() -> DurableProposalExecutor:
 
 
 def _adapter_case(tmp_path, *, templates: tuple[str, ...]):
-    """Build one MIPROv2 adapter bound to a scripted proposer transport."""
 
     driver, state = make_minimal_miprov2_runtime()
     store = make_store(tmp_path)
@@ -156,7 +146,6 @@ def test_failed_proposal_persists_a_terminal_failed_step(tmp_path) -> None:
     assert PROPOSER_GAVE_UP in result.terminal_failure.message
     assert result.accepted_candidates == ()
     assert result.resolved_intents == ()
-    # The paid call still happened, so the durable ledger must record it.
     assert result.budget_delta.consumed["proposal_calls"] == 1
 
     folded = _folded_state(store, result)
@@ -165,8 +154,6 @@ def test_failed_proposal_persists_a_terminal_failed_step(tmp_path) -> None:
     assert PROPOSER_GAVE_UP in folded.failure
     assert folded.proposal_state is not None
     assert folded.proposal_state.stage == "failed"
-    # A terminal state owes no further effect: planning names the durable
-    # cause instead of raising the proposer's wedging generation error.
     with pytest.raises(ValueError, match=PROPOSER_GAVE_UP):
         driver.plan(folded)
 
@@ -194,7 +181,6 @@ def _proposal_response(request) -> Miprov2ProposalResponse:
 
 
 def _state_pending_baseline_intent(driver, state) -> Miprov2State:
-    """Advance the pure machine to its first pending Evaluation Intent."""
 
     transition_budget = state.budget.proposal_calls + 2
     trace: list[tuple[str, str, str | None]] = []
@@ -230,7 +216,6 @@ def _state_pending_baseline_intent(driver, state) -> Miprov2State:
 
 
 def _request_for(request, state: Miprov2State):
-    """Rebuild one request whose pools and budget match the durable state."""
 
     consumed = {
         label: state.effect_counts[label]
@@ -267,7 +252,6 @@ def _rejected(intent) -> IntentResolution:
 
 
 def _issue_baseline_intent(adapter, driver, request, state):
-    """Emit the real baseline Intent, persisting its exact durable context."""
 
     pending = _state_pending_baseline_intent(driver, state)
     output = adapter.invoke(_request_for(request, pending), ())
@@ -314,14 +298,9 @@ def test_rejected_resolution_folds_to_a_terminal_failed_step(
     assert "rejected before execution" in folded.failure
     assert "validation" in folded.failure
     assert REJECTION_MESSAGE in folded.failure
-    # A rejection is refused before execution.  It must never be folded as an
-    # executed failure observation, so the study transcript and the durable
-    # effect ledger are untouched: nothing was measured, and no evaluation
-    # effect was ever spent.
     assert folded.study_transcript == issued.study_transcript
     assert folded.completed_effects == issued.completed_effects
     assert folded.effect_counts == issued.effect_counts
-    # The unmeasurable effect is dropped rather than left pending forever.
     assert issued.pending_evaluation is not None
     assert folded.pending_evaluation is None
 
@@ -335,8 +314,6 @@ def test_rejected_resolution_leaves_the_evidence_resolver_untouched(
     intent, issued = _issue_baseline_intent(adapter, driver, request, state)
     rejection = _rejected(intent)
 
-    # The evidence path still refuses to read a rejection as an executed
-    # failure; the fold branch is what makes the rejection terminal.
     with pytest.raises(ValueError, match="failed resolution"):
         Miprov2EvidenceResolver(store).resolve_evaluation_failure(rejection)
 

@@ -1,5 +1,3 @@
-"""Character Budget graph identity and derivation contracts."""
-
 from __future__ import annotations
 
 import pytest

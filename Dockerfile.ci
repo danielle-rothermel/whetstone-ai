@@ -1,4 +1,3 @@
-# CI image for whetstone-ai unit tests. Wire to Depot after GitHub Actions is stable.
 FROM python:3.13-slim
 
 RUN apt-get update \

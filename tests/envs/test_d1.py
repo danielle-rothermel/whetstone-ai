@@ -1,5 +1,3 @@
-"""Focused D1 direct-generation environment-contract tests."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -96,9 +94,6 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
     assert len(graphs) == len(D1_INPUT_ARMS)
     assert len(evals) == len(D1_INPUT_ARMS)
 
-    # The rename_token is identity-bearing ON THE ARM THAT READS IT: two
-    # `renamed` cells with different tokens score against different entry
-    # points, so they are different experiments and must not share identity.
     renamed = [
         build_d1_experiment(
             input_arm=D1_RENAMED_ARM, tasks=tasks, rename_token=token
@@ -116,8 +111,6 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
 
 
 def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
-    # Only the `renamed` arm substitutes the token; folding it into the other
-    # arms would churn their hashes for a value they never read.
     tasks = _tasks()
     for arm in D1_INPUT_ARMS:
         if arm == D1_RENAMED_ARM:
@@ -141,9 +134,6 @@ def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
     "bad", ["not a token", "2fxn", "", "def", "class", "target-fxn", "a.b"]
 )
 def test_invalid_rename_token_is_rejected_at_build_time(bad: str) -> None:
-    # The token is substituted into rendered SOURCE; an invalid identifier is
-    # otherwise a per-row SyntaxError at drive time, after the pool load and
-    # every provider call.
     with pytest.raises(ValueError, match="rename_token"):
         build_d1_experiment(
             input_arm=D1_RENAMED_ARM, tasks=_tasks(1), rename_token=bad

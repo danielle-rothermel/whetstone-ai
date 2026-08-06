@@ -1,5 +1,3 @@
-"""Closed, versioned Node Definition contracts."""
-
 from __future__ import annotations
 
 import pytest
@@ -90,7 +88,6 @@ def test_provider_call_config_reference_is_in_graph_hash() -> None:
         provider_call_config_hash=fake_hash("b"),
         evaluation_procedure_config_hash=proc,
     )
-    # Changing the Provider Call Config reference changes graph_hash.
     assert graph_hash(base) != graph_hash(changed)
 
 

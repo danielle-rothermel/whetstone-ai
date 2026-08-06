@@ -1,5 +1,3 @@
-"""Shared builders for evaluation engine and service tests."""
-
 from __future__ import annotations
 
 import json
@@ -71,8 +69,6 @@ def _uncached_experiment(*, repeats: int = 1) -> EnvExperiment:
 
 @cache
 def _cached_experiment(repeats: int) -> EnvExperiment:
-    # EnvExperiment and its complete object graph are frozen values. Tests
-    # only read this support; the ED1 variant uses dataclasses.replace.
     return _uncached_experiment(repeats=repeats)
 
 

@@ -1,11 +1,3 @@
-"""Objectives, Objective Vectors, and Pareto Fronts.
-
-Proves the direction-bearing Objective derivation, the ordered Objective
-Vector, deterministic Pareto Front construction (stable ordering, explicit tie
-behavior, direction per objective), and the type-level refusal that Reward is
-never accepted as an Objective.
-"""
-
 from __future__ import annotations
 
 from typing import cast
@@ -45,11 +37,6 @@ def _vector(quality: float, compression: float) -> ObjectiveVector:
     )
 
 
-# ---------------------------------------------------------------------------
-# Reward is never an Objective (type-level)
-# ---------------------------------------------------------------------------
-
-
 def test_reward_name_rejected_at_construction() -> None:
     with pytest.raises(RewardIsNotAnObjectiveError):
         _obj("reward", 1.0, Direction.MAXIMIZE)
@@ -61,8 +48,6 @@ def test_reward_name_rejected_case_insensitively() -> None:
 
 
 def test_direct_objective_construction_also_refuses_reward() -> None:
-    # The raw model validator (defense in depth) refuses the reserved name
-    # too; pydantic surfaces it as a ValidationError whose message names it.
     with pytest.raises(ValueError, match="reserved Reward name"):
         Objective(
             name="reward",
@@ -76,8 +61,6 @@ def test_direct_objective_construction_also_refuses_reward() -> None:
 
 
 def test_no_reward_derivation_source_exists() -> None:
-    # The closed derivation source enum has exactly Score and Rollout
-    # Aggregate; there is no Reward member, so an Objective cannot cite Reward.
     members = {m.value for m in ObjectiveDerivationSource}
     assert members == {"score", "rollout_aggregate"}
     assert "reward" not in members
@@ -106,11 +89,6 @@ def test_objective_rejects_nonfinite_values(value: float) -> None:
         _obj("quality", value, Direction.MAXIMIZE)
 
 
-# ---------------------------------------------------------------------------
-# Objective Vector ordering and uniqueness
-# ---------------------------------------------------------------------------
-
-
 def test_objective_vector_preserves_order() -> None:
     vector = _vector(0.8, 3.0)
     assert vector.names == ("quality", "compression")
@@ -133,13 +111,7 @@ def test_objective_vector_requires_at_least_one() -> None:
         ObjectiveVector(objectives=())
 
 
-# ---------------------------------------------------------------------------
-# Dominance is direction-aware
-# ---------------------------------------------------------------------------
-
-
 def test_dominance_respects_directions() -> None:
-    # a: higher quality AND lower compression -> dominates b.
     a = _vector(0.9, 2.0)
     b = _vector(0.8, 3.0)
     assert dominates(a, b)
@@ -147,7 +119,6 @@ def test_dominance_respects_directions() -> None:
 
 
 def test_no_dominance_on_tradeoff() -> None:
-    # a better on quality, b better on compression -> neither dominates.
     a = _vector(0.9, 3.0)
     b = _vector(0.8, 2.0)
     assert not dominates(a, b)
@@ -182,16 +153,11 @@ def test_dominance_rejects_opposite_directions() -> None:
         dominates(maximize, minimize)
 
 
-# ---------------------------------------------------------------------------
-# Pareto Front: determinism, stable order, explicit ties, direction
-# ---------------------------------------------------------------------------
-
-
 def test_pareto_front_keeps_non_dominated_only() -> None:
     candidates = [
-        ("c0", _vector(0.9, 2.0)),  # dominates c1
-        ("c1", _vector(0.8, 3.0)),  # dominated by c0
-        ("c2", _vector(0.7, 1.0)),  # tradeoff (best compression)
+        ("c0", _vector(0.9, 2.0)),
+        ("c1", _vector(0.8, 3.0)),
+        ("c2", _vector(0.7, 1.0)),
     ]
     front = pareto_front(candidates)
     ids = [m.candidate_id for m in front.members]
@@ -205,15 +171,12 @@ def test_pareto_front_is_stable_ordered() -> None:
         ("c2", _vector(0.8, 2.0)),
     ]
     front = pareto_front(candidates)
-    # Members are in strictly ascending original-index order.
     indices = [m.original_index for m in front.members]
     assert indices == sorted(indices)
     assert indices == [0, 1, 2]
 
 
 def test_pareto_front_ties_keep_both_members() -> None:
-    # Two identical vectors never dominate each other: both stay on the front,
-    # in stable input order, under the explicit STABLE_INDEX tie behavior.
     candidates = [
         ("c0", _vector(0.8, 3.0)),
         ("c1", _vector(0.8, 3.0)),
@@ -274,7 +237,7 @@ def test_pareto_front_rejects_empty_candidates() -> None:
 def test_direction_bearing_objective_has_direction() -> None:
     obj = _obj("compression", 2.0, Direction.MINIMIZE)
     assert obj.direction is Direction.MINIMIZE
-    assert obj.is_better_than(3.0)  # lower is better
+    assert obj.is_better_than(3.0)
     assert not obj.is_better_than(1.0)
 
 

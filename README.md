@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml/badge.svg)](https://github.com/danielle-rothermel/whetstone-ai/actions/workflows/whetstone_tests.yml)
 
-| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [dr-code v0.1.0](https://github.com/danielle-rothermel/dr-code) | [dr-graph v0.1.0](https://github.com/danielle-rothermel/dr-graph) | [dr-providers v0.2.1](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize v0.1.1](https://github.com/danielle-rothermel/dr-serialize) | [dr-store v0.1.0](https://github.com/danielle-rothermel/dr-store) | [whetstone-envs v0.1.0](https://github.com/danielle-rothermel/whetstone-envs) |
+| [Repo Definitions](https://danielle-rothermel.github.io/whetstone-ai/) | [dr-code](https://github.com/danielle-rothermel/dr-code) | [dr-graph](https://github.com/danielle-rothermel/dr-graph) | [dr-providers](https://github.com/danielle-rothermel/dr-providers) | [dr-serialize](https://github.com/danielle-rothermel/dr-serialize) | [dr-store](https://github.com/danielle-rothermel/dr-store) | [whetstone-envs](https://github.com/danielle-rothermel/whetstone-envs) |
 | --- | --- | --- | --- | --- | --- | --- |
 
 **Whetstone evaluates and optimizes prompt candidates through typed,
@@ -27,7 +27,7 @@ these areas:
 - **Optimization** provides a shared candidate-evaluation harness and native
   COPRO, MIPROv2, and GEPA flows, including proposal generation, tool use,
   algorithm state, and result artifacts.
-- **Authority and orchestration** coordinate durable proposal and evaluation
+- **Authority and coordination** govern durable proposal and evaluation
   effects, ownership claims, and terminal result binding across replay and
   recovery.
 

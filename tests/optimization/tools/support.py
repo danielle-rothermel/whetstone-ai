@@ -1,5 +1,3 @@
-"""Shared values and stores for Tool admission tests."""
-
 from __future__ import annotations
 
 from dr_store import (

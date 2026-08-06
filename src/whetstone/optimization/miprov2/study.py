@@ -1,11 +1,3 @@
-"""Effect-free, replay-stable Optuna ownership for MIPROv2.
-
-The immutable transcript is the authority.  It binds the frozen DSPy/Optuna
-contract, exact ordered candidate pools, evaluation schedule, candidate
-identities, task batches, Eval Configs, and evidence references.  A fresh
-in-memory Optuna study is reconstructed for every operation.
-"""
-
 from __future__ import annotations
 
 import importlib

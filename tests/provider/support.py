@@ -1,11 +1,3 @@
-"""Shared fixtures for the Whetstone semantic provider-layer tests.
-
-Builds real dr-providers Provider Call Requests, real Provider Transport
-Policies / Whetstone Provider Execution Policies, and a recording transport
-peer that returns real Provider Invocation Evidence from a scripted list of
-Provider Transport Outcomes. No network, no DBOS.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -123,12 +115,6 @@ def build_evidence(
 
 @dataclass
 class RecordingTransport:
-    """A transport callable that replays scripted outcomes as evidence.
-
-    Consumes ``outcomes`` in order (the last repeats). Records every request
-    it served and every evidence it produced so tests can assert determinism.
-    """
-
     request: ProviderCallRequest
     transport_policy: ProviderTransportPolicy
     outcomes: list[ProviderTransportOutcome]
@@ -152,8 +138,6 @@ class RecordingTransport:
 
 @dataclass
 class FakeClock:
-    """Deterministic monotonic clock: increments a fixed step per read."""
-
     step: float = 0.5
     _t: float = 0.0
 
@@ -165,8 +149,6 @@ class FakeClock:
 
 @dataclass
 class SleepRecorder:
-    """Records every backoff delay requested without actually sleeping."""
-
     delays: list[float] = field(default_factory=list)
 
     def __call__(self, seconds: float) -> None:

@@ -1,5 +1,3 @@
-"""Algorithm-neutral durable optimization harness."""
-
 from __future__ import annotations
 
 from collections import Counter
@@ -205,6 +203,13 @@ class OptimizationHarness(OptimizationRunStore):
     def run_step(
         self, request: OptimizationStepRequest
     ) -> tuple[OptimizationStepResult, TypedRef]:
+        """Validate and execute one exact step.
+
+        Repeating an identical ``(run_id, step_index)`` request replays its
+        bound result; a different request for that position raises
+        :class:`StepResultConflictError`. Effectful work follows the configured
+        replay policy.
+        """
         validated_request = OptimizationStepRequest.model_validate(
             request.model_dump(mode="json")
         )

@@ -1,5 +1,3 @@
-"""Isolated fork coverage for SQLite contention contracts."""
-
 from __future__ import annotations
 
 import multiprocessing

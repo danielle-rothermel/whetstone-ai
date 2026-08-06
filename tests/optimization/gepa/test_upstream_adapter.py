@@ -182,12 +182,6 @@ def test_upstream_adapter_preserves_order_evidence_and_effect_ordinals() -> (
 
 
 def test_upstream_adapter_skips_components_without_reflective_traces() -> None:
-    """A traceless component must not sink its traced siblings.
-
-    Upstream gepa's proposer logs and continues past components with no
-    reflective examples, so a partial reflective dataset proposes for the
-    traced components rather than crashing the whole round.
-    """
 
     broker = _FakeBroker()
     adapter = _adapter(broker)
@@ -200,7 +194,6 @@ def test_upstream_adapter_skips_components_without_reflective_traces() -> None:
                 "Feedback": "ok",
             },
         ),
-        # "beta" produced no traces at all this round.
     }
 
     proposed = adapter.propose_new_texts(
@@ -214,7 +207,6 @@ def test_upstream_adapter_skips_components_without_reflective_traces() -> None:
         "alpha"
     ]
 
-    # An empty (rather than absent) trace list is skipped the same way.
     empty_broker = _FakeBroker()
     empty_adapter = _adapter(empty_broker)
     assert empty_adapter.propose_new_texts(

@@ -1,5 +1,3 @@
-"""Process-local tool admission backend."""
-
 from __future__ import annotations
 
 from threading import RLock

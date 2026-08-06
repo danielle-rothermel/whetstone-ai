@@ -1,15 +1,3 @@
-"""Identity-bound Whetstone prompt formatting for frozen GEPA reflection.
-
-GEPA 0.1.1 owns mutation ordering and invokes the adapter's
-``propose_new_texts`` seam.  This module owns only the semantic rendering and
-response parsing at that seam.  It deliberately does not reproduce DSPy
-Signature field descriptions or output-prefix formatting.
-
-Frozen GEPA 0.1.1 merge is deterministic component recombination and performs
-no language-model proposal.  There is therefore no merge prompt or parser in
-this protocol.
-"""
-
 # ruff: noqa: E501
 
 from __future__ import annotations

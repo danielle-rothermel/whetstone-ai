@@ -1,5 +1,3 @@
-"""Crash-window tests for GEPA's stable child effect broker."""
-
 from __future__ import annotations
 
 import importlib.util
@@ -210,8 +208,6 @@ class _DurableAuthority:
 
 
 class _ProviderBackedProposalAuthority:
-    """Exercise the real application store and decorated provider executor."""
-
     def __init__(self, *, store, request, transport, executor, config) -> None:
         self.runtime_identity_hash = request.authority.authority_identity_hash
         self._store = store
@@ -259,15 +255,6 @@ class _ProviderBackedProposalAuthority:
 
 
 class _NestedReplayDbos:
-    """Emulate GEPA's semantic child workflow wrapping the executor's own.
-
-    Both DBOS layers load against this one emulator: the outer GEPA effect
-    workflow (entered through ``SetWorkflowID``) and, inside it, the
-    executor's ``start_workflow`` child whose body is one retry-disabled
-    step.  Every operation is appended to ``events`` so a replay can be
-    checked for its exact operation sequence.
-    """
-
     workflow_id: ClassVar[str | None] = None
     step_id: ClassVar[int | None] = None
     next_workflow_id: ClassVar[str | None] = None
@@ -416,7 +403,6 @@ def test_child_completion_then_outer_result_bind_replays_without_authority(
 
 
 def _operation_shape(events: list[str]) -> list[str]:
-    """Erase the content-addressed child ID from a recorded event sequence."""
 
     return [
         "start_workflow" if event.startswith("start_workflow:") else event
@@ -424,9 +410,6 @@ def _operation_shape(events: list[str]) -> list[str]:
     ]
 
 
-#: The exact operation sequence one uncached GEPA reflection effect performs:
-#: the semantic child workflow starts the executor's own child workflow, whose
-#: body is the single retry-disabled whole-call step.
 _FULL_PROPOSAL_SHAPE = [
     "workflow:_gepa_proposal_effect_workflow",
     "start_workflow",
@@ -434,12 +417,10 @@ _FULL_PROPOSAL_SHAPE = [
     "step:_logical_proposal_step",
 ]
 
-#: Replay of a completed effect stops at the GEPA semantic child.
 _REPLAYED_PROPOSAL_SHAPE = ["workflow:_gepa_proposal_effect_workflow"]
 
 
 def _nested_proposal_broker(tmp_path, name: str):
-    """Wire one GEPA broker over the executor on the nested DBOS emulator."""
 
     _NestedReplayDbos.reset()
     provider_module = load_proposal_provider_boundary(_NestedReplayDbos)
@@ -467,7 +448,6 @@ def _nested_proposal_broker(tmp_path, name: str):
 def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
     tmp_path,
 ) -> None:
-    """A crash before the outer bind never re-runs the paid proposal call."""
 
     broker, request, recording = _nested_proposal_broker(
         tmp_path,
@@ -500,7 +480,6 @@ def test_proposal_replay_preserves_inner_operation_sequence_without_recall(
 def test_parent_replay_always_consumes_stable_child_operation(
     tmp_path,
 ) -> None:
-    """Replaying one effect reuses the child rather than re-proposing."""
 
     broker, request, recording = _nested_proposal_broker(
         tmp_path,

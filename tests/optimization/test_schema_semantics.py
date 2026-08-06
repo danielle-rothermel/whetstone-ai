@@ -1,5 +1,3 @@
-"""Hostile serialized-input regressions for Step and Intent semantics."""
-
 from __future__ import annotations
 
 import json

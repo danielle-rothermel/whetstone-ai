@@ -1,23 +1,3 @@
-"""The ed1m execution oracle: dual scoring vs mutant and canonical behavior.
-
-A reconstructed program is scored by the canonical dr-code mutant oracle on
-the authenticated record's complete input sequence. Its typed outcomes are
-compared with both persisted expected-outcome vectors:
-
-  * ``fidelity_to_mutant`` -- the fraction of ALL inputs whose reconstruction
-    outcome matches the mutant's expected outcome. This is the TASK metric (the
-    reward-bearing one, blended with compression per task 22): the enc-dec
-    channel should faithfully reconstruct the buggy program's behavior.
-  * ``attractor_pull`` -- the fraction of the DISCRIMINATING inputs (mutant !=
-    canonical) whose reconstruction outcome matches the CANONICAL expected
-    outcome (the reconstruction "fixed" the seeded bug toward the training-
-    data attractor). This is the REPORTED contamination measurement -- NEVER a
-    reward objective. ``None`` when a mutant has no discriminating inputs.
-
-Comparison is exact ``ExpectedOutcome`` equality. A canonical oracle failure
-marks the row infrastructure-unknown and never converts it into score zero.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

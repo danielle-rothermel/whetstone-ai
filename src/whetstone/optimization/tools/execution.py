@@ -1,5 +1,3 @@
-"""Validated, admitted, and fenced execution of exact Tool Calls."""
-
 from __future__ import annotations
 
 from collections.abc import Mapping

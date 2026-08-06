@@ -1,29 +1,3 @@
-"""Closed, versioned Whetstone Node Definitions.
-
-Whetstone owns the *semantics* of its two Node kinds; the concrete native
-representation is dr-graph's ``NodeDefinition`` / ``NodeConfig``, and all
-Node fields participate in ``graph_hash``. Whetstone introduces no separate
-Node type registry, no Node hash, and no parallel config model.
-
-Two closed Node Definitions exist:
-
-``whetstone.llm-call/v1``
-    Primary output is a Generation. It references a native dr-providers
-    Provider Call Config by a typed reference plus its Identity Hash, carried
-    as a *static Variable assignment* (never a Node Input Source). The full
-    provider result is retained as provenance at runtime, not in identity.
-
-``whetstone.eval/v1``
-    Consumes declared upstream Node Outputs from the current Graph Run via
-    Node Input Sources. Its Evaluation Procedure Config is a typed reference
-    plus Identity Hash carried as a *static Variable assignment* — never a
-    Node Input Source and never a context-bound runtime input.
-
-Because the Provider Call Config reference and the Evaluation Procedure
-Config reference are Node ``variables`` (not ``input_sources``), they are in
-the Graph Config identity payload and changing either changes ``graph_hash``.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping

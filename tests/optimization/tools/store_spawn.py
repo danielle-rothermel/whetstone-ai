@@ -1,5 +1,3 @@
-"""Spawn-process helpers for durable Tool admission tests."""
-
 from __future__ import annotations
 
 from functools import partial
@@ -53,7 +51,6 @@ def admit_once(
     acquired: Any,
     queue: Queue,
 ) -> None:
-    """Open independent stores, admit one call, and report stable evidence."""
     try:
         config = ToolConfig.model_validate(config_payload)
         store = ToolCallStore(
@@ -102,7 +99,6 @@ def load_terminal_result_once(
     call_payload: dict[str, Any],
     queue: Queue,
 ) -> None:
-    """Load one completion through independently reopened durable stores."""
     try:
         call = ToolCall.model_validate(call_payload)
         store = ToolCallStore(
@@ -139,7 +135,6 @@ def admit_postgresql_once(
     backend_pid: Any,
     queue: Queue,
 ) -> None:
-    """Admit one call through an independent schema-bound connection."""
     try:
         config = ToolConfig.model_validate(config_payload)
         if role == "holder":
@@ -207,7 +202,6 @@ def load_postgresql_terminal_result_once(
     call_payload: dict[str, Any],
     queue: Queue,
 ) -> None:
-    """Load one PostgreSQL-backed completion in a fresh process."""
     try:
         call = ToolCall.model_validate(call_payload)
         connect_in_schema = partial(

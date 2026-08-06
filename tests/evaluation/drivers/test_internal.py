@@ -1,5 +1,3 @@
-"""Internal evaluation driver and process-wire contracts."""
-
 from __future__ import annotations
 
 import os
@@ -206,11 +204,9 @@ def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
     assert agg.name == "env_exact_match"
     assert agg.aggregation_output.status is AggregationStatus.OK
     assert agg.aggregation_output.value == pytest.approx(1.0)
-    # Complete matrix accounting: every planned row is present, none dropped.
     planned = agg.task_count * agg.repeat_count
     assert agg.rows_present == planned
     assert agg.rows_missing == agg.rows_failed == agg.rows_invalid == 0
-    # A valid internal-role Reward maps the aggregate.
     assert isinstance(result.reward, Reward)
     assert result.reward.evidence_role is EvaluationRole.INTERNAL
     assert result.reward.value == pytest.approx(1.0)
@@ -218,11 +214,6 @@ def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
 
 @pytest.mark.process_integration
 def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
-    # c22 correct responses are constraint-stack-specific (proven at score 1
-    # against a hand-built fixture in test_oracle_operator); here the full
-    # internal-eval loop is exercised end to end through the c22 gold-first
-    # oracle, producing a VALID Rollout Aggregate + Reward. A response that
-    # satisfies no stack scores 0 across the split.
     exp = tiny_experiment("c22")
     result = run_internal_eval(
         exp,
@@ -248,7 +239,6 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
 @pytest.mark.process_integration
 def test_internal_eval_wrong_answers_score_zero() -> None:
     exp = tiny_experiment("c18")
-    # Always answer the opposite label so every task scores 0.
     result = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,
@@ -364,14 +354,6 @@ sys.stdout.write(request.request_identity)
 def test_internal_row_request_json_is_stable_across_python_hash_seeds() -> (
     None
 ):
-    """The submitted row JSON and its identity must not vary with hash seed.
-
-    ``dr_providers`` models three provider-definition fields as frozensets.
-    This fixed request independently populates all three and asserts the
-    consumer serialization boundary without generating or evaluating a C18
-    pool: the submitted row is byte-identical, and hashes identically, under
-    fresh interpreters with different hash seeds.
-    """
     repo_root = str(Path(__file__).resolve().parents[3])
     script = _CROSS_SEED_REQUEST_SCRIPT.format(repo_root=repo_root)
     outputs: list[str] = []
@@ -784,12 +766,6 @@ def test_internal_eval_is_deterministic() -> None:
 
 @pytest.mark.process_integration
 def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
-    # A blank generation is not an accepted Generation (a provider semantic
-    # failure); the internal-eval marks it a FAILED row. Under the default
-    # PROPAGATE policy that makes the aggregate visibly incomplete (value
-    # None) -- never a silent 0 -- so on the internal/optimizer path (reward
-    # applied) the FAIL Reward Policy surfaces the TYPED
-    # CandidateEvaluationFailure the optimizer loop handles, not a bare crash.
     exp = tiny_experiment("c18")
     with pytest.raises(CandidateEvaluationFailure):
         run_internal_eval(
@@ -804,9 +780,6 @@ def test_blank_generation_is_a_failed_row_not_a_silent_zero() -> None:
 
 @pytest.mark.process_integration
 def test_official_eval_incomplete_aggregate_derives_no_reward() -> None:
-    # An official-role binding with incomplete
-    # evidence (all-blank -> failed rows -> aggregate None, PROPAGATE) must
-    # NOT crash and must derive NO Reward -- visible incompleteness only.
     exp = tiny_experiment("c18")
     result = run_internal_eval(
         exp,

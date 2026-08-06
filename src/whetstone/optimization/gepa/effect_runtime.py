@@ -1,5 +1,3 @@
-"""DBOS stable-child durability for GEPA evaluation and proposal effects."""
-
 from __future__ import annotations
 
 from dbos import DBOS, SetWorkflowID

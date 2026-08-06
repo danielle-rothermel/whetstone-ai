@@ -1,5 +1,3 @@
-"""Current-schema incremental persistence for completed provider calls."""
-
 from __future__ import annotations
 
 import hashlib

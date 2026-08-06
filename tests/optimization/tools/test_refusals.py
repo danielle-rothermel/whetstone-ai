@@ -1,5 +1,3 @@
-"""Tool validation, fenced execution, terminal replay, and exact evidence."""
-
 from __future__ import annotations
 
 import json

@@ -1,5 +1,3 @@
-"""Step and terminal bindings replay from fresh SQLite-backed instances."""
-
 import pytest
 from dr_store import BindingConflictError
 

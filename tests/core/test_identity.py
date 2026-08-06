@@ -1,5 +1,3 @@
-"""Direct identity, immutable JSON, and canonical comparison contracts."""
-
 import pickle
 from typing import Any
 

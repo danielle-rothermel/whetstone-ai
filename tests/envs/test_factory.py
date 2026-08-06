@@ -1,5 +1,3 @@
-"""Environment experiment factory contracts."""
-
 from __future__ import annotations
 
 import pytest
@@ -13,9 +11,6 @@ from whetstone.envs.registry import ENV_NAMES
 def test_build_env_experiment_returns_all_five_deliverables(
     env_name: str,
 ) -> None:
-    # The factory contract (five deliverables + shared Procedure identity) is
-    # N-independent, so build over a tiny pool -- avoids the full-N c18/c18h
-    # PrOntoQA regeneration this parametrization would otherwise pay twice.
     exp = tiny_experiment(env_name)
     d = exp.as_dict()
     assert set(d) == {
@@ -25,7 +20,6 @@ def test_build_env_experiment_returns_all_five_deliverables(
         "eval_configs",
         "reward_policy",
     }
-    # The Rollout Definition and both Eval Configs share one Procedure id.
     assert (
         exp.rollout_definition.procedure_config_hash
         == exp.eval_configs.procedure_config_hash

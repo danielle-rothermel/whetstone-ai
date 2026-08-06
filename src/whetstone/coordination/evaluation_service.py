@@ -1,5 +1,3 @@
-"""Restart-safe composition of evaluation and coordination capabilities."""
-
 from __future__ import annotations
 
 import threading
@@ -45,7 +43,9 @@ _EVALUATION_SERVICE_NAMESPACE = "whetstone.evaluation_service.v3"
 
 
 class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
-    """Resolve each immutable intent exactly once across process restarts."""
+    """Persist one authoritative resolution per immutable intent across
+    processes and restarts; an expired uncommitted attempt may be retried.
+    """
 
     def __init__(
         self,

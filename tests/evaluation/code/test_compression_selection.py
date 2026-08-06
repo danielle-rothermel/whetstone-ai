@@ -1,11 +1,3 @@
-"""Eval Experiment Compression Reference Selection.
-
-Proves the experiment rule selects exact UTF-8 bytes of
-``task.gt_code_wo_comments`` onto a generic dr-code Compression Reference Key,
-and that the generic key/artifact layer stays dataset-ignorant (it never
-learns the field name).
-"""
-
 from __future__ import annotations
 
 import inspect
@@ -29,8 +21,6 @@ from whetstone.evaluation.code import (
 
 
 class _Task(BaseModel):
-    """A minimal experiment task view carrying the reference field."""
-
     gt_code_wo_comments: str
 
 
@@ -70,24 +60,15 @@ def test_resolver_resolves_selected_bytes() -> None:
 
 
 def test_generic_layer_is_dataset_ignorant() -> None:
-    # The generic dr-code compression-reference module must not mention the
-    # experiment field name anywhere: it stays dataset-ignorant. The only
-    # mention is a docstring example, which is not executable knowledge; we
-    # assert the *code* (identifiers/strings) carries no such field access.
     source = inspect.getsource(generic_module)
-    # No attribute access or literal use of the field in code paths: the
-    # generic key/artifact carry only namespace/name and bytes.
     key = CompressionReferenceKey(namespace="ns", name="n")
     assert not hasattr(key, SELECTED_FIELD)
     artifact = CompressionReferenceArtifact(content=b"x")
     assert not hasattr(artifact, SELECTED_FIELD)
-    # The field name appears only inside a docstring (documentation), never as
-    # a code token. Confirm it does not appear outside the module docstring.
     module_doc = generic_module.__doc__ or ""
     occurrences_in_code = source.replace(module_doc, "").count(SELECTED_FIELD)
     assert occurrences_in_code == 0
 
 
 def test_selection_field_named_only_in_whetstone() -> None:
-    # Whetstone is where the dataset field is named.
     assert SELECTED_FIELD == "gt_code_wo_comments"

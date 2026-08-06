@@ -1,5 +1,3 @@
-"""The single injected evaluation engine used by optimization adapters."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

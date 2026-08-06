@@ -1,28 +1,3 @@
-"""Rollout Aggregate: provenance-bearing binding of pure aggregation output.
-
-dr-code's :func:`~dr_code.eval.aggregate` is a pure, provenance-free function
-over an explicitly complete tuple of inputs. Whetstone binds that value into a
-**provenance-bearing** Rollout Aggregate: it attaches the identity
-``(graph_hash, eval_config_hash)``, the complete planned Rollout Result matrix,
-and the stated Evaluation Binding hash. Whetstone owns provenance and the
-binding; dr-code owns the numeric reduction.
-
-The canonical Rollout Aggregate is an **Unweighted Task Mean**: the mean
-caller-derived scalar across Repeat IDs *per Task*, followed by the configured
-**unweighted** mean across the **complete** Task Set. The caller supplies the
-durable aggregate name. The per-task mean is a first reduction; the cross-task
-mean is the second. Every planned cell is accounted for.
-
-It handles failed rows, missing rows, and invalid (zero-denominator)
-Compression Ratios **explicitly** via the declared :class:`RowPolicy`: rows are
-never silently dropped. Under ``PROPAGATE`` an incomplete or failed cell makes
-the whole aggregate ``MISSING_DATA``; invalid cells are explicit
-not-applicable inputs. Under ``SKIP`` non-present cells are excluded but their
-exclusion is recorded in the provenance counts and checked against the
-declared skip tolerance. A wholly-empty reduction has an explicit non-OK
-status rather than a fabricated value.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

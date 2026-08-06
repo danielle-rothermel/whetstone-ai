@@ -1,5 +1,3 @@
-"""Durable stores, builders, and generic adapter test doubles."""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -129,7 +127,6 @@ def make_store(
 def memory_tool_call_store(
     store: ObjectStore, effect_authority: EffectAuthority
 ) -> ToolCallStore:
-    """Build a test-only Tool store with explicitly ephemeral admission."""
     return ToolCallStore(
         store,
         ToolAdmissionAuthority.memory(),

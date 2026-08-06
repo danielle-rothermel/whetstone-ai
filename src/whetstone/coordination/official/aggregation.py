@@ -1,22 +1,3 @@
-"""Official aggregation accounting: every planned key, none dropped.
-
-Deliverable 5 of Workstream 9: *official aggregation accounts for every planned
-key under the configured failure policy — missing rows are visible, never
-dropped.*
-
-The official write path plans a set of Rollout Execution Keys, resolves each to
-its ordinary Rollout Result reference through the authoritative Result Store,
-and produces a complete, explicit account: every planned key becomes exactly
-one :class:`~whetstone.coordination.official.records.PlannedKeyResult`,
-present or missing.
-Under
-:data:`OfficialFailurePolicy.STRICT` any missing planned key makes the official
-account incomplete (so it cannot be certified); under
-:data:`OfficialFailurePolicy.RECORD_MISSING` missing rows are recorded and
-remain visible, but they are still counted — never silently skipped — and the
-account is still marked incomplete so certification refuses it.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,5 +1,3 @@
-"""ToolCallStore facade semantics and exact terminal persistence."""
-
 from __future__ import annotations
 
 import json

@@ -1,5 +1,3 @@
-"""Durable claim arbitration for evaluation intents."""
-
 from __future__ import annotations
 
 import threading

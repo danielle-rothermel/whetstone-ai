@@ -1,5 +1,3 @@
-"""Concrete GEPA adapter factory identity and artifact tests."""
-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -52,7 +50,6 @@ _9 = "9" * 64
 def _direct_executor(
     *, policy_identity_hash: str = _F
 ) -> DurableProposalExecutor:
-    """Mint the canonical capability over an in-process pass-through."""
 
     def execute(*, config, request, transport, count):
         return transport.draft(config, request, count)
@@ -155,9 +152,6 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
         candidate_assembler=assembler,
         data_registry=registry,
     )
-    # A multi-repeat engine is refused at construction, before any paid
-    # evaluation: the single-repeat contract is pinned into the GEPA
-    # response-parser identity.
     multi_repeat_engine = cast(
         EvaluationEngine,
         SimpleNamespace(
@@ -258,8 +252,6 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
             )
         }
     )
-    # An executor advertising a different durability policy cannot serve an
-    # authority whose control names the original one.
     with pytest.raises(ValueError, match="prompt/durability"):
         CanonicalGepaProposalAuthority(
             store=store,
@@ -268,7 +260,6 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
             transport=transport,
             proposal_executor=other_executor,
         )
-    # Binding control and executor to the same policy identity is accepted.
     CanonicalGepaProposalAuthority(
         store=store,
         control=other_control,

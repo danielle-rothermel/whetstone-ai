@@ -1,5 +1,3 @@
-"""The reusable Reward Policy/Reward contract; official computes no Reward."""
-
 from __future__ import annotations
 
 import pytest
@@ -50,7 +48,6 @@ def test_reward_names_its_policy_and_cites_inputs() -> None:
     )
     assert reward.reward_policy_hash == policy.identity_hash()
     assert reward.evidence_role is EvaluationRole.INTERNAL
-    # value = 1.0*0.8 - 0.5*0.4 = 0.6
     assert reward.value == pytest.approx(0.6)
     cited = {c.name for c in reward.input_citations}
     assert cited == {"pass_rate", "compression"}
@@ -163,7 +160,7 @@ def test_missing_data_fail_raises() -> None:
     with pytest.raises(ValueError, match="missing"):
         apply_reward_policy(
             policy,
-            aggregates={"pass_rate": 0.8},  # compression missing
+            aggregates={"pass_rate": 0.8},
             evidence_role=EvaluationRole.INTERNAL,
             evidence_refs=_evidence_refs(),
         )

@@ -1,5 +1,3 @@
-"""Exact, serializable controls for the frozen GEPA 0.1.1 engine."""
-
 from __future__ import annotations
 
 import math

@@ -1,12 +1,3 @@
-"""End-to-end: official selection evidence certified by the authority.
-
-Ties Workstream 8 (Objectives + selection) to Workstream 9 (certification):
-official selection runs over complete certified aggregates, its evidence is
-persisted, and an Official Evaluation Record references that evidence and
-preserves the ordered selected-record mapping. No Reward is computed anywhere
-on this path.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -114,7 +105,6 @@ def test_selection_evidence_certified_and_persisted() -> None:
     evidence = _selection_evidence()
     assert evidence.selected_candidate_id == "graph-a"
 
-    # Persist the selection evidence immutably; reference it from the record.
     store = ObjectStore(MemoryBackend())
     evidence_ref = store_selection_evidence(store, evidence)
     assert evidence_ref == ObjectReference.for_record(

@@ -1,5 +1,3 @@
-"""Canonical MIPROv2 projection onto the sole candidate mutation field."""
-
 from __future__ import annotations
 
 import json

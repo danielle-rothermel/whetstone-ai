@@ -1,5 +1,3 @@
-"""Central output-contract and durable budget enforcement."""
-
 import pytest
 
 from whetstone.core.identity import TypedRef

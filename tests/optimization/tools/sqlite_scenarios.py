@@ -1,5 +1,3 @@
-"""Explicit clean-interpreter scenarios for SQLite Tool admission."""
-
 from __future__ import annotations
 
 import multiprocessing
@@ -99,8 +97,8 @@ def run_sqlite_capacity_race(
 ) -> None:
     database = tmp_path / "race.sqlite"
     config = tool_config(capacity=4)
-    # Initialize tables before processes start; each process still opens fully
-    # independent ObjectStore and admission-authority instances.
+    # Initialize tables before spawning; each process opens its own store
+    # and authority.
     sqlite_store(database)
     records = run_spawned_sqlite_admissions(
         database,

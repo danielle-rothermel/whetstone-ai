@@ -1,5 +1,3 @@
-"""Tests for the shared Evaluation Role vocabulary."""
-
 import pytest
 
 from whetstone.core.roles import EvaluationRole

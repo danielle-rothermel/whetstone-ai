@@ -1,5 +1,3 @@
-"""Optimization run binding and persistence operations."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -168,6 +166,11 @@ class OptimizationRunStore:
     def bind_run(
         self, run: OptimizationRun | OptimizationRunRef
     ) -> OptimizationRunRef:
+        """Bind one exact immutable run to its run ID.
+
+        Rebinding the same record is idempotent; a different record for that
+        ID raises :class:`OptimizationRunConflictError`.
+        """
         if isinstance(run, OptimizationRunRef):
             exact = OptimizationRunRef.model_validate(
                 run.model_dump(mode="json")

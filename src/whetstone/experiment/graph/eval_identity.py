@@ -1,23 +1,3 @@
-"""Eval identity partition validation.
-
-The composite dr-code Eval Config binds three component Configs: Sampling,
-Evaluation Procedure, and Aggregation. Whetstone additionally requires that
-the Eval Config's *Evaluation Procedure Config identity* exactly match the
-Evaluation Procedure Config reference assigned as a static Variable on the
-Eval Node in the Graph Config.
-
-That match is the seam that produces the settled identity partition:
-
-* Changing the Evaluation Procedure Config changes the Eval Node's static
-  Variable (hence ``graph_hash``) *and* the composite ``eval_config_hash``.
-* Changing only Sampling or only Aggregation changes only
-  ``eval_config_hash`` — the Graph Config, and thus ``graph_hash``, is
-  untouched.
-
-Whetstone owns no parallel Eval Config identity; ``eval_config_hash`` is
-exactly ``EvalConfig.config_identity_hash`` from dr-code.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

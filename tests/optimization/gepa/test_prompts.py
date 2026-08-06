@@ -237,12 +237,6 @@ def test_multimodal_reflection_snapshot_preserves_structured_part() -> None:
 
 
 def test_typed_but_textual_part_renders_its_text_instead_of_media() -> None:
-    """A media ``type`` alone must not divert text out of the prompt.
-
-    Classifying on ``type`` alone projected textual dicts into structured
-    content, so their text never reached the reflection prompt.
-    """
-
     textual = {
         "type": "image",
         "label": "diagram-7",
@@ -260,7 +254,6 @@ def test_typed_but_textual_part_renders_its_text_instead_of_media() -> None:
         _request(examples=examples),
     )
 
-    # No structured content part is emitted, so the prompt stays plain text.
     assert rendered.messages is None
     assert "[MEDIA-1 — see structured content]" not in rendered.text
     assert "diagram-7" in rendered.text

@@ -1,1 +1,0 @@
-"""MIPROv2 tests."""

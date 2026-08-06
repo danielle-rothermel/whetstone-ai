@@ -1,28 +1,3 @@
-"""The whetstone-owned metric-extraction operator over the env oracle.
-
-The terminal Eval Node's Evaluation Procedure invokes the env ORACLE through
-this whetstone-owned operator. Given a model generation and an
-:class:`~whetstone.envs.task.EnvTask`'s evaluation input (gold), it calls
-``whetstone_envs.<env>.oracle.score_gold`` -- which applies the env's shared
-normalization first -- and emits:
-
-* a dr-code :class:`~dr_code.eval.MetricFact` named ``env_exact_match`` with
-  unit ``correct/1`` (a 0/1 correctness fact), carrying the resolved
-  operator lineage (the Evaluation Procedure Config identity plus the
-  operator name/version); and
-* a dr-code :class:`~dr_code.eval.Score` also named ``env_exact_match`` (unit
-  ``correct/1``), derived from that fact, carrying the same Procedure
-  identity in its derivation lineage.
-
-This operator is whetstone-owned: it is *not* a dr-code metrics-engine
-operator (it never touches ``ArtifactKind`` / the engine / the metric
-registry). Its name and version are folded into the Metric Extraction Config
-identity via :func:`whetstone.envs.procedure.env_metric_extraction_config`,
-so a change to the operator is visible in ``eval_config_hash`` and
-``graph_hash``. dr-code owns the ``MetricFact`` / ``Score`` types; whetstone
-owns the env-oracle invocation.
-"""
-
 from __future__ import annotations
 
 from dr_code.eval import (

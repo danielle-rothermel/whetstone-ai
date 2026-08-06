@@ -1,5 +1,3 @@
-"""Smoke-test the built Whetstone wheel from outside its checkout."""
-
 from __future__ import annotations
 
 import importlib

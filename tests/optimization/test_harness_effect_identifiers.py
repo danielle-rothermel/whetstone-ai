@@ -1,5 +1,3 @@
-"""Exact run ancestry and per-Step effect identifiers are fail-closed."""
-
 from __future__ import annotations
 
 import pytest

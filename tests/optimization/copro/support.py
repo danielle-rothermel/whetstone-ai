@@ -1,5 +1,3 @@
-"""Explicit adapter and request construction shared by COPRO tests."""
-
 from __future__ import annotations
 
 from typing import Any
@@ -47,7 +45,6 @@ def durable_copro_proposal_executor(
     *,
     policy_identity_hash: str = FULL_C,
 ) -> DurableProposalExecutor:
-    """Mint the canonical capability over an in-process pass-through."""
 
     def execute(*, config, request, transport, count):
         return transport.draft(config, request, count)

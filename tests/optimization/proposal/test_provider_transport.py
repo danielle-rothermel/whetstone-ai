@@ -283,8 +283,6 @@ def test_resolved_provider_config_hash_must_match_proposer_identity() -> None:
 
 def test_resolved_provider_config_record_ref_must_match_before_call() -> None:
     resolved = openrouter_chat_config(model="proposal-model")
-    # Prime the cached provider identity, then copy a different body carrying
-    # that claim so only exact content-reference verification can reject it.
     claimed_identity_hash = resolved.identity_hash
     wrong_record = resolved.model_copy(
         update={
@@ -427,7 +425,6 @@ def test_transport_durability_schema_constants() -> None:
 
 
 def test_transport_durability_identity_payload_and_digest_are_golden() -> None:
-    """The registry key is exactly these two pinned capability components."""
 
     golden = "862c33a44ec69924e65f4556e5077ba61e0afbcfcb129e4cbd32ce7fa75b767c"
     assert (

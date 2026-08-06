@@ -1,23 +1,3 @@
-"""The D1 direct-generation HumanEval Submission Score drive.
-
-Drives one candidate over a d1 split through serializable process jobs,
-running a SINGLE LLM Call per (task, repeat):
-
-1. compose the mutable wrapper ``{body}`` (the candidate's Mutation-Surface
-   payload) around the FROZEN input arm (the screen DIRECT-arm slice of the
-   canonical HumanEval prompt; the ``renamed`` arm is the all-occurrence
-   canonical-name scrub);
-2. call the task model directly;
-3. score the model output for correctness through the SAME dr-code HumanEval
-   sandbox ed1 uses (the ``renamed`` arm scores against the RENAMED entry
-   point -- the amendment-2 scoring trap, never the leaked canonical name).
-
-It reduces to one ``humaneval_submission_score`` aggregate using the shared
-two-stage unweighted task mean. The frozen input-arm construction is owned by
-:mod:`whetstone.envs.input_transform`. Nothing here makes a live paid call by
-itself: the transport and code-eval scorer are injected.
-"""
-
 from __future__ import annotations
 
 import json
@@ -152,9 +132,7 @@ class D1RowOutcome(BaseModel):
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
     latency_s: float | None = None
-    #: Task-26 per-call provenance (``None`` when unknown): the provider stop
-    #: reason of the accepted Generation + the FULL typed diagnostic of a
-    #: failed call.
+    #: The accepted Generation's stop reason and full typed failure diagnostic.
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
     #: True when a TRANSIENT transport fault (timeout/stall/transport-error/
@@ -324,9 +302,9 @@ def _input_arm_text(
 ) -> tuple[str, HumanEvalTask]:
     """The frozen input-arm text + the (possibly renamed) scoring task.
 
-    REUSES the screen driver: ``split_prompt`` -> the arm slice via
-    ``_direct_body``; the ``renamed`` arm additionally scrubs EVERY canonical-
-    name occurrence and returns a RENAMED scoring task (the amendment-2 trap).
+    ``split_prompt`` and ``direct_body`` derive the selected arm. The
+    ``renamed`` arm also scrubs every canonical-name occurrence and returns a
+    scoring task with the renamed entry point.
     """
     ht = experiment.humaneval_for(instance)
     parts = split_prompt(ht.prompt, ht.entry_point)

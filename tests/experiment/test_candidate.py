@@ -1,5 +1,3 @@
-"""Candidate identity, exact-reference, and JSON boundary contracts."""
-
 from __future__ import annotations
 
 import pickle

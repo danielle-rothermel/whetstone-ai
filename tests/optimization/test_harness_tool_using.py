@@ -1,5 +1,3 @@
-"""Tool-using output checkpoints and terminal evidence."""
-
 from typing import Any, cast
 
 import pytest

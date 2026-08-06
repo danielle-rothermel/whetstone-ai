@@ -1,30 +1,3 @@
-"""The five whetstone-envs task families bound to a uniform env spec.
-
-Each quick-test candidate in ``whetstone-envs`` exposes the same three
-model-call-free surfaces behind its ``whetstone_envs.<env>`` package: a
-seeded generator (``generate.generate_pool`` -> a
-``whetstone_envs.core.TaskPool``), an independent scoring oracle
-(``oracle.score_gold(prediction, gold) -> int``, which applies the env's
-*shared* normalization first), and a naive/ceiling ``ProbePair``
-(``prompts.PROBES``). This module names those surfaces once per env so the
-rest of the adapter is env-agnostic.
-
-The oracle contract is deliberately uniform: every env's ``score_gold``
-takes the model generation as its first argument and the instance's public
-``gold`` field as its second, and returns ``0`` / ``1`` after the shared
-:func:`whetstone_envs.core.normalize`. For the four re-derive-the-answer
-envs (c11, c19, c18, c23) ``gold`` is the expected answer string; for c22
-``gold`` is the serialized constraint stack the oracle re-runs its checkers
-against. Either way, ``score_gold(generation, task.gold)`` is the single
-call the whetstone metric-extraction operator makes.
-
-Split sizes and the repeat count are the env's committed spec defaults where
-the env commits them (``generate.default_split_sizes`` for c11/c18/c19/c23),
-and whetstone-side spec defaults where the env does not (c22 commits no
-split call; see :data:`_C22_SPLIT`). ``held_out`` is never referenced by any
-Sampling Config this adapter builds.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -51,18 +24,8 @@ class PoolPreset(Protocol):
     def generate(self, *, n_per_stratum: int | None = None) -> TaskPool: ...
 
 
-#: The task families this adapter binds, in build/validation order
-#: (cheapest/most robust first, matching the validation plan's spend order).
-#: ``c22h`` is the c22 hard-mode variant: it maps to the SAME c22 modules
-#: (:data:`_ENV_MODULE_NAME`) but generates its pool from that env's
-#: ``HARD_PRESET`` (:data:`_ENV_POOL_PRESET`) -- the hardest configuration of
-#: the original IFEval suite, with no hidden-information design change. A
-#: distinct env id keeps its ledger rows / cells / eval-config identities
-#: separate from base c22's. ``c18h`` is the analogous c18 hard-mode variant:
-#: the SAME c18 modules generated from c18's ``HARD_PRESET`` -- the hardest
-#: upstream-PrOntoQA configuration along c18's depth + distractor axes (deeper
-#: chains D5/D8/D10, distractors ON where the pinned upstream can honor them),
-#: again with no hidden-information change and a distinct env id.
+#: Bound task families in build order. Hard-mode variants reuse their base
+#: modules with ``HARD_PRESET``; distinct names preserve dataset identities.
 ENV_NAMES: tuple[str, ...] = (
     "c22",
     "c22h",
@@ -73,53 +36,30 @@ ENV_NAMES: tuple[str, ...] = (
     "c23",
 )
 
-#: The underlying ``whetstone_envs`` package a bound env id loads its
-#: generate/oracle/prompts surfaces from. Defaults to the env id itself; only
-#: the hard-mode variants differ (each reuses its base env's modules with a
-#: different pool preset).
+#: Base modules reused by variant environment names.
 _ENV_MODULE_NAME: dict[str, str] = {"c22h": "c22", "c18h": "c18"}
 
-#: The named generation preset a bound env id generates its pool from, when it
-#: is a *variant* of another env's default pool. The value is the attribute
-#: name of a ``Preset`` on the env's generate module. Only the hard-mode
-#: variants use one (``HARD_PRESET``); every other env generates its committed
-#: default pool.
+#: Generation presets selected by variant environment names.
 _ENV_POOL_PRESET: dict[str, str] = {
     "c22h": "HARD_PRESET",
     "c18h": "HARD_PRESET",
 }
 
 
-#: The two provenance markers a :class:`TokenEstimate` may carry. A
-#: ``live-measured`` estimate came from an actual smoke/pilot measurement; a
-#: ``scaled-pending-measurement`` estimate is a committed baseline-spec §5
-#: value scaled by the reasoning-model correction, to be overwritten once its
-#: env's pilot records a measured mean. As of the round-3 update ALL five envs
-#: are ``live-measured``; ``scaled-pending-measurement`` is retained as the
-#: default provenance for any newly added, not-yet-measured env.
+#: Estimate provenance distinguishes direct measurement from scaled defaults
+#: awaiting measurement.
 ESTIMATE_LIVE_MEASURED = "live-measured"
 ESTIMATE_SCALED_PENDING = "scaled-pending-measurement"
-#: A third provenance: an estimate INHERITED verbatim from another env's
-#: measured means (c22h seeds from c22's live-measured naive/ceiling), pending
-#: its own pilot measurement which will overwrite it.
+#: Inherited estimates retain distinct provenance until directly measured.
 ESTIMATE_INHERITED_PENDING = "inherited-pending-measurement"
 
 
 @dataclass(frozen=True, slots=True)
 class TokenEstimate:
-    """The per-call token estimate for one env's baseline probes.
+    """Per-call token estimates for the naive and ceiling probes.
 
-    The naive probe and the ceiling probe are distinguished by every spec, so
-    both are recorded separately. These are the defaults the pilot's token-
-    sanity check runs against when ``--spec-estimate-tokens`` is not passed;
-    the flag still overrides.
-
-    ``estimate_source`` marks provenance: ``live-measured`` (all five envs, as
-    of the round-3 update, from their pilots' measured per-call means) versus
-    ``scaled-pending-measurement`` (a committed baseline-spec §5 value scaled
-    for the reasoning-model correction, the default for any not-yet-measured
-    env). A pilot overwrites its env's estimate with its measured means and
-    records those in the pilot JSON so the report can show est-vs-actual.
+    ``estimate_source`` records whether values were measured, inherited
+    pending measurement, or scaled pending measurement.
     """
 
     naive: int
@@ -127,20 +67,12 @@ class TokenEstimate:
     estimate_source: str = ESTIMATE_SCALED_PENDING
 
 
-#: Per-env token estimates. ALL FIVE are now LIVE-MEASURED from their pilots'
-#: measured per-call means: c22 naive 2526 / ceiling 3046; c11 1735 / 1831;
-#: c19 4377 / 5009; c23 5468 / 4953; c18 naive 1306. c18's ceiling keeps its
-#: measured 2448 with the caveat that that measurement PREDATES the verdict-
-#: extraction scoring fix (the extraction changes only how the reply is
-#: scored, not how many tokens the model emits, so the token mean is expected
-#: to hold; flagged for re-confirmation by the post-fix c18 pilot).
 _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
     "c22": TokenEstimate(
         naive=2526, ceiling=3046, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
     "c22h": TokenEstimate(
-        # Inherited from c22's live-measured means; overwritten by c22h's
-        # own pilot once it records a measured per-call mean.
+        # Inherits c22's estimates.
         naive=2526,
         ceiling=3046,
         estimate_source=ESTIMATE_INHERITED_PENDING,
@@ -152,18 +84,12 @@ _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
         naive=4377, ceiling=5009, estimate_source=ESTIMATE_LIVE_MEASURED
     ),
     "c18": TokenEstimate(
-        # naive live-measured; ceiling 2448 measured PRE extraction fix.
         naive=1306,
         ceiling=2448,
         estimate_source=ESTIMATE_LIVE_MEASURED,
     ),
     "c18h": TokenEstimate(
-        # Inherited from c18's live-measured means scaled x1.5 for the deeper
-        # (D8/D10) chains: naive 1306 -> 1959, ceiling 2448 -> 3672. A longer
-        # chain means a longer facts+rules block and (for the ceiling probe) a
-        # longer step-by-step derivation, so the base c18 estimate would
-        # under-budget the token-sanity check. Overwritten by c18h's own pilot
-        # once it records a measured per-call mean.
+        # Scales c18's estimates for longer D8/D10 prompts.
         naive=1959,
         ceiling=3672,
         estimate_source=ESTIMATE_INHERITED_PENDING,
@@ -173,10 +99,7 @@ _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
     ),
 }
 
-#: Spec-default deliberate-observation repeats per task. The envs commit no
-#: repeat count (a Repeat Plan is a whetstone execution concern, out of scope
-#: for whetstone-envs per its PLAN "Integration handoff"); the validation
-#: plan's pilots use 3 temp-0 repeats, so 3 is the whetstone-side default.
+#: Default deliberate-observation repeats per task.
 DEFAULT_REPEATS = 3
 
 #: Envs whose oracle ``score_gold`` is ``(gold, response)`` rather than the
@@ -185,23 +108,12 @@ DEFAULT_REPEATS = 3
 #: constraint stack from the gold).
 _GOLD_FIRST_ENVS: frozenset[str] = frozenset({"c22", "c22h"})
 
-#: Envs whose generated pool is **blocked** by stratum (all of one stratum's
-#: instances contiguous, then the next), so ``TaskPool.split``'s contiguous
-#: slicing would skew each split toward the leading strata. c22 is blocked
-#: (its generator emits ``n_per_stratum`` instances per (constraint-count x
-#: atom-mix) cell in a fixed cell order). The other four envs interleave their
-#: strata (verified), so a contiguous split is already balanced for them.
-#: Blocked-pool envs are sampled per-stratum instead (see
-#: :func:`whetstone.envs.sampling.stratified_split`). c22h shares c22's blocked
-#: layout (its HARD_PRESET emits n_per_stratum instances per stratum in cell
-#: order), so it is stratified too.
+#: Pools blocked by stratum require per-stratum sampling because contiguous
+#: slicing would skew splits toward leading strata.
 _STRATIFIED_SPLIT_ENVS: frozenset[str] = frozenset({"c22", "c22h"})
 
-#: c22 commits no ``default_split_sizes`` (unlike the other four). Its spec
-#: (Section 1) proposes N=20/stratum; this adapter uses the same
-#: small-internal / balanced-official-and-held-out per-stratum shape the
-#: other envs commit, kept well inside c22's 20/stratum pool. Recorded as a
-#: judgment call in the build report.
+#: c22 has no package-provided split sizes; these per-stratum defaults stay
+#: within its 20-instance strata.
 _C22_SPLIT_PER_STRATUM = (2, 6, 6)  # (internal_eval, official, held_out)
 
 #: Per-env per-stratum split overrides (``(internal, official, held_out)``).
@@ -223,53 +135,12 @@ _SPLIT_PER_STRATUM_BY_ENV: dict[str, tuple[int, int, int]] = {
 
 @dataclass(frozen=True, slots=True)
 class EnvSpec:
-    """The bound surfaces of one whetstone-envs task family.
+    """Bind generation, prompt, oracle, identity, and split behavior for one
+    environment.
 
-    Parameters
-    ----------
-    name:
-        The env identifier (``"c22"`` .. ``"c23"``).
-    generate:
-        The env's ``generate`` module (``generate_pool`` / ``build_manifest``
-        / optional ``default_split_sizes``).
-    oracle:
-        The env's ``oracle`` module. Its ``score_gold`` returns 0/1 after the
-        env's shared normalization; see ``gold_first`` for the argument order.
-    probes:
-        The env's naive/ceiling :class:`~whetstone_envs.core.ProbePair` as
-        committed by whetstone-envs. Retained for reference / byte-fidelity
-        equivalence; the adapter renders through :attr:`surface` instead.
-    surface:
-        The adapter-side :class:`~whetstone.envs.probes.ProbeSurface`: a
-        genuinely mutable, serialization-stable ``user_prompt_template`` pair
-        plus a content-driven render. For four envs this wraps ``probes``
-        verbatim; for c19 it replaces the env's identity-sentinel ``ProbePair``
-        (which is non-functional under mutation / JSON round-trip) with real
-        ``str.format`` templates, so the Mutation Surface is genuinely mutable
-        and Result-Store-stable.
-    oracle_qualname:
-        The dotted path to the oracle entry point, folded into the Metric
-        Extraction Config identity so a change of oracle wiring is visible in
-        ``eval_config_hash`` / ``graph_hash``.
-    token_estimate:
-        The committed per-call :class:`TokenEstimate` (naive + ceiling) from
-        this env's baseline-spec §5, the default the pilot's token-sanity
-        check runs against absent a ``--spec-estimate-tokens`` override.
-    gold_first:
-        Whether the env oracle's ``score_gold`` takes ``(gold, response)``
-        (``True`` -- c22) rather than the usual ``(prediction, gold)``
-        (``False`` -- c11/c19/c18/c23). c22's oracle re-runs its constraint
-        checkers against the response and reads the constraint stack from the
-        gold, so its signature is ``score_gold(gold, response)``; this flag
-        makes :meth:`score_gold` call the oracle with the right order while
-        the adapter surface stays uniform ``score_gold(generation, gold)``.
-    stratified_split:
-        Whether this env's pool is **blocked** by stratum (``True`` only for
-        c22), so the adapter samples splits per-stratum
-        (:func:`whetstone.envs.sampling.stratified_split`) rather than via
-        ``TaskPool.split``'s contiguous slicing (which would skew a blocked
-        pool toward the leading strata). The interleaved envs keep the
-        contiguous split, which is already balanced for them.
+    ``gold_first`` selects oracle argument order; ``stratified_split`` selects
+    per-stratum splitting; preset and generator-version fields distinguish
+    variant datasets.
     """
 
     name: str
@@ -378,11 +249,10 @@ def _load_env_spec(name: str) -> EnvSpec:
 
 
 class UnknownEnvError(KeyError):
-    """A requested env name is not one of the five bound task families."""
+    pass
 
 
 def env_spec(name: str) -> EnvSpec:
-    """Return the :class:`EnvSpec` for ``name`` (raises on an unknown env)."""
     if name not in ENV_NAMES:
         raise UnknownEnvError(
             f"unknown env {name!r}; expected one of {ENV_NAMES}"

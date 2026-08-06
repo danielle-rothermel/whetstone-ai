@@ -1,10 +1,3 @@
-"""Shared builders for official-selection tests.
-
-Constructs real Whetstone :class:`RolloutAggregate` values through the public
-aggregate constructors so selection runs against certified, complete evidence
-rather than stand-ins.
-"""
-
 from __future__ import annotations
 
 from dr_code.eval import (
@@ -104,11 +97,6 @@ def quality_aggregate(
     tasks: int = 2,
     repeats: int = 2,
 ) -> RolloutAggregate:
-    """A complete, OK selection-quality aggregate.
-
-    Every planned cell is present with the same value, so the two staged
-    reductions produce ``value`` and the pure status is OK.
-    """
     task_rows = tuple(
         TaskRows(
             task_identity=f"task-{t}",
@@ -132,7 +120,6 @@ def compression_aggregate(
     tasks: int = 2,
     repeats: int = 2,
 ) -> RolloutAggregate:
-    """A complete, OK Mean Compression Ratio aggregate."""
     task_rows = tuple(
         TaskRows(
             task_identity=f"task-{task_index}",
@@ -155,16 +142,10 @@ def incomplete_quality_aggregate(
     tasks: int = 2,
     repeats: int = 2,
 ) -> RolloutAggregate:
-    """An incomplete selection-quality aggregate with missing rows.
-
-    One task is short a repeat, so under the default PROPAGATE policy the pure
-    reduction is not OK (MISSING_DATA) — exactly the incomplete evidence
-    official selection must refuse.
-    """
     task_rows = (
         TaskRows(
             task_identity="task-0",
-            rows=(RowValue(value=1.0),),  # short one repeat -> missing padded
+            rows=(RowValue(value=1.0),),
         ),
         *(
             TaskRows(

@@ -1,5 +1,3 @@
-"""Typed optimization serialization-boundary contracts."""
-
 from typing import Any
 
 import pytest

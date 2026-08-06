@@ -1230,13 +1230,6 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
 def test_cache_evidence_excludes_another_bindings_partial_rows(
     tmp_path,
 ) -> None:
-    """Provenance is binding-scoped exactly as restoration is.
-
-    Both evaluations share one candidate, split, and partial log, so the rows
-    differ only in ``request_identity`` (via the Evaluation Binding hash).
-    Restoration refuses the first binding's rows, so the second evaluation's
-    ``CacheEvidence`` must not count them either.
-    """
     store = ObjectStore(SqliteBackend(tmp_path / "binding-scope.sqlite"))
     engine = _engine(tmp_path, store=store, partial=True)
     partial_log = PartialLog(tmp_path / "partials.jsonl")

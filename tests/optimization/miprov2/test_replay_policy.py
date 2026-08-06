@@ -39,8 +39,6 @@ class _UnusedEvalConfigResolver:
 
 
 class _ExecutionRecorder:
-    """Count canonical-capability executions over a pass-through transport."""
-
     def __init__(self) -> None:
         self.calls = 0
 

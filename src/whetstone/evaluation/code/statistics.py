@@ -1,27 +1,3 @@
-"""Percentile bootstrap CIs over TASKS (no extra LLM calls).
-
-The validation plan's "Statistical confidence" directive requires that every
-claim carry a bootstrap CI computed over the exchangeable unit -- the **task**
-(repeats within a task are correlated; the task is the resampling unit). Each
-interval is a percentile bootstrap, 10k resamples, 95%, and reproducibly
-seeded.
-
-Two interval shapes are produced:
-
-* **marginal** (:func:`bootstrap_mean_ci`): the CI of a single arm's mean over
-  per-task mean scores (``naive_ci95``, ``ceiling_ci95``).
-* **paired** (:func:`bootstrap_paired_delta_ci`): the CI of ``mean(b) -
-  mean(a)`` where each resample draws the SAME task indices for both arms
-  (``delta_ci95`` = best-naive, ``headroom_ci95`` = ceiling-naive). Pairing
-  cancels shared per-task variance, so a paired interval is generally tighter
-  than the unpaired one on the same data.
-
-Every function is a pure function of already-collected per-task scores (no
-provider call is made) and deterministic given ``seed``: the same fixed seed
-draws the same resample index sets, so paired variants that share a seed also
-share their resample indices across both arms.
-"""
-
 from __future__ import annotations
 
 import random

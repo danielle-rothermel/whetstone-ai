@@ -1,5 +1,3 @@
-"""SQLite effect authority storage."""
-
 from __future__ import annotations
 
 import sqlite3

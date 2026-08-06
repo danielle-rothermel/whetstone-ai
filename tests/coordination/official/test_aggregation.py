@@ -1,10 +1,3 @@
-"""Official aggregation accounts for every planned key; nothing dropped.
-
-Proves that the official account covers the complete planned matrix, that
-missing rows are recorded and visible (never silently dropped), and that the
-strict raising policy still surfaces the complete missing set.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -22,7 +15,6 @@ ROLLOUT_RESULT_SCHEMA = "whetstone.rollout_result"
 
 
 def _resolver(bound: dict[str, str]):
-    """A Result-Store-like resolver: planned key -> content-hash char."""
 
     def resolve(key: str) -> ObjectReference | None:
         char = bound.get(key)
@@ -45,22 +37,18 @@ def test_every_planned_key_is_accounted_for() -> None:
     assert account.present_count == 3
     assert account.missing_count == 0
     assert account.complete
-    # One row per planned key, in planned order.
     assert [p.planned_key for p in account.planned_results] == planned
 
 
 def test_missing_rows_are_visible_never_dropped() -> None:
     planned = ["k0", "k1", "k2"]
-    # k1 has no bound result.
     account = account_planned_keys(
         planned_keys=planned,
         resolve=_resolver({"k0": "1", "k2": "3"}),
         policy=OfficialFailurePolicy.RECORD_MISSING,
     )
-    # The account still has exactly one row per planned key.
     assert account.planned_count == 3
     assert [p.planned_key for p in account.planned_results] == planned
-    # The missing key is recorded and visible, not dropped.
     assert account.missing_keys == ("k1",)
     assert account.missing_count == 1
     assert not account.complete
@@ -78,7 +66,6 @@ def test_strict_raising_policy_surfaces_full_missing_set() -> None:
             policy=OfficialFailurePolicy.STRICT,
             raise_on_missing=True,
         )
-    # The exception carries the complete missing set (nothing dropped).
     assert set(exc.value.missing) == {"k1", "k2"}
 
 
@@ -96,8 +83,6 @@ def test_account_requires_at_least_one_key() -> None:
 
 
 def test_account_feeds_certification_with_missing_visible() -> None:
-    # The official account's planned rows feed certify directly: a missing key
-    # stays a visible planned row and makes the record uncertified.
     from whetstone.coordination.official import EvaluationAuthority
 
     from .support import aggregate_ref, eval_config_ref, single_entry_mapping
@@ -105,7 +90,7 @@ def test_account_feeds_certification_with_missing_visible() -> None:
     planned = ["k0", "k1"]
     account = account_planned_keys(
         planned_keys=planned,
-        resolve=_resolver({"k0": "1"}),  # k1 missing
+        resolve=_resolver({"k0": "1"}),
         policy=OfficialFailurePolicy.RECORD_MISSING,
     )
     authority = EvaluationAuthority(name="whetstone-official")
@@ -118,12 +103,11 @@ def test_account_feeds_certification_with_missing_visible() -> None:
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(
             planned_keys=("k0", "k1"),
-            result_keys=("k0",),  # k1 missing
+            result_keys=("k0",),
         ),
     )
     assert record.completeness.planned_count == 2
     assert record.completeness.missing_count == 1
     assert not record.completeness.certified
-    # The missing planned key is still present as a visible row in the record.
     missing = [p for p in record.planned_results if not p.is_present]
     assert [p.planned_key for p in missing] == ["k1"]

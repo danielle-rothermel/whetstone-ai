@@ -1,14 +1,3 @@
-"""Structured, identity-bearing demonstrations for MIPROv2.
-
-DSPy stores demonstrations as mutable ``Example`` objects attached directly to
-predictors.  Whetstone cannot persist those process objects.  This module is
-the prompt-format adaptation seam: it keeps the same per-predictor ordering,
-but represents every demonstration as immutable JSON with the evidence that
-produced it.
-
-The types in this module perform no model, storage, or network effects.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping

@@ -1,5 +1,3 @@
-"""SQLite-specific Tool admission schema and contention tests."""
-
 from __future__ import annotations
 
 import sqlite3

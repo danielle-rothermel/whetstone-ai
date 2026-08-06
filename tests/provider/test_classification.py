@@ -1,5 +1,3 @@
-"""Semantic failure taxonomy + Generation acceptance contract tests."""
-
 from __future__ import annotations
 
 import pytest
@@ -27,7 +25,6 @@ class TestGenerationAcceptance:
         result = accept_generation(response)
         assert isinstance(result, Generation)
         assert result.text == "the answer"
-        # Retains the full causal transport response as provenance.
         assert result.response is response
 
     @pytest.mark.parametrize("text", ["", "   ", "\n\t ", "\r\n"])
@@ -36,7 +33,6 @@ class TestGenerationAcceptance:
         result = accept_generation(response)
         assert isinstance(result, ProviderSemanticFailure)
         assert result.failure_class is SemanticFailureClass.BLANK_GENERATION
-        # The rejected response is retained, never discarded.
         assert result.rejected_response is response
         assert result.transport_failure is None
 
@@ -63,7 +59,6 @@ class TestGenerationAcceptance:
 
 class TestFailureTaxonomyIsClosedAndTotal:
     def test_every_transport_failure_class_maps(self) -> None:
-        # Classification is total over the FailureClass enum.
         for failure_class in FailureClass:
             outcome = s.failure_outcome(failure_class=failure_class)
             result = classify_outcome(outcome)
@@ -127,7 +122,6 @@ class TestSemanticFailureInvariants:
             message="m",
             retryable=True,
         )
-        # Both present -> rejected.
         with pytest.raises(ValueError, match="exactly one"):
             ProviderSemanticFailure(
                 failure_class=SemanticFailureClass.TRANSPORT_ERROR,
@@ -135,7 +129,6 @@ class TestSemanticFailureInvariants:
                 transport_failure=failure,
                 rejected_response=response,
             )
-        # Neither present -> rejected.
         with pytest.raises(ValueError, match="exactly one"):
             ProviderSemanticFailure(
                 failure_class=SemanticFailureClass.TRANSPORT_ERROR,

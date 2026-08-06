@@ -1,5 +1,3 @@
-"""Direct template rendering, parsing, and serialization contracts."""
-
 import pytest
 from pydantic import ValidationError
 

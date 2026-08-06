@@ -1,26 +1,3 @@
-"""Provider Execution Policy: Whetstone semantic orchestration policy.
-
-The Provider Execution Policy composes exactly ONE Provider Transport Policy
-*reference* with only Whetstone semantic concerns:
-
-* a bounded logical-attempt count,
-* per-semantic-class retry eligibility (a closed map over
-  :class:`SemanticFailureClass`),
-* a deterministic backoff schedule.
-
-It deliberately duplicates NONE of the transport policy's operational fields:
-no credentials, no timeout, and no native retry count. Native retries are
-pinned to zero by construction — the policy references the transport policy by
-its identity payload and asserts ``native_retry_count == 0``; it never carries
-its own copy of that field. Whetstone owns all semantic retry, so any nonzero
-native retry would be a second, uncoordinated retry loop.
-
-The policy is identity-bearing: its Identity Payload (transport-policy identity
-+ classification/backoff/attempt config) hashes through dr-serialize to a full
-64-character Provider Execution Policy Identity Hash that each Provider Call
-Attempt references.
-"""
-
 from __future__ import annotations
 
 import math

@@ -1,5 +1,3 @@
-"""Non-collected builders for internal evaluation driver tests."""
-
 from __future__ import annotations
 
 from dr_providers import (
@@ -76,12 +74,6 @@ def _binding(
 
 
 def _correct_reply(env_name: str, instances) -> ReplyFn:
-    """A reply fn that returns the correct answer for the matching task.
-
-    The env oracle grades the generation against each task's gold; the fake
-    returns each task's own correct answer keyed off its rendered prompt so
-    the internal eval scores a clean 1.0.
-    """
     env = env_spec(env_name)
     from whetstone.envs.rollout_definition import (
         initial_candidate,
@@ -89,7 +81,6 @@ def _correct_reply(env_name: str, instances) -> ReplyFn:
     )
 
     naive = initial_candidate(env)
-    # Map rendered-naive-prompt -> the correct generation for that instance.
     correct_by_prompt: dict[str, str] = {}
     for inst in instances:
         prompt = render_prompt(env, naive, inst)
@@ -102,13 +93,8 @@ def _correct_reply(env_name: str, instances) -> ReplyFn:
 
 
 def _correct_generation(env, instance) -> str:
-    """The known-correct generation for an instance (per env)."""
     if env.name == "c22":
-        # A response satisfying whatever stack the instance carries is
-        # instance-specific; the c22 internal-eval test uses a hand-built
-        # single-instance fixture instead (see the c22-specific test below).
         return instance.gold
-    # For the re-derive envs the gold IS the correct answer.
     return instance.gold
 
 

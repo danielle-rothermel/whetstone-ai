@@ -1,5 +1,3 @@
-"""Explicit construction support shared by MIPROv2 tests."""
-
 from __future__ import annotations
 
 import hashlib
@@ -71,7 +69,6 @@ MIPROV2_EVIDENCE_TASK_IDENTITY = hashlib.sha256(
 
 
 def miprov2_injected_defaults() -> Miprov2InjectedDefaults:
-    """Build the canonical injected defaults used by control tests."""
 
     provider = openrouter_chat_config(model="proposal-model")
     validation = eval_config_reference(eval_config(FULL_B))
@@ -104,7 +101,6 @@ def miprov2_injected_defaults() -> Miprov2InjectedDefaults:
 
 
 def configure_test_miprov2(**updates: Any):
-    """Configure the small canonical MIPROv2 test control."""
 
     values: dict[str, Any] = {
         "base_candidate": candidate_reference(
@@ -127,14 +123,12 @@ def persist_test_record(
     schema: str,
     record: Jsonable,
 ) -> TypedRef:
-    """Persist one exact record and return its public typed reference."""
 
     ref, _ = store.put(schema, record)
     return TypedRef(schema_name=ref.schema, content_hash=ref.content_hash)
 
 
 def miprov2_evidence_source_eval_config():
-    """Build the canonical source Eval Config for evidence tests."""
 
     definition = DefinitionRef(
         definition_id="miprov2-evidence",
@@ -163,7 +157,6 @@ def miprov2_evidence_source_eval_config():
 
 
 def miprov2_evidence_bindings() -> Miprov2DurableBindings:
-    """Build durable bindings for evidence-only scenarios."""
 
     return Miprov2DurableBindings(
         control_identity_hash=FULL_A,
@@ -181,7 +174,6 @@ def make_miprov2_evidence_fixture(
     *,
     reward_policy_hash: str,
 ) -> tuple[EvaluationIntent, Miprov2IntentContext]:
-    """Persist one exact bootstrap intent and its evidence context."""
 
     attempt = BootstrapAttemptPlan(
         bindings=miprov2_evidence_bindings(),
@@ -280,7 +272,6 @@ def make_miprov2_evidence_fixture(
 
 
 def canonical_miprov2_eval_source(sampling_hash: str):
-    """Build a source Eval Config with one caller-selected sampling hash."""
 
     definition = DefinitionRef(
         definition_id="runtime-eval",
@@ -313,7 +304,6 @@ def make_minimal_miprov2_runtime(
     proposal_calls: int = 2,
     track_stats: bool = True,
 ) -> tuple[Miprov2Driver, Miprov2State]:
-    """Start the smallest successful MIPROv2 runtime scenario."""
 
     bootstrap_source = canonical_miprov2_eval_source("1" * 64)
     validation_source = canonical_miprov2_eval_source("2" * 64)
@@ -398,7 +388,6 @@ def make_minimal_miprov2_runtime(
 def resolve_miprov2_eval_config_binding(
     request: Miprov2EvalConfigBindingRequest,
 ) -> Miprov2EvalConfigBinding:
-    """Materialize the exact runtime Eval Config binding for a request."""
 
     suffix = request.identity_hash()[:20]
     task_set = TaskSet(

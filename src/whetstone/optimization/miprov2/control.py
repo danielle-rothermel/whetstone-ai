@@ -1,10 +1,3 @@
-"""Resolved, identity-bearing MIPROv2 construction and run controls.
-
-This module is deliberately effect free. It reproduces the configuration,
-dataset, and auto/manual resolution order of the frozen DSPy implementation
-before bootstrap, proposal, or evaluation effects are allowed to run.
-"""
-
 from __future__ import annotations
 
 import math

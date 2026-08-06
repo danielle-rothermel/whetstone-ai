@@ -1,10 +1,3 @@
-"""Standalone frozen-GEPA differential oracle.
-
-This module intentionally imports no Whetstone implementation code.  It is
-executed in fresh subprocesses so ``PYTHONHASHSEED`` is effective before GEPA
-imports, and preserves candidate component order rather than sorting it.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -16,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+# Run in a fresh interpreter so PYTHONHASHSEED is fixed before GEPA imports.
 from gepa import optimize
 from gepa.core.adapter import EvaluationBatch, ProposalFn
 
@@ -262,6 +256,7 @@ class _Adapter:
 
 def _result_payload(result: Any) -> dict[str, Any]:
     return {
+        # Preserve candidate insertion order.
         "candidates": [
             list(candidate.items()) for candidate in result.candidates
         ],
@@ -322,9 +317,6 @@ def run_oracle(
         skip_perfect_score=False,
         seed=0,
         logger=_QuietLogger(),
-        # GEPA documents callback methods as optional, while its static
-        # Protocol declares every hook.  This oracle implements only the
-        # lifecycle hooks it records.
         callbacks=cast(Any, [_Callback(trace)]),
         run_dir=None,
         display_progress_bar=False,

@@ -1,11 +1,3 @@
-"""Evaluation Authority: the named principal and official write path.
-
-Proves that only an authority issues official Bindings / records / manifests,
-that internal evaluation can never be relabeled or copied to official even when
-identity hashes are byte-identical, and that certification computes the
-completeness decision from the planned/present accounting.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -51,19 +43,12 @@ def _official_binding(
 
 
 def _internal_binding() -> EvaluationBinding:
-    # Same ordinary Eval Config hash as the official run: identical config
-    # identity, internal role.
     return EvaluationBinding(
         schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=eval_config_ref(),
         role=EvaluationRole.INTERNAL,
         campaign="camp-1",
     )
-
-
-# ---------------------------------------------------------------------------
-# Only the authority issues official Bindings
-# ---------------------------------------------------------------------------
 
 
 def test_authority_issues_official_binding() -> None:
@@ -76,11 +61,6 @@ def test_authority_issues_official_binding() -> None:
 def test_authority_must_be_named() -> None:
     with pytest.raises(ValueError, match="must be named"):
         EvaluationAuthority(name="")
-
-
-# ---------------------------------------------------------------------------
-# Relabeling refusal
-# ---------------------------------------------------------------------------
 
 
 def test_internal_evidence_is_refused_for_certification() -> None:
@@ -97,16 +77,10 @@ def test_internal_evidence_is_refused_for_certification() -> None:
 
 
 def test_identical_identity_hashes_still_refuse_relabeling() -> None:
-    # The internal and official Bindings share the SAME ordinary Eval Config
-    # hash; only the role and authority differ. The internal binding's config
-    # identity is byte-identical to the official one, but relabeling refused.
     authority = _authority()
     official = _official_binding(authority)
     internal = _internal_binding()
     assert internal.eval_config == official.eval_config
-    # A shared measurement cell produces the SAME Rollout Key encoding under
-    # each binding except for the Evaluation Binding id, proving identity
-    # comparison is possible while relabeling is refused.
     assert internal.role is EvaluationRole.INTERNAL
 
     with pytest.raises(RelabelingRefusedError, match="never relabeling"):
@@ -123,7 +97,7 @@ def test_identical_identity_hashes_still_refuse_relabeling() -> None:
 def test_wrong_authority_is_refused() -> None:
     minter = _authority("authority-A")
     other = _authority("authority-B")
-    binding = _official_binding(minter)  # names authority-A
+    binding = _official_binding(minter)
     with pytest.raises(UnauthorizedOfficialWriteError):
         other.certify(
             evaluation_binding=binding,
@@ -133,11 +107,6 @@ def test_wrong_authority_is_refused() -> None:
             aggregate_refs=(aggregate_ref("9"),),
             selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
         )
-
-
-# ---------------------------------------------------------------------------
-# Certification + completeness accounting
-# ---------------------------------------------------------------------------
 
 
 def test_certify_complete_evidence() -> None:
@@ -168,7 +137,7 @@ def test_certify_refuses_when_incomplete() -> None:
     binding = _official_binding(authority)
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
-        PlannedKeyResult(planned_key="k1", result_ref=None),  # missing
+        PlannedKeyResult(planned_key="k1", result_ref=None),
     )
     record = authority.certify(
         evaluation_binding=binding,
@@ -176,10 +145,9 @@ def test_certify_refuses_when_incomplete() -> None:
         aggregate_refs=(aggregate_ref("9"),),
         selected_record_mapping=single_entry_mapping(
             planned_keys=("k0", "k1"),
-            result_keys=("k0",),  # k1 missing
+            result_keys=("k0",),
         ),
     )
-    # An incomplete evaluation is uncertified; the missing row stays visible.
     assert not record.completeness.complete
     assert not record.completeness.certified
     assert record.completeness.missing_count == 1
@@ -202,8 +170,6 @@ def test_official_record_is_immutable() -> None:
 
 
 def test_official_record_certifies_ordinary_results_no_new_role() -> None:
-    # The record references ORDINARY Rollout Result refs (the whetstone
-    # rollout_result schema); certification introduces no distinct result type.
     authority = _authority()
     binding = _official_binding(authority)
     record = authority.certify(
@@ -222,8 +188,6 @@ def test_official_record_certifies_ordinary_results_no_new_role() -> None:
 
 
 def test_official_record_carries_immutable_revision_chain() -> None:
-    # A record is immutable; a "revision" is a new record naming its
-    # predecessor, captured as an auditable revision entry.
     authority = _authority()
     binding = _official_binding(authority)
     record = authority.certify(
@@ -245,12 +209,6 @@ def test_official_record_carries_immutable_revision_chain() -> None:
     assert len(record.revisions) == 1
     assert record.revisions[0].ordinal == 1
     assert record.revisions[0].reason.startswith("re-certified")
-
-
-# ---------------------------------------------------------------------------
-# The ordered mapping is reconciled against the actual present/missing
-# accounting (result_key_set must be a subset of the present planned keys).
-# ---------------------------------------------------------------------------
 
 
 def _record(
@@ -286,11 +244,9 @@ def _record(
 
 
 def test_mapping_cannot_attribute_result_to_a_missing_planned_key() -> None:
-    # k1 is missing while the mapping attributes a result to it, contradicting
-    # the record's present/missing accounting.
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
-        PlannedKeyResult(planned_key="k1", result_ref=None),  # missing
+        PlannedKeyResult(planned_key="k1", result_ref=None),
     )
     bad_mapping = SelectedRecordMapping(
         entries=(
@@ -298,7 +254,7 @@ def test_mapping_cannot_attribute_result_to_a_missing_planned_key() -> None:
                 record_ref=record_ref("1"),
                 graph_hash=GRAPH_A,
                 planned_key_set=("k0", "k1"),
-                result_key_set=("k0", "k1"),  # attributes result to missing k1
+                result_key_set=("k0", "k1"),
                 aggregate_ref=aggregate_ref("9"),
             ),
         )
@@ -308,7 +264,6 @@ def test_mapping_cannot_attribute_result_to_a_missing_planned_key() -> None:
 
 
 def test_mapping_result_keys_matching_present_set_is_accepted() -> None:
-    # A result_key_set reflecting the actual present keys is accepted.
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         PlannedKeyResult(planned_key="k1", result_ref=None),
@@ -329,9 +284,6 @@ def test_mapping_result_keys_matching_present_set_is_accepted() -> None:
 
 
 def test_mapping_cannot_omit_a_present_planned_key() -> None:
-    # Both planned keys are present, but the mapping attributes a result only
-    # to k0. Under-attribution drops a present result from the per-graph
-    # lineage the plot publication path stacks on, so it is refused.
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         PlannedKeyResult(planned_key="k1", result_ref=result_ref("e")),
@@ -342,7 +294,7 @@ def test_mapping_cannot_omit_a_present_planned_key() -> None:
                 record_ref=record_ref("1"),
                 graph_hash=GRAPH_A,
                 planned_key_set=("k0", "k1"),
-                result_key_set=("k0",),  # omits the present k1
+                result_key_set=("k0",),
                 aggregate_ref=aggregate_ref("9"),
             ),
         )
@@ -352,9 +304,6 @@ def test_mapping_cannot_omit_a_present_planned_key() -> None:
 
 
 def test_mapping_entry_need_not_cover_planned_keys_outside_its_set() -> None:
-    # Reconciliation is scoped to the entry's own planned_key_set: k1 is
-    # present at the record level but outside this entry's planned set, so its
-    # absence from result_key_set is not under-attribution.
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
         PlannedKeyResult(planned_key="k1", result_ref=result_ref("e")),
@@ -375,12 +324,9 @@ def test_mapping_entry_need_not_cover_planned_keys_outside_its_set() -> None:
 
 
 def test_converged_entries_agree_with_record_present_set() -> None:
-    # Two selected records converge on one graph_hash. Their shared
-    # result_key_set must reconcile with the record-level present set: if it
-    # names a missing key, both converged entries are refused together.
     planned = (
         PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),
-        PlannedKeyResult(planned_key="k1", result_ref=None),  # missing
+        PlannedKeyResult(planned_key="k1", result_ref=None),
     )
     converged = SelectedRecordMapping(
         entries=(
@@ -404,13 +350,6 @@ def test_converged_entries_agree_with_record_present_set() -> None:
         _record(planned=planned, mapping=converged)
 
 
-# ---------------------------------------------------------------------------
-# The evaluation_binding_id is validated as a full Identity Hash, so a forged
-# non-hash binding id cannot be stamped onto an Official Evaluation Record via
-# the direct constructor path.
-# ---------------------------------------------------------------------------
-
-
 def test_forged_non_hash_binding_id_is_refused() -> None:
     planned = (PlannedKeyResult(planned_key="k0", result_ref=result_ref("d")),)
     with pytest.raises(ValueError, match="binding_id must be a full"):
@@ -422,9 +361,6 @@ def test_forged_non_hash_binding_id_is_refused() -> None:
 
 
 def test_authority_issued_binding_id_is_a_full_hash() -> None:
-    # The authority path produces a binding id that is a full 64-char identity
-    # hash, so the record validator accepts it (the funnel and the validator
-    # agree).
     authority = _authority()
     binding = _official_binding(authority)
     binding_id = binding.identity_hash()
@@ -439,12 +375,6 @@ def test_authority_issued_binding_id_is_a_full_hash() -> None:
         selection_evidence_ref=result_ref("f"),
     )
     assert record.evaluation_binding_id == binding_id
-
-
-# ---------------------------------------------------------------------------
-# Planned keys are unique in a record: a duplicated key would inflate the
-# planned/present counts and certify as complete over fewer keys than claimed.
-# ---------------------------------------------------------------------------
 
 
 def test_duplicate_planned_keys_are_refused() -> None:

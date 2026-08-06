@@ -1,11 +1,3 @@
-"""The mandatory ordered selected-record -> graph -> keys -> aggregate mapping.
-
-Proves the load-bearing property: two selected Materialization Records that
-share one ``graph_hash`` (converged) share one planned/result-key set and one
-aggregate reference, yet each keeps its own ordered entry so the two selected
-records stay separately attributable.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -19,9 +11,6 @@ from .support import GRAPH_A, GRAPH_B, aggregate_ref, mapping_entry, record_ref
 
 
 def test_two_selected_records_sharing_a_graph_stay_attributable() -> None:
-    # Records m1 and m2 converged on GRAPH_A: they share the planned/result key
-    # set and aggregate reference, but each is its own ordered entry keyed by
-    # its own record_ref.
     shared_keys = ("k0", "k1")
     entry_1 = mapping_entry(
         record_char="1",
@@ -39,15 +28,12 @@ def test_two_selected_records_sharing_a_graph_stay_attributable() -> None:
     )
     mapping = SelectedRecordMapping(entries=(entry_1, entry_2))
 
-    # Both entries are preserved, in order, separately attributable.
     assert len(mapping.entries) == 2
     assert mapping.entries[0].record_ref != mapping.entries[1].record_ref
-    # They resolve to the same graph and aggregate (convergence).
     assert mapping.distinct_graph_hashes == (GRAPH_A,)
     for_graph = mapping.entries_for_graph(GRAPH_A)
     assert len(for_graph) == 2
     assert for_graph[0].aggregate_ref == for_graph[1].aggregate_ref
-    # Each entry keeps its own selected Materialization Record reference.
     record_refs = {e.record_ref.content_hash for e in for_graph}
     assert len(record_refs) == 2
 
@@ -87,8 +73,6 @@ def test_duplicate_selected_record_is_rejected() -> None:
 
 
 def test_converged_entries_must_agree_on_aggregate() -> None:
-    # Same graph_hash but different aggregate refs is a contradiction: a shared
-    # graph cannot produce two different aggregates.
     entry_1 = mapping_entry(
         record_char="1",
         graph_hash=GRAPH_A,

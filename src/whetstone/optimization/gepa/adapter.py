@@ -1,11 +1,3 @@
-"""Public façade for canonical upstream GEPA optimization.
-
-The optimizer in this module does not implement selection, sampling,
-acceptance, Pareto tracking, merging, budgets, or final ranking. Those
-decisions remain inside the frozen public ``gepa.optimize`` engine hosted by
-``run_gepa_engine``.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

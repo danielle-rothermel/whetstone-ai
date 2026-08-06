@@ -1,5 +1,3 @@
-"""Public COPRO construction and persisted optimizer-control identity."""
-
 from __future__ import annotations
 
 import math

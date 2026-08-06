@@ -1,28 +1,3 @@
-"""Immutable Official Evaluation Record and Official Plot Manifest schemas.
-
-Per the vocabulary (*Official Evaluation Record*, *Official Plot Manifest*) and
-Workstream 9 of ``design/concrete-changes.html``. Both records are immutable,
-stored by typed Object Reference plus Content Hash (never an Identity Hash),
-and carry typed **record-local** provenance fields — there is no universal
-Provenance class.
-
-:class:`OfficialEvaluationRecord`
-    Authority-issued certification naming the official Evaluation Binding and
-    the ordinary Eval Config, the planned Rollout Execution Keys, the ordinary
-    Rollout Result references plus Content Hashes, the complete aggregate
-    references, the completeness and certification decisions, the Objectives
-    and official selection evidence, revisions, and — MANDATORY — the ordered
-    selected-record -> graph -> keys -> aggregate mapping. It certifies
-    ordinary Rollout Results as official without introducing a distinct result
-    role/type.
-
-:class:`OfficialPlotManifest`
-    Authority-issued publication manifest naming Official Evaluation Record
-    references, complete aggregate and objective-selection references, the
-    Selection Policy, source revisions, dependency lock, and environment
-    identity, and preserving the same ordered mapping.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -275,37 +250,25 @@ class OfficialEvaluationRecord(BaseModel):
         return self
 
     def record_content(self) -> dict[str, Any]:
-        """The complete canonical persisted content (for the Content Hash)."""
         return self.model_dump(mode="json")
 
 
 class OfficialPlotManifest(BaseModel):
-    """Immutable authority-issued publication manifest for one plot.
-
-    Names the Official Evaluation Record references, the complete aggregate and
-    objective-selection references, the Selection Policy, source revisions,
-    dependency lock, and environment identity, and preserves the same ordered
-    selected-record -> graph -> keys -> aggregate mapping. Record-local typed
-    provenance only.
+    """Immutable plot provenance with an ordered record-to-aggregate
+    mapping.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     authority: StrictStr
-    # The Official Evaluation Record(s) this plot resolves through.
     record_refs: tuple[TypedRef, ...]
-    # Complete aggregate + objective-selection references.
     aggregate_refs: tuple[TypedRef, ...]
     objective_selection_refs: tuple[TypedRef, ...]
-    # The frozen Selection Policy identity (name/version/hash string).
     selection_policy: StrictStr
-    # Source + dependency provenance for the published plot.
     source_revisions: tuple[tuple[str, str], ...]
     dependency_lock: tuple[tuple[str, str], ...]
     environment_identity: StrictStr
-    # The same ordered mapping preserved.
     selected_record_mapping: SelectedRecordMapping
-    # Record-local typed provenance fields.
     provenance_note: StrictStr | None = None
     provenance_ordinal: StrictInt | None = None
 
@@ -337,5 +300,4 @@ class OfficialPlotManifest(BaseModel):
         return self
 
     def record_content(self) -> dict[str, Any]:
-        """The complete canonical persisted content (for the Content Hash)."""
         return self.model_dump(mode="json")

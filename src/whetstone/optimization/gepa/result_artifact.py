@@ -1,5 +1,3 @@
-"""Canonical paired result/effect artifact for one completed GEPA run."""
-
 from __future__ import annotations
 
 from dr_store import BindingConflictError, ObjectStore

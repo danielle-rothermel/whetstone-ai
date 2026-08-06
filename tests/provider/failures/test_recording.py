@@ -102,7 +102,7 @@ def test_failure_metadata_visits_underlying_despite_context() -> None:
         try:
             raise ValueError("being handled")
         except ValueError:
-            # No `from`: the test needs __context__ set without __cause__.
+            # Omit `from` so __context__ remains set without __cause__.
             raise RecordingFailureError(  # noqa: B904
                 "wrapped", underlying=underlying
             )

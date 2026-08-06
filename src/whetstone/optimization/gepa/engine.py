@@ -1,5 +1,3 @@
-"""Thin host for the frozen, unmodified public ``gepa.optimize`` engine."""
-
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

@@ -1,13 +1,3 @@
-"""Eval worker step failure taxonomy, policy, and recording boundary.
-
-This package handles eval workflow failures: classify, retry, summarize, and
-persist failure records. It is not a global exception registry.
-
-Encoding errors live in ``dr_serialize`` and are bridged at
-``eval_failures.recording``. Failures must use an explicit Whetstone or
-provider exception type before they can be classified and persisted.
-"""
-
 from dr_providers import (
     RECOVERABLE_FAILURE_CLASSES,
     RETRYABLE_FAILURE_CLASSES,

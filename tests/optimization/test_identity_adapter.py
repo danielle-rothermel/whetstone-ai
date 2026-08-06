@@ -1,5 +1,3 @@
-"""The zero-optimization baseline is pure and durable."""
-
 import pytest
 
 from tests.optimization.support import (

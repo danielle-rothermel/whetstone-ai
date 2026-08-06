@@ -1,5 +1,3 @@
-"""Strict Adapter Output failure-boundary contracts."""
-
 import pytest
 from pydantic import ValidationError
 

@@ -1,5 +1,3 @@
-"""Small host-facing conformance matrix for native optimizer adapters."""
-
 from __future__ import annotations
 
 from collections.abc import Callable

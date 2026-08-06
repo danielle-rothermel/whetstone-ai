@@ -1,28 +1,3 @@
-"""Whetstone dr-code adapters and experiment derivations.
-
-This package consumes the released dr-code evaluation kernel's generic
-compression references and pure aggregation primitives, and adds only
-Whetstone-owned experiment policy and boundary roles. It introduces **no**
-duplicate dr-code type, artifact, schema, or identity.
-
-Deliverables:
-
-* **Code Generation / Submission Text** boundary (``submission``) — projects an
-  exact decoder Generation into native ``TextArtifact.text``.
-* **Score / Metric Fact derivations** (``scoring``) — Compressed Description
-  Length (zstd-19) and Compression Ratio.
-* **Compression Reference Selection** (``compression_selection``) — the
-  experiment rule selecting ``task.gt_code_wo_comments`` bytes onto a generic
-  dr-code Compression Reference Key.
-* **Rollout Aggregate** (``aggregate``) — provenance-bearing binding of pure
-  dr-code aggregation output; one caller-named Unweighted Task Mean over a
-  validated evaluation matrix with explicit missing/failed-row policy.
-* **Bootstrap Statistics** (``statistics``) — reproducible percentile
-  confidence intervals with tasks as the resampling unit.
-* **Power Analysis** (``power``) — deterministic paired sample-size
-  recommendations over task-count and repeat-count grids.
-"""
-
 from whetstone.evaluation.code.aggregate import (
     CompletenessPolicy,
     EvaluationMatrixPlan,

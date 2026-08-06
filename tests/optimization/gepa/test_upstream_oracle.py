@@ -1,5 +1,3 @@
-"""Differential oracle against unmodified frozen GEPA 0.1.1."""
-
 from __future__ import annotations
 
 import hashlib
@@ -243,8 +241,6 @@ def _native_data(
 
 
 class _RecorderBackedOracleBroker:
-    """Native boundary double with real semantic request/result persistence."""
-
     def __init__(
         self,
         store: ObjectStore,
@@ -510,8 +506,6 @@ def test_direct_upstream_oracle_matches_frozen_crash_fixture_across_hash_seeds(
         expected_effect_count=expected["effect_count"],
     )
 
-    # Exact equality preserves every candidate component pair in upstream
-    # insertion order.  Do not sort or coerce candidate mappings here.
     assert seed_one == seed_777
     effect_kinds = seed_one["effect_kinds"]
     result = seed_one["result"]

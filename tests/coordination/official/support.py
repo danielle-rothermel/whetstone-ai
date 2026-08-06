@@ -1,5 +1,3 @@
-"""Shared builders for Evaluation Authority tests."""
-
 from __future__ import annotations
 
 from dr_code.eval import DefinitionRef, EvalConfig
@@ -82,9 +80,6 @@ def single_entry_mapping(
     planned_keys: tuple[str, ...],
     result_keys: tuple[str, ...] | None = None,
 ) -> SelectedRecordMapping:
-    # ``result_keys`` defaults to the planned keys (complete evidence); pass a
-    # narrower tuple to model an incomplete record whose mapping must only
-    # attribute results to the planned keys that are actually present.
     return SelectedRecordMapping(
         entries=(
             mapping_entry(

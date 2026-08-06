@@ -1,5 +1,3 @@
-"""Exact-reference evidence bridge for durable MIPROv2 effects."""
-
 from __future__ import annotations
 
 import json

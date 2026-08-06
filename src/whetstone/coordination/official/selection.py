@@ -1,28 +1,3 @@
-"""Official selection over complete certified aggregate evidence.
-
-Workstream 8 of ``design/concrete-changes.html`` and the *Official Evaluation*
-Running Example row require an official-selection procedure that:
-
-* runs only over **complete, certified** Rollout Aggregate evidence — an
-  incomplete or non-certified aggregate is refused, never silently skipped;
-* derives a per-candidate
-  :class:`~whetstone.experiment.objectives.ObjectiveVector`
-  deterministically from that evidence;
-* constructs a deterministic
-  :class:`~whetstone.experiment.objectives.ParetoFront` with
-  stable ordering, explicit tie behavior, and a direction per objective;
-* persists the *derivation*, the candidate *order*, the *tie* behavior, and the
-  *selection* result as :class:`SelectionEvidence` — a complete, canonical,
-  content-addressable record; and
-* never computes or accepts a Reward as an Objective.
-
-The selection input is a per-candidate bundle of certified aggregates. "One
-candidate" here is one admitted Graph Hash / curve slot; its aggregates are
-the Whetstone :class:`~whetstone.evaluation.code.RolloutAggregate` values
-already bound to ``(graph_hash, eval_config_hash)`` and a stated Evaluation
-Binding.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -183,7 +158,6 @@ class SelectionEvidence(BaseModel):
         return self
 
     def record_content(self) -> dict[str, Any]:
-        """The complete canonical persisted content (for a Content Hash)."""
         return self.model_dump(mode="json")
 
 

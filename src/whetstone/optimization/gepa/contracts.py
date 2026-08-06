@@ -1,11 +1,3 @@
-"""Typed, replay-safe external-effect contract for frozen GEPA 0.1.1.
-
-Upstream GEPA owns every algorithmic decision.  These records describe only
-the task-evaluation and reflection-model effects that cross into Whetstone.
-An invocation ordinal protects replay order, while the complete semantic
-request prevents a changed effect from being reused at the same ordinal.
-"""
-
 from __future__ import annotations
 
 from typing import Any, Literal, Protocol

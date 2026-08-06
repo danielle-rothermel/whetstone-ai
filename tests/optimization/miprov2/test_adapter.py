@@ -42,7 +42,6 @@ class _UnusedResolver:
 
 
 def _unused_executor() -> DurableProposalExecutor:
-    """Mint the canonical capability over a never-invoked execution."""
 
     def execute(*, config, request, transport, count):
         raise AssertionError("test does not execute proposal effects")
@@ -202,13 +201,8 @@ def test_composition_is_deterministic_and_json_is_format_literal() -> None:
 def test_composed_json_survives_rendering_under_every_contract(
     kind: TemplateRenderKind,
 ) -> None:
-    """Rendered metadata and demonstrations must reach the task model as JSON.
-
-    ``{{``/``}}`` are brace escapes only under ``python_format/v1``; the
-    literal contracts pass them through verbatim, so escaping there would
-    deliver malformed JSON.
-    """
-
+    # Brace escaping applies only to python_format/v1; literal contracts
+    # receive raw JSON.
     literal_body = kind is TemplateRenderKind.LITERAL_BODY_V1
     contract = TemplateRenderContract(
         kind=kind,

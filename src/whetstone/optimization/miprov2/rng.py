@@ -1,5 +1,3 @@
-"""Serializable shared-RNG state for the durable MIPROv2 control flow."""
-
 from __future__ import annotations
 
 import random

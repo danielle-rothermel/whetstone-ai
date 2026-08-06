@@ -1,5 +1,3 @@
-"""Package boundaries remain explicit and free of compatibility barrels."""
-
 from typing import get_type_hints
 
 import whetstone.optimization as optimization

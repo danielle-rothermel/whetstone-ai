@@ -1,5 +1,3 @@
-"""Importable multiprocessing workers for execution-storage tests."""
-
 from __future__ import annotations
 
 import fcntl
@@ -283,7 +281,6 @@ def run_partial_operation(
 
 
 def _observe_lock_boundary(attempted: Any, acquired: Any) -> None:
-    """Publish the exact before/after boundary around the next flock call."""
     real_flock = file_lock_module.fcntl.flock
     observed = False
 

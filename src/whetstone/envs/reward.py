@@ -1,20 +1,3 @@
-"""The per-env Reward Policy over the internal ``env_exact_match`` aggregate.
-
-The optimizer sees only internal-split evaluation. This module builds the
-reusable :class:`~whetstone.experiment.reward.RewardPolicy` that maps the
-env's internal ``env_exact_match`` Rollout Aggregate to a single scalar
-Reward, higher-is-better (``maximize=True``, unit weight). Applying it is
-delegated to :func:`~whetstone.experiment.reward.apply_reward_policy`, the
-sole Reward constructor, which refuses official-role evidence -- so the
-Reward can only ever be computed from internal evidence, and every produced
-Reward cites its policy Identity Hash and the exact ``env_exact_match`` input
-value it scalarized.
-
-The aggregate name the policy term selects is exactly the aggregate name the
-internal Rollout Aggregate carries (:data:`ENV_EXACT_MATCH_AGGREGATE_NAME`),
-so the mapping is unambiguous.
-"""
-
 from __future__ import annotations
 
 from whetstone.core.identity import TypedRef

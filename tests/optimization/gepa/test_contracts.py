@@ -1,5 +1,3 @@
-"""GEPA effect contract and recorder tests."""
-
 from __future__ import annotations
 
 import pytest

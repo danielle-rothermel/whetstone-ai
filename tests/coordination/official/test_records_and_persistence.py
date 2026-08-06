@@ -1,11 +1,3 @@
-"""Official Plot Manifest publication and immutable persistence.
-
-Proves the manifest preserves the ordered mapping (including two selected
-records sharing a graph), the immutable content-addressed persistence path for
-official records / manifests / selection evidence, and that the record's own
-reference matches the stored reference.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -72,8 +64,6 @@ def test_publish_plot_preserves_shared_graph_attribution() -> None:
         environment_identity="env-1",
         selected_record_mapping=mapping,
     )
-    # Two selected records sharing a graph stay separately attributable in the
-    # published manifest.
     assert len(manifest.selected_record_mapping.entries) == 2
     for_graph = manifest.selected_record_mapping.entries_for_graph(GRAPH_A)
     assert len(for_graph) == 2
@@ -96,7 +86,6 @@ def test_manifest_is_immutable() -> None:
 
 
 def test_manifest_aggregate_refs_must_cover_mapping() -> None:
-    # The mapping attributes aggregate '9', but the manifest declares only '8'.
     with pytest.raises(ValueError, match="not named in the manifest"):
         OfficialPlotManifest(
             authority="whetstone-official",
@@ -127,9 +116,7 @@ def test_official_record_persists_immutably() -> None:
     )
     store = ObjectStore(MemoryBackend())
     reference = store_official_evaluation_record(store, record)
-    # The stored reference matches the record's own content-addressed ref.
     assert reference == official_evaluation_record_reference(record)
-    # Round-trips: the exact immutable record comes back verified.
     fetched = store.get(reference)
     assert fetched == record.record_content()
 

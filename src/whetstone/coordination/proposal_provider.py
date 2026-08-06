@@ -1,27 +1,3 @@
-"""Best-effort DBOS durability boundary for proposal-provider effects.
-
-One logical proposal call — one algorithm-level ``draft(config, request,
-count)`` invocation — runs inside one deterministically identified DBOS child
-workflow whose body is a single :func:`DBOS.step` with DBOS retries disabled.
-The bounded provider retry policy (:class:`ProviderExecutionPolicy`) executes
-inside that step exactly as it does for a non-durable call: Whetstone owns
-every semantic attempt, and DBOS observes only the completed logical result.
-
-Guarantee, stated truthfully. The durability mode is ``at_least_once``: a
-completed step result is checkpointed and replays without re-invoking the
-transport, so recovery after a crash that happened before the provider call
-began, or any time after the checkpoint landed, costs nothing. The remaining
-window is real and accepted: if the process dies after the provider has
-served the call but before the step checkpoint commits, recovery re-executes
-the whole logical call and pays for it a second time. No idempotency key is
-sent to the provider, and no attempt is made to close that window here.
-
-The transport is bound by identity before ``DBOS.launch``: the workflow body
-resolves its transport from a registry keyed by
-``ProviderProposerTransport.durability_identity_hash``, so a registered
-identity can never detach from the capability a recovered workflow invokes.
-"""
-
 from __future__ import annotations
 
 from threading import Lock

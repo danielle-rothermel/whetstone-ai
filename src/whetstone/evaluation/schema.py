@@ -1,5 +1,3 @@
-"""Durable records produced by the canonical evaluation engine."""
-
 from __future__ import annotations
 
 from typing import Any, Literal

@@ -1,14 +1,3 @@
-"""Checks for the c22h hard-mode env variant.
-
-c22h is a distinct env id that reuses the c22 modules but generates its pool
-from c22's ``HARD_PRESET`` (the hardest IFEval configuration; no hidden-info
-change). These checks prove: it resolves through the registry to the c22
-modules with the hard preset; its 3 x 20 pool splits to (internal 6, official
-18, held_out 36) with disjoint splits; and its Eval Config / Task Set / dataset
-identities are DISTINCT from base c22's, so a c22h cell never collides with a
-c22 cell in the ledger.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -34,14 +23,11 @@ def test_c22h_is_a_bound_env_that_resolves() -> None:
     assert "c22h" in ENV_NAMES
     env = env_spec("c22h")
     assert env.name == "c22h"
-    # Reuses the c22 modules (mapped module name), not a c22h package.
     assert env.generate.__name__ == "whetstone_envs.c22.generate"
     assert env.oracle.__name__ == "whetstone_envs.c22.oracle"
     assert env.oracle_qualname == "whetstone_envs.c22.oracle.score_gold"
-    # Same gold-first oracle contract and blocked-pool stratified split as c22.
     assert env.gold_first is True
     assert env.stratified_split is True
-    # Inherited token estimate pending its own pilot.
     assert env.token_estimate.estimate_source == ESTIMATE_INHERITED_PENDING
 
 
@@ -54,7 +40,6 @@ def test_c22h_pool_is_the_hard_preset() -> None:
         "n6_hard": 20,
         "n8_hard": 20,
     }
-    # Every instance carries all three hard atoms (the preset's guarantee).
     from whetstone_envs.c22.spec import ConstraintSpec
 
     for inst in pool.instances:
@@ -102,8 +87,6 @@ def test_c22h_eval_config_hash_differs_from_c22() -> None:
 
 
 def test_c22h_task_identities_are_disjoint_from_c22() -> None:
-    # Distinct env name + distinct seed range => no shared task identity, so
-    # a c22h row never aliases a c22 row in the ledger.
     c22 = build_env_experiment("c22", model=_MODEL)
     c22h = build_env_experiment("c22h", model=_MODEL)
     c22_ids = set(c22.eval_configs.official.task_set.task_identities) | set(
@@ -125,7 +108,5 @@ def test_c22h_procedure_identity_partition_holds() -> None:
 
 @pytest.mark.parametrize("model", ["openai/gpt-5-nano", _MODEL])
 def test_c22h_builds_under_both_task_models(model: str) -> None:
-    # The pilot exercises both task models; the cell build must succeed under
-    # either (the task model folds into the route's Provider Call Config).
     exp = build_env_experiment("c22h", model=model)
     assert exp.env_name == "c22h"

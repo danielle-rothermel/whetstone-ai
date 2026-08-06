@@ -1,5 +1,3 @@
-"""Condition waits for tests whose authority clock is owned by SQLite."""
-
 from __future__ import annotations
 
 import sqlite3
@@ -17,7 +15,6 @@ _POLL_GATE = Event()
 
 
 def sqlite_authority_now(database: Path) -> datetime:
-    """Read the same transaction-authority clock used by the SQLite store."""
     with sqlite3.connect(database) as connection:
         row = connection.execute(_AUTHORITY_NOW).fetchone()
     if row is None or type(row[0]) is not str:
@@ -31,7 +28,6 @@ def wait_for_sqlite_authority_after(
     *,
     watchdog_seconds: float = _WATCHDOG_SECONDS,
 ) -> datetime:
-    """Return only once fresh SQLite authority time is past ``instant``."""
     deadline = time.monotonic() + watchdog_seconds
     while True:
         now = sqlite_authority_now(database)
@@ -42,6 +38,6 @@ def wait_for_sqlite_authority_after(
             raise AssertionError(
                 f"SQLite authority time did not pass {instant.isoformat()}"
             )
-        # This bounded wait only throttles fresh authority-time queries. The
-        # database predicate above, never elapsed watchdog time, is success.
+        # This wait only throttles queries; the database predicate proves
+        # success.
         _POLL_GATE.wait(timeout=min(_POLL_INTERVAL_SECONDS, remaining))

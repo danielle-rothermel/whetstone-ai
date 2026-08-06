@@ -1,33 +1,3 @@
-"""Pure statistical-power analysis over paired evaluation observations.
-
-Using two aligned per-task observation vectors, this module estimates the
-sample size needed to reliably rank candidates whose true score gap is
-``>= alpha * certified_headroom`` at a target correct-ranking probability.
-Tasks are the resampling unit.
-
-* **Empirical variance decomposition** (not assumed): from the anchor per-task
-  means it separates the within-task per-repeat (Bernoulli) variance from the
-  between-task / task-x-candidate interaction variance, bias-correcting the
-  between-task estimate for the finite anchor-repeat measurement noise.
-* **Paired model on a shared task set**: the between-task MAIN effect cancels
-  in a paired A-vs-B comparison; the residual variance of the mean paired
-  difference is the task-x-candidate INTERACTION plus the within-task repeat
-  noise OF THE DIFFERENCE -- and ONLY the latter shrinks with ``r``. So repeats
-  are a first-class power dial, not a no-op: marginal-variance-only power would
-  overstate the tasks needed and understate what repeats buy.
-* **2-D surface**: MDD@target over the full ``(n_tasks x repeats)`` grid (``n``
-  up to the pool ceiling, ``r`` up to a sane cap), the CHEAPEST ``(n, r)``
-  meeting the ``alpha`` target (cost = ``n*r`` calls at the measured per-call
-  cost), and the repeat-PLATEAU (``r`` beyond which the marginal MDD gain falls
-  below ``epsilon``).
-* **Pool-limit verdict**: if no ``(n, r)`` within ``pool x r_cap`` reaches the
-  target, the best achievable MDD and the ``(n, r)`` achieving it are recorded
-  explicitly rather than silently clamped.
-
-Every operation is a pure, deterministic (seeded) computation over
-already-measured per-task vectors.
-"""
-
 from __future__ import annotations
 
 import math
@@ -48,42 +18,29 @@ __all__ = [
     "analyze_power",
 ]
 
-#: The default fraction of certified headroom an evaluation must reliably
-#: resolve (a candidate gap ``>= alpha * headroom`` should rank correctly).
 DEFAULT_ALPHA = 0.25
 
-#: The default target correct-ranking probability (P(observed winner = true
-#: winner) at the target gap).
 DEFAULT_TARGET_PROB = 0.80
 
-#: The default repeat cap for the (n x r) grid search.
 DEFAULT_REPEAT_CAP = 20
 
-#: The repeat-plateau epsilon: ``r`` beyond which the marginal MDD improvement
-#: from one more repeat (at the recommended n) is below this is "plateaued".
 DEFAULT_MDD_PLATEAU_EPSILON = 0.005
 
-#: The seeded number of paired-ranking Monte-Carlo trials per grid point.
 _DEFAULT_TRIALS = 4000
 
 
-#: The grid of repeat counts evaluated (1..r_cap).
 def _repeat_grid(r_cap: int) -> tuple[int, ...]:
     return tuple(range(1, max(1, r_cap) + 1))
 
 
 @dataclass(frozen=True, slots=True)
 class PowerConfig:
-    """The knobs for one power analysis (all deterministic-seeded)."""
-
     alpha: float = DEFAULT_ALPHA
     target_prob: float = DEFAULT_TARGET_PROB
     repeat_cap: int = DEFAULT_REPEAT_CAP
     mdd_plateau_epsilon: float = DEFAULT_MDD_PLATEAU_EPSILON
     trials: int = _DEFAULT_TRIALS
     seed: int = 20260723
-    #: Optional measured per-call cost (USD) for the cost model; ``None`` keeps
-    #: the cost purely in call-count units (``n*r``).
     per_call_usd: float | None = None
 
     def __post_init__(self) -> None:
@@ -113,17 +70,8 @@ class PowerConfig:
 
 @dataclass(frozen=True, slots=True)
 class VarianceDecomposition:
-    """The empirical within-vs-between variance decomposition of the anchor.
-
-    ``base_rate`` is the operating base score the paired comparison is centered
-    on (the anchor midpoint). ``within_repeat_var`` is the per-single-repeat
-    Bernoulli variance at that operating point (shrinks with ``r``);
-    ``interaction_var`` is the task-x-candidate interaction variance of the
-    per-task difference (does NOT shrink with ``r``); ``between_task_var`` is
-    the task-to-task main-effect variance (CANCELS in a paired comparison,
-    reported for the within-vs-between verdict). ``anchor_repeats`` is the
-    ``r`` the anchor vectors were measured at (used to bias-correct the
-    estimates). ``within_dominates`` says whether repeat or task noise wins.
+    """Empirical variance terms; paired comparisons cancel the between-task
+    main effect.
     """
 
     base_rate: float
@@ -135,12 +83,10 @@ class VarianceDecomposition:
 
     @property
     def within_dominates(self) -> bool:
-        """Whether within-task repeat noise dominates between-task noise."""
         return self.within_repeat_var > self.between_task_var
 
     @property
     def noise_verdict(self) -> str:
-        """A human-readable summary of the dominant observed variance."""
         if self.within_dominates:
             return "within-task repeat noise dominates"
         return "between-task noise dominates"
@@ -148,32 +94,22 @@ class VarianceDecomposition:
 
 @dataclass(frozen=True, slots=True)
 class PowerRecommendation:
-    """The recommended (n_tasks, repeats) + the achievability verdict."""
-
     target_gap: float
     achievable: bool
-    #: Recommended sizes CLAMPED to the pool ceiling / r cap.
     recommended_n_tasks: int
     recommended_repeats: int
-    #: The MDD@target achieved at the recommendation.
     achieved_mdd: float
-    #: The cost of the recommendation (n*r calls, and USD when known).
     recommended_calls: int
     recommended_usd: float | None
-    #: When NOT achievable: the BEST (n,r) within pool x r-cap + its MDD.
     best_achievable_mdd: float
     best_n_tasks: int
     best_repeats: int
-    #: The repeat-plateau: r beyond which marginal MDD gain < epsilon (at the
-    #: recommended/best n). ``None`` when no plateau within the cap.
     repeat_plateau: int | None
     pool_limited: bool
 
 
 @dataclass(frozen=True, slots=True)
 class PowerSurfacePoint:
-    """One point on the evaluated ``(n_tasks, repeats)`` power surface."""
-
     n_tasks: int
     repeats: int
     calls: int
@@ -183,8 +119,6 @@ class PowerSurfacePoint:
 
 @dataclass(frozen=True, slots=True)
 class PowerResult:
-    """The full pure-math power analysis."""
-
     config: PowerConfig
     certified_headroom: float
     naive_mean: float
@@ -192,7 +126,6 @@ class PowerResult:
     pool_ceiling: int
     decomposition: VarianceDecomposition
     recommendation: PowerRecommendation
-    #: The full MDD surface: one point per (n_tasks, repeats) pair.
     surface: tuple[PowerSurfacePoint, ...] = ()
 
 
@@ -202,56 +135,17 @@ def _decompose_variance(
     *,
     anchor_repeats: int,
 ) -> VarianceDecomposition:
-    """Empirically decompose the anchor's within-vs-between/interaction
-    variance.
-
-    The candidates the internal eval must rank are MUTATIONS of the naive
-    baseline, so the operating base rate is the naive arm's mean (mid-range
-    Bernoulli noise is highest there).
-
-    From the anchor per-task means (measured at ``anchor_repeats`` repeats):
-
-    * ``base_rate`` = the naive arm's overall mean (the candidate operating
-      point). ``within_repeat_var`` = its single-repeat Bernoulli variance
-      ``base(1-base)`` -- the repeat noise that shrinks with r, anchored to the
-      operating rate the candidates actually sit at (NOT the anchor extremes,
-      where 0/1 saturation would understate it).
-    * ``between_task_var`` = the sample variance of the taskwise arm
-      midpoints, ANOVA-corrected by subtracting their measurement-noise
-      inflation ``within_obs/(2*anchor_repeats)`` (floored at 0). This is the
-      true task-to-task heterogeneity, which CANCELS in a paired comparison; it
-      is reported only for the within-vs-between verdict.
-    * ``interaction_var`` = the variance of the per-task naive->ceiling
-      DIFFERENCE across tasks, corrected for its own measurement noise
-      (``2*within_obs/anchor_repeats``), floored at 0. This is the
-      task-x-candidate interaction the paired residual retains and that does
-      NOT
-      shrink with r. It is anchored to a floor of ``0.1 * within_repeat_var``
-      so
-      the r=3 anchor's noisy near-zero interaction estimate cannot make the
-      paired model claim a perfectly-separable surface.
-    """
+    """Estimate the paired comparison's empirical variance terms."""
     both = np.concatenate([naive_per_task, ceiling_per_task])
     r = max(1, anchor_repeats)
     base_rate = float(np.clip(naive_per_task.mean(), 0.0, 1.0))
-    # Operating within-task single-repeat Bernoulli variance at the candidate
-    # base rate (mid-range noise, where the candidates actually operate).
     within = float(base_rate * (1.0 - base_rate))
-    # Observed within (at the anchor per-task rates) -- used only to de-bias
-    # the
-    # observed dispersions for the anchor measurement noise.
     within_obs = float(np.mean(both * (1.0 - both)))
-    # Between-task main effect from arm midpoints. Averaging two independent
-    # arm means halves the anchor measurement-noise contribution.
     midpoints = (naive_per_task + ceiling_per_task) / 2.0
     raw_between = (
         float(np.var(midpoints, ddof=1)) if midpoints.size > 1 else 0.0
     )
     between = max(0.0, raw_between - within_obs / (2.0 * r))
-    # Task-x-candidate interaction from the per-task PAIRED difference variance
-    # (corrected for the difference's measurement noise 2*within_obs/r), with a
-    # floor so a noisy r=3 near-zero estimate cannot fabricate a trivial
-    # surface.
     diff = ceiling_per_task - naive_per_task
     raw_interaction = float(np.var(diff, ddof=1)) if diff.size > 1 else 0.0
     interaction = max(

@@ -1,11 +1,3 @@
-"""No duplicate dr-code types in the Whetstone code-eval adapters.
-
-The adapters consume the released dr-code kernel and add only Whetstone policy
-and boundary roles. They must not redefine dr-code's evaluation-kernel
-contracts (TextArtifact, MetricFact, Score, compression
-key/artifact/resolver, Aggregation Output).
-"""
-
 from __future__ import annotations
 
 import importlib
@@ -94,7 +86,6 @@ def test_no_package_module_defines_a_dr_code_kernel_type() -> None:
 
 
 def test_submission_generation_is_whetstone_owned() -> None:
-    # Code Generation stays a Whetstone Generation; dr-code never learns it.
     gen = generation(text="x = 1\n")
     assert gen.__class__.__module__.startswith("whetstone")
     artifact = submission_text_artifact(gen)
@@ -150,7 +141,6 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     assert hasattr(EvaluationMatrixPlan, "__slots__")
     assert EvaluationMatrixPlan.__dataclass_params__.frozen
 
-    # Aggregate/result containers obey the same internal-value-object rule.
     output = dr_eval.AggregationOutput(
         status=dr_eval.AggregationStatus.NOT_APPLICABLE,
         value=None,

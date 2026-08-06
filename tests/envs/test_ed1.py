@@ -1,5 +1,3 @@
-"""Focused ED1 environment-contract tests with no orchestration dependency."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -410,18 +408,12 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
     assert outcome.executed_component_steps[0].outputs == {
         "generation": encoder_text
     }
-    # A decoder failure does not erase the ENCODER leg's telemetry: that call
-    # succeeded and its spend is real. The failed decoder still carries the
-    # typed provider diagnostic.
     assert outcome.latency_s is not None
     assert outcome.provider_error is not None
     assert outcome.encoder_len == len(encoder_text)
 
 
 def test_encoder_failure_still_reports_what_was_measured() -> None:
-    # The encoder call failed, so there is no usage to report (tokens stay
-    # None -- coverage-honest), but the budget the row was driven under and
-    # the typed provider diagnostic ARE known and must not be dropped.
     tasks = _tasks(1)
     experiment = build_ed1_experiment(
         tasks=tasks, repeats=1, internal_n=1, official_n=1
@@ -466,7 +458,6 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
     assert outcome.latency_s is not None
     assert outcome.provider_error is not None
     assert outcome.max_budget == round(0.5 * len(tasks[0].input_code))
-    # No usage exists for a failed call: reporting 0 would fabricate coverage.
     assert outcome.prompt_tokens is None
     assert outcome.total_tokens is None
 
@@ -584,7 +575,6 @@ def test_all_failed_diagnostics_name_dominant_failure() -> None:
 
 
 def _one_failed_row(instance, _repeat: int, _drive_ordinal: int):
-    """One task fails outright; the rest succeed (an INCOMPLETE evaluation)."""
     if str(instance.id).endswith("/0"):
         return Ed1RowOutcome(
             primary_value=None,
@@ -599,11 +589,6 @@ def _one_failed_row(instance, _repeat: int, _drive_ordinal: int):
 
 
 def test_blended_reward_refuses_an_incomplete_evaluation() -> None:
-    # A failed row folds into per-task scores as 0.0, so a raw mean of the
-    # blended rewards would CERTIFY an evaluation the primary aggregate
-    # refuses (value None under PROPAGATE). The blended path must gate on the
-    # same completeness signal: no primary value -> typed failure, not a
-    # silently-deflated Reward.
     with pytest.raises(CandidateEvaluationFailure):
         _evaluate(
             outcome_for=_one_failed_row,
@@ -613,8 +598,6 @@ def test_blended_reward_refuses_an_incomplete_evaluation() -> None:
 
 
 def test_unblended_and_blended_agree_on_refusing_incompleteness() -> None:
-    # The non-blended branch already refuses; the two branches must not
-    # disagree about whether the SAME evaluation is certifiable.
     with pytest.raises(CandidateEvaluationFailure):
         _evaluate(outcome_for=_one_failed_row, apply_reward=True)
 
@@ -655,9 +638,6 @@ def test_complete_evaluation_produces_exact_blended_reward() -> None:
 
 
 def test_advertised_reward_policy_matches_the_policy_applied() -> None:
-    # The experiment ADVERTISES reward_policy; reward time builds the blended
-    # policy from blend_config. A reader (and any consumer keying on the
-    # policy identity) must not see the pass-only policy on a blended cell.
     blend = BoundedCompressionMetricConfig(weight=0.1)
     blended = build_ed1_experiment(tasks=_tasks(1), blend_config=blend)
     expected = build_ed1_blended_reward_policy(blend, env_name=ED1_ENV_NAME)
@@ -670,8 +650,6 @@ def test_advertised_reward_policy_matches_the_policy_applied() -> None:
 
 
 def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
-    # A different weight is a different comparable config; the advertised
-    # policy name must carry that distinction, not collapse it.
     names = {
         build_ed1_experiment(
             tasks=_tasks(1),
@@ -683,9 +661,6 @@ def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
 
 
 def test_malformed_brace_is_a_typed_body_rejection() -> None:
-    # An unmatched '{' makes the render contract's parser raise a BARE
-    # ValueError; unguarded that surfaces as an untyped crash at eval start
-    # instead of the promised typed ED1_INVALID_BODY rejection.
     for body in ("Explain {code", "Explain code}", "Explain {a{b} thing"):
         assert ed1_body_rejection(body)
         with pytest.raises(Ed1BodyError) as excinfo:

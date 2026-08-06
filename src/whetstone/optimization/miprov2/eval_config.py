@@ -1,5 +1,3 @@
-"""Canonical per-effect Eval Config derivation for durable MIPROv2."""
-
 from __future__ import annotations
 
 from typing import Literal, Protocol

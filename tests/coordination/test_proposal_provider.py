@@ -1,5 +1,3 @@
-"""Durability contract for the best-effort proposal-provider boundary."""
-
 from __future__ import annotations
 
 import multiprocessing
@@ -150,7 +148,6 @@ def test_completed_step_replays_without_a_second_transport_call() -> None:
 
 
 def test_one_step_wraps_the_whole_logical_call_including_retries() -> None:
-    """Provider retries run inside the step; DBOS never sleeps between them."""
 
     reset_replay_dbos()
     module = load_proposal_provider_boundary(ReplayDbos)
@@ -194,7 +191,6 @@ def test_one_step_wraps_the_whole_logical_call_including_retries() -> None:
 
 
 def test_accept_before_checkpoint_replays_at_least_once_effect() -> None:
-    """A lost step checkpoint re-executes the accepted provider effect."""
 
     class _ProcessInterrupted(RuntimeError):
         pass
@@ -629,7 +625,6 @@ def test_conflicting_transport_under_one_key_is_rejected() -> None:
 )
 @pytest.mark.postgres_integration
 def test_real_dbos_workflow_replays_completed_proposal() -> None:
-    """A repeated real workflow ID returns its checkpointed first result."""
 
     from dbos import DBOS, DBOSConfig, SetWorkflowID
 

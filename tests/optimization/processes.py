@@ -1,5 +1,3 @@
-"""Bounded process joins and escalation for optimization integration tests."""
-
 from __future__ import annotations
 
 import multiprocessing
@@ -8,7 +6,6 @@ from typing import Any
 
 
 def in_process_start_methods() -> tuple[str, ...]:
-    """Return supported methods that never clone the pytest process."""
     return tuple(
         method
         for method in multiprocessing.get_all_start_methods()
@@ -21,7 +18,6 @@ def join_processes(
     *,
     timeout: float,
 ) -> None:
-    """Join successful workers and require clean zero exit codes."""
     workers = tuple(processes)
     for process in workers:
         process.join(timeout=timeout)
@@ -42,7 +38,6 @@ def terminate_processes(
     *,
     timeout: float,
 ) -> None:
-    """Terminate, then kill, and require every started worker to be reaped."""
     workers = tuple(processes)
     for process in workers:
         if process.is_alive():

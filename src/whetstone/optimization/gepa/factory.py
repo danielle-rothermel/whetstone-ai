@@ -1,5 +1,3 @@
-"""Concrete identity-bound adapter factory for canonical durable GEPA."""
-
 from __future__ import annotations
 
 from dr_store import ObjectStore

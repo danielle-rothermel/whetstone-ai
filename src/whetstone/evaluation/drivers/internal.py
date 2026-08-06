@@ -1,25 +1,3 @@
-"""The process-isolated internal-eval loop over an env's internal split.
-
-:func:`run_internal_eval` drives a candidate (the naive Initial Candidate in
-the factory tests) through serializable row jobs over the internal split and
-produces a provenance-bearing internal ``env_exact_match`` Rollout Aggregate
-plus the Reward the Reward Policy maps it to.
-
-The transport is injected -- a scripted fake in tests, the durable executor
-in production -- so nothing here makes a live paid LLM call. Each deliberate
-observation renders the candidate's prompt template against a task's public
-external inputs, calls the provider driver, and (on an accepted Generation)
-scores the text 0/1 with the env oracle via the whetstone metric-extraction
-operator. A failed provider call is an explicit ``failed`` row, never a
-silent zero.
-
-The reduction is the two-stage mean the design mandates for a 0/1 exact-match
-score: per-task mean over the task's repeats, then the unweighted mean across
-the complete internal Task Set. The aggregate is named ``env_exact_match`` so
-the Reward Policy term selects it, and its row accounting covers the whole
-planned internal matrix (no row dropped).
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -128,7 +106,7 @@ class RolloutOutput:
     output_text: str | None
     score: float | None
     failure_code: str = ""
-    #: Task-26 per-call provenance (coverage-honest -- ``None`` when unknown):
+    #: Per-call provenance (coverage-honest -- ``None`` when unknown):
     #: ``finish_reason`` is the provider stop reason of the accepted Generation
     #: (a truncated ``length`` is distinguishable from a clean ``stop``);
     #: ``provider_error`` is the FULL typed provider-failure diagnostic for a
@@ -136,7 +114,7 @@ class RolloutOutput:
     #: unknown.
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
-    #: ed1 enc-dec budget diagnostics on EVERY rollout row (task 26 item 6):
+    #: ed1 enc-dec budget diagnostics on every rollout row:
     #: the per-task ``max_budget`` (chars) the encoder was told to respect and
     #: the derived ``over_budget`` flag, so a consumer never re-derives
     #: ``round(budget_ratio * len)`` off-row. ``None`` for QA/d1 (no budget)
@@ -146,17 +124,14 @@ class RolloutOutput:
 
     @property
     def failed(self) -> bool:
-        """Whether the authoritative execution state is failed."""
         return self.row_state is ExecutedRowState.FAILED
 
     @property
     def missing(self) -> bool:
-        """Whether the authoritative execution state is missing."""
         return self.row_state is ExecutedRowState.MISSING
 
     @property
     def invalid(self) -> bool:
-        """Whether the row is invalid in the current execution state model."""
         return False
 
 
@@ -164,23 +139,8 @@ class RolloutOutput:
 class InternalEvalResult:
     """One candidate's evaluation outcome over a split.
 
-    Carries the provenance-bearing ``env_exact_match`` Rollout Aggregate. An
-    internal-role Evaluation Binding also produces the exact ``reward`` the
-    Reward Policy maps from the aggregate. An official-role binding produces
-    no Reward: official evaluation
-    computes the aggregate + per-task vectors only, per the design vocabulary.
-
-    ``per_task_scores`` is the aligned per-task mean 0/1 oracle score (one
-    entry per instance, in instance order) computed from the SAME driven rows
-    that produced ``aggregate`` -- a failed or missing row contributes 0 to
-    the mean so every task yields a comparable number. It exists so a paired
-    bootstrap CI can consume these scores with zero additional provider calls;
-    no second drive of the split is ever needed.
-
-    ``concurrency_halved`` records whether a rate-limit failure halved the
-    shared effective concurrency during this pass; ``deadline_reached`` records
-    whether the whole-phase wall deadline stopped dispatch (leaving some units
-    un-driven, counted as missing rows).
+    An official-role binding produces no Reward. Failed or missing rows
+    contribute 0 to the aligned per-task means.
     """
 
     aggregate: RolloutAggregate
@@ -200,7 +160,6 @@ class InternalEvalResult:
 
 
 def _per_task_score(task: TaskRows, repeat_count: int) -> float:
-    """Mean 0/1 score over a task's planned repeats (absent rows count 0)."""
     completed = task.completed_rows(repeat_count)
     if not completed:
         return 0.0
@@ -940,7 +899,6 @@ def run_internal_eval(
 
 
 def _row_is_rate_limited(outcome: InternalRowOutcome) -> bool:
-    """Whether a driven row's terminal Result is a rate-limit failure."""
     return outcome.rate_limited
 
 
@@ -962,7 +920,6 @@ def _should_redrive(outcome: InternalRowOutcome) -> bool:
 def _internal_outcome_from_record(
     record: PartialCallRecord,
 ) -> InternalRowOutcome:
-    """Rebuild the accepted outcome stored for one exact row request."""
     payload = ExecutedComponentTracePayload.from_json_value(
         record.observation_payload
     )

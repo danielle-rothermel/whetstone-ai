@@ -1,5 +1,3 @@
-"""Spawned-process fanout scheduling and cancellation contracts."""
-
 from __future__ import annotations
 
 import errno

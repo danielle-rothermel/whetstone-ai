@@ -1,5 +1,3 @@
-"""Tool evaluator projection onto the canonical evaluation engine."""
-
 from __future__ import annotations
 
 from collections.abc import Sequence

@@ -1,5 +1,3 @@
-"""Shared proposal-provider durability test support."""
-
 from __future__ import annotations
 
 import importlib.util
@@ -20,8 +18,6 @@ from whetstone.provider.language_model import PlainPromptAdapter
 
 
 class ReplayDbos:
-    """Checkpoint emulator for the concrete boundary unit seam."""
-
     workflow_id: ClassVar[str | None] = "proposal-workflow"
     step_id: ClassVar[int | None] = None
     retries_allowed: ClassVar[list[bool]] = []

@@ -1,14 +1,3 @@
-"""Thin adapter over the dr-providers kernel.
-
-The wire mechanics (config records, payload building, transport,
-parsing, failure classification) live in dr-providers. This module keeps
-only whetstone's domain shapes: ``ProviderResult`` (the provider outcome
-surface), the ``ProviderCallRequest`` construction from caller parameters,
-the ``ProviderTransportResponse`` -> ``ProviderResult`` conversion, and
-translation of kernel failure carriers into whetstone eval-failure
-exceptions.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Mapping

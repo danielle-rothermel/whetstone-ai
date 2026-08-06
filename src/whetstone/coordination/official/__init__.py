@@ -1,5 +1,3 @@
-"""Official evaluation authority, certification, and publication."""
-
 from whetstone.coordination.official.aggregation import (
     MissingPlannedKeysError,
     OfficialAggregationAccount,

@@ -1,5 +1,3 @@
-"""Spawn-safe workers for effect-authority process tests."""
-
 from __future__ import annotations
 
 from datetime import timedelta
@@ -20,7 +18,6 @@ from whetstone.core.identity import TypedRef
 
 
 def spawn_result(queue: Any, *, timeout: float = 10.0) -> dict[str, Any]:
-    """Read one spawned worker result with an assertion-oriented timeout."""
     try:
         return queue.get(timeout=timeout)
     except Empty as exc:
@@ -53,7 +50,6 @@ def race_acquire(
     acquired: Any,
     output: Any,
 ) -> None:
-    """Acquire from an independently constructed SQLite authority."""
     try:
         authority = EffectAuthority.sqlite(
             Path(database_path),
@@ -82,7 +78,6 @@ def acquire_then_exit(
     lease_seconds: float,
     output: Any,
 ) -> None:
-    """Acquire a lease and exit without terminalizing it."""
     authority = EffectAuthority.sqlite(Path(database_path))
     result = authority.acquire(
         EffectRequest.model_validate(request_payload),
@@ -107,7 +102,6 @@ def race_postgresql_acquire(
     backend_pid: Any,
     output: Any,
 ) -> None:
-    """Race one acquire through an independent schema-bound connection."""
     try:
         connect_gate = (
             PostgresOperationGate(
@@ -153,7 +147,6 @@ def postgresql_acquire_and_succeed_once(
     result_ref_json: str,
     output: Any,
 ) -> None:
-    """Acquire and terminalize through one independently opened authority."""
     try:
         authority = EffectAuthority.postgresql(
             dsn,
@@ -185,7 +178,6 @@ def replay_postgresql_effect_once(
     request_json: str,
     output: Any,
 ) -> None:
-    """Replay one terminal effect from a freshly constructed authority."""
     try:
         authority = EffectAuthority.postgresql(
             dsn,

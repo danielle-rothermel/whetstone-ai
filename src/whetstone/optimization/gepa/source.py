@@ -1,5 +1,3 @@
-"""Frozen upstream GEPA 0.1.1 source identity and installation guard."""
-
 from __future__ import annotations
 
 import hashlib

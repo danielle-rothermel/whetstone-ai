@@ -1,14 +1,3 @@
-"""Effect-free grounded proposal planning for DSPy-compatible MIPROv2.
-
-The planner in this module owns no model, storage, or DBOS runtime handle.
-Each call to :func:`plan_next_proposal_request` returns at most one typed
-external-effect request and an immutable state that must be persisted before
-executing it.  :func:`fold_proposal_response` then folds exactly that request's
-result.  This preserves the call and RNG topology of DSPy commit
-``6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0`` while adapting prompt content to
-native Whetstone components instead of DSPy Signature field descriptions.
-"""
-
 from __future__ import annotations
 
 import json

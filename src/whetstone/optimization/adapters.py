@@ -1,5 +1,3 @@
-"""Generic optimizer adapter contracts and the pure identity adapter."""
-
 from __future__ import annotations
 
 from collections.abc import Mapping

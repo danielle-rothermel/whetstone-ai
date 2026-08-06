@@ -1,5 +1,3 @@
-"""Lazy process-isolated fanout with parent-owned result commits."""
-
 from __future__ import annotations
 
 import math

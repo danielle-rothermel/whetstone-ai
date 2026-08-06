@@ -1,20 +1,3 @@
-"""The Mutation Surface + Diff Check for proposal validation.
-
-Every optimizing run in this system shares one Mutation Surface: the encoder
-``user_prompt_template`` field only. A proposal is valid iff it changes only
-that field relative to its named base candidate and canonical-JSON-matches the
-base everywhere else (the "diff check", ``concrete-changes.html`` / the run
-docs' shared harness expectation #3). This module makes that check a small,
-reusable, testable function so both COPRO and MIPROv2 reject the same way.
-
-The check is applied by the adapter *before* it emits a candidate: an invalid
-draft (empty template, a payload that touches a non-surface field, or a
-mutated base binding) is rejected and never becomes a proposal or an Evaluation
-Intent. Rejection is data, not an exception path the harness has to unwind: the
-adapter records the rejected draft as provenance and either retries within its
-attempt cap or fails the Step per its cardinality rule.
-"""
-
 from __future__ import annotations
 
 import string

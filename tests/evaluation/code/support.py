@@ -1,5 +1,3 @@
-"""Shared builders for the code-eval adapter tests."""
-
 from __future__ import annotations
 
 from dr_code.eval import OperatorLineage

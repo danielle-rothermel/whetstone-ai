@@ -1,5 +1,3 @@
-"""POSIX file locking and durability helpers for execution storage."""
-
 from __future__ import annotations
 
 import fcntl

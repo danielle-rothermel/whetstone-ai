@@ -1,5 +1,3 @@
-"""Backend construction for public Tool admission conformance tests."""
-
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -28,7 +26,6 @@ def conformance_store(
     backend: ToolAdmissionBackend,
     tmp_path: Path,
 ) -> Iterator[ToolCallStore]:
-    """Yield one isolated store using the selected admission backend."""
     if backend == "memory":
         store = ToolCallStore(
             ObjectStore(MemoryBackend()),

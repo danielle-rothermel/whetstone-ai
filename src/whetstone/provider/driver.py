@@ -1,27 +1,3 @@
-"""Pure, DBOS-free provider attempt-loop driver.
-
-Given a Provider Call Request, a Provider Execution Policy, and an injectable
-transport callable, run bounded logical attempts and produce the ordered
-:class:`ProviderCallAttempt` wrappers plus the terminal
-:class:`ProviderCallResult`.
-
-Every decision is deterministic:
-
-* attempt numbering is contiguous 1..N;
-* the loop stops on the first accepted Generation, on the first
-  non-retry-eligible semantic failure, or when the bounded attempt count is
-  exhausted;
-* the pre-attempt backoff delay is a pure function of the attempt number.
-
-The driver is infrastructure-free. Both a clock hook and a sleep hook are
-injectable so callers and tests can drive deterministic timing without
-hard-coding wall-clock access or real sleeping.
-
-Replay determinism: given the same recorded transport outcomes (the same
-sequence of Provider Invocation Evidence returned by the transport callable),
-the driver produces a byte-identical attempt sequence and terminal Result.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable

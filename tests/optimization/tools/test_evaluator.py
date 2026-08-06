@@ -116,11 +116,6 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
 def _subset_tool_config(
     engine: EvaluationEngine, *, store_namespace_key: str
 ) -> ToolConfig:
-    """Build a config whose Definition actually declares ``task_ids``.
-
-    ``ToolCall`` requires ``args`` to match ``input_fields`` exactly, so a
-    subset call is only constructible against such a Definition.
-    """
     return _tool_config(
         engine,
         store_namespace_key=store_namespace_key,
@@ -129,11 +124,6 @@ def _subset_tool_config(
 
 
 def test_tool_projection_rejects_malformed_task_subsets(tmp_path) -> None:
-    """Malformed subsets are refused before any evaluation work happens.
-
-    These calls go through the real ``ToolCall`` validator, so ``args``
-    carries the frozen (tuple-shaped) sequence the production path sees.
-    """
     store = ObjectStore(SqliteBackend(tmp_path / "tool-malformed.sqlite"))
     engine = _engine(tmp_path, store=store)
     config = _subset_tool_config(engine, store_namespace_key="tool-malformed")
@@ -164,11 +154,6 @@ def test_tool_projection_rejects_malformed_task_subsets(tmp_path) -> None:
 
 @pytest.mark.process_integration
 def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
-    """A well-formed subset reaches the engine through the real args path.
-
-    ``ImmutableJsonObject`` freezes JSON arrays to tuples, so the validator
-    must accept the frozen sequence shape rather than a bare ``list``.
-    """
     store = ObjectStore(SqliteBackend(tmp_path / "tool-subset.sqlite"))
     engine = _engine(tmp_path, store=store)
     config = _subset_tool_config(engine, store_namespace_key="tool-subset")
@@ -180,7 +165,6 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
         task_ids=[bound_task],
     )
 
-    # The frozen args really do hand the evaluator a non-list sequence.
     assert not isinstance(call.args["task_ids"], list)
 
     projected = EngineToolEvaluator(engine).evaluate(call, config)
@@ -193,12 +177,6 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
 def test_engine_tool_evaluator_drives_a_call_through_the_executor(
     tmp_path,
 ) -> None:
-    """The engine evaluator satisfies the whole ToolEvaluator Protocol.
-
-    ``EvaluatingToolExecutor`` calls ``validate`` before admission, so a
-    projection missing it would fail on the paved path rather than in a
-    direct ``evaluate`` call.
-    """
     database = tmp_path / "tool-executor.sqlite"
     store = ObjectStore(SqliteBackend(database))
     engine = _engine(tmp_path, store=store)

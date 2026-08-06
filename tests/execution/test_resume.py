@@ -1,5 +1,3 @@
-"""Exact partial-row request selection shared by environment evaluators."""
-
 from __future__ import annotations
 
 import pytest

@@ -1,5 +1,3 @@
-"""Stable parent DBOS workflow for replaying canonical GEPA from run start."""
-
 from __future__ import annotations
 
 from dbos import DBOS, SetWorkflowID

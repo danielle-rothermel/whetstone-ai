@@ -1,5 +1,3 @@
-"""Direction-bearing objectives and deterministic Pareto fronts."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

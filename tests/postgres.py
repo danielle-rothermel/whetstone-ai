@@ -1,5 +1,3 @@
-"""Disposable PostgreSQL schema support for live integration tests."""
-
 from __future__ import annotations
 
 import os
@@ -16,8 +14,6 @@ from psycopg.sql import SQL, Identifier
 
 @dataclass(frozen=True, slots=True)
 class PostgresTestSchema:
-    """One environment-provided database partitioned by a unique schema."""
-
     dsn: str
     name: str
 
@@ -112,8 +108,6 @@ class _GatedPostgresConnection:
 
 
 class PostgresOperationGate:
-    """Gate the second connection at exact operation queries."""
-
     def __init__(
         self,
         *,
@@ -155,7 +149,6 @@ def connect_in_postgres_schema(
     *,
     schema: str,
 ) -> Any:
-    """Open a connection whose durable search path is the test schema."""
     connection = connect(dsn)
     try:
         with connection.cursor() as cursor:
@@ -175,7 +168,6 @@ def require_postgres_lock_wait(
     schema: PostgresTestSchema,
     backend_pid: int,
 ) -> None:
-    """Require a backend to reach a database-reported lock wait."""
     with connect_in_postgres_schema(
         schema.dsn,
         schema=schema.name,
@@ -200,7 +192,6 @@ def require_postgres_lock_wait(
 
 @contextmanager
 def isolated_postgres_schema(prefix: str) -> Iterator[PostgresTestSchema]:
-    """Create and always drop one UUID-partitioned live PostgreSQL schema."""
     dsn = os.environ.get("WHETSTONE_TEST_POSTGRES_DSN")
     if dsn is None:
         pytest.skip(

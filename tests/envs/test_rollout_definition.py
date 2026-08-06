@@ -1,5 +1,3 @@
-"""The Rollout Definition role graph: one LLM Call Node -> one Eval Node."""
-
 from __future__ import annotations
 
 import dr_graph
@@ -55,7 +53,6 @@ def test_graph_has_one_llm_call_and_one_terminal_eval_node() -> None:
 def test_prompt_is_the_only_llm_input_source() -> None:
     rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
     llm = next(n for n in rd.graph_config.nodes if n.node_id == LLM_NODE_ID)
-    # The prompt Graph External Input is the sole Node Input Source.
     assert list(llm.input_sources) == ["prompt"]
     source = llm.input_sources["prompt"]
     assert source.kind.value == "graph_external"
@@ -76,8 +73,6 @@ def test_provider_config_change_changes_graph_hash() -> None:
 
 
 def test_procedure_change_changes_graph_hash() -> None:
-    # Two different envs => different Evaluation Procedure Config identity =>
-    # different Eval Node static Variable => different graph_hash.
     a = build_rollout_definition(env_spec("c22"), model=_MODEL)
     b = build_rollout_definition(env_spec("c11"), model=_MODEL)
     assert a.procedure_config_hash != b.procedure_config_hash
@@ -96,7 +91,6 @@ def test_initial_and_ceiling_candidates_are_the_probe_templates(
     env = env_spec(env_name)
     ic = initial_candidate(env)
     cc = ceiling_candidate(env)
-    # The Mutation Surface is the encoder user_prompt_template only.
     assert set(ic.payload) == {MUTATION_FIELD}
     assert ic.payload[MUTATION_FIELD] == env.surface.naive_template
     assert cc.payload[MUTATION_FIELD] == env.surface.ceiling_template
@@ -114,9 +108,6 @@ def test_render_uses_public_inputs_and_never_leaks_gold(
     ceiling = render_prompt(env, ceiling_candidate(env), inst)
     assert naive
     assert ceiling
-    # Rendering is restricted to the contract's public fields. Python-format
-    # surfaces reject an unavailable oracle field, while literal-replace
-    # surfaces leave non-contract text untouched; neither can interpolate it.
     if (
         env.surface.template_render_contract.kind
         is TemplateRenderKind.LITERAL_REPLACE_V1
@@ -131,12 +122,6 @@ def test_render_uses_public_inputs_and_never_leaks_gold(
 
 @pytest.mark.parametrize("env_name", ENV_NAMES)
 def test_template_survives_json_round_trip(env_name: str) -> None:
-    # The Mutation Surface must be a genuinely serialization-stable template:
-    # a Candidate persisted + reloaded via the Result Store
-    # (model_validate_json -> value-equal but a fresh object) must still
-    # render. This is the c19 fidelity fix (its env ProbePair dispatched by
-    # object identity, so a round-tripped template raised KeyError); the check
-    # runs for every env so no future env regresses to identity dispatch.
     env = env_spec(env_name)
     inst = env.generate_pool(n_per_stratum=1).instances[0]
     for candidate in (initial_candidate(env), ceiling_candidate(env)):
@@ -152,10 +137,6 @@ def test_template_survives_json_round_trip(env_name: str) -> None:
 
 @pytest.mark.parametrize("env_name", ENV_NAMES)
 def test_mutated_template_still_renders(env_name: str) -> None:
-    # An optimizer mutation of the surfaced template must render (the whole
-    # point of the Mutation Surface). Prepend a marker to the naive template
-    # and assert the rendered prompt carries it -- content-driven rendering,
-    # never object identity.
     env = env_spec(env_name)
     inst = env.generate_pool(n_per_stratum=1).instances[0]
     naive = initial_candidate(env)
@@ -171,10 +152,6 @@ def test_mutated_template_still_renders(env_name: str) -> None:
 
 @pytest.mark.parametrize("env_name", ENV_NAMES)
 def test_surface_render_matches_env_probe_bytes(env_name: str) -> None:
-    # The adapter surface must render byte-for-byte identically to the env's
-    # own committed ProbePair renderer across a whole pool (oracle fidelity is
-    # unchanged by the c19 template rebinding). c19's env renderer is reached
-    # via its ProbePair.render_naive / render_ceiling.
     env = env_spec(env_name)
     pool = env.generate_pool(n_per_stratum=1)
     for inst in pool.instances:

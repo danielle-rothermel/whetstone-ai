@@ -1,26 +1,3 @@
-"""The ed1 encoder->decoder->code-eval drive (dual scores).
-
-Drives one candidate over an ed1 split through serializable process jobs,
-running the three-node rollout per (task, repeat):
-
-1. render the candidate's Mutation-Surface ENCODER template against the task's
-   ``INPUT_CODE`` (= ``gt_code_wo_comments``) and the per-task character budget
-   ``MAX_BUDGET = round(budget_ratio * chars(input_code))`` (guidance, not a
-   hard clip -- the design: "the budget steers, nothing clips");
-2. call the encoder (the shared enc/dec route);
-3. render the fixed DECODER template against the ENCODER output and call the
-   decoder;
-4. score the DECODER output for the environment's primary metric (ED1:
-   HumanEval Submission Score; ED1M: Fidelity to Mutant) and the ENCODER output
-   for compression (whetstone zstd-19 Compression Ratio vs
-   ``gt_code_wo_comments``).
-
-It reduces to the environment's primary aggregate plus Mean Compression Ratio
-using the shared two-stage unweighted task mean, and returns both with per-row
-outputs. Nothing here makes a live paid call by itself: the transport and
-code-eval scorer are injected.
-"""
-
 from __future__ import annotations
 
 import json
@@ -127,14 +104,7 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 @dataclass(frozen=True, slots=True)
 class Ed1RowDiag:
-    """One (task, repeat) row's diagnostic record for the pilot artifact.
-
-    Explains an arm-level ``None`` from disk: the typed ``failure_code`` (empty
-    when the row succeeded), the primary/compression scalars, the per-task
-    ``max_budget`` the encoder was told to respect, the actual encoder-output
-    length, and the derived ``over_budget`` flag (an over-budget row is NEVER
-    clipped or failed -- the budget only steers, so this is diagnostic only).
-    """
+    """Per-row diagnostics; exceeding the budget never clips or fails a row."""
 
     instance_id: str
     repeat: int
@@ -293,18 +263,15 @@ class Ed1RowOutcome(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
-    #: Task-20 telemetry: summed encoder+decoder reasoning tokens + summed
+    #: Summed encoder+decoder reasoning tokens and wall-clock latency.
     #: wall-clock latency for the row. ``None`` when the provider exposed no
     #: reasoning detail (never 0-conflated).
     reasoning_tokens: int | None = None
     latency_s: float | None = None
-    #: Budget diagnostics: the per-task MAX_BUDGET (chars) the encoder was told
-    #: to respect and the actual encoder-output length. ``over_budget`` is a
-    #: derived flag (encoder_len > max_budget) -- an over-budget row is NOT
-    #: clipped or failed (the budget only steers), so this is diagnostic only.
+    #: Exceeding MAX_BUDGET is diagnostic and never clips or fails a row.
     max_budget: int | None = None
     encoder_len: int | None = None
-    #: Task-26 per-call provenance. ``finish_reason`` is the DECODER call's
+    #: ``finish_reason`` is the decoder call's
     #: provider stop reason (the terminal output-bearing call -- a truncated
     #: ``length`` decode is distinguishable from a clean ``stop``);
     #: ``provider_error`` is the FULL typed diagnostic of whichever call failed
@@ -318,7 +285,7 @@ class Ed1RowOutcome(BaseModel):
     #: scoring) is NOT redrivable (re-driving the same input will not change a
     #: deterministic "no").
     redrivable: bool = False
-    #: Task-31 prompt-cache honesty. A DUAL ed1 row is ``cache_hit`` True only
+    #: A dual ed1 row is ``cache_hit`` True only
     #: when BOTH the encoder AND decoder calls were served from cache (no wire
     #: call at all this time -> latency nulled). If either leg was freshly
     #: driven the row's latency is genuine and ``cache_hit`` is False.
@@ -371,12 +338,6 @@ class Ed1RowOutcome(BaseModel):
 
     @property
     def over_budget(self) -> bool | None:
-        """True when the encoder output exceeded MAX_BUDGET (diagnostic only).
-
-        ``None`` when either the budget or the encoder length is unknown (a
-        pre-encoder failure, e.g. a render error), so a reader distinguishes
-        "measured, within budget" from "never measured".
-        """
         if self.max_budget is None or self.encoder_len is None:
             return None
         return self.encoder_len > self.max_budget
@@ -590,8 +551,7 @@ def drive_ed1_row(
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_rollout
     assert rd is not None
-    # NO-BUDGET frame (task 22.4): budget_rule None -> no MAX_BUDGET, no budget
-    # sentence rendered (render_encoder_frame drops the clause on None).
+    # A None budget rule omits both MAX_BUDGET and the rendered budget clause.
     rule = rd.budget_rule
     max_budget = (
         None
@@ -1280,7 +1240,7 @@ def run_ed1_eval(
         plan=sampling.evaluation_matrix_plan,
     )
 
-    # Task 22: the weighted-blend reward. When a blend config is set, the
+    # When a blend config is set, the
     # CERTIFICATION metric + the per-task CI vector are the PER-TASK blended
     # reward (primary score + compression are always reported separately). The
     # blend is composed per task, so the paired bootstrap operates on blended

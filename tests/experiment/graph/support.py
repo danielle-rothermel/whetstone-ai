@@ -1,10 +1,3 @@
-"""Shared builders for whetstone graph-contract tests.
-
-Constructs real dr-code Eval Configs and real dr-graph Graph Configs so the
-identity-partition and execution-planning proofs run against the released
-dependency contracts, not stand-ins.
-"""
-
 from __future__ import annotations
 
 from dr_code.eval.lifecycle import (
@@ -69,8 +62,6 @@ def eval_config(
     procedure: EvaluationProcedureConfig | None = None,
     reduction: str = "mean",
 ) -> EvalConfig:
-    """Build a composite Eval Config; override the Procedure or Aggregation
-    to probe the identity partition."""
     procedure = procedure or procedure_config()
     aggregation = AggregationDefinition(
         definition_id="agg", version="1"
@@ -83,7 +74,6 @@ def eval_config(
 
 
 def llm_eval_graph_definition() -> GraphDefinition:
-    """A minimal LLM Call -> Eval Graph Definition with one terminal Node."""
     llm = llm_call_node_definition(
         "generate",
         prompt_source="task.prompt",
@@ -100,7 +90,6 @@ def build_graph_config(
     provider_call_config_hash: str,
     evaluation_procedure_config_hash: str,
 ) -> GraphConfig:
-    """Materialize a Graph Config with the given static config references."""
     definition = llm_eval_graph_definition()
     assignments = {
         "generate": llm_call_variable_assignment(

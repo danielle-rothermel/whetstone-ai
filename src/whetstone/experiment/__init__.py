@@ -1,5 +1,3 @@
-"""Experiment candidates, bindings, objectives, rewards, and graphs."""
-
 from whetstone.experiment.objectives import (
     RESERVED_OBJECTIVE_NAMES,
     Direction,

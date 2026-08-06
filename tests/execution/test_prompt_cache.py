@@ -1,5 +1,3 @@
-"""Prompt-cache identity, durability, and cross-process single-flight."""
-
 from __future__ import annotations
 
 import json

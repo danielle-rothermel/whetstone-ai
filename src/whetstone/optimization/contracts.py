@@ -1,5 +1,3 @@
-"""Serialization contracts for durable optimization."""
-
 from __future__ import annotations
 
 from collections import Counter
@@ -264,7 +262,7 @@ class EvaluationIntent(BaseModel):
 
 
 class OptimizationRun(BaseModel):
-    """The one future run envelope, independent of harness binding."""
+    """An immutable run envelope independent of harness binding."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

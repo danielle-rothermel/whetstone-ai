@@ -1,5 +1,3 @@
-"""Independent process-group guardian for fanout workers."""
-
 from __future__ import annotations
 
 import os

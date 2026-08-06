@@ -1,5 +1,3 @@
-"""Shared effect-storage protocol and row encoding."""
-
 from __future__ import annotations
 
 import json

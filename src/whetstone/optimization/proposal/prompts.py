@@ -1,5 +1,3 @@
-"""Algorithm-specific proposal prompts for the generic proposer transport."""
-
 from __future__ import annotations
 
 from whetstone.core.identity import ImmutableJsonObject

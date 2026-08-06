@@ -1,5 +1,3 @@
-"""Evaluation-role vocabulary shared by evaluation contracts."""
-
 from enum import UNIQUE, StrEnum, verify
 
 

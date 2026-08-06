@@ -1,5 +1,3 @@
-"""Exact Eval Config and evaluation-binding boundary contracts."""
-
 from __future__ import annotations
 
 import pytest

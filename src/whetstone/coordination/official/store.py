@@ -1,13 +1,3 @@
-"""Persistence of immutable official records by typed Object Reference.
-
-Official Evaluation Records, Official Plot Manifests, and official selection
-evidence are immutable and stored by typed :class:`~dr_store.ObjectReference`
-plus Content Hash — never an Identity Hash. These thin helpers put each record
-through dr-store and return the typed reference, cross-checking that the stored
-reference matches the record's own content-addressed reference so a caller can
-never persist a record under a mismatched reference.
-"""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any

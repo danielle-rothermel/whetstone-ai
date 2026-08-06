@@ -1,5 +1,3 @@
-"""Successful real MIPROv2 adapter flow through the durable harness."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field

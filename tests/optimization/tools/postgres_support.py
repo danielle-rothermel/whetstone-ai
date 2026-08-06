@@ -1,5 +1,3 @@
-"""Recorders and process scenarios for PostgreSQL Tool admission tests."""
-
 from __future__ import annotations
 
 import multiprocessing

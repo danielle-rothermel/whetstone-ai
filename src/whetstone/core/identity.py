@@ -1,5 +1,3 @@
-"""Validated identities, exact references, and immutable JSON boundaries."""
-
 from __future__ import annotations
 
 import math

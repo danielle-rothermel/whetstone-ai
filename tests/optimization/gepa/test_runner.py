@@ -1,5 +1,3 @@
-"""Stable-parent replay tests for the canonical GEPA runner."""
-
 from __future__ import annotations
 
 import importlib.util
@@ -45,8 +43,8 @@ class _SetWorkflowID:
 
 
 def _load_runner():
-    # Load the factory and package with the real DBOS API before replacing
-    # only the runner's decorator/SetWorkflowID seam.
+    # Import the real DBOS API before replacing only the runner's decorator
+    # seam.
     import whetstone.optimization.gepa.factory  # noqa: F401
 
     fake_dbos = types.ModuleType("dbos")
@@ -186,12 +184,6 @@ def _train_instance(control):
 
 
 def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
-    """Validation is symmetric with the engine's valset binding check.
-
-    The engine refuses a supplied valset when the control binds valset
-    omission, so a request carrying one is unrunnable and must not be able
-    to validate and hash into a persistable workflow ID.
-    """
 
     module = _load_runner()
     control = gepa_control()
@@ -218,7 +210,6 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
 
 
 def test_parent_request_rejects_bound_valset_identity_drift() -> None:
-    """A bound valset must still match the control's exact data identities."""
 
     module = _load_runner()
     control = gepa_control(valset_task_identities=("c" * 64,))
@@ -243,7 +234,6 @@ def test_parent_request_rejects_bound_valset_identity_drift() -> None:
             ),
         )
 
-    # The matching valset validates and hashes.
     accepted = module.GepaParentRunRequest(
         factory_identity_hash="f" * 64,
         control=control,

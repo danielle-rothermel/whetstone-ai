@@ -1,5 +1,3 @@
-"""Durable issuance ledger for optimizer tool calls."""
-
 from __future__ import annotations
 
 from threading import RLock

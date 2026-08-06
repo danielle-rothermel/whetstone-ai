@@ -1,5 +1,3 @@
-"""Source-derived differential tests against frozen DSPy MIPROv2."""
-
 from __future__ import annotations
 
 import hashlib
@@ -177,7 +175,6 @@ def _proposal_trace(
 def test_bootstrap_proposal_and_search_shapes_match_source_oracle(
     component_count: int,
 ) -> None:
-    """Internal frozen machinery retains DSPy's predictor-major behavior."""
 
     assert MIPROV2_REFERENCE_COMMIT == ORACLE_COMMIT
     component_ids = tuple(

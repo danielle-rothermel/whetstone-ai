@@ -1,1 +1,0 @@
-"""Whetstone package initialization."""

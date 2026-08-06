@@ -1,5 +1,3 @@
-"""Shared SQLite effect-authority process scenarios."""
-
 from __future__ import annotations
 
 import multiprocessing
@@ -26,6 +24,8 @@ def run_spawned_authority_contention(
     ready = [context.Event() for _ in range(2)]
     attempted = [context.Event() for _ in range(2)]
     acquired = [context.Event() for _ in range(2)]
+    # The process checks finish before this lease, so scheduling cannot
+    # create a second owner.
     processes = [
         context.Process(
             target=race_acquire,
@@ -34,8 +34,6 @@ def run_spawned_authority_contention(
                 payload,
                 "shared-worker",
                 attempt,
-                # The bounded process checks below finish long before this
-                # lease, so elapsed scheduling cannot create a second owner.
                 60.0,
                 ready[index],
                 start,
@@ -74,7 +72,6 @@ def run_spawned_same_owner_different_attempts_arbitrate_once(
     root: Path,
     start_method: str,
 ) -> None:
-    """Exercise one authority contention scenario outside pytest collection."""
     results = run_spawned_authority_contention(
         root / "race.sqlite",
         start_method=start_method,

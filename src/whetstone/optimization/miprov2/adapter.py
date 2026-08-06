@@ -1,11 +1,3 @@
-"""Canonical MIPROv2 adapter over the durable pure phase machine.
-
-This file intentionally contains no optimizer algorithm of its own.  Exact
-control, bootstrap, proposal, RNG, rendering, and Optuna behavior lives in the
-typed MIPROv2 modules; the adapter only executes one already-planned proposal
-effect or exposes one evaluation/bootstrap intent per harness step.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -131,9 +123,9 @@ class Miprov2Adapter:
     replaying the executor's completed checkpoint instead of failing the run.
     The executor's own durability contract states the guarantee it delivers.
 
-    Current :class:`OptimizationHarness` terminalization supports a newly
-    derived accepted candidate. An unchanged base-candidate winner is not a
-    supported terminal output.
+    :class:`OptimizationHarness` terminalization requires a derived accepted
+    candidate; an unchanged base-candidate winner is not a supported terminal
+    output.
     """
 
     def __init__(

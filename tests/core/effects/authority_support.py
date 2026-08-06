@@ -1,5 +1,3 @@
-"""Shared effect-authority test builders."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta

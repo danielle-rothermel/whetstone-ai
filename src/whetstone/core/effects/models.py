@@ -1,5 +1,3 @@
-"""Effect request, lease, terminal, and acquisition contracts."""
-
 from __future__ import annotations
 
 import math

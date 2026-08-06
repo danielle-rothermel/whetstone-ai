@@ -1,5 +1,3 @@
-"""Regression tests for evidence-only GEPA transcript projection."""
-
 from __future__ import annotations
 
 from dr_store import ObjectStore, SqliteBackend

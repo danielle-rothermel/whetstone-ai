@@ -1,5 +1,3 @@
-"""Provider-call inspection, provenance, and re-drive eligibility."""
-
 from __future__ import annotations
 
 import pytest

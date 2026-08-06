@@ -1,5 +1,3 @@
-"""Compressed Description Length and Compression Ratio."""
-
 from __future__ import annotations
 
 import zstandard
@@ -21,8 +19,6 @@ from whetstone.evaluation.code import (
 from .support import FULL_HASH, operator_lineage
 
 ENCODER_TEXT = "def f(x):\n    return x + 1\n" * 8
-
-# --- Compressed Description Length -----------------------------------------
 
 
 def test_cdl_is_zstd19_utf8_byte_count() -> None:
@@ -62,9 +58,6 @@ def test_cdl_fact_carries_unit_and_lineage() -> None:
     assert fact.lineage.operator == "compressed_length"
 
 
-# --- Compression Ratio -----------------------------------------------------
-
-
 def test_compression_ratio_over_nonzero_reference() -> None:
     reference = CompressionReferenceArtifact(content=b"abcdefghij")
     ratio = compression_ratio_value(
@@ -89,14 +82,12 @@ def test_compression_ratio_score_has_lineage() -> None:
 
 def test_compression_ratio_zero_denominator_is_none_never_coerced() -> None:
     empty_reference = CompressionReferenceArtifact(content=b"")
-    # Value path: explicit None, never 0.0 / 1.0.
     assert (
         compression_ratio_value(
             compressed_description_length=5, reference=empty_reference
         )
         is None
     )
-    # Score path: explicit None (invalid/N-A behavior), never a coerced Score.
     score = compression_ratio_score(
         compressed_description_length=5,
         reference=empty_reference,

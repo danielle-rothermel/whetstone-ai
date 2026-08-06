@@ -1,5 +1,3 @@
-"""Exact request-identity selection for environment partial-row resume."""
-
 from __future__ import annotations
 
 from collections.abc import Iterable

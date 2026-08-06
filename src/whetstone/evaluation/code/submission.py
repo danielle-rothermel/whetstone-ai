@@ -1,24 +1,3 @@
-"""Code Generation producer role and the Submission Text boundary.
-
-Two Whetstone roles project onto one native dr-code type:
-
-* **Code Generation** — a
-  :class:`~whetstone.provider.classification.Generation`
-  read in Whetstone's *code-generation producer/lifecycle* role: its text is
-  intended for the code-evaluation pipeline but does **not** yet assert valid
-  Python source. Code Generation is Whetstone-owned producer semantics; dr-code
-  never learns it.
-* **Submission Text** — the shared *boundary role* of the exact decoder Code
-  Generation string carried as native ``dr_code.trace.TextArtifact.text`` into
-  preprocessing. It is a role, not a type: it creates **no** duplicate type,
-  artifact, schema, or identity. The dr-code kernel receives a plain
-  ``TextArtifact`` and cannot tell it apart from any other text artifact.
-
-The projection is exact: the Submission Text is byte-for-byte the Code
-Generation string (no normalization, trimming, or re-encoding). Preprocessing,
-not this boundary, decides candidate validity.
-"""
-
 from __future__ import annotations
 
 from dr_code.trace import TextArtifact

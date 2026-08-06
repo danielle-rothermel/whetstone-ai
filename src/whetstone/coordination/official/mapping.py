@@ -1,19 +1,3 @@
-"""The mandatory ordered selected-record -> graph -> keys -> aggregate mapping.
-
-Both the Official Evaluation Record and the Official Plot Manifest MUST
-preserve, per the vocabulary, *the ordered mapping from every selected
-Materialization Record Object Reference plus Content Hash to its*
-``graph_hash`` *, shared planned/result-key set, and aggregate Object
-Reference plus Content Hash*.
-
-The load-bearing property is **separate attributability under convergence**:
-two selected Materialization Records that share one ``graph_hash`` (converged
-assignments) also share one planned/result-key set and one aggregate reference,
-yet each keeps its own ordered entry so the two selected records stay
-separately attributable to their curve slots / candidates. This module owns
-the entry type and the validated ordered container both records embed.
-"""
-
 from __future__ import annotations
 
 from typing import Any

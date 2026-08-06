@@ -1,5 +1,3 @@
-"""Run fork-based SQLite contention before an interpreter starts threads."""
-
 from __future__ import annotations
 
 import multiprocessing

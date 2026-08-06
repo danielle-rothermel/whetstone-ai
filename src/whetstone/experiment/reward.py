@@ -1,5 +1,3 @@
-"""Reusable finite Reward Policy and exact Reward contracts."""
-
 from __future__ import annotations
 
 import math

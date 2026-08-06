@@ -1,5 +1,3 @@
-"""Exact Tool and Reward serialized-contract regressions."""
-
 from __future__ import annotations
 
 import json

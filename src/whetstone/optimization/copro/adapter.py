@@ -1,5 +1,3 @@
-"""DSPy-compatible, single-prompt COPRO over durable Whetstone primitives."""
-
 from __future__ import annotations
 
 import math

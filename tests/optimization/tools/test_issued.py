@@ -1,5 +1,3 @@
-"""Harness-owned issued-call ledger durability and budget regressions."""
-
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor

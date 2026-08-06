@@ -1,23 +1,3 @@
-"""Character Budget graph/runtime binding.
-
-The Character Budget is a character-count bound applied during a Rollout.
-Its binding is deliberately split so that identity stays clean:
-
-* The output-affecting *derivation rule or ratio* is a Graph Definition
-  Variable. Its assignment belongs to Graph Config identity, so changing it
-  changes ``graph_hash``. It is carried as an LLM Call Node static Variable
-  (see ``nodes.CHARACTER_BUDGET_VARIABLE``).
-* The *concrete Task-derived bound* (an integer character count computed
-  from a Task at runtime) is used by the environment when rendering the
-  encoder prompt. The rendered prompt is the Graph External Input; the bound
-  itself is not part of Graph Config / Rollout Variant identity.
-
-Whetstone owns this experiment binding directly. There is deliberately no
-separate character-budget policy artifact — no dedicated type, schema,
-config, or identity. Both forms also stay separate from the compression byte
-denominator, which is a dr-code concern.
-"""
-
 from __future__ import annotations
 
 import math

@@ -165,7 +165,6 @@ def _bootstrapped_demo(**overrides: object):
 
 
 def _assert_item_assignment_refused(mapping: object, key: str) -> None:
-    """Attempt one item assignment through an untyped view of the mapping."""
 
     with pytest.raises(TypeError):
         cast("Any", mapping)[key] = "tampered"

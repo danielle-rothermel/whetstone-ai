@@ -1,5 +1,3 @@
-"""EnvTask: stable identity, Graph External Inputs, evaluation inputs."""
-
 from __future__ import annotations
 
 import pytest
@@ -25,12 +23,10 @@ def test_env_task_wraps_instance_fields() -> None:
     assert task.instance_id == "c18-D1-1"
     assert task.seed == 42
     assert task.strata == ("D1",)
-    # Graph External Inputs = the rendered prompt inputs.
     assert task.prompt_inputs_dict() == {
         "question": "Sally is a brimpus.",
         "query": "q?",
     }
-    # Evaluation input = the gold/oracle-checkable state.
     assert task.gold == "True"
 
 
@@ -92,12 +88,6 @@ def test_env_task_over_real_instances(env_name: str) -> None:
     pool = env.generate_pool(n_per_stratum=1)
     inst = pool.instances[0]
     task = EnvTask.from_instance(env_name, inst)
-    # Prompt inputs never carry the gold (external inputs are public only).
-    assert task.gold not in task.prompt_inputs_dict().values() or (
-        # some re-derive golds are short tokens that could coincide; assert
-        # the gold is not a declared prompt-input KEY instead
-        True
-    )
+    assert task.gold not in task.prompt_inputs_dict().values() or (True)
     assert len(task.task_identity()) == 64
-    # The wrapped content hash tracks the env's own content-hash convention.
     assert task.instance_content_hash

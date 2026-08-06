@@ -1,5 +1,3 @@
-"""Spawn-safe JSON process worker for fanout units."""
-
 from __future__ import annotations
 
 import importlib

@@ -1,5 +1,3 @@
-"""Durable atomic partial-call records and exact resume identities."""
-
 from __future__ import annotations
 
 import hashlib

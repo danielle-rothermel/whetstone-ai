@@ -472,8 +472,6 @@ def test_provider_parameters_cannot_drift_under_the_policy_identity() -> None:
     )
     before = policy.identity_hash()
 
-    # Every route that could reach the stored mapping: the caller's own dict,
-    # a dumped copy, and direct item assignment on the field itself.
     supplied["temperature"] = 1.5
     cast("Any", policy).model_dump(mode="json")["provider_parameters"][
         "temperature"

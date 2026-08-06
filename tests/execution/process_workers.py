@@ -1,5 +1,3 @@
-"""Importable process jobs used by fanout integration tests."""
-
 from __future__ import annotations
 
 import os
@@ -43,7 +41,6 @@ def _append(path: Path, line: str) -> None:
 
 
 def gated_event(payload: JsonValue) -> JsonValue:
-    """Block on a parent-owned gate, optionally failing after release."""
     body = _mapping(payload)
     key = _string(body, "key")
     wait_for_release(_string(body, "signal_path"), key)
@@ -53,7 +50,6 @@ def gated_event(payload: JsonValue) -> JsonValue:
 
 
 def require_path_then_return(payload: JsonValue) -> JsonValue:
-    """Prove a required boundary file exists before user code begins."""
     body = _mapping(payload)
     required_path = Path(_string(body, "required_path"))
     event_path = Path(_string(body, "event_path"))
@@ -64,7 +60,6 @@ def require_path_then_return(payload: JsonValue) -> JsonValue:
 
 
 def block_process_tree(payload: JsonValue) -> JsonValue:
-    """Publish process-tree readiness once, then await scheduler signals."""
     body = _mapping(payload)
     signal_path = _string(body, "signal_path")
     key = _string(body, "key")
@@ -94,7 +89,6 @@ signal.pause()
 
 
 def spawn_descendant_and_return(payload: JsonValue) -> JsonValue:
-    """Leave a same-group descendant running after the worker returns."""
     body = _mapping(payload)
     signal_path = _string(body, "signal_path")
     ready_reader, ready_writer = os.pipe()
@@ -146,7 +140,6 @@ signal.pause()
 
 
 def open_file_descriptors(payload: JsonValue) -> JsonValue:
-    """Return unexpected descriptors visible when user code begins."""
     del payload
     descriptors: list[int] = []
     for descriptor in range(3, 4096):
@@ -159,12 +152,10 @@ def open_file_descriptors(payload: JsonValue) -> JsonValue:
 
 
 def return_payload(payload: JsonValue) -> JsonValue:
-    """Return the validated JSON payload unchanged."""
     return payload
 
 
 def non_finite_result(payload: JsonValue) -> JsonValue:
-    """Return an invalid scalar or nested JSON number."""
     body = _mapping(payload)
     event_path = Path(_string(body, "event_path"))
     _append(event_path, "started")

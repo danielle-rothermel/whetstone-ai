@@ -1,5 +1,3 @@
-"""Tool-call admission contracts and atomic transition rules."""
-
 from __future__ import annotations
 
 import json

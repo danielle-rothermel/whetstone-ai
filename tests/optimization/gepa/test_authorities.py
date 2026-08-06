@@ -1,5 +1,3 @@
-"""Concrete GEPA authority identity and evidence tests."""
-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -73,7 +71,6 @@ def test_data_registry_binds_position_order_and_exact_refs(tmp_path) -> None:
 
 
 def test_authority_refuses_a_structurally_similar_executor(tmp_path) -> None:
-    """Only the exact canonical capability may carry the paid GEPA call."""
 
     store = ObjectStore(SqliteBackend(tmp_path / "structural.sqlite"))
     services = prompt_services()
@@ -129,7 +126,6 @@ def test_authority_refuses_a_structurally_similar_executor(tmp_path) -> None:
 
 
 def test_whole_call_evidence_boundary_literals_are_pinned(tmp_path) -> None:
-    """The persisted coarsest-boundary record keeps its exact literals."""
 
     assert GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY == "whole_call"
     assert GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA == (

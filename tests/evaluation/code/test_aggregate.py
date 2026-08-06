@@ -1,5 +1,3 @@
-"""Rollout Aggregate provenance, matrix planning, and scalar reductions."""
-
 from __future__ import annotations
 
 from dataclasses import replace
@@ -288,8 +286,6 @@ def test_failed_row_propagates_missing_data() -> None:
 
 
 def test_failed_rows_still_visible_in_provenance() -> None:
-    # All-failed rows leave the reduction non-OK (never a fabricated zero),
-    # while remaining counted in the aggregate provenance.
     experiment = tiny_experiment("c18")
     sampling = experiment.eval_configs.internal
     task_rows = tuple(
