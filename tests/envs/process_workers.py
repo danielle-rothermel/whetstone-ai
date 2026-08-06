@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from functools import partial
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from pydantic import JsonValue
 
@@ -62,9 +60,8 @@ def drive_internal_success(payload: JsonValue) -> JsonValue:
 
 
 def drive_d1_success(payload: JsonValue) -> JsonValue:
-    from dr_code.core.execution.executor import host_process_executor
-
     from tests.envs.support import FakeTransport, constant_reply
+    from tests.execution.fake_python import local_python_executor
     from whetstone.envs.d1 import build_d1_experiment
     from whetstone.envs.ed1 import Ed1Instance
     from whetstone.envs.ed1_scoring import score_ed1_submission
@@ -90,25 +87,24 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
         != request.procedure_config_hash
     ):
         raise ValueError("D1 row procedure identity is not canonical")
-    with TemporaryDirectory(prefix="whetstone-dr-exec-") as record_root:
-        outcome = drive_d1_row(
-            experiment=experiment,
-            candidate_body=request.candidate_body,
-            instance=instance,
-            provider_call_config=request.provider_call_config,
-            execution_policy=request.execution_policy,
-            transport=FakeTransport(constant_reply(task.ground_truth_code)),
-            scorer=partial(
-                score_ed1_submission,
-                executor=host_process_executor(Path(record_root)),
-            ),
-            logical_call_id=request.logical_call_id,
-            repeat_index=request.repeat_index,
-            drive_ordinal=request.drive_ordinal,
-            cache=_cache(request.cache_root),
-            cache_phase=request.cache_phase,
-            cache_unit=request.cache_unit,
-        )
+    outcome = drive_d1_row(
+        experiment=experiment,
+        candidate_body=request.candidate_body,
+        instance=instance,
+        provider_call_config=request.provider_call_config,
+        execution_policy=request.execution_policy,
+        transport=FakeTransport(constant_reply(task.ground_truth_code)),
+        scorer=partial(
+            score_ed1_submission,
+            executor=local_python_executor(),
+        ),
+        logical_call_id=request.logical_call_id,
+        repeat_index=request.repeat_index,
+        drive_ordinal=request.drive_ordinal,
+        cache=_cache(request.cache_root),
+        cache_phase=request.cache_phase,
+        cache_unit=request.cache_unit,
+    )
     return D1RowResult(
         request_identity=request.request_identity,
         outcome=outcome,
@@ -126,7 +122,6 @@ def drive_ed1_transient_then_success(payload: JsonValue) -> JsonValue:
 def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
     from dataclasses import fields
 
-    from dr_code.core.execution.executor import host_process_executor
     from dr_code.humaneval import HumanEvalTask
     from dr_providers import (
         FailureClass,
@@ -136,6 +131,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
     )
 
     from tests.envs.support import FakeTransport
+    from tests.execution.fake_python import local_python_executor
     from whetstone.envs.ed1 import (
         DECODER_TEMPLATE,
         Ed1Experiment,
@@ -235,31 +231,29 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
 
         transport = transient_transport
 
-    with TemporaryDirectory(prefix="whetstone-dr-exec-") as record_root:
-        executor = host_process_executor(Path(record_root))
-        scorer = partial(
-            (
-                score_ed1m_reconstruction
-                if mutant is not None
-                else score_ed1_submission
-            ),
-            executor=executor,
-        )
-        outcome = drive_ed1_row(
-            experiment=experiment,
-            candidate_template=request.candidate_template,
-            instance=instance,
-            provider_call_config=request.provider_call_config,
-            execution_policy=request.execution_policy,
-            transport=transport,
-            scorer=scorer,
-            logical_call_id=request.logical_call_id,
-            repeat_index=request.repeat_index,
-            drive_ordinal=request.drive_ordinal,
-            cache=_cache(request.cache_root),
-            cache_phase=request.cache_phase,
-            cache_unit=request.cache_unit,
-        )
+    scorer = partial(
+        (
+            score_ed1m_reconstruction
+            if mutant is not None
+            else score_ed1_submission
+        ),
+        executor=local_python_executor(),
+    )
+    outcome = drive_ed1_row(
+        experiment=experiment,
+        candidate_template=request.candidate_template,
+        instance=instance,
+        provider_call_config=request.provider_call_config,
+        execution_policy=request.execution_policy,
+        transport=transport,
+        scorer=scorer,
+        logical_call_id=request.logical_call_id,
+        repeat_index=request.repeat_index,
+        drive_ordinal=request.drive_ordinal,
+        cache=_cache(request.cache_root),
+        cache_phase=request.cache_phase,
+        cache_unit=request.cache_unit,
+    )
     return Ed1RowResult(
         request_identity=request.request_identity,
         outcome=outcome,

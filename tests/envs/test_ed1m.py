@@ -5,10 +5,10 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from dr_code.core.execution.executor import host_process_executor
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 from dr_exec import ExecutorFailure, FakeExecutor
 
+from tests.execution.fake_python import local_python_executor
 from whetstone.envs.ed1m_dataset import (
     DatasetValidationError,
     ExpectedOutcome,
@@ -170,17 +170,13 @@ def test_build_rejects_unauthenticated_records(
         build_ed1m_experiment(artifact_dir=mutant_dataset_dir)
 
 
-def test_oracle_faithful_reconstruction_has_zero_attractor(
-    tmp_path: Path,
-) -> None:
+def test_oracle_faithful_reconstruction_has_zero_attractor() -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
-    record_root = tmp_path / "records"
-    record_root.mkdir()
     score = score_ed1m_reconstruction(
         reconstruction=_MUTATED_SOURCE,
         mutant=_mutant_record(),
-        executor=host_process_executor(record_root),
+        executor=local_python_executor(),
     )
 
     assert score.fidelity_to_mutant == pytest.approx(1.0)
@@ -188,32 +184,26 @@ def test_oracle_faithful_reconstruction_has_zero_attractor(
     assert score.infrastructure_unknown is False
 
 
-def test_oracle_canonical_reconstruction_has_full_attractor(
-    tmp_path: Path,
-) -> None:
+def test_oracle_canonical_reconstruction_has_full_attractor() -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
-    record_root = tmp_path / "records"
-    record_root.mkdir()
     score = score_ed1m_reconstruction(
         reconstruction=_CANONICAL_SOURCE,
         mutant=_mutant_record(),
-        executor=host_process_executor(record_root),
+        executor=local_python_executor(),
     )
 
     assert score.fidelity_to_mutant == pytest.approx(0.5)
     assert score.attractor_pull == pytest.approx(1.0)
 
 
-def test_oracle_definitive_mismatch_scores_zero(tmp_path: Path) -> None:
+def test_oracle_definitive_mismatch_scores_zero() -> None:
     from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
 
-    record_root = tmp_path / "records"
-    record_root.mkdir()
     score = score_ed1m_reconstruction(
         reconstruction="def f(x):\n    return None\n",
         mutant=_mutant_record(),
-        executor=host_process_executor(record_root),
+        executor=local_python_executor(),
     )
 
     assert score.fidelity_to_mutant == pytest.approx(0.0)

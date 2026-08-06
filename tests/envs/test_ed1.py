@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from dr_code.core.execution.executor import host_process_executor
 from dr_exec import Executor, ExecutorFailure, FakeExecutor
 from dr_providers import FailureClass
 
@@ -16,6 +15,7 @@ from tests.envs.support import (
     row_job_factory,
     synthetic_ed1_tasks,
 )
+from tests.execution.fake_python import local_python_executor
 from tests.provider.support import build_evidence, failure_outcome
 from whetstone.envs.ed1 import (
     DECODER_TEMPLATE,
@@ -181,10 +181,8 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
 
 
 @pytest.fixture
-def code_executor(tmp_path: Path) -> Executor:
-    record_root = tmp_path / "dr-exec-records"
-    record_root.mkdir()
-    return host_process_executor(record_root)
+def code_executor() -> Executor:
+    return local_python_executor()
 
 
 def test_humaneval_scoring_canonical_passes_wrong_fails(
