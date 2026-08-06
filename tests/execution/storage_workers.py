@@ -1,5 +1,3 @@
-"""Importable multiprocessing workers for execution-storage tests."""
-
 from __future__ import annotations
 
 import fcntl
@@ -42,6 +40,21 @@ class _CrashAfterPublicationCache(PromptResultCache):
 class _CrashAfterPendingCache(PromptResultCache):
     def _store_entry(self, **kwargs: Any) -> NoReturn:
         os._exit(87)
+
+
+class _CrashAfterStatsWriteCache(PromptResultCache):
+    def _write_stats(self, stats: Any) -> None:
+        super()._write_stats(stats)
+        if stats.inflight_publication_ids:
+            os._exit(88)
+
+
+class _CrashAfterAppliedRenameCache(PromptResultCache):
+    def _cleanup_applied_accounting_locked(
+        self,
+        journal: Any,
+    ) -> NoReturn:
+        os._exit(89)
 
 
 def cache_request() -> ProviderCallRequest:
@@ -100,6 +113,8 @@ def execute_cache_worker(
     lock_acquired: Any | None = None,
     crash_after_publication: bool = False,
     crash_after_pending: bool = False,
+    crash_after_stats_write: bool = False,
+    crash_after_applied_rename: bool = False,
     umask_value: int | None = None,
 ) -> None:
     if umask_value is not None:
@@ -114,6 +129,10 @@ def execute_cache_worker(
         cache = _CrashAfterPublicationCache(root=Path(root))
     elif crash_after_pending:
         cache = _CrashAfterPendingCache(root=Path(root))
+    elif crash_after_stats_write:
+        cache = _CrashAfterStatsWriteCache(root=Path(root))
+    elif crash_after_applied_rename:
+        cache = _CrashAfterAppliedRenameCache(root=Path(root))
     else:
         cache = PromptResultCache(root=Path(root))
     execution = execute_call(
@@ -143,6 +162,22 @@ def execute_cache_worker(
                 if execution.provenance is not None
                 else None
             ),
+        }
+    )
+
+
+def recover_cache_worker(root: str, key: str, output: Any) -> None:
+    cache = PromptResultCache(root=Path(root))
+    entry = cache.get_result(key)
+    counters = cache.counters()
+    stats = cache._read_stats()
+    output.put(
+        {
+            "entry_readable": entry is not None,
+            "counters": counters,
+            "inflight_publication_ids": list(stats.inflight_publication_ids),
+            "pending_exists": cache._pending_accounting_path_for(key).exists(),
+            "applied_exists": cache._applied_accounting_path_for(key).exists(),
         }
     )
 
@@ -246,7 +281,6 @@ def run_partial_operation(
 
 
 def _observe_lock_boundary(attempted: Any, acquired: Any) -> None:
-    """Publish the exact before/after boundary around the next flock call."""
     real_flock = file_lock_module.fcntl.flock
     observed = False
 

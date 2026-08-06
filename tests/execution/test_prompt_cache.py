@@ -1,5 +1,3 @@
-"""Prompt-cache identity, durability, and cross-process single-flight."""
-
 from __future__ import annotations
 
 import json
@@ -24,7 +22,9 @@ from dr_providers import (
 from tests.execution.storage_workers import (
     cache_request,
     execute_cache_worker,
+    recover_cache_worker,
 )
+from tests.optimization.processes import join_processes, terminate_processes
 from tests.provider import support as s
 from whetstone.execution._file_lock import FileLock
 from whetstone.execution.prompt_cache import (
@@ -107,13 +107,68 @@ def _start_cache_contenders(
         )
         for worker_id in range(worker_count)
     ]
-    for process in processes:
+    started = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        reports = [output.get(timeout=20) for _ in processes]
+        join_processes(started, timeout=20)
+        return reports
+    finally:
+        barrier.abort()
+        terminate_processes(started, timeout=20)
+
+
+def _run_expected_cache_crash(
+    *,
+    root: Path,
+    expected_exitcode: int,
+    **crash_window: bool,
+) -> None:
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    process = context.Process(
+        target=execute_cache_worker,
+        args=(
+            str(root),
+            str(root / "invocations"),
+            0,
+            None,
+            output,
+        ),
+        kwargs=crash_window,
+    )
+    started = []
+    try:
         process.start()
-    reports = [output.get(timeout=20) for _ in processes]
-    for process in processes:
+        started.append(process)
         process.join(timeout=20)
-        assert process.exitcode == 0
-    return reports
+        assert process.exitcode == expected_exitcode
+    finally:
+        terminate_processes(started, timeout=20)
+
+
+def _recover_cache_in_fresh_process(
+    *,
+    root: Path,
+    key: str,
+) -> dict[str, object]:
+    context = multiprocessing.get_context("spawn")
+    output = context.Queue()
+    process = context.Process(
+        target=recover_cache_worker,
+        args=(str(root), key, output),
+    )
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        report = output.get(timeout=20)
+        join_processes(started, timeout=20)
+        return report
+    finally:
+        terminate_processes(started, timeout=20)
 
 
 def test_v2_key_pins_all_semantic_identity_components() -> None:
@@ -312,6 +367,7 @@ def test_cache_disabled_is_byte_identical_and_creates_no_bytes(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.process_integration
 def test_six_processes_execute_one_paid_call_and_restart_stats(
     tmp_path: Path,
 ) -> None:
@@ -419,6 +475,7 @@ def test_policy_and_drive_ordinal_partition_cached_results(
     assert cache.counters() == {"hits": 0, "misses": 3, "stores": 3}
 
 
+@pytest.mark.process_integration
 def test_killed_single_flight_owner_releases_lock_for_waiter(
     tmp_path: Path,
 ) -> None:
@@ -440,9 +497,6 @@ def test_killed_single_flight_owner_releases_lock_for_waiter(
             "started": owner_started,
         },
     )
-    owner.start()
-    assert owner_started.wait(timeout=10)
-
     waiter_output = context.Queue()
     waiter_attempted = context.Event()
     waiter_acquired = context.Event()
@@ -460,23 +514,25 @@ def test_killed_single_flight_owner_releases_lock_for_waiter(
             "lock_acquired": waiter_acquired,
         },
     )
-    waiter.start()
+    started = []
     try:
+        owner.start()
+        started.append(owner)
+        assert owner_started.wait(timeout=10)
+        waiter.start()
+        started.append(waiter)
         assert waiter_attempted.wait(timeout=10)
         assert not waiter_acquired.is_set()
         owner.terminate()
         owner.join(timeout=10)
         assert waiter_acquired.wait(timeout=10)
         waiter.join(timeout=10)
+        assert owner.exitcode is not None
+        assert waiter.exitcode == 0
+        report = waiter_output.get(timeout=5)
+        assert not report["cache_hit"]
     finally:
-        for process in (owner, waiter):
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=10)
-    assert owner.exitcode is not None
-    assert waiter.exitcode == 0
-    report = waiter_output.get(timeout=5)
-    assert not report["cache_hit"]
+        terminate_processes(started, timeout=10)
     assert PromptResultCache(root=tmp_path).counters() == {
         "hits": 0,
         "misses": 1,
@@ -484,6 +540,7 @@ def test_killed_single_flight_owner_releases_lock_for_waiter(
     }
 
 
+@pytest.mark.process_integration
 def test_corrupt_entry_repair_is_single_flight_across_processes(
     tmp_path: Path,
 ) -> None:
@@ -586,6 +643,7 @@ def test_atomic_publication_fsyncs_entry_and_stats_directories(
     assert set(replaced_source_modes) == {0o600}
 
 
+@pytest.mark.process_integration
 def test_restart_reconciles_kill_after_durable_entry_publication(
     tmp_path: Path,
 ) -> None:
@@ -602,9 +660,14 @@ def test_restart_reconciles_kill_after_durable_entry_publication(
         ),
         kwargs={"crash_after_publication": True},
     )
-    process.start()
-    process.join(timeout=20)
-    assert process.exitcode == 86
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        process.join(timeout=20)
+        assert process.exitcode == 86
+    finally:
+        terminate_processes(started, timeout=20)
 
     cache = PromptResultCache(root=tmp_path)
     key = prompt_cache_key(
@@ -626,6 +689,81 @@ def test_restart_reconciles_kill_after_durable_entry_publication(
     assert not cache._applied_accounting_path_for(key).exists()
 
 
+@pytest.mark.process_integration
+def test_restart_reconciles_kill_after_stats_write_before_journal_rename(
+    tmp_path: Path,
+) -> None:
+    _run_expected_cache_crash(
+        root=tmp_path,
+        expected_exitcode=88,
+        crash_after_stats_write=True,
+    )
+
+    cache = PromptResultCache(root=tmp_path)
+    key = prompt_cache_key(
+        cache_request(),
+        s.build_execution_policy(max_attempts=1),
+        0,
+        0,
+    )
+    pending_path = cache._pending_accounting_path_for(key)
+    applied_path = cache._applied_accounting_path_for(key)
+    stats = json.loads(cache._stats_path.read_text())
+    assert cache._path_for(key).exists()
+    assert pending_path.exists()
+    assert not applied_path.exists()
+    assert stats["hits"] == 0
+    assert stats["misses"] == 1
+    assert stats["stores"] == 1
+    assert len(stats["inflight_publication_ids"]) == 1
+
+    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == {
+        "entry_readable": True,
+        "counters": {"hits": 0, "misses": 1, "stores": 1},
+        "inflight_publication_ids": [],
+        "pending_exists": False,
+        "applied_exists": False,
+    }
+
+
+@pytest.mark.process_integration
+def test_restart_reconciles_kill_after_applied_rename_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    _run_expected_cache_crash(
+        root=tmp_path,
+        expected_exitcode=89,
+        crash_after_applied_rename=True,
+    )
+
+    cache = PromptResultCache(root=tmp_path)
+    key = prompt_cache_key(
+        cache_request(),
+        s.build_execution_policy(max_attempts=1),
+        0,
+        0,
+    )
+    pending_path = cache._pending_accounting_path_for(key)
+    applied_path = cache._applied_accounting_path_for(key)
+    stats = json.loads(cache._stats_path.read_text())
+    assert cache._path_for(key).exists()
+    assert not pending_path.exists()
+    assert applied_path.exists()
+    assert stats["hits"] == 0
+    assert stats["misses"] == 1
+    assert stats["stores"] == 1
+    assert len(stats["inflight_publication_ids"]) == 1
+
+    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == {
+        "entry_readable": True,
+        "counters": {"hits": 0, "misses": 1, "stores": 1},
+        "inflight_publication_ids": [],
+        "pending_exists": False,
+        "applied_exists": False,
+    }
+
+
+@pytest.mark.process_integration
 def test_reconciliation_preserves_journal_and_reports_corrupt_entry(
     tmp_path: Path,
 ) -> None:
@@ -642,9 +780,14 @@ def test_reconciliation_preserves_journal_and_reports_corrupt_entry(
         ),
         kwargs={"crash_after_publication": True},
     )
-    process.start()
-    process.join(timeout=20)
-    assert process.exitcode == 86
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        process.join(timeout=20)
+        assert process.exitcode == 86
+    finally:
+        terminate_processes(started, timeout=20)
 
     cache = PromptResultCache(root=tmp_path)
     key = prompt_cache_key(
@@ -661,6 +804,7 @@ def test_reconciliation_preserves_journal_and_reports_corrupt_entry(
     assert pending_path.exists()
 
 
+@pytest.mark.process_integration
 def test_corrupt_entry_is_quarantined_before_pending_publication(
     tmp_path: Path,
 ) -> None:
@@ -684,9 +828,14 @@ def test_corrupt_entry_is_quarantined_before_pending_publication(
         ),
         kwargs={"crash_after_pending": True},
     )
-    process.start()
-    process.join(timeout=20)
-    assert process.exitcode == 87
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        process.join(timeout=20)
+        assert process.exitcode == 87
+    finally:
+        terminate_processes(started, timeout=20)
 
     pending_path = cache._pending_accounting_path_for(key)
     quarantined = list(entry_path.parent.glob(f".{entry_path.name}.corrupt.*"))
@@ -805,6 +954,7 @@ def test_file_lock_rejects_symlink_without_chmodding_target(
     _assert_unchanged(victim, body=body, mode=0o644)
 
 
+@pytest.mark.process_integration
 def test_cache_files_and_directories_are_private_under_permissive_umask(
     tmp_path: Path,
 ) -> None:
@@ -834,10 +984,14 @@ def test_cache_files_and_directories_are_private_under_permissive_umask(
         ),
         kwargs={"umask_value": 0},
     )
-    process.start()
-    output.get(timeout=20)
-    process.join(timeout=20)
-    assert process.exitcode == 0
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        output.get(timeout=20)
+        join_processes(started, timeout=20)
+    finally:
+        terminate_processes(started, timeout=20)
 
     cache = PromptResultCache(root=tmp_path)
     key = prompt_cache_key(

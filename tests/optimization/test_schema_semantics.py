@@ -1,5 +1,3 @@
-"""Hostile serialized-input regressions for Step and Intent semantics."""
-
 from __future__ import annotations
 
 import json
@@ -7,48 +5,61 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization import (
+from whetstone.core.effects.models import (
+    EffectTerminal,
+    TerminalOutcome,
+)
+from whetstone.core.identity import (
+    NonEmptyId,
+    TerminalFailure,
+    typed_ref_for_record,
+)
+from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA_VERSION,
+)
+from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.candidate import (
     Candidate,
-    EffectTerminal,
-    IntentOutcome,
-    IntentResolution,
-    NonEmptyId,
-    OptimizationStepResult,
-    OutputContract,
-    ProposalDraft,
-    RefusalClass,
-    ResolutionClass,
-    ResolutionDetail,
+    candidate_reference,
+)
+from whetstone.experiment.reward import (
     Reward,
     RewardPolicy,
     RewardTerm,
-    StepStatus,
-    TerminalFailure,
-    TerminalOutcome,
-    ToolCall,
-    ToolCallState,
-    ToolCapacityScope,
-    ToolRefusal,
-    ToolResult,
     apply_reward_policy,
-    candidate_from_draft,
-    candidate_reference,
     reward_reference,
-    step_request_reference,
-    tool_call_reference,
-    tool_result_reference,
-    typed_ref_for_record,
 )
-from whetstone.optimization.schema import EvaluationBinding, ToolEvidence
-from whetstone.optimization.tool_store import (
+from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA_VERSION,
+    IntentOutcome,
+    IntentResolution,
+    OptimizationStepResult,
+    OutputContract,
+    ResolutionClass,
+    ResolutionDetail,
+    StepStatus,
+    ToolEvidence,
+    step_request_reference,
+)
+from whetstone.optimization.proposal.mutation import candidate_from_draft
+from whetstone.optimization.proposal.proposer import ProposalDraft
+from whetstone.optimization.tools.admission import (
+    ToolCallState,
     ToolCallStoreEntry,
     tool_effect_request,
 )
-from whetstone.optimization.tools import tool_capacity_binding
+from whetstone.optimization.tools.contracts import (
+    RefusalClass,
+    ToolCall,
+    ToolCapacityScope,
+    ToolRefusal,
+    ToolResult,
+    tool_call_reference,
+    tool_capacity_binding,
+    tool_result_reference,
+)
 
 from .support import (
     candidate,

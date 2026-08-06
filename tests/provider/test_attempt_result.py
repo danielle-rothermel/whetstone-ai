@@ -1,5 +1,3 @@
-"""Provider Call Attempt + Provider Call Result schema invariants."""
-
 from __future__ import annotations
 
 import pytest
@@ -82,7 +80,6 @@ class TestProviderCallAttempt:
         assert attempt.execution_policy_hash == policy_hash
         assert attempt.succeeded
         assert attempt.latency_ms == 250
-        # Exactly one Provider Invocation Evidence artifact.
         assert attempt.evidence is not None
 
     def test_exactly_one_classification_side(self) -> None:
@@ -275,7 +272,6 @@ class TestProviderCallResult:
                 request_identity={},
                 execution_policy_hash=policy_hash,
                 attempts=(a1,),
-                # Wrong: terminal claims success while last attempt failed.
                 generation=_accepted_generation(),
             )
 

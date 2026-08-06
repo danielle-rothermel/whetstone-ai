@@ -1,5 +1,3 @@
-"""Durable records produced by the canonical evaluation engine."""
-
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -15,24 +13,23 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.code_eval.aggregate import ROLLOUT_AGGREGATE_SCHEMA
-from whetstone.envs.internal_eval import ExecutedComponentTracePayload
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import (
+from whetstone.core.identity import (
     IdentityHash,
     ImmutableJsonObject,
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.optimization.reward import REWARD_SCHEMA, RewardRef
-from whetstone.optimization.schema import (
-    EVALUATION_EVIDENCE_SCHEMA,
-    EVALUATION_FAILURE_SCHEMA,
-    CandidateRef,
-    EvaluationBinding,
-    IntentOutcome,
-    IntentResolution,
+from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.schema_names import (
+    EVALUATION_EVIDENCE_SCHEMA as _EVALUATION_EVIDENCE_SCHEMA,
 )
+from whetstone.evaluation.schema_names import (
+    EVALUATION_FAILURE_SCHEMA as _EVALUATION_FAILURE_SCHEMA,
+)
+from whetstone.evaluation.traces import ExecutedComponentTracePayload
+from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.candidate import CandidateRef
+from whetstone.experiment.reward import RewardRef
 
 #: Persisted-format contracts. Exact wire fields and versions are pinned by
 #: golden tests; never derive them from internal dataclass names.
@@ -41,10 +38,6 @@ EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION = 1
 EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
 EVALUATION_OUTPUTS_SCHEMA_VERSION = 2
 EVALUATION_EVIDENCE_SCHEMA_VERSION = 2
-EVALUATION_RESULT_ATTESTATION_SCHEMA = (
-    "whetstone.evaluation_result_attestation"
-)
-EVALUATION_INTENT_CLAIM_SCHEMA = "whetstone.evaluation_intent_claim"
 
 
 class RowAccounting(BaseModel):
@@ -403,7 +396,7 @@ class EvaluationEvidenceRef(BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> EvaluationEvidenceRef:
         expected = typed_ref_for_record(
-            EVALUATION_EVIDENCE_SCHEMA, self.record.record_content()
+            _EVALUATION_EVIDENCE_SCHEMA, self.record.record_content()
         )
         if self.record_ref != expected:
             raise ValueError(
@@ -438,7 +431,7 @@ class EvaluationFailureEvidenceRef(BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> EvaluationFailureEvidenceRef:
         expected = typed_ref_for_record(
-            EVALUATION_FAILURE_SCHEMA, self.record.record_content()
+            _EVALUATION_FAILURE_SCHEMA, self.record.record_content()
         )
         if self.record_ref != expected:
             raise ValueError(
@@ -447,56 +440,12 @@ class EvaluationFailureEvidenceRef(BaseModel):
         return self
 
 
-class EvaluationIntentClaim(BaseModel):
-    """One event in an intent's globally ordered lease stream."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    intent_ref: TypedRef
-    owner_id: StrictStr
-    event_ordinal: StrictInt
-    generation: StrictInt
-    heartbeat_ordinal: StrictInt
-    expires_at: StrictFloat
-    result_attestation_ref: TypedRef | None = None
-
-
-class EvaluationResultAttestation(BaseModel):
-    """The exact terminal evaluator result won through claim arbitration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    graph_hash: IdentityHash
-    resolution: IntentResolution
-
-    @model_validator(mode="after")
-    def _validate(self) -> EvaluationResultAttestation:
-        if self.resolution.outcome not in {
-            IntentOutcome.COMPLETED,
-            IntentOutcome.FAILED,
-        }:
-            raise ValueError(
-                "an Evaluation Result Attestation requires a terminal "
-                "executed outcome"
-            )
-        return self
-
-    def record_content(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-
 __all__ = [
     "EVALUATION_COMPONENT_TRACES_SCHEMA",
     "EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION",
-    "EVALUATION_EVIDENCE_SCHEMA",
     "EVALUATION_EVIDENCE_SCHEMA_VERSION",
-    "EVALUATION_FAILURE_SCHEMA",
-    "EVALUATION_INTENT_CLAIM_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA_VERSION",
-    "EVALUATION_RESULT_ATTESTATION_SCHEMA",
-    "REWARD_SCHEMA",
-    "ROLLOUT_AGGREGATE_SCHEMA",
     "CacheEvidence",
     "EvaluationComponentTraceRow",
     "EvaluationComponentTraces",
@@ -505,9 +454,7 @@ __all__ = [
     "EvaluationEvidenceRef",
     "EvaluationFailureEvidence",
     "EvaluationFailureEvidenceRef",
-    "EvaluationIntentClaim",
     "EvaluationOutputRow",
     "EvaluationOutputsRecord",
-    "EvaluationResultAttestation",
     "RowAccounting",
 ]

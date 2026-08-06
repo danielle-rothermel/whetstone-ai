@@ -1,26 +1,3 @@
-"""Provider Call Attempt wrapper and terminal Provider Call Result.
-
-A :class:`ProviderCallAttempt` is the serializable Whetstone logical-attempt
-wrapper. It contains:
-
-* the logical call identity (stable across attempts of one logical call),
-* the 1-based attempt number,
-* the Provider Execution Policy identity,
-* timing (start/end monotonic-ish timestamps and derived latency),
-* exactly ONE stable :class:`ProviderInvocationEvidence` artifact, and
-* its Whetstone semantic classification (a Generation or a Provider Semantic
-  Failure).
-
-It does not guarantee exactly one physical wire call; it is one *logical*
-attempt observation. Provider bodies live inside the invocation evidence.
-
-A :class:`ProviderCallResult` is the terminal semantic Result for one logical
-provider call: the Provider Call Request identity, the ordered completed
-attempts, and the final Generation or Provider Semantic Failure. An exhausted
-Provider Semantic Failure is expected terminal domain output — a valid Result,
-never an exception.
-"""
-
 from __future__ import annotations
 
 import math
@@ -35,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.identity import require_full_hash
+from whetstone.core.identity import require_full_hash
 from whetstone.provider.classification import (
     Generation,
     ProviderSemanticFailure,

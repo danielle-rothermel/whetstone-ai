@@ -1,43 +1,3 @@
-"""The ``ed1`` encoder-decoder HumanEval compression env binding.
-
-``ed1`` is the runner env for the enc-dec compression experiment (scope:
-``reports/encdec-scope.md``). Unlike the QA envs (a deterministic string
-oracle),
-ed1's rollout is a three-node Encoder -> Decoder -> Eval graph
-(:mod:`whetstone.envs.encdec_rollout`) whose Eval Node runs the dr-code
-HumanEval
-test sandbox (HumanEval Submission Score on the DECODER output) plus the
-whetstone zstd-19 compression scoring (Compression Ratio on the ENCODER output
-vs the ground-truth code).
-
-This module owns the ed1 experiment binding that plugs into the runner:
-
-* the HumanEval+ task pool (wrapping dr-code's ``load_humaneval_plus``), each
-  task wrapped as a whetstone :class:`Instance` carrying ``INPUT_CODE`` (=
-  ``task.gt_code_wo_comments``) plus the HumanEval fields the code-eval Eval
-  Node
-  needs, with the pinned dataset revision recorded;
-* the two encoder :class:`ProbeSurface` templates (naive "concise" A and the
-  ceiling-ish "compress for reconstruction" B, verbatim from
-  ``design/eval-run.html``) -- the encoder ``user_prompt_template`` is the
-  Mutation Surface optimizers mutate;
-* :func:`build_ed1_experiment`, an
-:class:`~whetstone.envs.factory.EnvExperiment`
-  the runner cell consumes (its rollout is the enc-dec 3-node graph, its eval
-  path is the code-eval drive in :mod:`whetstone.envs.ed1_eval`).
-
-The canonical enc/dec task model is ``deepseek/deepseek-v4-flash`` (same route
-plays BOTH encoder and decoder); ``--task-model`` overrides per cell and folds
-into ``graph_hash``. ``budget_ratio`` (default 0.5) is CLI-visible
-(``--budget-ratio``) and folds into ``graph_hash`` via the Character Budget
-rule.
-
-Optimizer Reward = HumanEval Submission Score ONLY for now; the Mean
-Compression Ratio is REPORTED alongside (dual scores in the cell line + traces
-+ sidecars). Full dual-objective / Pareto selection is a FLAGGED follow-up,
-not built here.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -55,7 +15,8 @@ from dr_code.humaneval import HumanEvalTask
 from dr_code.synthetic.humaneval_loader import HF_REVISION, load_humaneval_plus
 from whetstone_envs.core import Instance
 
-from whetstone.code_eval.aggregate import aggregation_definition
+from whetstone.core.identity import TypedRef
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import ED1_PARSER_PROFILE, CodeScore
 from whetstone.envs.encdec_rollout import (
@@ -74,32 +35,27 @@ from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
 )
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import TypedRef
-from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.reward import (
+from whetstone.evaluation.code.aggregate import aggregation_definition
+from whetstone.experiment.candidate import (
+    Candidate,
+    TemplateRenderContract,
+    TemplateRenderKind,
+)
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     Reward,
     RewardPolicy,
     RewardTerm,
     apply_reward_policy,
 )
-from whetstone.optimization.schema import (
-    Candidate,
-    TemplateRenderContract,
-    TemplateRenderKind,
-)
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
-#: The ed1 env id.
 ED1_ENV_NAME = "ed1"
 
 #: The canonical enc/dec task model (same route plays both encoder + decoder).
-#: Design + directive: ``deepseek/deepseek-v4-flash`` (NOT nano).
-#: ``--task-model``
-#: overrides and folds into ``graph_hash``.
+#: ``--task-model`` overrides and folds into ``graph_hash``.
 ED1_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 
-#: The default budget ratio (``--budget-ratio``). Folds into ``graph_hash``.
 ED1_DEFAULT_BUDGET_RATIO = 0.5
 
 #: The pinned HumanEval+ dataset revision (dr-code ``HF_REVISION``), recorded
@@ -114,19 +70,16 @@ ED1_DATASET_ID = "evalplus/humanevalplus"
 #: aggregate is the unweighted task mean of those values.
 ED1_SUBMISSION_SCORE_NAME = "humaneval_submission_score"
 
-#: The blended-reward term name: primary score with bounded compression.
 ED1_BLENDED_REWARD_NAME = "blended_reward"
-#: The compression aggregate name reported alongside (never the Reward).
 ED1_COMPRESSION_NAME = "compression_ratio"
 
-#: The ed1 single stratum label (HumanEval+ is not stratified).
 _ED1_STRATUM = "humaneval_plus"
 
 _DEFINITION_VERSION = "1"
 
 # --- Encoder prompt: an IMMUTABLE FRAME + a mutable strategy body ------------
 #
-# The encoder Mutation Surface is NARROWED (user directive, task 17): the
+# The encoder Mutation Surface is limited to the leading strategy body: the
 # proposer/probe vary ONLY the leading STRATEGY-SENTENCE body; the budget
 # clause and the fenced code block are a FIXED frame every candidate keeps by
 # construction. The Mutation Surface payload is the BODY string; rendering
@@ -147,9 +100,9 @@ ENCODER_FRAME = (
     "```"
 )
 
-#: The NO-BUDGET frame variant (task 22.4): NO "Use at most N characters." line
-#: and NO MAX_BUDGET. Used when ``budget_ratio is None`` -- the user's end goal
-#: is to optimize compression without listing a budget at all; the blended
+#: The no-budget frame has no "Use at most N characters." line or MAX_BUDGET.
+#: Used when ``budget_ratio is None`` to optimize compression without listing
+#: a budget; the blended
 #: reward's compression term carries the pressure. Identity-folded (a no-budget
 #: rollout is a distinct graph variant).
 ENCODER_FRAME_NO_BUDGET = "{body}\n```python\n{input_code}\n```"
@@ -269,12 +222,10 @@ class Ed1Instance:
 
     @property
     def input_code(self) -> str:
-        """The encoder INPUT_CODE (``gt_code_wo_comments``)."""
         return self.instance.prompt_inputs["input_code"]
 
     @property
     def gt_code_wo_comments(self) -> str:
-        """The compression-reference ground-truth code (without comments)."""
         return self.input_code
 
 
@@ -330,10 +281,8 @@ def load_ed1_tasks(
 ) -> tuple[Ed1Instance, ...]:
     """Load the pinned HumanEval+ pool as ordered, deterministic ed1 instances.
 
-    ``prefer_snapshot`` (default True) loads the committed offline snapshot so
-    the pilot + tests need no network. ``limit`` takes the first-N tasks (a
-    fixed
-    ordered slice) for the minimal pilot. The dataset revision is
+    ``prefer_snapshot`` (default True) loads the committed offline snapshot.
+    ``limit`` takes a fixed, ordered first-N slice. The dataset revision is
     :data:`ED1_DATASET_REVISION`.
     """
     tasks = load_humaneval_plus(prefer_snapshot=prefer_snapshot)
@@ -474,14 +423,12 @@ def _ed1_candidate(*, candidate_id: str, body: str) -> Candidate:
 
 
 def ed1_initial_candidate() -> Candidate:
-    """The naive Initial Candidate: strategy body A ("concise description")."""
     return _ed1_candidate(
         candidate_id=f"{ED1_ENV_NAME}-naive", body=ENCODER_BODY_A
     )
 
 
 def ed1_ceiling_candidate() -> Candidate:
-    """The ceiling reference: strategy body B (reconstruction-compress)."""
     return _ed1_candidate(
         candidate_id=f"{ED1_ENV_NAME}-ceiling", body=ENCODER_BODY_B
     )
@@ -609,10 +556,10 @@ class Ed1Experiment(EnvExperiment):
     """
 
     encdec_rollout: EncDecRolloutDefinition | None = None
-    #: The per-task Character Budget ratio, OR ``None`` for the NO-BUDGET frame
-    #: (no "Use at most N characters." line, no MAX_BUDGET; task 22.4).
-    #: ``None`` is the default for ed1 OPTIMIZER cells -- the end goal is
-    #: to optimize compression without listing a budget at all; the reward's
+    #: The per-task Character Budget ratio, or ``None`` for the no-budget frame
+    #: with no "Use at most N characters." line or MAX_BUDGET.
+    #: ``None`` is the default for ed1 optimizer cells to optimize compression
+    #: without listing a budget at all; the reward's
     #: compression term carries the pressure instead.
     budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO
     dataset_revision: str = ED1_DATASET_REVISION
@@ -624,7 +571,7 @@ class Ed1Experiment(EnvExperiment):
     #: subprocess, not a container sandbox. Execution isolation is a
     #: runner-layer concern, not this layer's.
     scorer: Callable[..., CodeScore] | None = None
-    #: The weighted-blend reward config (task 22), OR ``None`` for primary
+    #: The weighted-blend reward config, or ``None`` for primary
     #: score only.
     #: When set, the official certification metric + internal selection use the
     #: PER-TASK blended reward; primary score + compression are ALWAYS
@@ -656,21 +603,21 @@ def build_ed1_experiment(
     Loads the pinned HumanEval+ pool (or uses injected ``tasks`` for tests),
     splits it into internal/official (first-N ordered), builds the 3-node
     enc-dec rollout at ``budget_ratio`` (folded into ``graph_hash``), the naive
-    (A) + ceiling (B) encoder candidates, the two Eval Configs (sharing the
-    code-eval Procedure identity), and the primary-score-only Reward Policy.
+    (A) + ceiling (B) encoder candidates, and the two Eval Configs sharing the
+    code-eval Procedure identity. ``blend_config=None`` selects the
+    primary-only advertised and applied Reward Policy; a blend config selects
+    the blended advertised and applied Reward Policy.
 
-    ``exclude_task_ids`` DROPS those task ids from the pool BEFORE the split
-    (the task-screen pool filter, task 17 Part 2): a task that is 100% correct
-    in every screen arm carries no signal and is removed from the train /
-    eval / test (internal / official / held-out) pools. The exclusion applies
-    to the
+    ``exclude_task_ids`` drops those task ids from the pool before the split:
+    excluded tasks are removed from the train / eval / test (internal /
+    official / held-out) pools. The exclusion applies to the
     ordered pool, so the filtered Task Set is deterministic; because each
     split's Task Set identity folds its task ids, a filtered pool yields a
     DISTINCT ``eval_config_hash`` per split -- the exclusion folds into the id
-    by construction. The list is per-model (built from that model's screen), so
-    the caller passes the exclusion list for the model the cell actually runs.
+    by construction. The caller passes the exclusion list for the model the
+    cell actually runs.
 
-    ``split_manifest`` (task 29) OVERRIDES the first-N slice with role-true
+    ``split_manifest`` overrides the first-N slice with role-true
     train/val/test semantics: the internal split = the manifest's
     ``train + val`` ids (by MEMBERSHIP, in manifest order -- the internal
     machinery has no val sub-split, so val folds into internal alongside
@@ -715,7 +662,7 @@ def build_ed1_experiment(
         all_instances = tuple(t.instance for t in pool)
         n = len(all_instances)
         # First-N ordered split: internal then official (disjoint, contiguous).
-        # A tiny pilot pool may put all tasks in the official split.
+        # A small pool may put all tasks in the official split.
         i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
         internal_instances = all_instances[:i_n]
         rest = all_instances[i_n:]
@@ -758,9 +705,6 @@ def build_ed1_experiment(
         initial_candidate=ed1_initial_candidate(),
         ceiling_candidate=ed1_ceiling_candidate(),
         eval_configs=eval_configs,
-        # The ADVERTISED policy must be the one reward time actually applies:
-        # a blend config means the blended-reward policy, not the pass-only
-        # one (see ``ed1_reward_from_blended``).
         reward_policy=(
             build_ed1_reward_policy()
             if blend_config is None

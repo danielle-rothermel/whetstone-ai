@@ -1,34 +1,3 @@
-"""The per-env Evaluation Procedure Config.
-
-The terminal Eval Node carries an Evaluation Procedure Config that, when
-executed, invokes the env oracle via the whetstone-owned metric-extraction
-operator (:mod:`whetstone.envs.oracle_operator`). This module builds that
-Config as a genuine dr-code :class:`~dr_code.eval.EvaluationProcedureConfig`
-so its Identity Hash flows into the composite Eval Config's
-``evaluation_procedure_config_hash`` (and thence the graph's Eval Node
-static Variable, hence ``graph_hash``).
-
-The Procedure is env-specific: its Metric Extraction Config folds in the env
-name and the fully-qualified oracle entry point (as Metric-Question
-settings) plus the whetstone operator's name/version, so two envs get
-distinct Procedure identities and a change of oracle wiring is visible in
-``eval_config_hash``.
-
-The env oracle applies its own shared normalization inside ``score_gold``,
-so the Procedure declares **no** dr-code preprocessing steps (an empty
-Preprocessing Config): normalization is not a separate preprocessing
-operator here, it is intrinsic to the oracle. ``zero_denominator`` is a
-Procedure Variable; the default ``not_applicable`` matches the completeness
-policy the internal/official Aggregation Configs declare.
-
-Building the Metric Extraction Config uses the dr-code sole-owner
-constructor with an explicit resolved operator version, because the
-whetstone env-oracle operator is deliberately not a dr-code metrics-engine
-operator registered in dr-code's metric registry. The resulting Config is a
-real dr-code ``MetricExtractionConfig`` whose identity folds in the
-whetstone operator name/version exactly as a registry-resolved one would.
-"""
-
 from __future__ import annotations
 
 from dr_code.eval import (

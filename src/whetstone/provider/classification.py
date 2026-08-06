@@ -1,31 +1,3 @@
-"""Semantic failure taxonomy and Generation acceptance.
-
-dr-providers returns a typed no-throw Provider Transport Outcome — either a
-Provider Transport Response (a successful wire body carrying least-processed
-``text``) or a Provider Transport Failure (a typed transport-level failure).
-Neither asserts Whetstone semantic acceptance. This module is the sole owner
-of that acceptance decision:
-
-* **Generation acceptance** — a :class:`Generation` is the accepted *nonblank*
-  semantic text projected by Whetstone from a Provider Transport Response. If
-  the projected text is blank or whitespace-only it is NOT a Generation; it is
-  classified as a :class:`ProviderSemanticFailure` of class
-  ``BLANK_GENERATION`` that retains the rejected transport response.
-
-* **Semantic failure classification** — every Provider Transport Outcome maps
-  deterministically to exactly one closed :class:`SemanticFailureClass`. A
-  Provider Transport Failure is classified from its transport ``failure_class``
-  (and, where informative, its ``status_code``); a blank/whitespace response
-  is classified ``BLANK_GENERATION``; an unknown transport failure is
-  ``MALFORMED_RESPONSE``.
-
-The taxonomy is a *closed* enum: classification is total over the Provider
-Transport Outcome union, so an exhausted retry loop can always name its cause.
-The rejected causal evidence (the transport failure or the rejected response)
-is retained on every :class:`ProviderSemanticFailure` so retry policy and the
-terminal Provider Call Result carry their cause, never just a label.
-"""
-
 from __future__ import annotations
 
 from enum import StrEnum

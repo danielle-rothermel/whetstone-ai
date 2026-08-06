@@ -1,5 +1,3 @@
-"""Generic optimizer adapter contracts and the pure identity adapter."""
-
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -9,23 +7,23 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from whetstone.optimization.effect_authority import ReplayPolicy
-from whetstone.optimization.identity import (
+from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.identity import (
     ImmutableJsonObject,
     OpaqueKey,
     TerminalFailure,
     TypedRef,
 )
-from whetstone.optimization.schema import (
+from whetstone.experiment.candidate import Candidate
+from whetstone.optimization.contracts import (
     BudgetDelta,
-    Candidate,
     EvaluationIntent,
     OptimizationStepRequest,
     StepKind,
     StepMode,
     StepStatus,
 )
-from whetstone.optimization.tools import RuntimeToolHandle
+from whetstone.optimization.tools.contracts import RuntimeToolHandle
 
 __all__ = [
     "AdapterCheckpoint",

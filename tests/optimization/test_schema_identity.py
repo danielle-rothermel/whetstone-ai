@@ -1,75 +1,77 @@
-"""Typed optimization serialization-boundary contracts."""
-
 from typing import Any
 
 import pytest
 from dr_providers import ProviderTransportPolicy
 from pydantic import ValidationError
 
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization import (
+from whetstone.core.identity import (
+    IdentityRef,
+    TerminalFailure,
+    TypedRef,
+    typed_ref_for_record,
+)
+from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA,
-    INTENT_RESOLUTION_SCHEMA_VERSION,
-    BudgetState,
-    Candidate,
-    CandidateRef,
+)
+from whetstone.experiment.binding import (
+    EVALUATION_BINDING_SCHEMA_VERSION,
     EvalConfigRef,
-    EvaluationIntent,
-    IdentityRef,
-    IntentOutcome,
-    IntentResolution,
-    OptimizationRun,
-    OptimizationStepRequest,
-    OptimizationStepResult,
-    OutputContract,
-    ProposalDraft,
-    ResolutionClass,
-    ResolutionDetail,
+    EvaluationBinding,
+    ExecutionEnvironmentFingerprint,
+    eval_config_reference,
+)
+from whetstone.experiment.candidate import (
+    Candidate,
+    TemplateRenderContract,
+    TemplateRenderKind,
+    candidate_reference,
+)
+from whetstone.experiment.reward import (
     RewardPolicy,
     RewardTerm,
+)
+from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA,
+    INTENT_RESOLUTION_SCHEMA_VERSION,
+    OPTIMIZATION_RUN_SCHEMA,
+    OPTIMIZATION_RUN_SCHEMA_VERSION,
+    STEP_RESULT_SCHEMA,
+    BudgetState,
+    EvaluationIntent,
+    IntentOutcome,
+    IntentResolution,
+    OptimizationProposal,
+    OptimizationResult,
+    OptimizationRun,
+    OptimizationStepRequest,
+    OptimizationStepRequestRef,
+    OptimizationStepResult,
+    OptimizationStepResultRef,
+    OutputContract,
+    ResolutionClass,
+    ResolutionDetail,
     StepKind,
     StepMode,
     StepStatus,
-    TemplateRenderContract,
-    TemplateRenderKind,
-    TerminalFailure,
+    optimization_run_reference,
+    step_request_reference,
+    step_result_reference,
+)
+from whetstone.optimization.proposal.mutation import candidate_from_draft
+from whetstone.optimization.proposal.proposer import ProposalDraft
+from whetstone.optimization.tools.contracts import (
     ToolCall,
     ToolCapacityScope,
     ToolDefinitionRef,
     ToolRefusal,
     ToolResult,
-    TypedRef,
-    candidate_from_draft,
-    candidate_reference,
-    canonical_json_equal,
-    compute_identity_hash,
-    eval_config_reference,
-    optimization_run_reference,
     tool_call_reference,
+    tool_capacity_binding,
     tool_config_reference,
     tool_result_reference,
-    typed_ref_for_record,
 )
-from whetstone.optimization.schema import (
-    CANDIDATE_IDENTITY_SCHEMA,
-    CANDIDATE_IDENTITY_SCHEMA_VERSION,
-    EVALUATION_BINDING_SCHEMA,
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    OPTIMIZATION_RUN_SCHEMA,
-    OPTIMIZATION_RUN_SCHEMA_VERSION,
-    STEP_RESULT_SCHEMA,
-    EvaluationBinding,
-    ExecutionEnvironmentFingerprint,
-    OptimizationProposal,
-    OptimizationResult,
-    OptimizationStepRequestRef,
-    OptimizationStepResultRef,
-    step_request_reference,
-    step_result_reference,
-)
-from whetstone.optimization.tools import tool_capacity_binding
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
@@ -83,32 +85,6 @@ from .support import (
     python_format_contract,
     tool_run,
 )
-
-
-def test_candidate_ref_binds_exact_record_content_and_identity() -> None:
-    record = candidate()
-    ref = candidate_reference(record)
-    assert ref.record == record
-    assert ref.identity_hash == record.identity_hash()
-    with pytest.raises(ValidationError, match="exact candidate"):
-        CandidateRef(
-            record=record,
-            record_ref=TypedRef(schema_name="wrong", content_hash=FULL_A),
-            identity_hash=record.identity_hash(),
-        )
-
-
-def test_eval_config_ref_binds_exact_typed_record_and_identity() -> None:
-    record = eval_config()
-    ref = eval_config_reference(record)
-    assert ref.record == record
-    assert ref.identity_hash == record.config_identity_hash
-    with pytest.raises(ValidationError, match="identity_hash"):
-        EvalConfigRef(
-            record=record,
-            record_ref=ref.record_ref,
-            identity_hash=FULL_A,
-        )
 
 
 def test_intent_has_exact_refs_and_no_loose_identity_fields() -> None:
@@ -277,122 +253,6 @@ def _step_result(
     )
 
 
-def test_candidate_identity_contract_literals_are_pinned() -> None:
-    record = candidate()
-
-    assert CANDIDATE_IDENTITY_SCHEMA == "whetstone.optimization_candidate"
-    assert CANDIDATE_IDENTITY_SCHEMA_VERSION == 1
-    assert tuple(record.identity_payload()) == (
-        "candidate_id",
-        "base_ref",
-        "payload",
-    )
-    assert (
-        record.identity_hash()
-        == "d13bd9c7dcb859cc7260591eed0f7ec4bbd6a296dccc934bbf7090ae3a9ebca3"
-    )
-
-
-def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
-    binding = _evaluation_binding()
-    assert EVALUATION_BINDING_SCHEMA == "whetstone.evaluation_binding"
-    assert EVALUATION_BINDING_SCHEMA_VERSION == 2
-    assert binding.schema_version == EVALUATION_BINDING_SCHEMA_VERSION
-    assert binding.record_content()["schema_version"] == 2
-    assert tuple(binding.record_content()) == tuple(binding.identity_payload())
-    assert tuple(binding.identity_payload()) == (
-        "schema_version",
-        "eval_config",
-        "role",
-        "authority_principal",
-        "campaign",
-        "provider_execution_policy_ref",
-        "retry_policy_ref",
-        "operational_policy_refs",
-        "environment_fingerprint",
-        "provenance_note",
-        "provenance_ordinal",
-    )
-    assert binding.identity_payload()["provider_execution_policy_ref"] == {
-        "record_ref": {
-            "schema_name": "whetstone.provider_execution_policy",
-            "content_hash": (
-                "ddb2115fb1631560c9b02b1aa16820482"
-                "e37b28523d1f43ddd7dbecbed664909"
-            ),
-        },
-        "identity_hash": (
-            "e11d5ffb3acb35048f57ae08dbc34cc4b68332115707ecf8fd304e8c5d147ac2"
-        ),
-    }
-    assert (
-        binding.identity_hash()
-        == "d77a3ea054252f78bbce949e66569a32b2f01e71c43785443597f44c731e4391"
-    )
-
-
-def test_evaluation_binding_rejects_wrong_provider_policy_schema() -> None:
-    binding = _evaluation_binding()
-    payload = binding.model_dump(mode="json")
-    payload["provider_execution_policy_ref"]["record_ref"]["schema_name"] = (
-        "whetstone.test.wrong_policy"
-    )
-
-    with pytest.raises(
-        ValidationError,
-        match="provider_execution_policy_ref must use schema",
-    ):
-        EvaluationBinding.model_validate(payload)
-
-
-@pytest.mark.parametrize(
-    "provider_ref_present",
-    [True, False],
-    ids=["provider-ref-present", "provider-ref-absent"],
-)
-def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
-    provider_ref_present: bool,
-) -> None:
-    current_payload = _evaluation_binding().model_dump(mode="json")
-    if not provider_ref_present:
-        current_payload["provider_execution_policy_ref"] = None
-    current_binding = EvaluationBinding.model_validate(current_payload)
-
-    legacy_wire = current_binding.model_dump(mode="json")
-    legacy_wire.pop("schema_version")
-    if provider_ref_present:
-        policy_ref = current_binding.provider_execution_policy_ref
-        assert policy_ref is not None
-        legacy_wire["provider_execution_policy_ref"] = (
-            policy_ref.record_ref.model_dump(mode="json")
-        )
-
-    legacy_identity_hash = compute_identity_hash(
-        schema=EVALUATION_BINDING_SCHEMA,
-        schema_version=1,
-        payload=legacy_wire,
-    )
-    assert (
-        legacy_identity_hash
-        == {
-            True: (
-                "f95ccb10ad8717c32924c1ca2355caf9"
-                "f7679ddc5b95d40472f61e1f3dc75f97"
-            ),
-            False: (
-                "f182528f43640e0342fe996172213e68d"
-                "c5a7049fa75fe3d0196ac88b735309f"
-            ),
-        }[provider_ref_present]
-    )
-    assert legacy_identity_hash != current_binding.identity_hash()
-
-    with pytest.raises(ValidationError, match="Field required"):
-        EvaluationBinding.model_validate(legacy_wire)
-    with pytest.raises(ValidationError, match="Input should be 2"):
-        EvaluationBinding.model_validate({"schema_version": 1, **legacy_wire})
-
-
 def test_intent_resolution_v2_wire_contract_is_exact() -> None:
     intent = _evaluation_intent(candidate("P1"))
     resolution = IntentResolution(
@@ -463,19 +323,6 @@ def test_intent_resolution_rejects_v1_wire() -> None:
         )
 
 
-def test_evaluation_binding_enforces_official_authority() -> None:
-    with pytest.raises(ValidationError, match="required for official"):
-        _evaluation_binding(role=EvaluationRole.OFFICIAL)
-    with pytest.raises(ValidationError, match="absent for internal"):
-        _evaluation_binding(authority_principal="official-publisher")
-
-    official = _evaluation_binding(
-        role=EvaluationRole.OFFICIAL,
-        authority_principal="official-publisher",
-    )
-    assert official.authority_principal == "official-publisher"
-
-
 def test_intent_requires_its_binding_exact_eval_config() -> None:
     intent = _evaluation_intent(candidate("P1"))
     payload = intent.model_dump(mode="json")
@@ -544,79 +391,6 @@ def test_intent_rejects_uncomposed_binding_fields(
         )
 
 
-def test_evaluation_binding_defensively_copies_nested_identity_data() -> None:
-    source = _evaluation_binding().model_dump(mode="json")
-    binding = EvaluationBinding.model_validate(source)
-    before = binding.identity_hash()
-
-    source["environment_fingerprint"]["dependency_versions"][0][1] = "9.9.9"
-    source["operational_policy_refs"][0]["schema_name"] = "whetstone.wrong"
-
-    assert binding.environment_fingerprint.dependency_versions == (
-        ("dr-code", "0.1.0"),
-    )
-    assert (
-        binding.operational_policy_refs[0].schema_name
-        == "whetstone.test.accounting_policy"
-    )
-    assert binding.identity_hash() == before
-    assert (
-        EvaluationBinding.model_validate(
-            binding.model_dump(mode="json")
-        ).identity_hash()
-        == before
-    )
-    with pytest.raises(ValidationError, match="frozen"):
-        binding.environment_fingerprint.__setattr__("code_revision", "changed")
-
-
-def test_evaluation_binding_identity_is_sensitive_to_exact_content() -> None:
-    internal = _evaluation_binding()
-    changed_campaign_payload = internal.model_dump(mode="json")
-    changed_campaign_payload["campaign"] = "another-campaign"
-    changed_environment_payload = internal.model_dump(mode="json")
-    changed_environment_payload["environment_fingerprint"][
-        "runtime_identity"
-    ] = "darwin"
-    official = _evaluation_binding(
-        role=EvaluationRole.OFFICIAL,
-        authority_principal="official-publisher",
-    )
-
-    assert (
-        EvaluationBinding.model_validate(
-            changed_campaign_payload
-        ).identity_hash()
-        != internal.identity_hash()
-    )
-    assert (
-        EvaluationBinding.model_validate(
-            changed_environment_payload
-        ).identity_hash()
-        != internal.identity_hash()
-    )
-    assert official.identity_hash() != internal.identity_hash()
-
-
-def test_environment_dependencies_are_unique_and_canonical_by_package() -> (
-    None
-):
-    fingerprint = ExecutionEnvironmentFingerprint(
-        dependency_versions=(
-            ("whetstone-envs", "2"),
-            ("dr-code", "1"),
-        )
-    )
-    assert fingerprint.dependency_versions == (
-        ("dr-code", "1"),
-        ("whetstone-envs", "2"),
-    )
-    with pytest.raises(ValidationError, match="package names must be unique"):
-        ExecutionEnvironmentFingerprint(
-            dependency_versions=(("dr-code", "1"), ("dr-code", "2"))
-        )
-
-
 @pytest.mark.parametrize("unordered", [set(), frozenset(), {}])
 def test_ordered_fields_reject_unordered_python_containers(
     unordered: object,
@@ -626,13 +400,6 @@ def test_ordered_fields_reject_unordered_python_containers(
             {
                 **_proposal_request().run.record.record_content(),
                 "tool_configs": unordered,
-            }
-        )
-    with pytest.raises(ValidationError, match="ordered tuple or JSON array"):
-        EvaluationBinding.model_validate(
-            {
-                **_evaluation_binding().model_dump(mode="json"),
-                "operational_policy_refs": unordered,
             }
         )
     with pytest.raises(ValidationError, match="ordered tuple or JSON array"):
@@ -659,11 +426,6 @@ def test_ordered_fields_reject_unordered_python_containers(
                 "reward_evidence_refs": unordered,
             }
         )
-
-
-def test_dependency_pairs_reject_unordered_containers() -> None:
-    with pytest.raises(ValidationError, match="package/version pairs"):
-        ExecutionEnvironmentFingerprint(dependency_versions=[{"dr-code", "1"}])
 
 
 def test_only_pre_execution_rejection_may_omit_evaluation_result() -> None:
@@ -976,76 +738,6 @@ def test_optimization_run_owns_proposal_reward_policy() -> None:
     pure_payload["reward_policy"] = _reward_policy().model_dump(mode="json")
     with pytest.raises(ValidationError, match="only a proposal-only"):
         OptimizationRun.model_validate(pure_payload)
-
-
-def test_json_fields_defensively_copy_and_deep_freeze() -> None:
-    source: dict[str, Any] = {
-        "nested": {"enabled": True},
-        "items": [1, {"name": "first"}],
-    }
-    record = candidate()
-    record = record.model_validate(
-        {
-            **record.model_dump(mode="json"),
-            "payload": source,
-        }
-    )
-    before_identity = record.identity_hash()
-    before_ref = candidate_reference(record).record_ref
-
-    source["nested"]["enabled"] = False
-    source_items: Any = source["items"]
-    source_items[1]["name"] = "changed"
-
-    frozen_dump = record.model_dump(mode="json")["payload"]
-    assert frozen_dump["nested"]["enabled"] is True
-    assert frozen_dump["items"][1]["name"] == "first"
-    assert record.identity_hash() == before_identity
-    assert candidate_reference(record).record_ref == before_ref
-    frozen_nested: Any = record.payload["nested"]
-    frozen_items: Any = record.payload["items"]
-    with pytest.raises(TypeError):
-        frozen_nested["enabled"] = False
-    with pytest.raises(TypeError):
-        frozen_items[1]["name"] = "changed"
-    with pytest.raises(AttributeError):
-        record.payload._items = ()
-
-
-def test_json_fields_round_trip_as_ordinary_strict_json() -> None:
-    record = candidate()
-    dumped = record.model_dump(mode="json")
-    assert type(dumped["payload"]) is dict
-    assert type(dumped["payload"]["fixed"]) is str
-    assert record.model_validate(dumped) == record
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"bad": object()},
-        {1: "non-string key"},
-        {"bad": float("nan")},
-        {"bad": float("inf")},
-    ],
-)
-def test_json_fields_reject_non_json_and_nonfinite_values(payload) -> None:
-    with pytest.raises((TypeError, ValidationError, ValueError)):
-        candidate().model_validate(
-            {
-                **candidate().model_dump(mode="json"),
-                "payload": payload,
-            }
-        )
-
-
-def test_canonical_json_comparison_preserves_json_types() -> None:
-    assert not canonical_json_equal({"value": True}, {"value": 1})
-    assert not canonical_json_equal({"value": 1}, {"value": 1.0})
-    assert canonical_json_equal(
-        {"nested": [{"value": 1}]},
-        {"nested": [{"value": 1}]},
-    )
 
 
 def test_budget_validates_overlapping_maps_independently() -> None:

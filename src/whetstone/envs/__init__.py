@@ -1,27 +1,6 @@
-"""Whetstone adapters binding the five whetstone-envs task families.
-
-This package is the thin adapter the whetstone-envs PLAN's "Integration
-handoff" describes: it declares each candidate's generator + oracle + prompts
-as a single LLM Call Node + single terminal Eval Node Rollout Definition,
-wraps the env ``TaskPool`` splits as the internal / official Evaluation
-Contexts (held-out untouched), and wires the env oracle's 0/1 result into
-Metric Facts + a ``env_exact_match`` Score. It owns the execution-contract
-concerns (Rollout Definition, Eval Configs, Reward Policy) that deliberately
-do not live in whetstone-envs.
-
-The single cross-env entry point is
-:func:`~whetstone.envs.factory.build_env_experiment`; the transport-injected
-internal-eval loop is
-:func:`~whetstone.envs.internal_eval.run_internal_eval`.
-"""
-
 from __future__ import annotations
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
-from whetstone.envs.internal_eval import (
-    InternalEvalResult,
-    run_internal_eval,
-)
 from whetstone.envs.oracle_operator import (
     ENV_EXACT_MATCH_NAME,
     ENV_EXACT_MATCH_UNIT,
@@ -48,6 +27,10 @@ from whetstone.envs.sampling import (
     build_eval_configs,
 )
 from whetstone.envs.task import EnvTask
+from whetstone.evaluation.drivers.internal import (
+    InternalEvalResult,
+    run_internal_eval,
+)
 
 __all__ = [
     "ENV_EXACT_MATCH_NAME",

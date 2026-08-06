@@ -1,5 +1,3 @@
-"""Run-scoped prompt-result caching with original-call provenance."""
-
 from __future__ import annotations
 
 import json

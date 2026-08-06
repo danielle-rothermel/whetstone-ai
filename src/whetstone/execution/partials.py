@@ -1,5 +1,3 @@
-"""Current-schema incremental persistence for completed provider calls."""
-
 from __future__ import annotations
 
 import hashlib
@@ -11,7 +9,7 @@ import re
 import secrets
 import stat
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Self, cast
 
@@ -264,6 +262,12 @@ def _validate_timestamp(value: str) -> None:
         ) from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("partial row at must include a UTC offset")
+    if parsed.utcoffset() != timedelta(0):
+        raise ValueError("partial row at must use the UTC offset +00:00")
+    if value != parsed.astimezone(UTC).isoformat():
+        raise ValueError(
+            "partial row at must use canonical UTC ISO 8601 formatting"
+        )
 
 
 def _reject_non_finite(value: object, *, path: str) -> None:

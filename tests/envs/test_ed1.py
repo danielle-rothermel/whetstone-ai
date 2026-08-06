@@ -1,5 +1,3 @@
-"""Focused ED1 environment-contract tests with no orchestration dependency."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -21,6 +19,7 @@ from tests.envs.support import (
 from tests.provider.support import build_evidence, failure_outcome
 from whetstone.envs.ed1 import (
     DECODER_TEMPLATE,
+    ED1_BLENDED_REWARD_NAME,
     ED1_CANONICAL_MODEL,
     ED1_DATASET_REVISION,
     ED1_ENV_NAME,
@@ -37,13 +36,6 @@ from whetstone.envs.ed1 import (
     validate_ed1_body,
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-from whetstone.envs.ed1_eval import (
-    Ed1PartialPayload,
-    Ed1RowOutcome,
-    Ed1RowRequest,
-    drive_ed1_row,
-    run_ed1_eval,
-)
 from whetstone.envs.ed1_scoring import score_ed1_submission
 from whetstone.envs.encdec_rollout import (
     DECODER_NODE_ID,
@@ -52,12 +44,17 @@ from whetstone.envs.encdec_rollout import (
     build_encdec_rollout_definition,
     encdec_graph_definition,
 )
-from whetstone.envs.internal_eval import (
-    ExecutedRowState,
-    _llm_component_step,
-)
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness
+from whetstone.evaluation.drivers.ed1 import (
+    Ed1PartialPayload,
+    Ed1RowOutcome,
+    Ed1RowRequest,
+    drive_ed1_row,
+    run_ed1_eval,
+)
+from whetstone.evaluation.drivers.internal import _llm_component_step
+from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
@@ -65,7 +62,7 @@ from whetstone.execution.fanout import (
 )
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
 def _tasks(limit: int = 3):
@@ -411,18 +408,12 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
     assert outcome.executed_component_steps[0].outputs == {
         "generation": encoder_text
     }
-    # A decoder failure does not erase the ENCODER leg's telemetry: that call
-    # succeeded and its spend is real. The failed decoder still carries the
-    # typed provider diagnostic.
     assert outcome.latency_s is not None
     assert outcome.provider_error is not None
     assert outcome.encoder_len == len(encoder_text)
 
 
 def test_encoder_failure_still_reports_what_was_measured() -> None:
-    # The encoder call failed, so there is no usage to report (tokens stay
-    # None -- coverage-honest), but the budget the row was driven under and
-    # the typed provider diagnostic ARE known and must not be dropped.
     tasks = _tasks(1)
     experiment = build_ed1_experiment(
         tasks=tasks, repeats=1, internal_n=1, official_n=1
@@ -467,7 +458,6 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
     assert outcome.latency_s is not None
     assert outcome.provider_error is not None
     assert outcome.max_budget == round(0.5 * len(tasks[0].input_code))
-    # No usage exists for a failed call: reporting 0 would fabricate coverage.
     assert outcome.prompt_tokens is None
     assert outcome.total_tokens is None
 
@@ -522,7 +512,7 @@ def test_ed1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.ed1_eval.index_partial_records",
+        "whetstone.evaluation.drivers.ed1.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
@@ -585,7 +575,6 @@ def test_all_failed_diagnostics_name_dominant_failure() -> None:
 
 
 def _one_failed_row(instance, _repeat: int, _drive_ordinal: int):
-    """One task fails outright; the rest succeed (an INCOMPLETE evaluation)."""
     if str(instance.id).endswith("/0"):
         return Ed1RowOutcome(
             primary_value=None,
@@ -600,11 +589,6 @@ def _one_failed_row(instance, _repeat: int, _drive_ordinal: int):
 
 
 def test_blended_reward_refuses_an_incomplete_evaluation() -> None:
-    # A failed row folds into per-task scores as 0.0, so a raw mean of the
-    # blended rewards would CERTIFY an evaluation the primary aggregate
-    # refuses (value None under PROPAGATE). The blended path must gate on the
-    # same completeness signal: no primary value -> typed failure, not a
-    # silently-deflated Reward.
     with pytest.raises(CandidateEvaluationFailure):
         _evaluate(
             outcome_for=_one_failed_row,
@@ -614,26 +598,46 @@ def test_blended_reward_refuses_an_incomplete_evaluation() -> None:
 
 
 def test_unblended_and_blended_agree_on_refusing_incompleteness() -> None:
-    # The non-blended branch already refuses; the two branches must not
-    # disagree about whether the SAME evaluation is certifiable.
     with pytest.raises(CandidateEvaluationFailure):
         _evaluate(outcome_for=_one_failed_row, apply_reward=True)
 
 
-def test_blended_reward_is_produced_when_the_evaluation_is_complete() -> None:
-    # The gate must not block the healthy path: every row present -> a Reward.
+def test_complete_evaluation_produces_exact_blended_reward() -> None:
+    blend = BoundedCompressionMetricConfig(weight=0.1)
     _, result = _evaluate(
         apply_reward=True,
-        blend_config=BoundedCompressionMetricConfig(weight=0.1),
+        blend_config=blend,
     )
-    assert result.reward is not None
-    assert result.primary_aggregate.aggregation_output.value is not None
+    primary = 1.0
+    compression_ratio = 0.5
+    compression_score = (blend.max_compression_ratio - compression_ratio) / (
+        blend.max_compression_ratio - blend.min_compression_ratio
+    )
+    expected_value = primary * (
+        (1.0 - blend.weight) + blend.weight * compression_score
+    )
+
+    reward = result.reward
+    assert reward is not None
+    assert result.per_task_primary == (1.0, 1.0, 1.0)
+    assert result.per_task_compression == (0.5, 0.5, 0.5)
+    assert reward.value == pytest.approx(expected_value)
+    assert reward.reward_name == "reward"
+    assert reward.reward_policy.policy_name == (
+        "whetstone.env.ed1.blended_reward|"
+        "primary_score_with_bounded_compression_penalty|"
+        "w=0.1|min=0.01|max=4"
+    )
+    assert [citation.name for citation in reward.input_citations] == [
+        ED1_BLENDED_REWARD_NAME
+    ]
+    assert reward.evidence_refs == (
+        result.primary_aggregate.record_ref(),
+        result.compression_aggregate.record_ref(),
+    )
 
 
 def test_advertised_reward_policy_matches_the_policy_applied() -> None:
-    # The experiment ADVERTISES reward_policy; reward time builds the blended
-    # policy from blend_config. A reader (and any consumer keying on the
-    # policy identity) must not see the pass-only policy on a blended cell.
     blend = BoundedCompressionMetricConfig(weight=0.1)
     blended = build_ed1_experiment(tasks=_tasks(1), blend_config=blend)
     expected = build_ed1_blended_reward_policy(blend, env_name=ED1_ENV_NAME)
@@ -646,8 +650,6 @@ def test_advertised_reward_policy_matches_the_policy_applied() -> None:
 
 
 def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
-    # A different weight is a different comparable config; the advertised
-    # policy name must carry that distinction, not collapse it.
     names = {
         build_ed1_experiment(
             tasks=_tasks(1),
@@ -659,9 +661,6 @@ def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
 
 
 def test_malformed_brace_is_a_typed_body_rejection() -> None:
-    # An unmatched '{' makes the render contract's parser raise a BARE
-    # ValueError; unguarded that surfaces as an untyped crash at eval start
-    # instead of the promised typed ED1_INVALID_BODY rejection.
     for body in ("Explain {code", "Explain code}", "Explain {a{b} thing"):
         assert ed1_body_rejection(body)
         with pytest.raises(Ed1BodyError) as excinfo:
@@ -855,7 +854,8 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.envs.ed1_eval.run_call_pool", crash_after_ordinal_zero
+        "whetstone.evaluation.drivers.ed1.run_call_pool",
+        crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
         run_ed1_eval(
@@ -920,7 +920,9 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
             guard_timeouts=len(specs),
         )
 
-    monkeypatch.setattr("whetstone.envs.ed1_eval.run_call_pool", timeout_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.ed1.run_call_pool", timeout_pool
+    )
     run_ed1_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
@@ -981,7 +983,9 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
         )
 
     fresh_log = PartialLog(path=tmp_path / "ed1-deadline.partial.jsonl")
-    monkeypatch.setattr("whetstone.envs.ed1_eval.run_call_pool", deadline_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.ed1.run_call_pool", deadline_pool
+    )
     missing = run_ed1_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),

@@ -1,5 +1,3 @@
-"""Task-selection parsing, role resolution, and identity tests."""
-
 from __future__ import annotations
 
 import json
@@ -164,7 +162,6 @@ def test_duplicate_role_ids_are_rejected() -> None:
 def test_cross_role_duplicate_ids_are_rejected(
     role_a: str, role_b: str
 ) -> None:
-    """An id in two roles leaks a training task into the held-out split."""
     payload = _manifest()
     pools = cast(dict[str, object], payload["pools"])
     ed1 = cast(dict[str, object], pools["ed1"])
@@ -175,6 +172,5 @@ def test_cross_role_duplicate_ids_are_rejected(
 
 
 def test_train_val_test_roles_stay_disjoint_end_to_end() -> None:
-    """The accepted manifest's internal and official ids never overlap."""
     roles = parse_task_split_manifest(_manifest()).for_env("ed1")
     assert not set(roles.internal_ids) & set(roles.official_ids)

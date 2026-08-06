@@ -1,5 +1,3 @@
-"""Focused D1 direct-generation environment-contract tests."""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -24,12 +22,6 @@ from whetstone.envs.d1 import (
     d1_initial_candidate,
     render_d1_frame,
 )
-from whetstone.envs.d1_eval import (
-    D1RowOutcome,
-    D1RowRequest,
-    _input_arm_text,
-    run_d1_eval,
-)
 from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
     ED1_INVALID_BODY,
@@ -41,18 +33,22 @@ from whetstone.envs.input_transform import (
     rename_identifier,
     split_prompt,
 )
-from whetstone.envs.internal_eval import (
-    ExecutedRowState,
-    _llm_component_step,
-)
 from whetstone.envs.rollout_definition import LLM_NODE_ID
+from whetstone.evaluation.drivers.d1 import (
+    D1RowOutcome,
+    D1RowRequest,
+    _input_arm_text,
+    run_d1_eval,
+)
+from whetstone.evaluation.drivers.internal import _llm_component_step
+from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
     PoolOutcome,
 )
 from whetstone.execution.partials import PartialLog
-from whetstone.optimization.mutation import MUTATION_FIELD
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
 def _tasks(limit: int = 3):
@@ -98,9 +94,6 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
     assert len(graphs) == len(D1_INPUT_ARMS)
     assert len(evals) == len(D1_INPUT_ARMS)
 
-    # The rename_token is identity-bearing ON THE ARM THAT READS IT: two
-    # `renamed` cells with different tokens score against different entry
-    # points, so they are different experiments and must not share identity.
     renamed = [
         build_d1_experiment(
             input_arm=D1_RENAMED_ARM, tasks=tasks, rename_token=token
@@ -118,8 +111,6 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
 
 
 def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
-    # Only the `renamed` arm substitutes the token; folding it into the other
-    # arms would churn their hashes for a value they never read.
     tasks = _tasks()
     for arm in D1_INPUT_ARMS:
         if arm == D1_RENAMED_ARM:
@@ -143,9 +134,6 @@ def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
     "bad", ["not a token", "2fxn", "", "def", "class", "target-fxn", "a.b"]
 )
 def test_invalid_rename_token_is_rejected_at_build_time(bad: str) -> None:
-    # The token is substituted into rendered SOURCE; an invalid identifier is
-    # otherwise a per-row SyntaxError at drive time, after the pool load and
-    # every provider call.
     with pytest.raises(ValueError, match="rename_token"):
         build_d1_experiment(
             input_arm=D1_RENAMED_ARM, tasks=_tasks(1), rename_token=bad
@@ -349,7 +337,8 @@ def test_d1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.envs.d1_eval.index_partial_records", should_not_restore
+        "whetstone.evaluation.drivers.d1.index_partial_records",
+        should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
         run_d1_eval(
@@ -487,7 +476,8 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.envs.d1_eval.run_call_pool", crash_after_ordinal_zero
+        "whetstone.evaluation.drivers.d1.run_call_pool",
+        crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
         run_d1_eval(
@@ -554,7 +544,9 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
             guard_timeouts=len(specs),
         )
 
-    monkeypatch.setattr("whetstone.envs.d1_eval.run_call_pool", timed_out_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.run_call_pool", timed_out_pool
+    )
     run_d1_eval(
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,
@@ -629,7 +621,9 @@ def test_d1_phase_deadline_is_missing_and_not_redriven(monkeypatch) -> None:
             guard_timeouts=0,
         )
 
-    monkeypatch.setattr("whetstone.envs.d1_eval.run_call_pool", deadline_pool)
+    monkeypatch.setattr(
+        "whetstone.evaluation.drivers.d1.run_call_pool", deadline_pool
+    )
     result = run_d1_eval(
         experiment,
         candidate_body=D1_WRAPPER_BODY_NAIVE,

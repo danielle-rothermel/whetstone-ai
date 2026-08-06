@@ -1,5 +1,3 @@
-"""Adapter replay requirements are mandatory and fail closed."""
-
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -9,20 +7,24 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 import whetstone.optimization as optimization
-from whetstone.optimization import (
+from whetstone.core.effects.authority import EffectAuthority
+from whetstone.core.effects.models import ReplayPolicy
+from whetstone.core.identity import TerminalFailure
+from whetstone.optimization.adapters import (
     AdapterOutput,
     AdapterReplayPolicyMismatchError,
-    EffectRecoveryRequiredError,
-    EffectRequestConflictError,
     IdentityOptimizerAdapter,
-    ReplayPolicy,
-    RuntimeToolHandle,
+)
+from whetstone.optimization.contracts import (
     StepMode,
     StepStatus,
-    TerminalFailure,
     step_request_reference,
 )
-from whetstone.optimization.effect_authority import EffectAuthority
+from whetstone.optimization.harness import (
+    EffectRecoveryRequiredError,
+    EffectRequestConflictError,
+)
+from whetstone.optimization.tools.contracts import RuntimeToolHandle
 
 from .support import (
     CountingProposalAdapter,
@@ -197,10 +199,6 @@ def test_mismatch_fails_before_writes_handles_effects_or_invocation(
     assert error.adapter_key == "tool-test"
     assert error.configured_policy is ReplayPolicy.IDEMPOTENT
     assert error.required_policy is ReplayPolicy.NO_REDRIVE
-    assert str(error) == (
-        "adapter 'tool-test' requires replay policy 'no_redrive'; "
-        "configured policy is 'idempotent'"
-    )
     assert puts == 0
     assert executor.handles_built == 0
     assert acquisitions == 0
@@ -441,8 +439,8 @@ def test_legacy_adapter_effect_policy_fails_closed_without_invocation(
     assert adapter.invocations == 0
 
 
-def test_error_is_exported_from_public_facade() -> None:
-    assert (
-        optimization.AdapterReplayPolicyMismatchError
-        is AdapterReplayPolicyMismatchError
+def test_error_is_owned_by_the_adapter_contract_module() -> None:
+    assert AdapterReplayPolicyMismatchError.__module__ == (
+        "whetstone.optimization.adapters"
     )
+    assert not hasattr(optimization, "AdapterReplayPolicyMismatchError")

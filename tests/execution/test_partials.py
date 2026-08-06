@@ -1,5 +1,3 @@
-"""Durable atomic partial-call records and exact resume identities."""
-
 from __future__ import annotations
 
 import hashlib
@@ -19,6 +17,7 @@ from tests.execution.storage_workers import (
     run_partial_operation,
     write_torn_partial_worker,
 )
+from tests.optimization.processes import join_processes, terminate_processes
 from whetstone.execution._file_lock import PrivateDirectory
 from whetstone.execution.partials import (
     PARTIAL_FRAME_SCHEMA,
@@ -603,6 +602,7 @@ def test_legacy_predictable_temp_is_unknown_and_untouched(
     assert legacy_temp.read_bytes() == b"unknown"
 
 
+@pytest.mark.process_integration
 def test_killed_atomic_writer_leaves_ignored_bounded_orphan(
     tmp_path: Path,
 ) -> None:
@@ -615,16 +615,16 @@ def test_killed_atomic_writer_leaves_ignored_bounded_orphan(
         target=write_torn_partial_worker,
         args=(str(path), started),
     )
-    writer.start()
+    processes = []
     try:
+        writer.start()
+        processes.append(writer)
         assert started.wait(timeout=10)
         writer.terminate()
         writer.join(timeout=10)
+        assert writer.exitcode is not None
     finally:
-        if writer.is_alive():
-            writer.kill()
-            writer.join(timeout=10)
-    assert writer.exitcode is not None
+        terminate_processes(processes, timeout=10)
     assert [record.unit for record in log.load()] == ["first"]
     assert len(list(path.glob(".*.tmp"))) == 1
 
@@ -814,6 +814,7 @@ def test_repeated_load_then_append_reads_only_new_target_on_append(
         assert reads == after_load + 1
 
 
+@pytest.mark.process_integration
 def test_multiprocess_multi_megabyte_appends_all_validate(
     tmp_path: Path,
 ) -> None:
@@ -828,11 +829,15 @@ def test_multiprocess_multi_megabyte_appends_all_validate(
         )
         for worker_id in range(worker_count)
     ]
-    for process in processes:
-        process.start()
-    for process in processes:
-        process.join(timeout=30)
-        assert process.exitcode == 0
+    started = []
+    try:
+        for process in processes:
+            process.start()
+            started.append(process)
+        join_processes(started, timeout=30)
+    finally:
+        barrier.abort()
+        terminate_processes(started, timeout=30)
 
     loaded = PartialLog(path=path).load()
     assert len(loaded) == worker_count
@@ -841,6 +846,7 @@ def test_multiprocess_multi_megabyte_appends_all_validate(
     }
 
 
+@pytest.mark.process_integration
 def test_append_survives_immediate_child_hard_exit(tmp_path: Path) -> None:
     path = tmp_path / "calls.partial"
     context = multiprocessing.get_context("spawn")
@@ -849,15 +855,20 @@ def test_append_survives_immediate_child_hard_exit(tmp_path: Path) -> None:
         args=(str(path), 1, 32),
         kwargs={"exit_immediately": True},
     )
-    process.start()
-    process.join(timeout=10)
-    assert process.exitcode == 0
+    started = []
+    try:
+        process.start()
+        started.append(process)
+        join_processes(started, timeout=10)
+    finally:
+        terminate_processes(started, timeout=10)
     assert [record.unit for record in PartialLog(path=path).load()] == [
         "candidate-1"
     ]
 
 
 @pytest.mark.parametrize("operation", ["append", "load", "delete"])
+@pytest.mark.process_integration
 def test_separate_instances_serialize_all_operations(
     tmp_path: Path,
     operation: str,
@@ -871,8 +882,6 @@ def test_separate_instances_serialize_all_operations(
         target=hold_partial_lock,
         args=(str(path), entered, release),
     )
-    holder.start()
-    assert entered.wait(timeout=10)
     output = context.Queue()
     attempted = context.Event()
     acquired = context.Event()
@@ -880,23 +889,22 @@ def test_separate_instances_serialize_all_operations(
         target=run_partial_operation,
         args=(str(path), operation, output, attempted, acquired),
     )
-    operation_process.start()
+    started = []
     try:
+        holder.start()
+        started.append(holder)
+        assert entered.wait(timeout=10)
+        operation_process.start()
+        started.append(operation_process)
         assert attempted.wait(timeout=10)
         assert not acquired.is_set()
         release.set()
         assert acquired.wait(timeout=10)
-        holder.join(timeout=10)
-        operation_process.join(timeout=10)
+        join_processes(started, timeout=10)
+        assert output.get(timeout=5) in {"appended", "deleted", 1}
     finally:
         release.set()
-        for process in (holder, operation_process):
-            if process.is_alive():
-                process.kill()
-                process.join(timeout=10)
-    assert holder.exitcode == 0
-    assert operation_process.exitcode == 0
-    assert output.get(timeout=5) in {"appended", "deleted", 1}
+        terminate_processes(started, timeout=10)
 
 
 def test_short_writes_are_completed(tmp_path: Path, monkeypatch) -> None:
@@ -913,6 +921,18 @@ def test_short_writes_are_completed(tmp_path: Path, monkeypatch) -> None:
 
 @pytest.mark.parametrize("value", ["", "not-a-timestamp", "2026-07-31"])
 def test_invalid_at_is_rejected(value: str) -> None:
+    with pytest.raises(ValueError, match="partial row at"):
+        _record(at=value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2026-07-31T12:00:00+01:00",
+        "2026-07-31T12:00:00Z",
+    ],
+)
+def test_at_requires_canonical_utc_isoformat(value: str) -> None:
     with pytest.raises(ValueError, match="partial row at"):
         _record(at=value)
 

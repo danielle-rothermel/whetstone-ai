@@ -1,5 +1,3 @@
-"""The single injected evaluation engine used by optimization adapters."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,28 +5,30 @@ from typing import Any
 
 from dr_store import ObjectStore
 
-from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.internal_eval import (
-    ExecutedComponentTracePayload,
-    InternalEvalResult,
-    InternalRowJobFactory,
-    run_internal_eval,
+from whetstone.core.identity import (
+    IdentityRef,
+    TypedRef,
+    typed_ref_for_record,
 )
+from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import (
     render_prompt,
     validate_candidate_prompt,
 )
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
+from whetstone.evaluation.code.aggregate import ROLLOUT_AGGREGATE_SCHEMA
+from whetstone.evaluation.drivers.internal import (
+    InternalEvalResult,
+    InternalRowJobFactory,
+    run_internal_eval,
+)
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
-    EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_EVIDENCE_SCHEMA_VERSION,
     EVALUATION_OUTPUTS_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA_VERSION,
-    REWARD_SCHEMA,
-    ROLLOUT_AGGREGATE_SCHEMA,
     CacheEvidence,
     EvaluationComponentTraceRow,
     EvaluationComponentTraces,
@@ -39,24 +39,23 @@ from whetstone.evaluation.schema import (
     EvaluationOutputsRecord,
     RowAccounting,
 )
+from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
+from whetstone.evaluation.traces import ExecutedComponentTracePayload
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.optimization.identity import (
-    IdentityRef,
-    TypedRef,
-    typed_ref_for_record,
-)
-from whetstone.optimization.reward import reward_reference
-from whetstone.optimization.schema import (
-    CANDIDATE_RECORD_SCHEMA,
+from whetstone.experiment.binding import (
     EVAL_CONFIG_RECORD_SCHEMA,
-    Candidate,
     EvalConfigRef,
     EvaluationBinding,
-    candidate_reference,
     eval_config_reference,
 )
+from whetstone.experiment.candidate import (
+    CANDIDATE_RECORD_SCHEMA,
+    Candidate,
+    candidate_reference,
+)
+from whetstone.experiment.reward import REWARD_SCHEMA, reward_reference
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,

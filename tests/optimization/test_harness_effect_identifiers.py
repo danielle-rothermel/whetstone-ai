@@ -1,28 +1,30 @@
-"""Exact run ancestry and per-Step effect identifiers are fail-closed."""
-
 from __future__ import annotations
 
 import pytest
 
-from whetstone.optimization import (
-    AdapterOutput,
+from whetstone.core.effects.authority import EffectAuthority
+from whetstone.core.effects.models import ReplayPolicy
+from whetstone.experiment.candidate import candidate_reference
+from whetstone.optimization.adapters import AdapterOutput
+from whetstone.optimization.contracts import (
     BudgetDelta,
     OptimizationStepResult,
-    ReplayPolicy,
-    RuntimeToolHandle,
     StepMode,
     StepStatus,
-    ToolCall,
-    candidate_reference,
     step_request_reference,
     step_result_reference,
 )
-from whetstone.optimization.effect_authority import EffectAuthority
 from whetstone.optimization.harness import (
     INTENT_EFFECT_KEY_PREFIX,
     INTENT_EFFECT_KEY_SCHEMA_VERSION,
+)
+from whetstone.optimization.run_store import (
     OPTIMIZATION_RESULT_BINDING_PREFIX,
     STEP_RESULT_BINDING_PREFIX,
+)
+from whetstone.optimization.tools.contracts import (
+    RuntimeToolHandle,
+    ToolCall,
 )
 
 from .support import (

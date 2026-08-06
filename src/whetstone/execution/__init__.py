@@ -1,5 +1,3 @@
-"""Environment-neutral execution primitives."""
-
 from whetstone.execution.call_support import (
     GUARD_MARGIN_SECONDS,
     CallTelemetry,

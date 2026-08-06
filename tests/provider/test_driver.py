@@ -1,10 +1,9 @@
-"""Pure attempt-loop driver: bounded, deterministic, replay-identical."""
-
 from __future__ import annotations
 
 import pytest
 from dr_providers import FailureClass, ProviderTransportOutcome
 
+import whetstone.provider.driver as provider_driver
 from tests.provider import support as s
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.classification import (
@@ -58,7 +57,6 @@ class TestSuccessPath:
         assert generation is not None
         assert generation.text == "ok"
         assert len(transport.served) == 1
-        # No backoff before the first attempt.
         assert sleeps.delays == []
 
     def test_retries_until_success(self) -> None:
@@ -74,7 +72,6 @@ class TestSuccessPath:
         generation = result.generation
         assert generation is not None
         assert generation.text == "finally"
-        # Backoff taken before attempts 2 and 3 only.
         assert sleeps.delays == [1.0, 2.0]
 
     def test_attempts_are_ordered_and_share_identity(self) -> None:
@@ -94,7 +91,6 @@ class TestSuccessPath:
 
 class TestExhaustionIsExpectedOutput:
     def test_exhausted_failure_is_a_valid_terminal_result(self) -> None:
-        # Exhaustion is EXPECTED domain output: a valid Result, not a raise.
         result, transport, _ = _run(
             outcomes=[s.failure_outcome(failure_class=FailureClass.TRANSIENT)],
             max_attempts=3,
@@ -105,7 +101,6 @@ class TestExhaustionIsExpectedOutput:
         failure = result.semantic_failure
         assert isinstance(failure, ProviderSemanticFailure)
         assert failure.failure_class is SemanticFailureClass.TRANSPORT_ERROR
-        # Bound was reached: exactly max_attempts physical calls.
         assert result.attempt_count == 3
         assert len(transport.served) == 3
 
@@ -115,7 +110,6 @@ class TestExhaustionIsExpectedOutput:
             max_attempts=5,
         )
         assert not result.succeeded
-        # provider-rejection is not retry-eligible: stop after one attempt.
         assert result.attempt_count == 1
         assert len(transport.served) == 1
         assert sleeps.delays == []
@@ -127,13 +121,11 @@ class TestExhaustionIsExpectedOutput:
         result, _, _ = _run(
             outcomes=[s.response_outcome(text="   ")], max_attempts=3
         )
-        # Blank generation is not retry-eligible by default: one attempt.
         assert not result.succeeded
         assert result.attempt_count == 1
         failure = result.semantic_failure
         assert isinstance(failure, ProviderSemanticFailure)
         assert failure.failure_class is SemanticFailureClass.BLANK_GENERATION
-        # The rejected response is retained on the terminal failure.
         assert failure.rejected_response is not None
 
     def test_terminal_failure_equals_last_attempt(self) -> None:
@@ -145,7 +137,7 @@ class TestExhaustionIsExpectedOutput:
 
 
 class TestReplayDeterminism:
-    def test_same_recorded_outcomes_produce_identical_sequence(self) -> None:
+    def test_same_recorded_outcomes_produce_same_stable_payload(self) -> None:
         outcomes = [
             s.failure_outcome(failure_class=FailureClass.TRANSIENT),
             s.failure_outcome(failure_class=FailureClass.RATE_LIMITED),
@@ -153,10 +145,9 @@ class TestReplayDeterminism:
         ]
         first, _, _ = _run(outcomes=list(outcomes))
         second, _, _ = _run(outcomes=list(outcomes))
-        # Byte-identical stable serialization of the whole Result.
         assert first.to_stable_dict() == second.to_stable_dict()
 
-    def test_attempt_sequence_is_byte_identical(self) -> None:
+    def test_attempt_sequence_has_same_stable_payload(self) -> None:
         outcomes = [
             s.failure_outcome(failure_class=FailureClass.TRANSIENT),
             s.response_outcome(text="x"),
@@ -179,8 +170,9 @@ class TestReplayDeterminism:
 
 
 class TestInjectableHooks:
-    def test_default_sleep_is_noop_no_blocking(self) -> None:
-        # Without a sleep hook the pure driver never blocks (no wall clock).
+    def test_default_sleep_hook_receives_backoff(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         request = s.build_request()
         transport_policy = s.build_transport_policy()
         policy = s.build_execution_policy(
@@ -194,14 +186,20 @@ class TestInjectableHooks:
                 s.response_outcome(text="ok"),
             ],
         )
-        # No clock, no sleep injected -> uses real monotonic; must not hang.
-        result = run_provider_call(
+        default_sleep_delays: list[float] = []
+        monkeypatch.setattr(
+            provider_driver, "_no_sleep", default_sleep_delays.append
+        )
+
+        result = provider_driver.run_provider_call(
             request=request,
             policy=policy,
             transport=transport,
             logical_call_id="lc-x",
+            clock=s.FakeClock(),
         )
         assert result.succeeded
+        assert default_sleep_delays == [1.0]
 
     def test_timing_recorded_from_injected_clock(self) -> None:
         result, _, _ = _run(

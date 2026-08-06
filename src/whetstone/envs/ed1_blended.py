@@ -1,34 +1,3 @@
-"""The ED1-family primary score with a bounded compression penalty.
-
-The USER's standing rule (task 22) for ALL enc-dec optimization: the ed1/ed1m
-optimizer's reward is a weighted blend of its concrete primary score and a
-bounded compression score. ED1's primary score is HumanEval Submission Score;
-ED1M's is Fidelity to Mutant.
-
-SPEC (verbatim semantics)::
-
-    clamped = clamp(compression_ratio, min_ratio, max_ratio)
-    compression_score = (max_ratio - clamped) / (max_ratio - min_ratio)
-    reward = primary_score * ((1 - weight) + weight * compression_score)
-
-``compression_ratio`` is the EXISTING recorded metric: the whetstone zstd-19
-Compression Ratio (compressed encoder-output bytes / ``gt_code_wo_comments``
-bytes). Definitional continuity with everything already recorded -- her spec
-said "or similar", and reusing the recorded metric keeps every past screen/
-anchor row retro-computable (:func:`blended_reward_from_components`).
-
-PROPERTIES (tested): output always in [0, 1]; ``primary_score=0 -> 0``
-regardless of compression; ``primary_score=1 -> [1-weight, 1]``; ``weight=0``
-degenerates to the primary score.
-
-COMPOSITION (task 22.1): the blend is computed PER TASK -- a task's
-repeats-mean primary score times that task's compression score -- then averaged
-over tasks. So the paired-bootstrap machinery (internal selection + official
-CIs) operates on per-task blended rewards exactly as ``env_exact_match`` does
-for QA. A task with NO compression sample uses its primary score: a missing
-channel never fabricates compression credit or erases a measured score.
-"""
-
 from __future__ import annotations
 
 from typing import Literal
@@ -37,12 +6,11 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 BLENDED_METRIC_ID = "primary_score_with_bounded_compression_penalty"
 
-#: The starting weight the user named (start at 0.05 or 0.10); the CLI default.
 DEFAULT_COMPRESSION_WEIGHT = 0.10
 
 
 class BoundedCompressionMetricConfig(BaseModel):
-    """The ed1 blended-reward config (identity-bearing, task 22.2).
+    """Identity-bearing ed1 blended-reward configuration.
 
     ``metric_id`` + ``weight`` + clamp bounds fold into the eval/reward config
     identity via :meth:`identity_key`, so a different weight is a distinct
@@ -151,7 +119,7 @@ def blend_per_task(
     per_task_compression: tuple[float | None, ...],
     config: BoundedCompressionMetricConfig,
 ) -> tuple[float, ...]:
-    """Per-task blended rewards (task 22.1 composition).
+    """Compute aligned per-task blended rewards.
 
     Each task's blend is its repeats-mean primary score times its compression
     score, so the paired bootstrap operates on per-task blended rewards. The
@@ -176,13 +144,11 @@ def blended_reward_from_components(
     min_compression_ratio: float = 0.01,
     max_compression_ratio: float = 4.0,
 ) -> float:
-    """DERIVED (analysis-side) blend from already-recorded components (22.5).
+    """Derive an analysis-side blend from already-recorded components.
 
-    Recomputes the blended reward from a recorded (pass, compression) row
-    under ANY weight/bounds WITHOUT re-driving -- so every past screen/
-    anchor row (which carries both components) is comparable under the blend.
-    CLEARLY LABELED DERIVED: reads recorded measurements; never drives a
-    call. Use for retro-analysis only.
+    Recomputes the blended reward from a recorded (pass, compression) row under
+    any weight and bounds without re-driving. It reads recorded measurements
+    and never drives a call.
     """
     config = BoundedCompressionMetricConfig(
         weight=weight,
@@ -205,15 +171,14 @@ def retro_blend_recorded_rows(
     primary_key: str = "primary_score",
     compression_key: str = "compression_ratio",
 ) -> dict[str, object]:
-    """DERIVED retro-compute of the blend over already-recorded rows (22.5).
+    """Derive blends over already-recorded rows without re-driving calls.
 
     Reads recorded per-task/per-arm rows -- each a mapping carrying the two
     recorded components (``primary_score`` + ``compression_ratio``, from any
     /anchor artifact) -- and recomputes the blended reward per row under the
     given weight/bounds, WITHOUT re-driving. Returns the per-row blends + their
-    mean, so a past measurement is comparable under any weight. CLEARLY LABELED
-    DERIVED: it never drives a call; a row missing a pass value is skipped
-    (reported in ``skipped``), a missing compression uses the primary score.
+    mean. It never drives a call; a row missing a pass value is skipped
+    (reported in ``skipped``), and missing compression uses the primary score.
     """
     config = BoundedCompressionMetricConfig(
         weight=weight,

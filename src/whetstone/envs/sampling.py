@@ -1,29 +1,3 @@
-"""Sampling Configs, Task Sets, and the composite internal/official Eval
-Configs from a TaskPool's splits.
-
-The env's committed pool split (``EnvSpec.default_split_sizes``) carves the
-pool into three ordered, disjoint subsets: ``internal_eval`` (optimizer
-feedback), ``official`` (before/after comparison), and ``held_out``
-(untouched). This module maps the two *used* splits onto dr-code Task Sets +
-Repeat Plans + Sampling Configs, and assembles the two composite Eval Configs
-that share the **exact same** Evaluation Procedure Config identity.
-
-Guarantees, per the validation-plan cell definition:
-
-* The internal and official Task Sets are **ordered** (ordering is
-  identity-bearing) and **disjoint** (their task identities never overlap --
-  the pool split already asserts disjointness by instance id, and this module
-  re-asserts it over task identities).
-* ``held_out`` is never referenced by any Sampling Config built here (proved
-  by a test that no built config's task identities intersect the held-out
-  set).
-* Both Eval Configs fold in **one** Evaluation Procedure Config identity, so
-  ``graph_hash`` is unchanged across the two while ``eval_config_hash``
-  differs (their Sampling Configs differ).
-* The Aggregation Config is ``mean`` with an explicit completeness policy
-  (``missing_data`` propagate/skip, ``zero_denominator`` not_applicable).
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -42,15 +16,15 @@ from dr_code.eval import (
 )
 from whetstone_envs.core import Instance, PoolSplit, TaskPool
 
-from whetstone.code_eval.aggregate import (
+from whetstone.core.roles import EvaluationRole
+from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
+from whetstone.envs.task import EnvTask
+from whetstone.evaluation.code.aggregate import (
     CompletenessPolicy,
     EvaluationMatrixPlan,
     RowPolicy,
     aggregation_definition,
 )
-from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
-from whetstone.envs.task import EnvTask
-from whetstone.evaluation_role import EvaluationRole
 
 _DEFINITION_VERSION = "1"
 
@@ -201,7 +175,7 @@ def build_aggregation_config(
     config identity, so a tolerant SKIP config has a DISTINCT
     ``eval_config_hash`` from an untolerant one (or from PROPAGATE). Under
     ``PROPAGATE`` the bound is inert but still declared (and defaults ``0.0``,
-    preserving the legacy identity of untolerant configs).
+    preserving the identity of untolerant configs).
     """
     policy = completeness.to_policy(max_skip_fraction=max_skip_fraction)
     return aggregation_definition(
@@ -326,8 +300,7 @@ def stratified_split(
     only balanced when the pool interleaves its strata. c22's pool is
     **blocked** (all ``n3_easy`` instances first, then all ``n3_mixed``, ...),
     so a contiguous split would put the whole internal_eval slice in the single
-    easiest stratum and drop the hardest strata into the unused remainder tail
-    (build-report judgment call #2's balance claim fails for c22).
+    easiest stratum and drop the hardest strata into the unused remainder tail.
 
     This builds the same three disjoint subsets but samples each stratum
     independently: for every stratum (in first-seen pool order) it takes the

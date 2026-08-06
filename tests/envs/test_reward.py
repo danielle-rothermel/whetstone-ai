@@ -1,9 +1,9 @@
-"""The per-env Reward Policy over the internal env_exact_match aggregate."""
-
 from __future__ import annotations
 
 import pytest
 
+from whetstone.core.identity import typed_ref_for_record
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.envs.reward import (
     ENV_EXACT_MATCH_AGGREGATE_NAME,
@@ -11,9 +11,7 @@ from whetstone.envs.reward import (
     build_reward_policy,
     reward_from_internal_aggregate,
 )
-from whetstone.evaluation_role import EvaluationRole
-from whetstone.optimization.identity import typed_ref_for_record
-from whetstone.optimization.reward import (
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     OfficialRewardError,
     apply_reward_policy,
@@ -32,7 +30,6 @@ def test_policy_maps_env_exact_match_higher_better(env_name: str) -> None:
     assert term.name == ENV_EXACT_MATCH_AGGREGATE_NAME
     assert term.maximize is True
     assert term.weight == 1.0
-    # A higher internal mean produces a strictly higher Reward.
     low = reward_from_internal_aggregate(
         policy, env_exact_match_value=0.25, evidence_refs=_EVIDENCE_REFS
     )
@@ -66,9 +63,6 @@ def test_reward_refuses_official_role() -> None:
 
 
 def test_missing_internal_aggregate_fails_the_reward() -> None:
-    # A missing required internal term under FAIL surfaces as the TYPED
-    # CandidateEvaluationFailure (the optimizer loop marks the candidate failed
-    # per policy), not a bare ValueError crash.
     policy = build_reward_policy(env_spec("c18"))
     assert policy.missing_data is MissingDataPolicy.FAIL
     with pytest.raises(

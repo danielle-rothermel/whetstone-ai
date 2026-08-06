@@ -1,13 +1,3 @@
-"""The dr-code HumanEval scoring boundary for ed1 correctness.
-
-This module binds ed1 to one explicit dr-code parser profile and the canonical
-bounded Python execution API. It projects dr-code's typed score into the small
-:class:`CodeScore` contract consumed by the ed1 evaluation drive:
-``passed`` is the typed boolean projection of dr-code's SubmissionOutcome and
-``infrastructure_unknown`` marks an execution result that cannot be treated as
-a definitive zero.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

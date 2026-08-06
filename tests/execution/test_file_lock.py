@@ -1,5 +1,3 @@
-"""Secure and durable filesystem foundations for execution storage."""
-
 from __future__ import annotations
 
 import os

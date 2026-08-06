@@ -1,5 +1,3 @@
-"""Authenticated ed1m dataset, oracle, and environment contract tests."""
-
 from __future__ import annotations
 
 from inspect import Parameter, signature
@@ -72,7 +70,6 @@ def mutant_dataset_dir(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> Path:
-    """Publish a canonical authenticated dataset without external artifacts."""
     tasks = [
         HumanEvalPlusTask(
             task_id="HumanEval/0",
@@ -261,9 +258,6 @@ def test_build_uses_content_and_dataset_identities(
         loaded.manifest.dataset_identity
     )
     assert experiment.blend_config is not None
-    # The ADVERTISED policy must be the one reward time applies: a blended
-    # ed1m cell advertises the blended policy (scoped to the ed1m env name),
-    # never the fidelity-only one.
     from whetstone.envs.ed1 import build_ed1_blended_reward_policy
     from whetstone.envs.ed1m import ED1M_ENV_NAME, build_ed1m_reward_policy
 
@@ -296,12 +290,12 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
         process_row_job_factory,
     )
     from whetstone.envs.ed1 import ed1_initial_candidate
-    from whetstone.envs.ed1_eval import run_ed1_eval
     from whetstone.envs.ed1m import (
         ED1M_FIDELITY_NAME,
         build_ed1m_experiment,
     )
-    from whetstone.optimization.mutation import MUTATION_FIELD
+    from whetstone.evaluation.drivers.ed1 import run_ed1_eval
+    from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
     experiment = build_ed1m_experiment(
         artifact_dir=mutant_dataset_dir,

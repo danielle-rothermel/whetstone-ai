@@ -1,5 +1,3 @@
-"""Isolated fork coverage for SQLite contention contracts."""
-
 from __future__ import annotations
 
 import multiprocessing
@@ -15,6 +13,7 @@ import pytest
     "fork" not in multiprocessing.get_all_start_methods(),
     reason="fork is unavailable on this platform",
 )
+@pytest.mark.process_integration
 def test_fork_contention_runs_before_threads_exist(tmp_path: Path) -> None:
     completed = subprocess.run(
         [

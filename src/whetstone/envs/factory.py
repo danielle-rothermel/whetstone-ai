@@ -1,14 +1,3 @@
-"""``build_env_experiment`` -- the single cross-environment factory.
-
-:func:`build_env_experiment` binds one env's five deliverables into one
-value: the Rollout Definition graph, the Initial (naive) and reference
-(ceiling) Candidates, the internal + official Eval Configs (sharing one
-Evaluation Procedure Config identity), and the Reward Policy. It is the
-single entry point for constructing a family contract. The
-internal-eval loop that drives a candidate through an injected transport
-lives in :mod:`whetstone.envs.internal_eval`.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,7 +5,6 @@ from typing import Protocol
 
 from dr_providers import ProviderCallConfig
 
-from whetstone.code_eval.aggregate import CompletenessPolicy
 from whetstone.envs.procedure import env_procedure_config
 from whetstone.envs.registry import DEFAULT_REPEATS, env_spec
 from whetstone.envs.reward import build_reward_policy
@@ -30,8 +18,9 @@ from whetstone.envs.sampling import (
     EnvEvalConfigs,
     build_eval_configs,
 )
-from whetstone.optimization.reward import RewardPolicy
-from whetstone.optimization.schema import Candidate
+from whetstone.evaluation.code.aggregate import CompletenessPolicy
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.reward import RewardPolicy
 
 
 class RolloutDefinitionLike(Protocol):
@@ -55,7 +44,7 @@ class RolloutDefinitionLike(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class EnvExperiment:
-    """The five bound deliverables for one env, returned by the factory.
+    """Identity-bound components required to evaluate one environment.
 
     ``rollout_definition``, ``initial_candidate``, ``ceiling_candidate``,
     ``eval_configs`` (internal + official, shared Procedure identity), and
@@ -78,7 +67,6 @@ class EnvExperiment:
     )
 
     def as_dict(self) -> dict[str, object]:
-        """The factory's contract shape (the keys the runner reads)."""
         return {
             "rollout_definition": self.rollout_definition,
             "initial_candidate": self.initial_candidate,
@@ -98,32 +86,6 @@ def build_env_experiment(
     repeats: int = DEFAULT_REPEATS,
     split_sizes: tuple[int, int, int] | None = None,
 ) -> EnvExperiment:
-    """Build one env's complete experiment: the single validation entry point.
-
-    Parameters
-    ----------
-    env_name:
-        One of the five bound envs (``c22`` .. ``c23``).
-    model:
-        The task model route for the LLM Call Node's Provider Call Config.
-    pool_n_per_stratum:
-        Override the env's spec-default pool size (tests use a tiny pool).
-    completeness:
-        The Aggregation Config completeness policy (default propagate).
-    max_skip_fraction:
-        The declared completeness tolerance for a SKIP policy: the maximum
-        fraction of skipped (missing/failed/invalid) rows still certified as a
-        value; beyond it the official arm is forced incomplete. Identity-
-        bearing (folds into ``eval_config_hash``). Inert under PROPAGATE.
-    repeats:
-        The Repeat Plan repeat count (default the spec-default 3).
-    split_sizes:
-        Override the env's committed spec-default pool split (tests pass a
-        tiny ``(internal, official, held_out)`` split for a small pool).
-    The internal and official Eval Configs share the Rollout Definition's
-    Evaluation Procedure Config identity, so ``graph_hash`` is stable across
-    the two while their ``eval_config_hash`` values differ.
-    """
     env = env_spec(env_name)
     rollout_definition = build_rollout_definition(env, model=model)
     procedure = env_procedure_config(env)

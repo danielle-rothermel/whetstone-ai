@@ -1,44 +1,3 @@
-"""The ``d1`` direct-optimization precursor env (task 23).
-
-``d1`` is the DIRECT-generation counterpart to the enc-dec ``ed1`` family: a
-single LLM Call renders one prompt and the model's output is scored directly
-through the SAME dr-code HumanEval sandbox ``ed1`` uses. There is no encoder or
-decoder -- the model generates the function implementation in one call.
-
-d1's two-part prompt has a FROZEN input arm and a MUTABLE surrounding wrapper:
-
-* the FROZEN input arm is one of five direct prompt slices: ``original`` /
-  ``docstring`` / ``signature`` / ``name`` / ``renamed``. The construction
-  REUSES the screen driver verbatim (``split_prompt`` / ``_direct_body`` /
-  ``renamed_task`` / ``rename_identifier``), including the RENAMED arm's
-  all-occurrence canonical-name scrub (signature AND doctests -> a neutral
-  token) and the amendment-2 scoring trap (a renamed arm scores against the
-  RENAMED entry point, never the leaked canonical name). The chosen input arm
-  is a per-experiment CONSTANT (identity-bearing): a d1 cell is pinned to one
-  arm and folds it into the split Task Set / graph identity.
-* the MUTABLE surrounding wrapper is the Mutation Surface the optimizer varies
-  -- a leading strategy/instruction BODY (:data:`D1_WRAPPER_BODY_NAIVE`) an
-  immutable frame (:data:`D1_WRAPPER_FRAME`) composes around the frozen input
-  arm. The frame owns the ``{body}`` / ``{input_arm}`` placeholders, so a body
-  never needs (or is allowed) placeholders of its own -- body validation reuses
-  ed1's :func:`whetstone.envs.ed1.ed1_body_rejection`.
-
-The naive d1 wrapper reproduces the canonical direct-arm prompt byte for byte,
-so a D1 evaluation on a given input arm remains comparable to a direct probe
-using the same transformation.
-
-Reward is the unblended HumanEval Submission Score, NOT the weighted blend
-(blended reward is an ed1/ed1m standing rule ONLY -- task 22). The full runner
-stack (power analysis / optimization traces / telemetry / reasoning-effort /
-temperature / partials / resume) rides the SHARED seams.
-
-Science framing (respected in naming/docs, not implemented here): d1 is the
-information-floor control (clean models x ablated input arms) and the
-contamination-exploitation trap (deepseek x ablated arms; the accepted prompt
-text is the evidence). The old "enforcement impl" idea is DEAD -- superseded by
-the ed1 blended reward; d1 builds NO budget enforcement.
-"""
-
 from __future__ import annotations
 
 import keyword
@@ -50,7 +9,6 @@ from dr_graph import GraphConfig, GraphDefinition, graph_hash
 from dr_providers import ProviderCallConfig, openrouter_chat_config
 from whetstone_envs.core import Instance
 
-from whetstone.code_eval.aggregate import aggregation_definition
 from whetstone.envs.ed1 import (
     ED1_DATASET_REVISION,
     ED1_SUBMISSION_SCORE_NAME,
@@ -77,21 +35,21 @@ from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
 )
-from whetstone.graph.nodes import (
+from whetstone.evaluation.code.aggregate import aggregation_definition
+from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.graph.nodes import (
     eval_node_definition,
     eval_variable_assignment,
     llm_call_node_definition,
     llm_call_variable_assignment,
 )
-from whetstone.optimization.mutation import MUTATION_FIELD
-from whetstone.optimization.reward import (
+from whetstone.experiment.reward import (
     MissingDataPolicy,
     RewardPolicy,
     RewardTerm,
 )
-from whetstone.optimization.schema import Candidate
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
-#: The d1 env id.
 D1_ENV_NAME = "d1"
 
 #: The canonical d1 task model. d1's science pairs a clean model against
@@ -108,12 +66,11 @@ D1_PROCEDURE_CONFIG_SCHEMA = "whetstone.d1_code_eval_procedure"
 
 _DEFINITION_VERSION = "1"
 
-# --- The frozen input arms (REUSED from the screen) --------------------------
+# --- The frozen input arms ---------------------------------------------------
 
-#: The five frozen input arms d1 can pin, in screen order. Each maps to a
-#: screen DIRECT arm's slice of the canonical HumanEval prompt; ``renamed``
-#: additionally scrubs EVERY canonical-name occurrence (signature + doctests)
-#: and scores against the renamed entry point (the amendment-2 ablation).
+#: The five frozen input arms d1 can pin. ``renamed`` additionally scrubs every
+#: canonical-name occurrence (signature and doctests) and scores against the
+#: renamed entry point.
 #: The one arm that reads ``rename_token`` (and so folds it into identity).
 D1_RENAMED_ARM = "renamed"
 
@@ -125,7 +82,6 @@ D1_INPUT_ARMS: tuple[str, ...] = (
     D1_RENAMED_ARM,
 )
 
-#: The default rename token for the renamed input arm (matches the screen's).
 D1_DEFAULT_RENAME_TOKEN = "target_fxn"
 
 
@@ -140,9 +96,7 @@ D1_DEFAULT_RENAME_TOKEN = "target_fxn"
 #: the FROZEN ``{input_arm}`` text. ``{body}`` is the ONLY mutable region.
 D1_WRAPPER_FRAME = "{body}\n{input_arm}"
 
-#: The naive wrapper body -- BYTE-IDENTICAL to the screen ``_direct_prompt``
-#: instruction sentence, so a d1 naive (eval-anchor) prompt reproduces the
-#: screen's direct-arm prompt exactly and hence the screen arm's pass numbers.
+#: The naive wrapper body reproduces the canonical direct prompt instruction.
 D1_WRAPPER_BODY_NAIVE = (
     "Write a complete, correct Python implementation for the following. "
     "Output only Python code."
@@ -178,7 +132,6 @@ def _d1_candidate(*, candidate_id: str, body: str) -> Candidate:
 
 
 def d1_initial_candidate() -> Candidate:
-    """The naive Initial Candidate: the screen-identical wrapper body."""
     return _d1_candidate(
         candidate_id=f"{D1_ENV_NAME}-naive", body=D1_WRAPPER_BODY_NAIVE
     )
@@ -241,7 +194,7 @@ def d1_graph_definition() -> GraphDefinition:
     input-arm control Variable (reusing the ``character_budget_rule`` slot to
     carry the FROZEN input-arm token) so a distinct input arm yields a distinct
     ``graph_hash`` -- the arm is an output-affecting knob that MUST fold into
-    graph identity (the c23-era rule), exactly as ed1 folds its budget ratio.
+    graph identity, exactly as ed1 folds its budget ratio.
     """
     llm = llm_call_node_definition(
         LLM_NODE_ID,
@@ -349,7 +302,7 @@ def _d1_split(
     ``renamed`` arm the ``rename_token`` folds in too: it changes the scored
     entry point, so two tokens are two experiments.
 
-    ``manifest_tag`` (a task-split-manifest's content-hash + pool, task 29)
+    ``manifest_tag`` (a task-split manifest's content hash and pool)
     folds in ALONGSIDE the input arm so a manifest-driven split is a DISTINCT
     eval_config_hash from both a first-N slice and a same-arm non-manifest
     cell. ``None`` leaves the ids byte-identical to a first-N slice cell.
@@ -442,10 +395,10 @@ def build_d1_experiment(
     ``eval_config_hash``), and the unblended HumanEval Submission Score Reward
     Policy.
 
-    ``exclude_task_ids`` DROPS those ids from the ordered pool before the split
-    (the per-model screen's always-pass exclusion list), exactly as ed1 does.
+    ``exclude_task_ids`` drops those ids from the ordered pool before the
+    split, exactly as ed1 does.
 
-    ``split_manifest`` (task 29) OVERRIDES the first-N slice with role-true
+    ``split_manifest`` overrides the first-N slice with role-true
     train/val/test semantics: internal = the manifest's ``train + val`` ids (by
     MEMBERSHIP, manifest order -- no val sub-split exists, so val folds into
     internal alongside train), official = the manifest's ``test`` ids EXACTLY

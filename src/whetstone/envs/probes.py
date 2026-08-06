@@ -1,45 +1,3 @@
-"""The adapter-side probe surface: a genuinely mutable, serialization-stable
-prompt template + a content-driven render for every env.
-
-The Mutation Surface contract (``concrete-changes.html`` shared harness
-expectation: "Mutation Surface = prompt template only") requires that the
-``user_prompt_template`` an adapter surfaces as a Candidate payload be a *real*
-template: an optimizer may rewrite it, it survives a Result-Store JSON
-round-trip (``Candidate.model_validate_json``), and the resulting text renders
-purely from the template *content* plus the task's public prompt inputs.
-
-Four of the five envs already satisfy this: their ``ProbePair.render`` is
-content-driven (``str.format`` over ``prompt_inputs`` for c22/c18/c23; a
-literal ``{input}`` replace for c11), so a mutated or deserialized template
-renders correctly. c19 does **not**: its ``ProbePair`` stores sentinel strings
-(``"c19-naive"`` / ``"c19-ceiling"``) and its render dispatches by *Python
-object identity* (``if template is NAIVE_TEMPLATE``). Any optimizer mutation
-of the surfaced template, or even the unmutated naive template after a JSON
-round-trip (value-equal but identity lost), makes the env render raise
-``KeyError('unknown c19 probe template')`` -- so c19's cell is broken for both
-optimization and serialize/deserialize.
-
-This module fixes the *adapter's* fidelity without touching whetstone-envs (a
-load-bearing checkout). :func:`probe_surface` returns a :class:`ProbeSurface`
-whose ``naive_template`` / ``ceiling_template`` are genuine templates and whose
-``render`` is content-driven:
-
-* For c19 it binds real ``str.format`` templates whose slots are the public
-  ``{grid}`` / ``{command}`` inputs plus a ``{fact_line}`` computed from the
-  public ``fact_type`` input. The template head (the mutation target) is fully
-  editable and the render depends only on template content -- never object
-  identity -- so a mutated or round-tripped template renders. The rendered
-  bytes are identical to the env's own ``render_naive`` / ``render_ceiling``
-  (pinned by a per-fact-type equivalence test), so oracle fidelity is
-  unchanged.
-* For every other env it delegates verbatim to the env's own content-driven
-  ``ProbePair`` (no behavior change).
-
-Gold/oracle-only state can never be interpolated: c19's render formats against
-only the public inputs (a ``{gold}`` template raises ``KeyError``), matching
-the structural-leak proof the other envs already satisfy.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -47,7 +5,7 @@ from dataclasses import dataclass
 
 from whetstone_envs.core import Instance, ProbePair
 
-from whetstone.optimization.schema import (
+from whetstone.experiment.candidate import (
     TemplateRenderContract,
     TemplateRenderKind,
 )
@@ -82,12 +40,8 @@ def _render_with_contract(
 
 
 def _from_probe_pair(env_name: str, probes: ProbePair) -> ProbeSurface:
-    """Wrap an env's content-driven ``ProbePair`` verbatim.
-
-    Used for c22/c11/c18/c23, whose ``ProbePair.render`` already keys off
-    template content (``str.format`` over public inputs, or a literal
-    ``{input}`` replace), so the surfaced template is already mutable and
-    serialization-stable.
+    """Wrap the content-driven ``ProbePair`` used by every bound environment
+    except c19.
     """
     available_fields = {
         "c22": ("constraints_block",),

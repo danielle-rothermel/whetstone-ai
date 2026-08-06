@@ -1,30 +1,3 @@
-"""The dataset-specific EnvTask type playing the dr-code Task role.
-
-Following dr-code's own convention (``humaneval_task_identity``: the Task
-*role* is played by dataset-specific types with **no generic Task
-superclass**), each whetstone-env instance is wrapped by an
-:class:`EnvTask`: a frozen value carrying a *stable task identity* plus the
-two field families the Rollout Definition consumes.
-
-* **Graph External Inputs** -- the rendered prompt inputs a probe template
-  consumes (``EnvTask.prompt_inputs``, keyed ``task.<field>``). These are the
-  public inputs the LLM Call Node's prompt template renders against; they
-  never include gold/oracle-only state.
-* **Evaluation inputs** -- the gold/oracle-checkable state the terminal Eval
-  Node's oracle operator scores against (``EnvTask.gold``). This is the
-  instance's public ``gold`` field: the expected answer string for the
-  re-derive envs, or the serialized constraint stack the c22 oracle re-runs.
-
-The task identity is a full dr-serialize Identity Hash over the instance's
-identity-defining fields: its ``(id, seed)`` pins, its content hash (a
-SHA-256 over the instance's canonical fields, via
-``whetstone_envs.core.content_hash`` applied to a one-instance pool), its
-strata, and the env name. Two instances that are field-for-field identical
-hash equal; any change to a prompt input, gold, seed, or id changes the
-identity. Identity documents are produced through dr-serialize, the one
-canonical identity lane.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -32,7 +5,7 @@ from typing import Any
 
 from whetstone_envs.core import Instance, TaskPool, content_hash
 
-from whetstone.optimization.identity import compute_identity_hash
+from whetstone.core.identity import compute_identity_hash
 
 ENV_TASK_SCHEMA = "whetstone.env_task"
 ENV_TASK_SCHEMA_VERSION = 1

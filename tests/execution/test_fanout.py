@@ -1,5 +1,3 @@
-"""Spawned-process fanout scheduling and cancellation contracts."""
-
 from __future__ import annotations
 
 import errno
@@ -549,10 +547,8 @@ def test_worker_boundary_files_are_restrictive_and_validated(
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_parent_death_kills_fresh_worker_process_group(
-    tmp_path: Path,
     parent_signal: int,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     scheduler_script = """
 import os
@@ -603,10 +599,8 @@ run_call_pool(
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_stopped_guardian_on_completion_forces_local_containment(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     spawned: list[fanout_module._ActiveProcess[str, JsonValue]] = []
     spawned_event = threading.Event()
@@ -693,10 +687,8 @@ def test_stopped_guardian_on_completion_forces_local_containment(
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_harvest_retains_state_when_fallback_cannot_prove_containment(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     spawned: list[fanout_module._ActiveProcess[str, JsonValue]] = []
     spawned_event = threading.Event()
@@ -824,11 +816,9 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
 )
 @pytest.mark.process_integration
 def test_cancellation_failure_retains_uncontained_process_state(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     failure_site: str,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     target: list[fanout_module._ActiveProcess[str, JsonValue]] = []
     target_spawned = threading.Event()
@@ -964,10 +954,7 @@ def test_cancellation_failure_retains_uncontained_process_state(
 
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
-def test_worker_contains_group_when_guardian_and_scheduler_die(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_worker_contains_group_when_guardian_and_scheduler_die() -> None:
     signals = ProcessSignals()
     scheduler_script = """
 import os
@@ -1148,10 +1135,7 @@ worker._start_guardian(lifetime_reader, done_writer)
 
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
-def test_forked_scheduler_sibling_cannot_keep_worker_group_alive(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_forked_scheduler_sibling_cannot_keep_worker_group_alive() -> None:
     signals = ProcessSignals()
     scheduler_script = """
 import os
@@ -1237,10 +1221,7 @@ run_call_pool(
 
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
-def test_scheduler_death_after_worker_return_kills_left_descendant(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_scheduler_death_after_worker_return_kills_left_descendant() -> None:
     signals = ProcessSignals()
     scheduler_script = """
 import os
@@ -1313,10 +1294,7 @@ run_call_pool(
 
 
 @pytest.mark.process_integration
-def test_normal_completion_stops_left_descendant_before_acceptance(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_normal_completion_stops_left_descendant_before_acceptance() -> None:
     signals = ProcessSignals()
     try:
         outcome = run_call_pool(
@@ -1494,8 +1472,7 @@ def test_control_pipe_inherit_failure_closes_both_descriptors(
 
 
 @pytest.mark.process_integration
-def test_repeated_completed_process_trees_are_clean(tmp_path: Path) -> None:
-    del tmp_path
+def test_repeated_completed_process_trees_are_clean() -> None:
     all_pids: list[int] = []
     for index in range(5):
         signals = ProcessSignals()
@@ -1526,10 +1503,8 @@ def test_repeated_completed_process_trees_are_clean(tmp_path: Path) -> None:
         _assert_process_gone(pid)
 
 
-def test_lazy_dispatch_never_starts_more_than_current_capacity(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+@pytest.mark.process_integration
+def test_lazy_dispatch_never_starts_more_than_current_capacity() -> None:
     signals = ProcessSignals()
     specs = [
         CallSpec(
@@ -1580,11 +1555,10 @@ def test_lazy_dispatch_never_starts_more_than_current_capacity(
 
 
 @pytest.mark.parametrize("failure_stage", ["decode", "predicate", "commit"])
+@pytest.mark.process_integration
 def test_accepted_worker_is_not_cancelled_when_parent_callback_fails(
-    tmp_path: Path,
     failure_stage: str,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     barriers: list[str] = []
 
@@ -1655,10 +1629,10 @@ def test_accepted_worker_is_not_cancelled_when_parent_callback_fails(
         _assert_process_gone(pid)
 
 
-def test_completion_order_drives_commits_but_results_preserve_input_order(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+@pytest.mark.process_integration
+def test_completion_order_drives_commits_but_results_preserve_input_order() -> (  # noqa: E501
+    None
+):
     signals = ProcessSignals()
     commits: list[JsonValue] = []
     committed = {key: threading.Event() for key in ("slow", "fast", "middle")}
@@ -1722,10 +1696,8 @@ def test_completion_order_drives_commits_but_results_preserve_input_order(
     ]
 
 
-def test_rate_feedback_reduces_capacity_before_filling_it(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+@pytest.mark.process_integration
+def test_rate_feedback_reduces_capacity_before_filling_it() -> None:
     signals = ProcessSignals()
     committed = {
         key: threading.Event()
@@ -1797,10 +1769,7 @@ def test_rate_feedback_reduces_capacity_before_filling_it(
 
 
 @pytest.mark.process_integration
-def test_unit_deadline_starts_when_each_child_starts(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_unit_deadline_starts_when_each_child_starts() -> None:
     signals = ProcessSignals()
     outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
 
@@ -1835,10 +1804,7 @@ def test_unit_deadline_starts_when_each_child_starts(
 
 
 @pytest.mark.process_integration
-def test_unit_timeout_kills_process_and_prevents_late_commit(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_unit_timeout_kills_process_and_prevents_late_commit() -> None:
     signals = ProcessSignals()
     commits: list[JsonValue] = []
     barriers: list[str] = []
@@ -1871,10 +1837,8 @@ def test_unit_timeout_kills_process_and_prevents_late_commit(
 
 @pytest.mark.process_integration
 def test_operation_deadline_kills_active_and_never_dispatches_queue(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     commits: list[JsonValue] = []
     outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
@@ -1954,11 +1918,10 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
         _assert_process_group_absent(signals.pid(key))
 
 
+@pytest.mark.process_integration
 def test_wall_watcher_stops_sibling_while_decode_runs_past_deadline(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     decode_entered = threading.Event()
     scripted_deadline = _ScriptedDeadline(decode_entered)
@@ -2024,11 +1987,10 @@ def test_wall_watcher_stops_sibling_while_decode_runs_past_deadline(
     ]
 
 
+@pytest.mark.process_integration
 def test_slow_spawn_cannot_release_worker_after_wall(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     popen_entered = threading.Event()
     scripted_deadline = _ScriptedDeadline(popen_entered)
@@ -2062,10 +2024,8 @@ def test_slow_spawn_cannot_release_worker_after_wall(
 
 
 def test_slow_serialization_stops_before_spawn_after_wall(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     serialization_entered = threading.Event()
     scripted_deadline = _ScriptedDeadline(serialization_entered)
@@ -2094,11 +2054,10 @@ def test_slow_serialization_stops_before_spawn_after_wall(
     signals.close()
 
 
+@pytest.mark.process_integration
 def test_slow_commit_may_finish_but_wall_stops_later_dispatch(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     commit_entered = threading.Event()
     scripted_deadline = _ScriptedDeadline(commit_entered)
@@ -2153,10 +2112,8 @@ def test_slow_commit_may_finish_but_wall_stops_later_dispatch(
 
 @pytest.mark.process_integration
 def test_wall_crossing_during_cancellation_never_dispatches_queue(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     barrier_entered = threading.Event()
     scripted_deadline = _ScriptedDeadline(barrier_entered)
@@ -2195,10 +2152,7 @@ def test_wall_crossing_during_cancellation_never_dispatches_queue(
 
 
 @pytest.mark.process_integration
-def test_unexpected_child_failure_cancels_siblings_before_raise(
-    tmp_path: Path,
-) -> None:
-    del tmp_path
+def test_unexpected_child_failure_cancels_siblings_before_raise() -> None:
     signals = ProcessSignals()
     failures: list[BaseException] = []
 
@@ -2283,10 +2237,8 @@ def test_platform_sized_finite_wall_is_supported() -> None:
     [-1, True, float("nan"), float("inf"), 10**400, Decimal("1")],
 )
 def test_invalid_unit_deadline_fails_before_dispatch(
-    tmp_path: Path,
     duration: object,
 ) -> None:
-    del tmp_path
     signals = ProcessSignals()
     spec = _gated_spec(
         "invalid",
@@ -2303,6 +2255,7 @@ def test_invalid_unit_deadline_fails_before_dispatch(
 
 
 @pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.process_integration
 def test_worker_rejects_non_finite_result_recursively(
     tmp_path: Path,
     nested: bool,

@@ -1,5 +1,3 @@
-"""Provider Execution Policy composition + identity contract tests."""
-
 from __future__ import annotations
 
 import math
@@ -22,8 +20,6 @@ class TestComposition:
         assert policy.transport_policy is transport
 
     def test_no_duplicated_transport_fields(self) -> None:
-        # The execution policy carries no credentials/timeout/native-retry
-        # field of its own; those live only on the referenced transport policy.
         fields = set(ProviderExecutionPolicy.model_fields)
         for forbidden in (
             "api_key_env",
@@ -35,7 +31,6 @@ class TestComposition:
             assert forbidden not in fields
 
     def test_native_retries_pinned_zero(self) -> None:
-        # A referenced transport policy with nonzero native retries is refused.
         with pytest.raises(ValueError, match="native_retry_count"):
             s.build_execution_policy(
                 transport_policy=s.build_transport_policy(native_retry_count=2)
@@ -76,7 +71,7 @@ class TestBackoff:
         assert schedule.delay_for(2) == 1.0
         assert schedule.delay_for(3) == 2.0
         assert schedule.delay_for(4) == 4.0
-        assert schedule.delay_for(5) == 5.0  # capped
+        assert schedule.delay_for(5) == 5.0
         assert schedule.delay_for(6) == 5.0
 
     def test_large_attempt_number_returns_cap_without_overflow(self) -> None:
@@ -132,8 +127,6 @@ class TestIdentity:
         assert len(s.build_execution_policy().identity_hash) == 64
 
     def test_identity_excludes_secret(self) -> None:
-        # Only the env-var NAME appears, never a secret; and the payload has no
-        # timeout duplication under an execution-policy-owned key.
         payload = s.build_execution_policy().identity_payload()
         assert payload["transport_policy"]["api_key_env"] == s.API_KEY_ENV
         assert "api_key" not in payload

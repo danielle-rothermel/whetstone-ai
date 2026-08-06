@@ -1,11 +1,3 @@
-"""Shared fixtures for the whetstone env-adapter tests.
-
-Builds a scripted fake transport (no network, no DBOS, no live paid call)
-that returns a per-request generation text so the internal-eval loop can be
-driven deterministically, plus small helpers to construct env pools and
-execution policies.
-"""
-
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -24,11 +16,13 @@ from dr_providers import (
 from pydantic import BaseModel, JsonValue
 from whetstone_envs.core import Instance
 
+from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import Ed1Instance, ed1_instance_from_task
+from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.registry import env_spec
 from whetstone.envs.sampling import EnvSplitSampling
-from whetstone.evaluation_role import EvaluationRole
 from whetstone.execution.fanout import ProcessJob
-from whetstone.optimization.schema import (
+from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
     EvaluationBinding,
     eval_config_reference,
@@ -36,30 +30,62 @@ from whetstone.optimization.schema import (
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 API_KEY_ENV = "OPENROUTER_API_KEY"
+TEST_MODEL = "openai/gpt-5-nano"
+_TINY_SPLIT = (2, 2, 2)
+TINY_SPLIT_FIT_CEILING = sum(_TINY_SPLIT)
 
-#: A text-returning callable keyed on the request's user-message content
-#: (the rendered prompt), so a fake can answer differently per task.
 ReplyFn = Callable[[str], str]
 RowPayloadFn = Callable[[Instance, int, int], BaseModel | JsonValue]
+
+
+def tiny_split_fits(env, n: int) -> bool:
+    pool = env.generate_pool(n_per_stratum=n)
+    if not env.stratified_split:
+        return len(pool) >= sum(_TINY_SPLIT)
+    n_strata = len(pool.strata)
+    per_stratum_max = sum(-(-part // n_strata) for part in _TINY_SPLIT)
+    return n >= per_stratum_max
+
+
+def tiny_experiment(env_name: str) -> EnvExperiment:
+    env = env_spec(env_name)
+    attempted_sizes: list[int] = []
+    for n in range(1, TINY_SPLIT_FIT_CEILING + 1):
+        attempted_sizes.append(n)
+        if tiny_split_fits(env, n):
+            break
+    else:
+        raise AssertionError(
+            f"{env_name} could not fit split {_TINY_SPLIT} by independently "
+            f"derived n_per_stratum ceiling {TINY_SPLIT_FIT_CEILING}; "
+            f"attempted_sizes={attempted_sizes}; "
+            f"final_attempted_size={attempted_sizes[-1]}"
+        )
+    return build_env_experiment(
+        env_name,
+        model=TEST_MODEL,
+        pool_n_per_stratum=n,
+        split_sizes=_TINY_SPLIT,
+        repeats=2,
+    )
 
 
 def row_job_factory(
     payload_for: RowPayloadFn,
 ) -> Callable[[BaseModel], ProcessJob]:
-    """Build request-bound importable jobs for reducer-focused tests."""
 
     def build(request: BaseModel) -> ProcessJob:
-        from whetstone.envs.d1_eval import (
+        from whetstone.evaluation.drivers.d1 import (
             D1RowOutcome,
             D1RowRequest,
             D1RowResult,
         )
-        from whetstone.envs.ed1_eval import (
+        from whetstone.evaluation.drivers.ed1 import (
             Ed1RowOutcome,
             Ed1RowRequest,
             Ed1RowResult,
         )
-        from whetstone.envs.internal_eval import (
+        from whetstone.evaluation.drivers.internal import (
             InternalRowOutcome,
             InternalRowRequest,
             InternalRowResult,
@@ -105,7 +131,6 @@ def row_job_factory(
 def process_row_job_factory(
     entrypoint: str,
 ) -> Callable[[BaseModel], ProcessJob]:
-    """Send the complete typed row request to a real driver worker."""
 
     def build(request: BaseModel) -> ProcessJob:
         return ProcessJob(
@@ -162,14 +187,6 @@ def _prompt_of(request: ProviderCallRequest) -> str:
 
 @dataclass
 class FakeTransport:
-    """A scripted transport: maps a rendered prompt to a reply text.
-
-    ``reply`` is a pure function of the rendered prompt (the user message),
-    so the fake can return the correct answer for one task and a wrong answer
-    for another. Records every request it served for determinism assertions.
-    No network is touched.
-    """
-
     reply: ReplyFn
     policy: ProviderTransportPolicy = field(default_factory=transport_policy)
     served: list[ProviderCallRequest] = field(default_factory=list)
@@ -193,7 +210,6 @@ class FakeTransport:
 
 
 def constant_reply(text: str) -> ReplyFn:
-    """A reply function returning ``text`` for every prompt."""
 
     def _reply(_prompt: str) -> str:
         return text
@@ -202,7 +218,6 @@ def constant_reply(text: str) -> ReplyFn:
 
 
 def synthetic_ed1_tasks(count: int = 3) -> tuple[Ed1Instance, ...]:
-    """Build a deterministic, sandbox-runnable HumanEval fixture pool."""
     tasks: list[Ed1Instance] = []
     for index in range(count):
         entry_point = f"add_{index}"
