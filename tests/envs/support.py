@@ -76,11 +76,13 @@ def row_job_factory(
 
     def build(request: BaseModel) -> ProcessJob:
         from whetstone.evaluation.drivers.d1 import (
+            D1GeneratedRowOutcome,
             D1RowOutcome,
             D1RowRequest,
             D1RowResult,
         )
         from whetstone.evaluation.drivers.ed1 import (
+            Ed1GeneratedRowOutcome,
             Ed1RowOutcome,
             Ed1RowRequest,
             Ed1RowResult,
@@ -107,15 +109,15 @@ def row_job_factory(
                 outcome=outcome,
             )
         elif isinstance(request, D1RowRequest):
-            if not isinstance(outcome, D1RowOutcome):
-                raise TypeError("D1 request requires D1RowOutcome")
+            if not isinstance(outcome, D1RowOutcome | D1GeneratedRowOutcome):
+                raise TypeError("D1 request requires a D1 row outcome")
             envelope = D1RowResult(
                 request_identity=request.request_identity,
                 outcome=outcome,
             )
         else:
-            if not isinstance(outcome, Ed1RowOutcome):
-                raise TypeError("ED1 request requires Ed1RowOutcome")
+            if not isinstance(outcome, Ed1RowOutcome | Ed1GeneratedRowOutcome):
+                raise TypeError("ED1 request requires an ED1 row outcome")
             envelope = Ed1RowResult(
                 request_identity=request.request_identity,
                 outcome=outcome,

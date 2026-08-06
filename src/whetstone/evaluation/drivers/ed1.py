@@ -36,7 +36,11 @@ from whetstone.envs.ed1 import (
     validate_ed1_body,
 )
 from whetstone.envs.ed1_blended import blend_per_task
-from whetstone.envs.ed1_scoring import CodeScore
+from whetstone.envs.ed1_scoring import (
+    CodeBatchScorer,
+    CodeScore,
+    CodeScoringInput,
+)
 from whetstone.envs.ed1m_dataset import MutantRecord
 from whetstone.envs.encdec_rollout import DECODER_NODE_ID, ENCODER_NODE_ID
 from whetstone.envs.sampling import (
@@ -343,6 +347,49 @@ class Ed1RowOutcome(BaseModel):
         return self.encoder_len > self.max_budget
 
 
+class Ed1GeneratedRowOutcome(BaseModel):
+    """A completed encode/decode row awaiting coordinator-side scoring."""
+
+    model_config = ConfigDict(
+        frozen=True,
+        extra="forbid",
+        allow_inf_nan=False,
+        strict=True,
+    )
+
+    compression_value: float | None
+    encoder_text: str
+    decoder_text: str
+    executed_component_steps: tuple[ExecutedComponentStep, ...]
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    latency_s: float | None = None
+    max_budget: int | None = None
+    encoder_len: int
+    finish_reason: str | None = None
+    cache_hit: bool = False
+    cache_provenance: CacheProvenance | None = None
+
+    @model_validator(mode="after")
+    def _valid_generated_outcome(self) -> Ed1GeneratedRowOutcome:
+        _validate_ed1_component_steps(
+            self.executed_component_steps,
+            encoder_text=self.encoder_text,
+            decoder_text=self.decoder_text,
+        )
+        if len(self.executed_component_steps) != 2:
+            raise ValueError(
+                "a generated ED1 row requires encode and decode steps"
+            )
+        if self.cache_hit != (self.cache_provenance is not None):
+            raise ValueError(
+                "cache_hit and original-entry provenance must be paired"
+            )
+        return self
+
+
 class Ed1PartialPayload(BaseModel):
     """Strict ED1-family state stored beside generic partial-call fields."""
 
@@ -463,7 +510,7 @@ class Ed1RowResult(BaseModel):
         _ED1_ROW_RESULT_SCHEMA
     )
     request_identity: str
-    outcome: Ed1RowOutcome
+    outcome: Ed1RowOutcome | Ed1GeneratedRowOutcome
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> Ed1RowResult:
@@ -539,15 +586,15 @@ def drive_ed1_row(
     provider_call_config: ProviderCallConfig,
     execution_policy: ProviderExecutionPolicy,
     transport: TransportCall,
-    scorer: Callable[..., object],
+    scorer: Callable[..., object] | None,
     logical_call_id: str,
     repeat_index: int,
     drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
     cache_unit: str,
-) -> Ed1RowOutcome:
-    """Run one enc->dec->score rollout for one (task, repeat)."""
+) -> Ed1RowOutcome | Ed1GeneratedRowOutcome:
+    """Run one encode/decode row, optionally scoring inside the worker."""
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_rollout
     assert rd is not None
@@ -682,6 +729,25 @@ def drive_ed1_row(
     )
     dec_tel = call_telemetry(dec)
     tel = _sum_telemetry(call_telemetry(enc), dec_tel)
+    compression = _compression_ratio(encoder_text, input_code)
+
+    if scorer is None:
+        return Ed1GeneratedRowOutcome(
+            compression_value=compression,
+            encoder_text=encoder_text,
+            decoder_text=decoder_text,
+            executed_component_steps=executed_component_steps,
+            prompt_tokens=tel.prompt_tokens,
+            completion_tokens=tel.completion_tokens,
+            total_tokens=tel.total_tokens,
+            reasoning_tokens=tel.reasoning_tokens,
+            latency_s=tel.latency_s,
+            max_budget=max_budget,
+            encoder_len=encoder_len,
+            finish_reason=dec_tel.finish_reason,
+            cache_hit=row_cache_hit,
+            cache_provenance=row_cache_prov,
+        )
 
     # Correctness (decoder output) -- may be an infrastructure-unknown, which
     # fails the row (never scored 0). ed1 scores the HumanEval test suite; ed1m
@@ -708,7 +774,6 @@ def drive_ed1_row(
             cache_hit=row_cache_hit,
             cache_provenance=row_cache_prov,
         )
-    compression = _compression_ratio(encoder_text, input_code)
     return Ed1RowOutcome(
         primary_value=code_score.row_value,
         compression_value=compression,
@@ -809,6 +874,51 @@ def _should_redrive(outcome: Ed1RowOutcome) -> bool:
     return outcome.failure_code == "runner_timeout" or outcome.redrivable
 
 
+def _finish_generated_row(
+    outcome: Ed1GeneratedRowOutcome,
+    score: CodeScore,
+) -> Ed1RowOutcome:
+    if score.infrastructure_unknown:
+        return Ed1RowOutcome(
+            primary_value=None,
+            compression_value=outcome.compression_value,
+            encoder_text=outcome.encoder_text,
+            decoder_text=outcome.decoder_text,
+            row_state=ExecutedRowState.FAILED,
+            executed_component_steps=outcome.executed_component_steps,
+            failure_code="code_eval_infrastructure_unknown",
+            prompt_tokens=outcome.prompt_tokens,
+            completion_tokens=outcome.completion_tokens,
+            total_tokens=outcome.total_tokens,
+            reasoning_tokens=outcome.reasoning_tokens,
+            latency_s=outcome.latency_s,
+            max_budget=outcome.max_budget,
+            encoder_len=outcome.encoder_len,
+            finish_reason=outcome.finish_reason,
+            cache_hit=outcome.cache_hit,
+            cache_provenance=outcome.cache_provenance,
+        )
+    return Ed1RowOutcome(
+        primary_value=score.row_value,
+        compression_value=outcome.compression_value,
+        encoder_text=outcome.encoder_text,
+        decoder_text=outcome.decoder_text,
+        row_state=ExecutedRowState.SUCCESS,
+        executed_component_steps=outcome.executed_component_steps,
+        attractor_pull=score.attractor_pull,
+        prompt_tokens=outcome.prompt_tokens,
+        completion_tokens=outcome.completion_tokens,
+        total_tokens=outcome.total_tokens,
+        reasoning_tokens=outcome.reasoning_tokens,
+        latency_s=outcome.latency_s,
+        max_budget=outcome.max_budget,
+        encoder_len=outcome.encoder_len,
+        finish_reason=outcome.finish_reason,
+        cache_hit=outcome.cache_hit,
+        cache_provenance=outcome.cache_provenance,
+    )
+
+
 def _compression_ratio(encoder_text: str, input_code: str) -> float | None:
     """The zstd-19 Compression Ratio of the ENCODER output vs the reference.
 
@@ -856,10 +966,12 @@ def run_ed1_eval(
     max_wall_seconds: float | None = None,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
+    batch_scorer: CodeBatchScorer | None = None,
 ) -> Ed1EvalResult:
     """Drive ``candidate_template`` over an ed1 split -> dual aggregates.
 
-    Fans out one serializable enc->dec->score process job per (task, repeat),
+    Fans out one serializable enc->dec process job per (task, repeat),
+    batch-scores generated ED1 submissions in the coordinator when requested,
     reduces to the primary + compression aggregates, derives Reward from the
     primary aggregate when unblended, and collects per-row outputs (encoder +
     decoder text) for the dual-score sidecar.
@@ -871,9 +983,10 @@ def run_ed1_eval(
     of re-driving and re-paying; a pending ordinal-0 record resumes at the
     exact ordinal-1 request.
 
-    ``row_job_factory`` is the trusted scoring authority. It must execute the
-    exact :class:`Ed1RowRequest` under its declared procedure; the parent binds
-    result identity before persistence but cannot attest arbitrary worker code.
+    ED1M retains its mutant-specific in-worker scorer. A generated ED1 row is
+    not written to the partial log until coordinator scoring completes, so a
+    crash in that interval may repeat generation; the prompt cache remains the
+    available no-wire replay path.
     """
     validate_ed1_body(candidate_template)
     instances = sampling.instances
@@ -995,7 +1108,8 @@ def run_ed1_eval(
         phase=split_role,
         unit=candidate_id,
     )
-    driven: dict[tuple[str, int], Ed1RowOutcome] = {}
+    driven: dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome] = {}
+    completed_requests: dict[tuple[str, int], Ed1RowRequest] = {}
     initial_requests: list[Ed1RowRequest] = []
     resumed_redrive_requests: list[Ed1RowRequest] = []
     for key, (ordinal_0, ordinal_1) in requests_by_key.items():
@@ -1015,10 +1129,12 @@ def run_ed1_eval(
 
     def _spec(
         request: Ed1RowRequest,
-    ) -> CallSpec[tuple[str, int], Ed1RowOutcome]:
+    ) -> CallSpec[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome]:
         instance = by_instance[request.instance.id]
 
-        def _decode(value: JsonValue) -> Ed1RowOutcome:
+        def _decode(
+            value: JsonValue,
+        ) -> Ed1RowOutcome | Ed1GeneratedRowOutcome:
             result = Ed1RowResult.from_process_payload(value)
             if result.request_identity != request.request_identity:
                 raise ValueError(
@@ -1031,14 +1147,18 @@ def run_ed1_eval(
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=_deadline(execution_policy),
-            commit=lambda outcome: _persist(
-                instance,
-                request.repeat_index,
-                outcome,
-                request_identity=request.request_identity,
-                redrive_pending=(
-                    request.drive_ordinal == 0 and _should_redrive(outcome)
-                ),
+            commit=lambda outcome: (
+                _persist(
+                    instance,
+                    request.repeat_index,
+                    outcome,
+                    request_identity=request.request_identity,
+                    redrive_pending=(
+                        request.drive_ordinal == 0 and _should_redrive(outcome)
+                    ),
+                )
+                if isinstance(outcome, Ed1RowOutcome)
+                else None
             ),
         )
 
@@ -1047,7 +1167,7 @@ def run_ed1_eval(
 
     def _drive(
         requests: list[Ed1RowRequest],
-    ) -> dict[tuple[str, int], Ed1RowOutcome]:
+    ) -> dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome]:
         nonlocal effective_concurrency
         specs = [_spec(request) for request in requests]
         request_by_key = {
@@ -1061,10 +1181,11 @@ def run_ed1_eval(
             max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
         effective_concurrency = pool.effective_concurrency
-        out: dict[tuple[str, int], Ed1RowOutcome] = {}
+        out: dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome] = {}
         for res in pool.results:
             if res.status is FanoutStatus.COMPLETED and res.value is not None:
                 out[res.key] = res.value
+                completed_requests[res.key] = request_by_key[res.key]
             elif res.status is FanoutStatus.UNIT_TIMEOUT:
                 # A runner-guard timeout: the row hung past its (2-call) guard.
                 # Marked redrivable so ONE bounded re-drive gets a fresh try
@@ -1113,15 +1234,63 @@ def run_ed1_eval(
     redrive_requests = resumed_redrive_requests + [
         requests_by_key[key][1]
         for key, outcome in first_driven.items()
-        if _should_redrive(outcome)
+        if isinstance(outcome, Ed1RowOutcome) and _should_redrive(outcome)
     ]
     if redrive_requests:
         redriven = _drive(redrive_requests)
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
-            if not outcome.missing
+            if not isinstance(outcome, Ed1RowOutcome) or not outcome.missing
         )
+
+    generated_keys = [
+        (str(instance.id), index)
+        for instance in instances
+        for index in range(repeats)
+        if isinstance(
+            driven[(str(instance.id), index)], Ed1GeneratedRowOutcome
+        )
+    ]
+    if generated_keys:
+        from whetstone.envs.ed1m import Ed1mExperiment
+
+        if isinstance(experiment, Ed1mExperiment):
+            raise ValueError("ED1M rows require their mutant scorer in-worker")
+        if batch_scorer is None:
+            raise ValueError(
+                "coordinator-side ED1 scoring requires a batch_scorer"
+            )
+        scoring_inputs = tuple(
+            CodeScoringInput(
+                raw_submission=generated.decoder_text,
+                task=humaneval_task_from_instance(by_instance[instance_id]),
+            )
+            for instance_id, index in generated_keys
+            for generated in (driven[(instance_id, index)],)
+            if isinstance(generated, Ed1GeneratedRowOutcome)
+        )
+        scores = tuple(batch_scorer(scoring_inputs))
+        if len(scores) != len(generated_keys):
+            raise ValueError(
+                "ED1 batch scorer returned the wrong result count"
+            )
+        for key, score in zip(generated_keys, scores, strict=True):
+            generated = driven[key]
+            if not isinstance(generated, Ed1GeneratedRowOutcome):
+                raise AssertionError(
+                    "generated ED1 row changed before scoring"
+                )
+            outcome = _finish_generated_row(generated, score)
+            driven[key] = outcome
+            request = completed_requests[key]
+            _persist(
+                by_instance[key[0]],
+                key[1],
+                outcome,
+                request_identity=request.request_identity,
+                redrive_pending=False,
+            )
 
     # Assemble per-task rows (primary + compression) + outputs, instance/repeat
     # order.
@@ -1141,6 +1310,8 @@ def run_ed1_eval(
         attr_vals: list[float] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
+            if not isinstance(outcome, Ed1RowOutcome):
+                raise AssertionError("ED1 row was not scored")
             if outcome.attractor_pull is not None:
                 attr_vals.append(outcome.attractor_pull)
             row_diags.append(
@@ -1337,6 +1508,7 @@ def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
 __all__ = [
     "Ed1EvalDiagnostics",
     "Ed1EvalResult",
+    "Ed1GeneratedRowOutcome",
     "Ed1PartialPayload",
     "Ed1RowDiag",
     "Ed1RowJobFactory",
