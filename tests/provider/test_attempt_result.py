@@ -226,6 +226,7 @@ class TestProviderCallAttempt:
 
 
 class TestProviderCallResult:
+    @pytest.mark.precheck
     def test_ordered_attempts_and_terminal_success(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         a1 = _attempt(

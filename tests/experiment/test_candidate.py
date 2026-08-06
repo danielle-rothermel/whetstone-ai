@@ -50,6 +50,7 @@ def test_candidate_identity_contract_literals_are_pinned() -> None:
     )
 
 
+@pytest.mark.precheck
 def test_candidate_ref_round_trips_exact_json() -> None:
     ref = candidate_reference(_candidate())
     dumped = ref.model_dump(mode="json")

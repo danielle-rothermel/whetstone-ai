@@ -622,6 +622,7 @@ def test_runtime_rejects_noncanonical_rng_and_bootstrap_cursor() -> None:
         )
 
 
+@pytest.mark.precheck
 def test_proposal_restart_reconstructs_exact_next_effect() -> None:
     driver, state = make_minimal_miprov2_runtime()
     first = driver.plan(state)

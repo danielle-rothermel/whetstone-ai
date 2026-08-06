@@ -62,6 +62,7 @@ def test_terminal_ordinal_one_wins_over_pending_ordinal_zero() -> None:
     assert decision.drive_ordinal is None
 
 
+@pytest.mark.precheck
 def test_pending_ordinal_zero_requires_exact_ordinal_one() -> None:
     ordinal_0 = _record("a" * 64, pending=True)
     records = index_partial_records(

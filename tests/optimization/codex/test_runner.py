@@ -832,6 +832,7 @@ def test_macos_process_executor_qualifies_codex_boundary(
     )
 
 
+@pytest.mark.precheck
 def test_process_isolation_fails_closed_on_unsupported_platform(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

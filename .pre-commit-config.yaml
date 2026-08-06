@@ -1,13 +1,13 @@
-# Pre-commit and pre-push run the repository's complete local gate.
-default_install_hook_types: [pre-commit, pre-push]
+# Pre-commit runs the repository's fast local gate. Full tests run in CI.
+default_install_hook_types: [pre-commit]
 
 repos:
   - repo: local
     hooks:
-      - id: pre-check
-        name: Pre-check (defs + ruff + ty + pytest)
+      - id: fast-precheck
+        name: Fast precheck (structural defs + ruff + ty + selected tests)
         entry: scripts/pre-check.sh
         language: system
         pass_filenames: false
         always_run: true
-        stages: [pre-commit, pre-push]
+        stages: [pre-commit]
