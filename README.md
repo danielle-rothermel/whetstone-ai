@@ -287,13 +287,15 @@ class CodexOutputArtifact(BaseModel):
     control_cost: dict[str, Any]
 ```
 
-The subprocess Codex runner fails closed without macOS `sandbox-exec` and
-limits filesystem access to staged runtime and declared state paths. It does
-not provide network containment or hide an explicitly supplied provider
-credential from Codex. Proposal acceptance validates the typed artifact and
-mutation contract; it does not require matching MCP evidence for every
-proposal. A configured partial log grants write access to its parent directory,
-so that directory must not contain unrelated state.
+The subprocess Codex runner uses the pinned official MCP SDK to validate the
+protocol and tool-input boundary. It fails closed without macOS `sandbox-exec`
+and limits filesystem access to staged runtime and declared state paths. It
+accepts the configured Codex executable without enforcing a CLI version and
+does not claim network, credential, or descendant-process containment.
+Proposal acceptance validates the typed artifact and mutation contract; it
+does not require matching MCP evidence for every proposal. A configured
+partial log grants write access to its parent directory, so that directory
+must not contain unrelated state.
 
 ## [Coordination and authority](src/whetstone/coordination/)
 

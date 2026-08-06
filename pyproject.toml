@@ -15,6 +15,7 @@ dependencies = [
     "dr-serialize>=0.1.1,<0.2",
     "dr-store>=0.1.0,<0.2",
     "gepa==0.1.1",
+    "mcp==2.0.0",
     "numpy>=2.5.1",
     "optuna==4.8.0",
     "psycopg[binary]>=3.3.4",

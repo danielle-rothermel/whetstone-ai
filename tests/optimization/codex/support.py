@@ -4,14 +4,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import anyio
 from dr_store import ObjectStore, SqliteBackend
+from mcp.client import Client
 
 from tests.envs.support import execution_policy, process_row_job_factory
-from tests.optimization.codex.mcp_client import (
-    InProcessMcpProcess,
-    JsonRpcClient,
-    JsonRpcProcess,
-)
 from tests.optimization.support import (
     memory_tool_call_store,
     optimizer_config_ref,
@@ -84,10 +81,16 @@ def tool_config(
     namespace: str,
     *,
     tool_name: str = "evaluate_candidate",
+    supports_task_ids: bool = False,
 ) -> ToolConfig:
     definition = ToolDefinition(
         tool_name=tool_name,
-        input_fields=("base_ref", "model_route", "template"),
+        input_fields=(
+            "base_ref",
+            "model_route",
+            "template",
+            *(("task_ids",) if supports_task_ids else ()),
+        ),
         output_fields=(
             "evaluation_evidence_ref",
             "output_artifact_ref",
@@ -201,48 +204,67 @@ class ScriptedAgentCall:
     base_ref: TypedRef
     model_route: str
     template: str
+    task_ids: tuple[str, ...] | None = None
 
 
 class FakeCodexRunner:
     def __init__(
         self,
         *,
-        process: JsonRpcProcess | None = None,
+        server: EvaluateCandidateServer | None = None,
         scripted_calls: Sequence[ScriptedAgentCall],
         final_proposals: Sequence[Candidate],
         artifact_run_id: str | None = None,
     ) -> None:
-        self._process = process
+        self._server = server
         self._calls = tuple(scripted_calls)
         self._proposals = tuple(final_proposals)
         self._artifact_run_id = artifact_run_id
         self.observed_payloads: list[dict[str, object]] = []
 
-    def _boundary(self, handle: RuntimeToolHandle) -> JsonRpcProcess:
-        if self._process is not None:
-            return self._process
-        return InProcessMcpProcess(EvaluateCandidateServer(handle=handle))
+    def _boundary(self, handle: RuntimeToolHandle) -> EvaluateCandidateServer:
+        if self._server is not None:
+            return self._server
+        return EvaluateCandidateServer(handle=handle)
+
+    async def _evaluate_calls(
+        self,
+        server: EvaluateCandidateServer,
+        handle: RuntimeToolHandle,
+    ) -> None:
+        async with Client(server) as client:
+            tools = await client.list_tools()
+            if [tool.name for tool in tools.tools] != [
+                str(handle.config.tool_name)
+            ]:
+                raise OpaqueStepError("external MCP process omitted the tool")
+            for call in self._calls:
+                arguments: dict[str, object] = {
+                    "call_id": call.call_id,
+                    "base_ref": call.base_ref.model_dump(mode="json"),
+                    "model_route": call.model_route,
+                    "template": call.template,
+                }
+                if call.task_ids is not None:
+                    arguments["task_ids"] = list(call.task_ids)
+                result = await client.call_tool(
+                    str(handle.config.tool_name), arguments
+                )
+                payload = result.structured_content
+                if not isinstance(payload, dict):
+                    raise OpaqueStepError(
+                        "MCP tool returned no structured result"
+                    )
+                self.observed_payloads.append(payload)
 
     def run(
         self, request: OptimizationStepRequest, handle: RuntimeToolHandle
     ) -> CodexRunResult:
-        client = JsonRpcClient(
-            self._boundary(handle).exchange,
-            tool_name=handle.config.tool_name,
+        anyio.run(
+            self._evaluate_calls,
+            self._boundary(handle),
+            handle,
         )
-        client.initialize()
-        tools = client.list_tools()
-        if not any(tool["name"] == client.tool_name for tool in tools):
-            raise OpaqueStepError("external MCP process omitted the tool")
-        for call in self._calls:
-            self.observed_payloads.append(
-                client.evaluate(
-                    call_id=call.call_id,
-                    base_ref=call.base_ref.model_dump(mode="json"),
-                    model_route=call.model_route,
-                    template=call.template,
-                )
-            )
         return CodexRunResult(
             artifact=CodexOutputArtifact(
                 run_id=self._artifact_run_id or request.run_id,
@@ -303,6 +325,7 @@ def stack(
     *,
     namespace: str = "codex-durable",
     tool_name: str = "evaluate_candidate",
+    supports_task_ids: bool = False,
 ) -> CodexStack:
     database = tmp_path / "codex.sqlite"
     store = ObjectStore(SqliteBackend(database))
@@ -312,6 +335,7 @@ def stack(
         experiment,
         namespace,
         tool_name=tool_name,
+        supports_task_ids=supports_task_ids,
     )
     authority = EffectAuthority.memory()
     call_store = memory_tool_call_store(store, authority)

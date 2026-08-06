@@ -1,26 +1,29 @@
 from __future__ import annotations
 
 import json
-from typing import Any, TextIO
+from typing import Any
 
-from whetstone.core.identity import ImmutableJsonObject, NonEmptyId
+from mcp import types as mcp_types
+from mcp.server.mcpserver import Context, MCPServer
+
+from whetstone.core.identity import (
+    ImmutableJsonObject,
+    NonEmptyId,
+    TypedRef,
+)
 from whetstone.optimization.tools.contracts import (
     RuntimeToolHandle,
     ToolCall,
     ToolResult,
 )
 
-MCP_PROTOCOL_VERSION = "2024-11-05"
+_BASE_INPUT_FIELDS = frozenset({"base_ref", "model_route", "template"})
+_TASK_SUBSET_INPUT_FIELDS = _BASE_INPUT_FIELDS | {"task_ids"}
 
 
-class McpError(RuntimeError):
-    def __init__(self, code: int, message: str) -> None:
-        self.code = code
-        self.message = message
-        super().__init__(f"[{code}] {message}")
-
-
-def tool_result_to_mcp_content(result: ToolResult) -> dict[str, Any]:
+def tool_result_to_mcp_result(
+    result: ToolResult,
+) -> mcp_types.CallToolResult:
     if result.refusal is not None:
         payload = {
             "refused": True,
@@ -28,165 +31,158 @@ def tool_result_to_mcp_content(result: ToolResult) -> dict[str, Any]:
             "refusal_class": result.refusal.refusal_class.value,
             "reason": str(result.refusal.reason),
         }
-        return {
-            "isError": True,
-            "content": [{"type": "text", "text": json.dumps(payload)}],
+        is_error = True
+    elif result.terminal_failure is not None:
+        payload = {
+            "refused": False,
+            "call_id": str(result.call_id),
+            "terminal_failure": result.terminal_failure.model_dump(
+                mode="json"
+            ),
         }
-    payload = {
-        "refused": False,
-        "call_id": str(result.call_id),
-        "output": None if result.output is None else result.output.to_json(),
-        "reward": (
-            None
-            if result.reward is None
-            else result.reward.model_dump(mode="json")
-        ),
-    }
-    return {
-        "isError": False,
-        "content": [{"type": "text", "text": json.dumps(payload)}],
-        "structuredContent": payload,
-    }
+        is_error = True
+    else:
+        assert result.output is not None
+        payload = {
+            "refused": False,
+            "call_id": str(result.call_id),
+            "output": result.output.to_json(),
+            "reward": (
+                None
+                if result.reward is None
+                else result.reward.model_dump(mode="json")
+            ),
+        }
+        is_error = False
+    return mcp_types.CallToolResult(
+        content=[
+            mcp_types.TextContent(
+                type="text",
+                text=json.dumps(payload, sort_keys=True),
+            )
+        ],
+        structured_content=payload,
+        is_error=is_error,
+    )
 
 
-class EvaluateCandidateServer:
-    """Expose one admitted evaluation tool over JSON-RPC."""
+class EvaluateCandidateServer(MCPServer[None]):
+    """Expose one configured evaluation tool through the official MCP SDK."""
 
     def __init__(self, *, handle: RuntimeToolHandle) -> None:
+        definition = handle.config.definition.record
+        input_fields = frozenset(definition.input_fields)
+        if input_fields not in (
+            _BASE_INPUT_FIELDS,
+            _TASK_SUBSET_INPUT_FIELDS,
+        ):
+            raise ValueError(
+                "MCP evaluation Tool Definition must declare exactly "
+                "base_ref, model_route, template, and optionally task_ids"
+            )
+
+        super().__init__(name="whetstone", version="1")
         self.tool_config = handle.config
         self._handle = handle
+        self._input_names = frozenset({"call_id", *input_fields})
+
+        if input_fields == _TASK_SUBSET_INPUT_FIELDS:
+
+            def evaluate_candidate(
+                call_id: NonEmptyId,
+                base_ref: TypedRef,
+                model_route: NonEmptyId,
+                template: str,
+                task_ids: list[str],
+            ) -> mcp_types.CallToolResult:
+                return self._call(
+                    call_id=call_id,
+                    base_ref=base_ref,
+                    model_route=model_route,
+                    template=template,
+                    task_ids=task_ids,
+                )
+
+        else:
+
+            def evaluate_candidate(
+                call_id: NonEmptyId,
+                base_ref: TypedRef,
+                model_route: NonEmptyId,
+                template: str,
+            ) -> mcp_types.CallToolResult:
+                return self._call(
+                    call_id=call_id,
+                    base_ref=base_ref,
+                    model_route=model_route,
+                    template=template,
+                )
+
+        self.add_tool(
+            evaluate_candidate,
+            name=str(definition.tool_name),
+            description=(
+                "Evaluate a candidate using Whetstone's canonical engine."
+            ),
+            structured_output=False,
+        )
+
+    async def list_tools(self) -> list[mcp_types.Tool]:
+        tools = await super().list_tools()
+        return [
+            tool.model_copy(
+                update={
+                    "input_schema": {
+                        **tool.input_schema,
+                        "additionalProperties": False,
+                    }
+                }
+            )
+            for tool in tools
+        ]
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        context: Context[None, Any] | None = None,
+    ) -> mcp_types.CallToolResult | mcp_types.InputRequiredResult:
+        if name == self.tool_config.tool_name and set(arguments) != (
+            self._input_names
+        ):
+            raise ValueError(
+                "MCP evaluation arguments must exactly match the advertised "
+                "tool input schema"
+            )
+        return await super().call_tool(name, arguments, context)
 
     @property
     def handle(self) -> RuntimeToolHandle:
         return self._handle
 
-    def handle_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
-        request_id = message.get("id")
-        try:
-            method = message.get("method")
-            if method == "initialize":
-                result = {
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "whetstone", "version": "1"},
-                }
-            elif method == "notifications/initialized":
-                return None
-            elif method == "tools/list":
-                result = {"tools": [self._tool_definition()]}
-            elif method == "tools/call":
-                result = self._call(message.get("params") or {})
-            elif method == "ping":
-                result = {}
-            else:
-                raise McpError(-32601, f"method not found: {method!r}")
-        except McpError as exc:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": exc.code, "message": exc.message},
-            }
-        if request_id is None:
-            return None
-        return {"jsonrpc": "2.0", "id": request_id, "result": result}
-
-    def _tool_definition(self) -> dict[str, Any]:
-        return {
-            "name": self.tool_config.tool_name,
-            "description": (
-                "Evaluate a candidate using Whetstone's canonical engine."
-            ),
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "call_id": {"type": "string"},
-                    "base_ref": {
-                        "type": "object",
-                        "properties": {
-                            "schema_name": {"type": "string"},
-                            "content_hash": {"type": "string"},
-                        },
-                        "required": ["schema_name", "content_hash"],
-                    },
-                    "model_route": {"type": "string"},
-                    "template": {"type": "string"},
-                },
-                "required": [
-                    "call_id",
-                    "base_ref",
-                    "model_route",
-                    "template",
-                ],
-            },
+    def _call(
+        self,
+        *,
+        call_id: NonEmptyId,
+        base_ref: TypedRef,
+        model_route: NonEmptyId,
+        template: str,
+        task_ids: list[str] | None = None,
+    ) -> mcp_types.CallToolResult:
+        raw_args: dict[str, object] = {
+            "base_ref": base_ref.model_dump(mode="json"),
+            "model_route": str(model_route),
+            "template": template,
         }
-
-    def _call(self, params: dict[str, Any]) -> dict[str, Any]:
-        if params.get("name") != self.tool_config.tool_name:
-            raise McpError(-32602, "unknown tool")
-        arguments = params.get("arguments")
-        if not isinstance(arguments, dict):
-            raise McpError(-32602, "tool arguments must be an object")
-        call_id = arguments.get("call_id")
-        if not isinstance(call_id, str) or not call_id:
-            raise McpError(-32602, "call_id must be non-empty")
-        base_ref = arguments.get("base_ref")
-        if not isinstance(base_ref, dict):
-            raise McpError(-32602, "base_ref must be a typed reference object")
-        try:
-            args = ImmutableJsonObject(
-                {
-                    "base_ref": base_ref,
-                    "model_route": arguments.get("model_route", ""),
-                    "template": arguments.get("template", ""),
-                }
-            )
-        except ValueError as exc:
-            raise McpError(-32602, str(exc)) from exc
+        if task_ids is not None:
+            raw_args["task_ids"] = task_ids
         call = ToolCall(
-            call_id=NonEmptyId(call_id),
+            call_id=call_id,
             tool_config=self._handle.tool_config_ref,
             capacity_binding=self._handle.binding,
-            args=args,
+            args=ImmutableJsonObject(raw_args),
         )
-        return tool_result_to_mcp_content(self._handle(call))
+        return tool_result_to_mcp_result(self._handle(call))
 
 
-def _protocol_error(code: int, message: str) -> dict[str, Any]:
-    return {
-        "jsonrpc": "2.0",
-        "id": None,
-        "error": {"code": code, "message": message},
-    }
-
-
-def serve_stdio(
-    server: EvaluateCandidateServer, *, stdin: TextIO, stdout: TextIO
-) -> None:
-    """Return protocol errors for invalid JSON and non-object requests."""
-    for raw in stdin:
-        if not raw.strip():
-            continue
-        response: dict[str, Any] | None
-        try:
-            message = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            response = _protocol_error(-32700, f"parse error: {exc.msg}")
-        else:
-            if isinstance(message, dict):
-                response = server.handle_request(message)
-            else:
-                response = _protocol_error(
-                    -32600, "request must be a JSON object"
-                )
-        if response is not None:
-            stdout.write(json.dumps(response) + "\n")
-            stdout.flush()
-
-
-__all__ = [
-    "MCP_PROTOCOL_VERSION",
-    "EvaluateCandidateServer",
-    "McpError",
-    "serve_stdio",
-    "tool_result_to_mcp_content",
-]
+__all__ = ["EvaluateCandidateServer", "tool_result_to_mcp_result"]

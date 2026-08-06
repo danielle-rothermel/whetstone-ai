@@ -12,7 +12,7 @@ from pydantic import (
 )
 
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.sampling import INTERNAL_EVAL, Completeness
+from whetstone.envs.sampling import Completeness
 from whetstone.evaluation.drivers.internal import InternalRowRequest
 from whetstone.evaluation.engine import EvaluationEngine
 from whetstone.execution.fanout import ProcessJob
@@ -26,7 +26,6 @@ class EvaluationRuntimeConfig(BaseModel):
 
     env_name: StrictStr
     model: StrictStr
-    sampling_role: StrictStr = "internal_eval"
     pool_n_per_stratum: StrictInt | None = None
     split_sizes: tuple[int, int, int] | None = None
     repeats: StrictInt
@@ -66,12 +65,8 @@ class EvaluationRuntimeConfig(BaseModel):
             repeats=self.repeats,
             split_sizes=self.split_sizes,
         )
-        sampling = experiment.eval_configs.eval_config_for(self.sampling_role)
-        split = (
-            experiment.eval_configs.internal
-            if self.sampling_role == INTERNAL_EVAL
-            else experiment.eval_configs.official
-        )
+        split = experiment.eval_configs.internal
+        sampling = split.eval_config
         if sampling.config_identity_hash != self.expected_eval_config_hash:
             raise ValueError(
                 "reconstructed runtime produced a different Eval Config"

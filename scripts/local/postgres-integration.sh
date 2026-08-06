@@ -114,6 +114,15 @@ cleanup() {
   if [[ "${database_created}" != true && "${role_created}" != true ]]; then
     return "${run_status}"
   fi
+  if ((run_status != 0)); then
+    if [[ "${database_created}" == true ]]; then
+      echo "Retaining failed PostgreSQL database ${test_database}" >&2
+    fi
+    if [[ "${role_created}" == true ]]; then
+      echo "Retaining failed PostgreSQL role ${test_role}" >&2
+    fi
+    return "${run_status}"
+  fi
   if [[ ! "${test_database}" =~ ^whetstone_test_[0-9a-f]{32}$ ]]; then
     echo "refusing to drop an unexpectedly named database" >&2
     return 1

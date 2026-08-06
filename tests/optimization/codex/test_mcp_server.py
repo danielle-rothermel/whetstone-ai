@@ -4,7 +4,6 @@ import pytest
 from dr_store import ObjectStore, SqliteBackend
 
 from tests.envs.support import execution_policy
-from tests.optimization.codex.mcp_client import InProcessMcpProcess
 from tests.optimization.codex.support import (
     MODEL_ROUTE,
     ROW_JOB_ENTRYPOINT,
@@ -84,7 +83,7 @@ def test_serialized_environment_reconstructs_evaluation_server(
     ]
     assert isinstance(template, str)
     runner = FakeCodexRunner(
-        process=InProcessMcpProcess(server),
+        server=server,
         scripted_calls=(
             ScriptedAgentCall(
                 call_id="child-call",

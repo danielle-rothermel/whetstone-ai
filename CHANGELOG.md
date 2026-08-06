@@ -10,7 +10,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Added
 
 - Add a Codex optimization adapter with a typed output artifact, one bounded
-  MCP evaluation tool, and fail-closed macOS filesystem isolation.
+  MCP evaluation tool backed by the pinned official protocol SDK, and
+  fail-closed macOS filesystem isolation.
 - Add a guarded local PostgreSQL 17 integration runner that creates and
   removes a unique least-privilege role and disposable database per run.
 - Add code-grounded repository terms and binding contracts under `.defs/`,
@@ -38,6 +39,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Restrict Codex runtime reconstruction to internal sampling, validate
+  evaluation-tool inputs before launch, surface durable tool failures to the
+  model, stage complete namespace packages, and retain failed PostgreSQL
+  integration state.
 - Make immutable JSON values safe for DBOS checkpoint serialization and keep
   DBOS tests independent of registry teardown order.
 - Bind proposal transport atomically and strengthen durable recovery,

@@ -340,7 +340,7 @@ class SubprocessCodexRunner:
         self._binary = codex_binary
         self._model = model
         self._timeout = timeout_seconds
-        self._prompt_builder = prompt_builder or _default_prompt
+        self._prompt_builder = prompt_builder
         source_environment = (
             dict(os.environ) if environment is None else dict(environment)
         )
@@ -396,8 +396,13 @@ class SubprocessCodexRunner:
             schema_path.write_text(
                 json.dumps(schema, sort_keys=True), encoding="utf-8"
             )
+            prompt = (
+                _default_prompt(request, tool_name=handle.config.tool_name)
+                if self._prompt_builder is None
+                else self._prompt_builder(request)
+            )
             command = build_codex_command(
-                prompt=self._prompt_builder(request),
+                prompt=prompt,
                 codex_binary=resolved_binary,
                 model=self._model,
                 mcp_env={
@@ -484,10 +489,13 @@ class SubprocessCodexRunner:
                 f"transport factory package {top_level!r} was not found"
             )
         if spec.submodule_search_locations:
-            source = Path(next(iter(spec.submodule_search_locations)))
             target = destination / top_level
-            if source.resolve() != package_root.resolve():
-                shutil.copytree(source, target, dirs_exist_ok=True)
+            # copytree overwrites existing files, so reverse order preserves
+            # Python's first-location import precedence in the merged package.
+            for location in reversed(spec.submodule_search_locations):
+                source = Path(location)
+                if source.resolve() != package_root.resolve():
+                    shutil.copytree(source, target, dirs_exist_ok=True)
         elif spec.origin is not None:
             shutil.copy2(spec.origin, destination / Path(spec.origin).name)
 
@@ -549,14 +557,16 @@ class SubprocessCodexRunner:
         return tuple(sorted(state_paths, key=str))
 
 
-def _default_prompt(request: OptimizationStepRequest) -> str:
+def _default_prompt(
+    request: OptimizationStepRequest, *, tool_name: str
+) -> str:
     context = json.dumps(
         request.model_dump(mode="json"),
         sort_keys=True,
         separators=(",", ":"),
     )
     return (
-        "Use only the external evaluate_candidate MCP tool for measurements. "
+        f"Use only the external {tool_name} MCP tool for measurements. "
         "Do not call any built-in tool. Build proposals from the exact "
         "candidate base_ref, model route, payload template, Tool Config, "
         "capacity, budget, pools, hyperparameters, and output contract in "

@@ -5,13 +5,12 @@ import os
 import sys
 from pathlib import Path
 
+import anyio
 import typer
+from mcp.client import Client
 
-from tests.optimization.codex.mcp_client import (
-    InProcessMcpProcess,
-    JsonRpcClient,
-)
 from whetstone.experiment.candidate import candidate_reference
+from whetstone.optimization.codex.mcp_bridge import EvaluateCandidateServer
 from whetstone.optimization.codex.mcp_server import build_server_from_env
 from whetstone.optimization.contracts import OptimizationStepRequest
 
@@ -52,6 +51,31 @@ def _request_context(prompt: str) -> OptimizationStepRequest:
     return OptimizationStepRequest.model_validate_json(
         prompt.split(marker, 1)[1]
     )
+
+
+async def _evaluate_proposal(
+    server: EvaluateCandidateServer,
+    base_ref: dict[str, object],
+    template: str,
+) -> dict[str, object]:
+    async with Client(server) as client:
+        tools = await client.list_tools()
+        assert [tool.name for tool in tools.tools] == [
+            str(server.tool_config.tool_name)
+        ]
+        result = await client.call_tool(
+            str(server.tool_config.tool_name),
+            {
+                "call_id": "subprocess-proposal-evaluation",
+                "base_ref": base_ref,
+                "model_route": _MODEL_ROUTE,
+                "template": template,
+            },
+        )
+    payload = result.structured_content
+    if not isinstance(payload, dict):
+        raise RuntimeError("MCP tool returned no structured result")
+    return payload
 
 
 @app.command(
@@ -114,18 +138,11 @@ def main(context: typer.Context) -> None:
         proposed_template = f"{template}\nAnswer carefully."
         base_ref = base.base_ref.model_dump(mode="json")
         server = build_server_from_env(_mcp_environment(args))
-        client = JsonRpcClient(
-            InProcessMcpProcess(server).exchange,
-            tool_name=server.tool_config.tool_name,
-        )
-        client.initialize()
-        tools = client.list_tools()
-        assert [tool["name"] for tool in tools] == [client.tool_name]
-        result = client.evaluate(
-            call_id="subprocess-proposal-evaluation",
-            base_ref=base_ref,
-            model_route=_MODEL_ROUTE,
-            template=proposed_template,
+        result = anyio.run(
+            _evaluate_proposal,
+            server,
+            base_ref,
+            proposed_template,
         )
         proposals.append(
             {

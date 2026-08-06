@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import sys
 
 from dr_store import ObjectStore, SqliteBackend
 
@@ -12,7 +11,6 @@ from whetstone.core.effects.authority import (
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.optimization.codex.mcp_bridge import (
     EvaluateCandidateServer,
-    serve_stdio,
 )
 from whetstone.optimization.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
@@ -72,7 +70,7 @@ def build_server_from_env(
 
 
 def main() -> None:
-    serve_stdio(build_server_from_env(), stdin=sys.stdin, stdout=sys.stdout)
+    build_server_from_env().run(transport="stdio")
 
 
 if __name__ == "__main__":

@@ -76,7 +76,8 @@ The subprocess Codex runner refuses to execute unless macOS sandbox-exec is \
 available, requires absolute paths for durable state, and builds a filesystem \
 profile for its staged runtime and declared state paths. A configured partial \
 log grants write access to its parent directory. The boundary does not claim \
-network containment or secrecy of an explicitly supplied provider credential."""
+network containment, secrecy of an explicitly supplied provider credential, \
+Codex CLI version compatibility, or descendant-process cleanup."""
 rationale = """
 Codex and its MCP child need a small runtime, exact durable stores, and provider \
 access, but they must not inherit ambient host filesystem authority. Refusing \
@@ -86,6 +87,21 @@ filesystem profile. Partial-log parent authority remains explicit because the \
 durable log opens records and its sibling lock through that directory."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/optimization/codex/test_runner.py"
+
+[[contracts]]
+title = "Codex MCP ingress uses the pinned official protocol boundary"
+statement = """
+The Codex MCP server delegates JSON-RPC framing, protocol negotiation, and \
+tool-input validation to the pinned official MCP SDK before Whetstone \
+constructs a ToolCall. Whetstone owns translation between the declared \
+evaluation-tool contract and its durable tool store."""
+rationale = """
+MCP is an external serialization boundary. Pinning its authoritative protocol \
+implementation prevents a partial local reimplementation from silently \
+accepting malformed envelopes or drifting from the negotiated wire contract, \
+while keeping Whetstone-specific evaluation semantics locally explicit."""
+date = "2026-08-06"
+check = "uv run pytest -q tests/optimization/codex/test_mcp_bridge.py tests/optimization/codex/test_mcp_server.py"
 
 [[contracts]]
 title = "Codex artifacts are accepted on proposal shape"

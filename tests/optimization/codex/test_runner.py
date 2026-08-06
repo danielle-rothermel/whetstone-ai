@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import importlib.machinery
+import json
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,6 +27,7 @@ from whetstone.optimization.codex.adapter import (
 )
 from whetstone.optimization.codex.runner import (
     _CODEX_DENIED_FEATURES,
+    _MCP_TOOLS_APPROVAL_MODE,
     SubprocessCodexRunner,
     _MacOsProcessIsolation,
 )
@@ -50,6 +54,9 @@ def _subprocess_boundary(
     tmp_path: Path,
     experiment: EnvExperiment,
     mode: str,
+    *,
+    tool_name: str = "evaluate_candidate",
+    prompt_builder: Callable[[OptimizationStepRequest], str] | None = None,
 ) -> SubprocessBoundary:
     store = ObjectStore(SqliteBackend(tmp_path / f"subprocess-{mode}.sqlite"))
     evaluation_engine = engine(store, experiment)
@@ -57,6 +64,7 @@ def _subprocess_boundary(
         evaluation_engine,
         experiment,
         f"codex-subprocess-{mode}",
+        tool_name=tool_name,
     )
     mcp_state = tmp_path / f"mcp-{mode}"
     mcp_state.mkdir()
@@ -88,6 +96,7 @@ def _subprocess_boundary(
             "AWS_SECRET_ACCESS_KEY": "forbidden",
             "UNRELATED_VALUE": "forbidden",
         },
+        prompt_builder=prompt_builder,
     )
     step_request = request(
         experiment.initial_candidate,
@@ -187,6 +196,11 @@ def test_subprocess_uses_typed_artifact_and_restricted_authority(
         if item == "--disable"
     }
     assert disabled == set(_CODEX_DENIED_FEATURES)
+    assert (
+        "mcp_servers.whetstone.default_tools_approval_mode="
+        + json.dumps(_MCP_TOOLS_APPROVAL_MODE)
+        in argv
+    )
     platform_environment = {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
     assert set(invocation["env_keys"]) - platform_environment == {
         "CODEX_HOME",
@@ -237,6 +251,139 @@ def test_subprocess_proposal_uses_the_mcp_evaluation_path(
     assert boundary.partial_log_path.is_dir()
     mcp_result = run.artifact.conversation_evidence["agent"]["mcp_result"]
     assert mcp_result["refused"] is False
+
+
+def test_partial_log_profile_preserves_declared_parent_authority(
+    tmp_path,
+    codex_experiment: EnvExperiment,
+) -> None:
+    boundary = _subprocess_boundary(tmp_path, codex_experiment, "proposal")
+    runtime_root = tmp_path / "isolated-runtime"
+    runtime_root.mkdir()
+
+    writable_paths = boundary.runner._writable_runtime_paths(runtime_root)
+
+    partial_path = boundary.partial_log_path
+    assert partial_path is not None
+    resolved_partial = partial_path.resolve()
+    lock_path = resolved_partial.with_name(f".{resolved_partial.name}.lock")
+    assert {resolved_partial, lock_path, resolved_partial.parent} <= set(
+        writable_paths
+    )
+    profile = _MacOsProcessIsolation._profile(
+        readable_paths=(),
+        writable_paths=writable_paths,
+    )
+    assert (
+        "(allow file-write* (subpath "
+        f"{json.dumps(str(resolved_partial.parent))}))" in profile
+    )
+    for ancestor in resolved_partial.parents:
+        assert (
+            "(allow file-read* file-test-existence (literal "
+            f"{json.dumps(str(ancestor))}))" in profile
+        )
+
+
+def test_default_prompt_names_configured_mcp_tool(
+    tmp_path,
+    codex_experiment: EnvExperiment,
+    cross_platform_fake_codex_boundary,
+) -> None:
+    tool_name = "score_candidate_draft"
+    boundary = _subprocess_boundary(
+        tmp_path,
+        codex_experiment,
+        "success",
+        tool_name=tool_name,
+    )
+
+    run = boundary.runner.run(boundary.request, boundary.handle)
+
+    events = run.artifact.conversation_evidence["jsonl_events"]
+    prompt = events[0]["argv"][-1]
+    instruction = prompt.split("\nOPTIMIZATION_STEP_REQUEST_JSON=", 1)[0]
+    assert tool_name in instruction
+    assert "evaluate_candidate" not in instruction
+
+
+def test_custom_prompt_builder_remains_request_only(
+    tmp_path,
+    codex_experiment: EnvExperiment,
+    cross_platform_fake_codex_boundary,
+) -> None:
+    observed_requests: list[OptimizationStepRequest] = []
+
+    def build_prompt(step_request: OptimizationStepRequest) -> str:
+        observed_requests.append(step_request)
+        context = json.dumps(step_request.model_dump(mode="json"))
+        return f"custom prompt\nOPTIMIZATION_STEP_REQUEST_JSON={context}"
+
+    boundary = _subprocess_boundary(
+        tmp_path,
+        codex_experiment,
+        "success",
+        prompt_builder=build_prompt,
+    )
+
+    run = boundary.runner.run(boundary.request, boundary.handle)
+
+    events = run.artifact.conversation_evidence["jsonl_events"]
+    assert events[0]["argv"][-1].startswith("custom prompt\n")
+    assert observed_requests == [boundary.request]
+
+
+def test_runtime_staging_merges_namespace_package_locations(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    codex_experiment: EnvExperiment,
+) -> None:
+    namespace = "row_job_namespace"
+    first = tmp_path / "first" / namespace
+    second = tmp_path / "second" / namespace
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    (first / "unrelated.py").write_text("VALUE = 'first'\n", encoding="utf-8")
+    (first / "collision.py").write_text("VALUE = 'first'\n", encoding="utf-8")
+    (second / "configured.py").write_text(
+        "def run():\n    return 'configured'\n",
+        encoding="utf-8",
+    )
+    (second / "collision.py").write_text(
+        "VALUE = 'second'\n", encoding="utf-8"
+    )
+    spec = importlib.machinery.ModuleSpec(
+        namespace,
+        loader=None,
+        is_package=True,
+    )
+    assert spec.submodule_search_locations is not None
+    spec.submodule_search_locations.extend((str(first), str(second)))
+    monkeypatch.setattr(
+        "whetstone.optimization.codex.runner.importlib.util.find_spec",
+        lambda _name: spec,
+    )
+    store = ObjectStore(SqliteBackend(tmp_path / "namespace.sqlite"))
+    evaluation_engine = engine(store, codex_experiment)
+    runner = SubprocessCodexRunner(
+        sqlite_path=str(tmp_path / "mcp.sqlite"),
+        runtime_config=runtime_config(evaluation_engine).model_copy(
+            update={"row_job_entrypoint": f"{namespace}.configured:run"}
+        ),
+        reward_policy=codex_experiment.reward_policy,
+        environment={},
+    )
+    destination = tmp_path / "runtime"
+    destination.mkdir()
+
+    runner._stage_runtime(destination)
+
+    staged_namespace = destination / namespace
+    assert (staged_namespace / "unrelated.py").is_file()
+    assert (staged_namespace / "configured.py").is_file()
+    assert (staged_namespace / "collision.py").read_text(encoding="utf-8") == (
+        "VALUE = 'first'\n"
+    )
 
 
 @pytest.mark.skipif(
