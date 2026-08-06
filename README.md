@@ -9,27 +9,30 @@
 reproducible experiment contracts.** Its functionality is organized into
 these areas:
 
-- **Experiment modeling and identity** bind candidates, computation graphs,
-  objectives, task plans, and execution settings into typed,
-  content-addressed configurations.
-- **Environments and sampling** assemble task pools, evaluation roles and
-  splits, prompt transformations, rollout definitions, and reward policies for
+- **[Core identity and effects](src/whetstone/core/)** provide validated IDs,
+  content-addressed references, evaluation roles, and replay-safe effect
+  primitives shared by every functional area.
+- **[Experiment modeling](src/whetstone/experiment/)** binds candidates,
+  computation graphs, objectives, rewards, and realized evaluation settings
+  into immutable configurations.
+- **[Environments and sampling](src/whetstone/envs/)** assemble task pools,
+  internal and official splits, rollout definitions, and reward policies for
   code-generation and encoder-decoder experiments.
-- **Provider interaction** translates language-model inputs and results,
-  classifies transport and semantic failures, applies bounded retry policies,
-  and retains evidence for each attempt.
-- **Execution and recovery** fan out work through managed subprocesses, reuse
-  cached provider results, preserve partial progress, and resume previously
-  completed work exactly.
-- **Evaluation and scoring** execute graphs over planned tasks and repeats,
-  capture component traces, and aggregate correctness, compression, reward,
-  and statistical evidence.
-- **Optimization** provides a shared candidate-evaluation harness and native
-  COPRO, MIPROv2, and GEPA flows, including proposal generation, tool use,
-  algorithm state, and result artifacts.
-- **Authority and coordination** govern durable proposal and evaluation
-  effects, ownership claims, and terminal result binding across replay and
-  recovery.
+- **[Provider interaction](src/whetstone/provider/)** classifies transport
+  outcomes, applies bounded semantic retry policy, and retains the exact
+  evidence for every completed attempt.
+- **[Execution and recovery](src/whetstone/execution/)** fan out process work,
+  preserve partial progress, reuse prompt results, and resume completed work
+  without changing its identity.
+- **[Evaluation and scoring](src/whetstone/evaluation/)** execute graphs over
+  planned tasks and repeats, capture component traces, and persist complete
+  aggregate and reward evidence.
+- **[Optimization](src/whetstone/optimization/)** provides the shared harness,
+  proposal and tool contracts, native COPRO, MIPROv2, and GEPA flows, and a
+  Codex MCP adapter with a typed output artifact.
+- **[Coordination and authority](src/whetstone/coordination/)** arbitrate
+  durable proposal and evaluation work, official selection, ownership claims,
+  and terminal result binding across recovery.
 
 The repository boundaries follow the same shape:
 
@@ -41,8 +44,290 @@ The repository boundaries follow the same shape:
 | Provider | `whetstone.provider` | Provider requests, attempt evidence, classification, and retry policy |
 | Execution | `whetstone.execution` | Process fanout, partial progress, prompt caching, and resume behavior |
 | Evaluation | `whetstone.evaluation` | Evaluation drivers, traces, evidence, scoring, and aggregates |
-| Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, and tool use |
+| Optimization | `whetstone.optimization` | Shared optimization contracts plus COPRO, MIPROv2, GEPA, Codex, and tool use |
 | Coordination | `whetstone.coordination` | Durable claims, official authority, and proposal/evaluation services |
+
+The excerpts below show stable contract shapes; validation and implementation
+details are omitted so this overview can remain useful as internals evolve.
+
+## [Core identity and effects](src/whetstone/core/)
+
+Core owns the small identity vocabulary shared across persistence, subprocess,
+and optimization boundaries, plus the closed evaluation roles.
+
+```python
+@verify(UNIQUE)
+class EvaluationRole(StrEnum):
+    INTERNAL = "internal"
+    OFFICIAL = "official"
+```
+
+```python
+class TypedRef(BaseModel):
+    schema_name: NonEmptyId
+    content_hash: ContentHash
+
+class TerminalFailure(BaseModel):
+    code: NonEmptyId
+    message: NonEmptyId
+    details: ImmutableJsonObject
+```
+
+## [Experiment modeling](src/whetstone/experiment/)
+
+Experiment models bind the candidate being changed to the exact policy,
+environment, objective, and provenance under which it is evaluated.
+
+```python
+class Candidate(BaseModel):
+    candidate_id: NonEmptyId
+    base_ref: TypedRef
+    payload: ImmutableJsonObject
+
+class EvaluationBinding(BaseModel):
+    eval_config: EvalConfigRef
+    role: EvaluationRole
+    authority_principal: NonEmptyId | None
+    campaign: NonEmptyId
+    environment_fingerprint: ExecutionEnvironmentFingerprint
+```
+
+```python
+@verify(UNIQUE)
+class Direction(StrEnum):
+    MAXIMIZE = "maximize"
+    MINIMIZE = "minimize"
+
+@dataclass(frozen=True, slots=True)
+class Objective:
+    name: str
+    value: float
+    direction: Direction
+    derivation: ObjectiveDerivation
+```
+
+## [Environments and sampling](src/whetstone/envs/)
+
+Environment packages compose reusable evaluation inputs without coupling the
+evaluation engine to a particular task family or graph implementation.
+
+```python
+class RolloutDefinitionLike(Protocol):
+    @property
+    def graph_hash(self) -> str: ...
+    @property
+    def provider_call_config(self) -> ProviderCallConfig: ...
+    @property
+    def procedure_config_hash(self) -> str: ...
+
+@dataclass(frozen=True, slots=True)
+class EnvExperiment:
+    env_name: str
+    rollout_definition: RolloutDefinitionLike
+    initial_candidate: Candidate
+    ceiling_candidate: Candidate
+    eval_configs: EnvEvalConfigs
+    reward_policy: RewardPolicy
+```
+
+```python
+class Completeness(StrEnum):
+    PROPAGATE = "propagate"
+    SKIP = "skip"
+```
+
+## [Provider interaction](src/whetstone/provider/)
+
+Provider contracts separate raw invocation evidence from Whetstone's semantic
+classification and keep the complete ordered retry history.
+
+```python
+class ProviderCallAttempt(BaseModel):
+    logical_call_id: StrictStr
+    attempt_number: StrictInt
+    execution_policy_hash: StrictStr
+    evidence: ProviderInvocationEvidence
+    generation: Generation | None
+    semantic_failure: ProviderSemanticFailure | None
+
+class ProviderCallResult(BaseModel):
+    logical_call_id: StrictStr
+    request_identity: dict[str, Any]
+    execution_policy_hash: StrictStr
+    attempts: tuple[ProviderCallAttempt, ...]
+    generation: Generation | None
+    semantic_failure: ProviderSemanticFailure | None
+```
+
+```python
+class ProviderExecutionPolicy(BaseModel):
+    transport_policy: ProviderTransportPolicy
+    max_attempts: StrictInt
+    retry_eligibility: dict[SemanticFailureClass, bool]
+    backoff: BackoffSchedule
+```
+
+## [Execution and recovery](src/whetstone/execution/)
+
+Execution owns bounded subprocess fanout and the durable local state used to
+resume provider work without treating elapsed time as evidence of progress.
+
+```python
+class ProcessJob(BaseModel):
+    entrypoint: StrictStr
+    payload: JsonValue
+
+@dataclass(frozen=True, slots=True)
+class CallSpec[K, R]:
+    key: K
+    job: ProcessJob
+    decode: Callable[[JsonValue], R]
+    deadline_seconds: float
+    commit: Callable[[R], None] | None
+    cancellation_barrier: Callable[[], None] | None
+```
+
+```python
+@dataclass(slots=True)
+class PartialLog:
+    path: Path
+    def append(self, record: PartialCallRecord) -> None: ...
+    def load(self) -> list[PartialCallRecord]: ...
+
+class PromptResultCache:
+    def get_result(
+        self, key: str
+    ) -> tuple[ProviderCallResult, CacheProvenance] | None: ...
+    def put(
+        self,
+        key: str,
+        *,
+        request_identity: dict[str, Any],
+        execution_policy_hash: str,
+        repeat_index: int,
+        drive_ordinal: int,
+        result: ProviderCallResult,
+        phase: str,
+        unit: str,
+        logical_call_id: str,
+    ) -> CacheProvenance: ...
+```
+
+## [Evaluation and scoring](src/whetstone/evaluation/)
+
+The canonical engine turns one immutable request into a durable evidence graph
+whose rows, traces, aggregates, and optional reward all address exact records.
+
+```python
+@dataclass(frozen=True, slots=True)
+class EvaluationRequest:
+    candidate: Candidate
+    evaluation_binding: EvaluationBinding
+    purpose: str
+
+class EvaluationEngine:
+    def evaluate(self, request: EvaluationRequest) -> EngineEvaluation: ...
+```
+
+```python
+class EvaluationEvidence(BaseModel):
+    candidate: CandidateRef
+    evaluation_binding: EvaluationBinding
+    graph_hash: StrictStr
+    task_identities: tuple[str, ...]
+    row_accounting: RowAccounting
+    component_traces_ref: TypedRef
+    outputs_ref: TypedRef
+    aggregate_ref: TypedRef
+    reward_ref: RewardRef | None
+```
+
+## [Optimization](src/whetstone/optimization/)
+
+Optimization keeps one harness contract while algorithm-specific code lives in
+[COPRO](src/whetstone/optimization/copro/),
+[MIPROv2](src/whetstone/optimization/miprov2/),
+[GEPA](src/whetstone/optimization/gepa/), and
+[Codex](src/whetstone/optimization/codex/) subpackages.
+
+```python
+class StepMode(StrEnum):
+    PURE = "pure"
+    PROPOSAL_ONLY = "proposal_only"
+    TOOL_USING = "tool_using"
+
+class OptimizationStepRequest(BaseModel):
+    run: OptimizationRunRef
+    step_id: NonEmptyId
+    step_index: NonNegativeInt
+    candidates: tuple[Candidate, ...]
+    budget: BudgetState
+    step_output_contract: OutputContract
+```
+
+```python
+class OptimizerAdapter(Protocol):
+    def invoke(
+        self,
+        request: OptimizationStepRequest,
+        handles: tuple[RuntimeToolHandle, ...],
+    ) -> AdapterOutput: ...
+
+class CodexRunner(Protocol):
+    def run(
+        self,
+        request: OptimizationStepRequest,
+        handle: RuntimeToolHandle,
+    ) -> CodexRunResult: ...
+
+class CodexOutputArtifact(BaseModel):
+    run_id: StrictStr
+    proposals: tuple[Candidate, ...]
+    conversation_evidence: dict[str, Any]
+    control_cost: dict[str, Any]
+```
+
+The subprocess Codex runner uses the pinned official MCP SDK to validate the
+protocol and tool-input boundary. It fails closed without macOS `sandbox-exec`
+and limits filesystem access to staged runtime and declared state paths. It
+accepts the configured Codex executable without enforcing a CLI version and
+does not claim network, credential, or descendant-process containment.
+Proposal acceptance validates the typed artifact and mutation contract; it
+does not require matching MCP evidence for every proposal. A configured
+partial log grants write access to its parent directory, so that directory
+must not contain unrelated state.
+
+## [Coordination and authority](src/whetstone/coordination/)
+
+Coordination owns process- and restart-safe claims and binds terminal
+evaluation or proposal results to the exact durable work request.
+
+```python
+class EvaluationIntentClaim(BaseModel):
+    intent_ref: TypedRef
+    owner_id: StrictStr
+    event_ordinal: StrictInt
+    generation: StrictInt
+    heartbeat_ordinal: StrictInt
+    expires_at: StrictFloat
+    result_attestation_ref: TypedRef | None
+
+class EvaluationResultAttestation(BaseModel):
+    graph_hash: IdentityHash
+    resolution: IntentResolution
+```
+
+```python
+class EngineEvaluationService:
+    @property
+    def replay_policy(self) -> ReplayPolicy: ...
+    def resolve_evaluation_intent(
+        self, intent: EvaluationIntent
+    ) -> IntentResolution: ...
+    def validate_resolution_graph(
+        self, resolution: IntentResolution
+    ) -> None: ...
+```
 
 The authoritative repository vocabulary and standing rules are
 [`terms.toml`](https://github.com/danielle-rothermel/whetstone-ai/blob/main/.defs/terms.toml)
@@ -107,7 +392,11 @@ integration entrypoints are `scripts/ci/process-integration.sh`,
 `scripts/ci/sqlite-time-integration.sh`,
 `scripts/ci/sqlite-contention.sh`, and
 `scripts/ci/postgres-integration.sh`. The PostgreSQL entrypoint requires
-`WHETSTONE_TEST_POSTGRES_DSN`. Run the complete serial suite with
+`WHETSTONE_TEST_POSTGRES_DSN`. For a local PostgreSQL 17 service that listens
+only on loopback, run `scripts/local/postgres-integration.sh`. It provisions a
+unique least-privilege role and database, removes both after successful
+validated cleanup, and otherwise leaves them for inspection. It never uses the
+durable runtime database as a test fallback. Run the complete serial suite with
 `uv run pytest -q`; CI also exercises installed-wheel and Python 3.14
 compatibility contracts.
 

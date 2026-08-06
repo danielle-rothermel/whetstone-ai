@@ -1,0 +1,13 @@
+from enum import UNIQUE, StrEnum, verify
+
+
+@verify(UNIQUE)
+class McpEnvironmentKey(StrEnum):
+    SQLITE_PATH = "WS_MCP_SQLITE_PATH"
+    TOOL_CONFIG = "WS_MCP_TOOL_CONFIG"
+    CAPACITY_BINDING = "WS_MCP_CAPACITY_BINDING"
+    RUNTIME_CONFIG = "WS_MCP_RUNTIME_CONFIG"
+    REWARD_POLICY = "WS_MCP_REWARD_POLICY"
+
+
+__all__ = ["McpEnvironmentKey"]

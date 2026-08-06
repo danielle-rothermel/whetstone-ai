@@ -1,3 +1,4 @@
+import pkgutil
 from pathlib import Path
 
 FUNCTIONAL_PACKAGES = {
@@ -16,7 +17,7 @@ def _package_directories(root: Path) -> set[str]:
     return {
         path.name
         for path in root.iterdir()
-        if path.is_dir() and (path / "__init__.py").is_file()
+        if path.is_dir() and any(path.glob("*.py"))
     }
 
 
@@ -27,14 +28,18 @@ def test_source_and_test_trees_share_functional_packages() -> None:
 
 def test_optimization_root_contains_only_shared_orchestration() -> None:
     root = Path("src/whetstone/optimization")
-    assert {path.name for path in root.glob("*.py")} == {
-        "__init__.py",
-        "adapters.py",
-        "contracts.py",
-        "harness.py",
-        "run_store.py",
+    assert {
+        module.name
+        for module in pkgutil.iter_modules([str(root)])
+        if not module.ispkg
+    } == {
+        "adapters",
+        "contracts",
+        "harness",
+        "run_store",
     }
     assert _package_directories(root) == {
+        "codex",
         "copro",
         "gepa",
         "miprov2",
