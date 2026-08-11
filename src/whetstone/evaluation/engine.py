@@ -12,7 +12,6 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.envs.ed1 import (
-    ED1_ENV_NAME,
     Ed1Experiment,
     render_encoder_frame,
     validate_ed1_body,
@@ -26,7 +25,7 @@ from whetstone.envs.rollout_definition import (
 )
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
 from whetstone.evaluation.aggregate import ROLLOUT_AGGREGATE_SCHEMA
-from whetstone.evaluation.drivers.ed1 import (
+from whetstone.evaluation.drivers.code_comp.encdec import (
     Ed1RowJobFactory,
     run_ed1_eval,
 )
@@ -457,8 +456,6 @@ class EvaluationEngine:
 
     def _run(self, request: EvaluationRequest) -> InternalEvalResult:
         if isinstance(self.experiment, Ed1Experiment):
-            if self.experiment.env_name != ED1_ENV_NAME:
-                raise ValueError("EvaluationEngine supports ED1, not ED1M")
             body = request.candidate.payload[MUTATION_FIELD]
             if type(body) is not str:
                 raise ValueError("ED1 candidate body must be a strict string")

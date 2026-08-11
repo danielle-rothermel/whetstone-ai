@@ -6,3 +6,15 @@ dataset loading, and enc-dec rollout infrastructure. Legacy import paths
 under ``whetstone.envs.d1``, ``ed1``, and ``ed1m`` remain as shims during
 the migration toward a single ``code_comp`` env identity.
 """
+
+from whetstone.envs.code_comp.registry import (
+    CodeCompMode,
+    build_code_comp_experiment,
+    code_comp_mode_for,
+)
+
+__all__ = [
+    "CodeCompMode",
+    "build_code_comp_experiment",
+    "code_comp_mode_for",
+]

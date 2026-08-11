@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from dr_store import ObjectStore
 
@@ -9,8 +9,11 @@ from whetstone.envs.code_comp.dataset import Ed1Instance
 from whetstone.envs.code_comp.modes.encdec import (
     Ed1Experiment,
     Ed1TaskModelConfig,
-    build_ed1_experiment,
     ed1_preview_metadata,
+)
+from whetstone.envs.code_comp.registry import (
+    CodeCompMode,
+    build_code_comp_experiment,
 )
 from whetstone.envs.code_comp.reward.blended import (
     ED1_DEFAULT_BLEND_CONFIG,
@@ -65,7 +68,7 @@ def build_ed1_preview_engine(
 ) -> EvaluationEngine:
     """Build one ED1 preview evaluation engine for matrix and debug scripts."""
 
-    from whetstone.evaluation.drivers.ed1_row_jobs import (
+    from whetstone.evaluation.drivers.code_comp.row_jobs import (
         ed1_task_model_row_job,
     )
     from whetstone.evaluation.engine import EvaluationEngine
@@ -142,14 +145,18 @@ def run_ed1_anchor_baseline_preview(
             f"{budget_label}: scoring-runtime preflight completed "
             f"({preflight.task_id}: {preflight.outcome})"
         )
-    experiment = build_ed1_experiment(
-        provider_call_config=task_model.provider_call_config,
-        budget_ratio=budget_ratio,
-        tasks=tasks,
-        internal_n=len(tasks),
-        official_n=len(tasks),
-        repeats=repeats,
-        blend_config=blend_config,
+    experiment = cast(
+        Ed1Experiment,
+        build_code_comp_experiment(
+            CodeCompMode.ENCDEC,
+            provider_call_config=task_model.provider_call_config,
+            budget_ratio=budget_ratio,
+            tasks=tasks,
+            internal_n=len(tasks),
+            official_n=len(tasks),
+            repeats=repeats,
+            blend_config=blend_config,
+        ),
     )
     engine = build_ed1_preview_engine(
         store=store,
@@ -293,14 +300,18 @@ def run_ed1_copro_scoring_preview(
     )
 
     def _experiment_for(settings: Ed1CoproSweepPoint) -> Ed1Experiment:
-        return build_ed1_experiment(
-            provider_call_config=task_model.provider_call_config,
-            budget_ratio=settings.budget_ratio,
-            tasks=tasks,
-            internal_n=len(tasks),
-            official_n=len(tasks),
-            repeats=repeats,
-            blend_config=blend_config,
+        return cast(
+            Ed1Experiment,
+            build_code_comp_experiment(
+                CodeCompMode.ENCDEC,
+                provider_call_config=task_model.provider_call_config,
+                budget_ratio=settings.budget_ratio,
+                tasks=tasks,
+                internal_n=len(tasks),
+                official_n=len(tasks),
+                repeats=repeats,
+                blend_config=blend_config,
+            ),
         )
 
     def engine_factory(settings: Ed1CoproSweepPoint) -> EvaluationEngine:

@@ -7,6 +7,7 @@ from typing import cast
 import pytest
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 from dr_exec import ExecutorFailure, FakeExecutor
+from dr_store import ObjectStore, SqliteBackend
 
 from tests.execution.fake_python import local_python_executor
 from whetstone.envs.ed1m_dataset import (
@@ -380,3 +381,42 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
     )
     assert evaluation.reward is not None
     assert evaluation.reward.input_citations[0].name == ED1M_FIDELITY_NAME
+
+
+def test_ed1m_evaluation_engine_evaluate_succeeds(
+    mutant_dataset_dir: Path,
+    tmp_path: Path,
+) -> None:
+    from tests.envs.support import (
+        execution_policy,
+        process_row_job_factory,
+    )
+    from tests.evaluation.support import _binding
+    from whetstone.envs.ed1 import ed1_initial_candidate
+    from whetstone.envs.ed1m import build_ed1m_experiment
+    from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
+
+    experiment = build_ed1m_experiment(
+        artifact_dir=mutant_dataset_dir,
+        internal_n=1,
+        official_n=1,
+        repeats=1,
+    )
+    store = ObjectStore(SqliteBackend(tmp_path / "ed1m-engine.sqlite"))
+    engine = EvaluationEngine(
+        store=store,
+        experiment=experiment,
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(max_attempts=1),
+        row_job_factory=process_row_job_factory(
+            "tests.envs.process_workers:drive_ed1_success"
+        ),
+    )
+    result = engine.evaluate(
+        EvaluationRequest(
+            candidate=ed1_initial_candidate(),
+            evaluation_binding=_binding(engine),
+            purpose="ed1m-engine",
+        )
+    )
+    assert result.evidence.reward_ref is not None

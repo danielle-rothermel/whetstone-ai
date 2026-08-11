@@ -46,6 +46,7 @@ def test_optimization_root_contains_only_shared_contracts() -> None:
         "miprov2",
         "proposal",
         "tools",
+        "validation",
     }
 
 

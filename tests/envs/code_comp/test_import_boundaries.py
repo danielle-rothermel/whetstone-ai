@@ -26,6 +26,15 @@ def _python_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if path.is_file())
 
 
+def test_code_comp_registry_imports_exclude_runner_and_optimization() -> None:
+    root = Path("src/whetstone/envs/code_comp/registry.py")
+    tree = ast.parse(root.read_text(), filename=str(root))
+    for module in _module_level_imports(tree):
+        assert not module.startswith(_FORBIDDEN_PREFIXES), (
+            f"{root} imports forbidden module {module!r}"
+        )
+
+
 def test_legacy_env_shims_expose_public_builders() -> None:
     import whetstone.envs.d1 as d1
     import whetstone.envs.ed1 as ed1
