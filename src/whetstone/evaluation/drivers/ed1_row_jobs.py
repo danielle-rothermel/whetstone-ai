@@ -10,12 +10,10 @@ from whetstone.execution.fanout import ProcessJob
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 _DUMMY_ROW_ENTRYPOINT = (
-    "whetstone.optimization.copro.ed1_scoring_preview_worker:"
-    "drive_dummy_ed1_generation"
+    "whetstone.evaluation.drivers.ed1_workers:drive_dummy_ed1_generation"
 )
 _PROVIDER_ROW_ENTRYPOINT = (
-    "whetstone.optimization.copro.ed1_scoring_preview_worker:"
-    "drive_provider_ed1_generation"
+    "whetstone.evaluation.drivers.ed1_workers:drive_provider_ed1_generation"
 )
 
 

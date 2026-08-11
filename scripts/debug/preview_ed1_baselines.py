@@ -15,34 +15,41 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from whetstone.envs.ed1 import ED1_CANONICAL_MODEL, Ed1Instance, load_ed1_tasks
-from whetstone.envs.ed1_preview import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
-    Ed1ScoringRuntimeSummary,
+from whetstone.envs.ed1 import (
+    ED1_CANONICAL_MODEL,
+    Ed1Instance,
+    ed1_task_model_from_metadata,
+    load_ed1_tasks,
+    run_ed1_anchor_baseline_sweep,
 )
-from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
-from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
+from whetstone.envs.ed1_runtime import (
+    Ed1ScoringRuntimeSummary,
+    build_ed1_scoring_runtime,
+)
+from whetstone.envs.ed1_scoring import (
+    ED1_SCORING_PREFLIGHT_TASK_ID,
+    CheckpointedCodeBatchScorer,
+)
 from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
     select_role_for_env,
 )
 from whetstone.evaluation.analysis.power import PowerConfig
+from whetstone.evaluation.drivers.ed1_row_jobs import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
+)
+from whetstone.evaluation.preview.anchor import (
+    AnchorArmPreview,
+    BaselinePreviewTranscript,
+    BaselineSweepTranscript,
+)
 from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitManifestError,
     TaskSplitRole,
     load_task_split_manifest,
-)
-from whetstone.optimization.copro.ed1_baseline_preview import (
-    Ed1BaselineArmPreview,
-    Ed1BaselinePreviewTranscript,
-    Ed1BaselineSweepTranscript,
-    run_ed1_baseline_sweep,
-)
-from whetstone.optimization.copro.ed1_task_model import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
 )
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.runner.routes import canonical_task_route
@@ -243,7 +250,7 @@ def _task_model(
 
 
 def _write_transcript(
-    transcript: Ed1BaselineSweepTranscript,
+    transcript: BaselineSweepTranscript,
     path: Path,
 ) -> None:
     temporary = path.with_suffix(".tmp.json")
@@ -263,7 +270,7 @@ def _step_text(step, field: str) -> str:
     return value
 
 
-def _render_arm(console: Console, arm: Ed1BaselineArmPreview) -> None:
+def _render_arm(console: Console, arm: AnchorArmPreview) -> None:
     console.rule(f"[bold blue]{arm.label}")
     console.print(Panel(Text(arm.instruction), title="Encoder instruction"))
     reward = arm.evidence.reward_ref
@@ -306,8 +313,9 @@ def _render_arm(console: Console, arm: Ed1BaselineArmPreview) -> None:
 
 def _render_preview(
     console: Console,
-    transcript: Ed1BaselinePreviewTranscript,
+    transcript: BaselinePreviewTranscript,
 ) -> None:
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     budget = (
         "unbudgeted"
         if transcript.budget_ratio is None
@@ -320,8 +328,8 @@ def _render_preview(
     config.add_row("task selection", ", ".join(transcript.task_ids))
     config.add_row("pool ceiling", str(transcript.pool_ceiling))
     config.add_row("row concurrency", str(transcript.concurrency))
-    config.add_row("task model mode", transcript.task_model.kind.value)
-    config.add_row("task model", transcript.task_model.model)
+    config.add_row("task model mode", task_model.kind.value)
+    config.add_row("task model", task_model.model)
     config.add_row(
         "evaluation binding", transcript.evaluation_binding.identity_hash()
     )
@@ -364,7 +372,7 @@ def _render_preview(
 
 def render_transcript(
     console: Console,
-    transcript: Ed1BaselineSweepTranscript,
+    transcript: BaselineSweepTranscript,
     *,
     output_dir: Path,
 ) -> None:
@@ -539,7 +547,7 @@ def main() -> None:
         runtime_identity=runtime.runtime_identity,
         executor=runtime.executor,
     ) as scorer:
-        transcript = run_ed1_baseline_sweep(
+        transcript = run_ed1_anchor_baseline_sweep(
             store=store,
             tasks=tasks,
             task_ids=task_ids,

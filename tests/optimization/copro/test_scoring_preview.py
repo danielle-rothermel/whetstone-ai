@@ -6,10 +6,24 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
-from whetstone.envs.ed1_preview import Ed1ScoringRuntimeSummary
-from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
+from whetstone.envs.ed1 import (
+    ed1_task_model_from_metadata,
+    run_ed1_copro_scoring_preview,
+)
+from whetstone.envs.ed1_runtime import (
+    Ed1RuntimeProbe,
+    Ed1ScoringRuntimeSummary,
+)
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
+from whetstone.evaluation.drivers.ed1_row_jobs import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
+)
+from whetstone.evaluation.drivers.ed1_workers import (
+    DUMMY_ALTERNATE_PASSING_BODY,
+    DUMMY_FAILING_BODY,
+)
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitRole,
@@ -21,18 +35,9 @@ from whetstone.optimization.copro.ed1_dry_run import (
     Ed1CoproRoundAttempt,
     Ed1CoproSweepRanges,
 )
-from whetstone.optimization.copro.ed1_scoring_preview import (
-    Ed1CoproCandidateProgress,
-    Ed1CoproRoundFailure,
-    run_ed1_copro_scoring_preview,
-)
-from whetstone.optimization.copro.ed1_scoring_preview_worker import (
-    DUMMY_ALTERNATE_PASSING_BODY,
-    DUMMY_FAILING_BODY,
-)
-from whetstone.optimization.copro.ed1_task_model import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
+from whetstone.optimization.copro.scoring_preview import (
+    CandidateProgress,
+    RoundFailure,
 )
 
 
@@ -79,7 +84,7 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
         ),
     )
     proposal_attempts: list[Ed1CoproRoundAttempt] = []
-    candidate_progress: list[Ed1CoproCandidateProgress] = []
+    candidate_progress: list[CandidateProgress] = []
     transcript = run_ed1_copro_scoring_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=synthetic_ed1_tasks(1),
@@ -111,8 +116,9 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
         candidate_observer=candidate_progress.append,
     )
 
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     assert transcript.preflight.passed is True
-    assert transcript.task_model.kind is Ed1TaskModelKind.DUMMY
+    assert task_model.kind is Ed1TaskModelKind.DUMMY
     assert transcript.concurrency == 4
     assert transcript.task_selection is not None
     assert transcript.task_selection.role is TaskSplitRole.TRAIN
@@ -145,7 +151,7 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
         if item.attempt.instruction == DUMMY_FAILING_BODY
     ]
     assert failed
-    assert all(item.primary_value == 0.0 for item in failed)
+    assert all(item.aggregate_values[0] == 0.0 for item in failed)
     assert all(item.attempt.reward == 0.0 for item in failed)
     first = point.rounds[0].evaluations[0]
     steps = first.component_traces.rows[0].executed_component_trace
@@ -167,7 +173,7 @@ def test_scoring_preview_observes_rejected_round_before_failure() -> None:
     )
     observed: list[Ed1CoproRoundAttempt] = []
 
-    with pytest.raises(Ed1CoproRoundFailure) as error:
+    with pytest.raises(RoundFailure) as error:
         run_ed1_copro_scoring_preview(
             store=ObjectStore(MemoryBackend()),
             tasks=synthetic_ed1_tasks(1),

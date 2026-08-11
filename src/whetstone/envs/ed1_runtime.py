@@ -15,6 +15,7 @@ from dr_serialize import IdentityDocument
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from whetstone.core.identity import compute_identity_hash
+from whetstone.experiment.binding import ExecutionEnvironmentFingerprint
 
 ED1_SCORING_RUNTIME_SCHEMA = "whetstone.ed1_scoring_runtime"
 ED1_SCORING_RUNTIME_SCHEMA_VERSION = 1
@@ -44,6 +45,29 @@ class Ed1RuntimeProbe(BaseModel):
     numpy_version: StrictStr
     python_executable: StrictStr
     python_version: StrictStr
+
+
+class Ed1ScoringRuntimeSummary(BaseModel):
+    """Runtime identity displayed and persisted with a scoring preview."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evaluation_python: StrictStr
+    dr_code_version: StrictStr
+    runtime_identity_hash: StrictStr
+    probe: Ed1RuntimeProbe
+
+
+def ed1_environment_fingerprint(
+    runtime: Ed1ScoringRuntimeSummary,
+) -> ExecutionEnvironmentFingerprint:
+    return ExecutionEnvironmentFingerprint(
+        dependency_versions=(
+            ("dr-code", runtime.dr_code_version),
+            ("numpy", runtime.probe.numpy_version),
+        ),
+        runtime_identity=runtime.runtime_identity_hash,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,5 +159,7 @@ __all__ = [
     "ED1_SCORING_RUNTIME_SCHEMA_VERSION",
     "Ed1RuntimeProbe",
     "Ed1ScoringRuntime",
+    "Ed1ScoringRuntimeSummary",
     "build_ed1_scoring_runtime",
+    "ed1_environment_fingerprint",
 ]

@@ -21,16 +21,18 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from whetstone.envs.ed1 import (
+    ed1_blend_config_from_metadata,
+    ed1_task_model_from_metadata,
+)
 from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
 from whetstone.evaluation.metrics.blended import (
     blended_reward,
     compression_score,
 )
+from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.execution.call_support import call_telemetry
 from whetstone.execution.partials import PartialLog
-from whetstone.optimization.copro.ed1_baseline_preview import (
-    Ed1BaselinePreviewTranscript,
-)
 from whetstone.provider.attempt import ProviderCallResult
 
 try:
@@ -190,7 +192,7 @@ def _manifest_treatments(
 
 
 def _validate_plan(
-    transcript: Ed1BaselinePreviewTranscript,
+    transcript: BaselinePreviewTranscript,
     treatment: Mapping[str, Any],
     manifest: Mapping[str, Any],
 ) -> None:
@@ -227,10 +229,9 @@ def _validate_plan(
                 f"treatment {treatment_id!r} result changed planned {field}"
             )
     task_model = plan.get("task_model")
-    if (
-        task_model is not None
-        and task_model != transcript.task_model.model_dump(mode="json")
-    ):
+    if task_model is not None and task_model != ed1_task_model_from_metadata(
+        transcript.metadata
+    ).model_dump(mode="json"):
         raise InspectionError(
             f"treatment {treatment_id!r} result changed planned task_model"
         )
@@ -318,10 +319,12 @@ def _extract_code(decoder_generation: str | None) -> dict[str, object]:
 
 def _arm_rows(
     treatment_id: str,
-    transcript: Ed1BaselinePreviewTranscript,
+    transcript: BaselinePreviewTranscript,
     arm_name: str,
     arm: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    blend_config = ed1_blend_config_from_metadata(transcript.metadata)
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     outputs = {
         (row.task_identity, row.repeat): row for row in arm.outputs.outputs
     }
@@ -373,7 +376,7 @@ def _arm_rows(
         compression_value = (
             None
             if compression_ratio is None
-            else compression_score(compression_ratio, transcript.blend_config)
+            else compression_score(compression_ratio, blend_config)
         )
         row_blended = (
             None
@@ -381,7 +384,7 @@ def _arm_rows(
             else blended_reward(
                 primary_score=float(output.score),
                 compression_ratio=compression_ratio,
-                config=transcript.blend_config,
+                config=blend_config,
             )
         )
         derived_over_budget = (
@@ -399,7 +402,7 @@ def _arm_rows(
         extracted = _extract_code(values["decoder_generation"])
         item: dict[str, Any] = {
             "treatment_id": treatment_id,
-            "model": transcript.task_model.model,
+            "model": task_model.model,
             "budget_ratio": transcript.budget_ratio,
             "arm": arm_name,
             "candidate_id": output.candidate_id,
@@ -473,7 +476,7 @@ def _arm_rows(
         blend = blended_reward(
             primary_score=primary,
             compression_ratio=compression,
-            config=transcript.blend_config,
+            config=blend_config,
         )
         if counts[
             task_identity
@@ -488,7 +491,7 @@ def _arm_rows(
         per_task.append(
             {
                 "treatment_id": treatment_id,
-                "model": transcript.task_model.model,
+                "model": task_model.model,
                 "budget_ratio": transcript.budget_ratio,
                 "arm": arm_name,
                 "task_identity": task_identity,
@@ -498,9 +501,7 @@ def _arm_rows(
                 "compression_reward": (
                     None
                     if compression is None
-                    else compression_score(
-                        compression, transcript.blend_config
-                    )
+                    else compression_score(compression, blend_config)
                 ),
                 "blended_reward": blend,
                 "stored_per_task_value": stored[task_identity],
@@ -772,10 +773,11 @@ def _mean(values: Iterable[object]) -> float | None:
 
 def _treatment_summary(
     treatment_id: str,
-    transcript: Ed1BaselinePreviewTranscript,
+    transcript: BaselinePreviewTranscript,
     rows: Sequence[Mapping[str, Any]],
     per_task: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     accounting: dict[str, dict[str, int]] = {}
     for name, arm in (
         ("BASELINE", transcript.baseline),
@@ -793,7 +795,7 @@ def _treatment_summary(
     ]
     return {
         "treatment_id": treatment_id,
-        "model": transcript.task_model.model,
+        "model": task_model.model,
         "budget_ratio": transcript.budget_ratio,
         "row_accounting": accounting,
         "integrity": "validated",
@@ -987,17 +989,17 @@ def inspect_matrix(output_dir: Path) -> dict[str, Any]:
     all_rows: list[dict[str, Any]] = []
     all_per_task: list[dict[str, Any]] = []
     summaries: list[dict[str, Any]] = []
-    transcripts: dict[str, Ed1BaselinePreviewTranscript] = {}
+    transcripts: dict[str, BaselinePreviewTranscript] = {}
     roots: dict[str, Path] = {}
     candidate_arms: dict[str, str] = {}
     for item in existing:
         try:
-            transcript = Ed1BaselinePreviewTranscript.model_validate_json(
+            transcript = BaselinePreviewTranscript.model_validate_json(
                 item["result_path"].read_text(encoding="utf-8")
             )
         except (OSError, ValidationError) as exc:
             raise InspectionError(
-                "invalid Ed1BaselinePreviewTranscript at "
+                "invalid BaselinePreviewTranscript at "
                 f"{item['result_path']}: {exc}"
             ) from exc
         _validate_plan(transcript, item, raw_manifest)

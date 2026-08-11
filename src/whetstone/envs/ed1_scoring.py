@@ -30,10 +30,58 @@ from dr_exec import (
 from dr_serialize import IdentityDocument
 from dr_store import SqliteRecordCache
 
+from whetstone.evaluation.preview.preflight import ScoringPreflight
+
 #: The parser contract for decoder submissions. The profile id and version are
 #: also folded into the ed1 evaluation procedure identity.
 ED1_SCORING_PROFILE_ID = HUMANEVAL_SCORING_PROFILE_ID
 ED1_SCORING_PROFILE_VERSION = HUMANEVAL_SCORING_PROFILE_VERSION
+ED1_SCORING_PREFLIGHT_TASK_ID = "HumanEval/0"
+
+
+class _PreflightTask(Protocol):
+    @property
+    def humaneval_task(self) -> HumanEvalTask: ...
+
+
+def _one_preflight_score(
+    scores: Sequence[CodeScore], *, context: str
+) -> CodeScore:
+    if len(scores) != 1:
+        raise ValueError(
+            f"{context} returned {len(scores)} scores, expected 1"
+        )
+    return scores[0]
+
+
+def run_ed1_scoring_preflight(
+    tasks: tuple[_PreflightTask, ...],
+    batch_scorer: CodeBatchScorer,
+) -> ScoringPreflight:
+    task = tasks[0].humaneval_task
+    score = _one_preflight_score(
+        batch_scorer(
+            (
+                CodeScoringInput(
+                    raw_submission=task.ground_truth_code,
+                    task=task,
+                ),
+            )
+        ),
+        context="runtime preflight",
+    )
+    result = ScoringPreflight(
+        task_id=task.task_id,
+        passed=score.passed,
+        infrastructure_unknown=score.infrastructure_unknown,
+        outcome=score.outcome,
+    )
+    if result.infrastructure_unknown or not result.passed:
+        raise RuntimeError(
+            "HumanEval ground-truth runtime preflight did not pass: "
+            f"{result.outcome}"
+        )
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +347,7 @@ def score_ed1_submission(
 
 
 __all__ = [
+    "ED1_SCORING_PREFLIGHT_TASK_ID",
     "ED1_SCORING_PROFILE_ID",
     "ED1_SCORING_PROFILE_VERSION",
     "BatchScoringDeadlineExceeded",
@@ -306,5 +355,6 @@ __all__ = [
     "CodeBatchScorer",
     "CodeScore",
     "CodeScoringInput",
+    "run_ed1_scoring_preflight",
     "score_ed1_submission",
 ]

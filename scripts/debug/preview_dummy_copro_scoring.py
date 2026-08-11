@@ -24,16 +24,32 @@ from rich.text import Text
 from whetstone.envs.ed1 import (
     ED1_CANONICAL_MODEL,
     Ed1Instance,
+    ed1_blend_config_from_metadata,
+    ed1_runtime_from_metadata,
+    ed1_task_model_from_metadata,
     load_ed1_tasks,
+    run_ed1_copro_scoring_preview,
 )
-from whetstone.envs.ed1_preview import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
+from whetstone.envs.ed1_runtime import (
     Ed1ScoringRuntimeSummary,
+    build_ed1_scoring_runtime,
 )
-from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
-from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
+from whetstone.envs.ed1_scoring import (
+    ED1_SCORING_PREFLIGHT_TASK_ID,
+    CheckpointedCodeBatchScorer,
+)
 from whetstone.envs.task_pools import select_role_for_env
+from whetstone.evaluation.drivers.ed1_row_jobs import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
+)
+from whetstone.evaluation.drivers.ed1_workers import (
+    DUMMY_ALTERNATE_PASSING_BODY,
+    DUMMY_FAILING_BODY,
+    DUMMY_PASSING_BODY,
+)
 from whetstone.evaluation.metrics.blended import compression_score
+from whetstone.evaluation.preview.scored import ScoredCandidate
 from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
@@ -52,23 +68,12 @@ from whetstone.optimization.copro.ed1_dry_run import (
     Ed1CoproRoundAttempt,
     Ed1CoproSweepRanges,
 )
-from whetstone.optimization.copro.ed1_scoring_preview import (
-    Ed1CoproCandidateProgress,
-    Ed1CoproRoundFailure,
-    Ed1CoproScoredRound,
-    Ed1CoproScoringPoint,
-    Ed1CoproScoringTranscript,
-    Ed1ScoredCandidate,
-    run_ed1_copro_scoring_preview,
-)
-from whetstone.optimization.copro.ed1_scoring_preview_worker import (
-    DUMMY_ALTERNATE_PASSING_BODY,
-    DUMMY_FAILING_BODY,
-    DUMMY_PASSING_BODY,
-)
-from whetstone.optimization.copro.ed1_task_model import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
+from whetstone.optimization.copro.scoring_preview import (
+    CandidateProgress,
+    RoundFailure,
+    ScoredRound,
+    ScoringPoint,
+    ScoringTranscript,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.optimization.proposal.prompts import (
@@ -196,9 +201,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _write_transcript(
-    transcript: Ed1CoproScoringTranscript, path: Path
-) -> None:
+def _write_transcript(transcript: ScoringTranscript, path: Path) -> None:
     temporary = path.with_suffix(".tmp.json")
     temporary.write_text(
         transcript.model_dump_json(indent=2) + "\n",
@@ -318,11 +321,12 @@ def _value(value: float | None) -> str:
 
 def render_runtime(
     console: Console,
-    transcript: Ed1CoproScoringTranscript,
+    transcript: ScoringTranscript,
     *,
     output_dir: Path,
 ) -> None:
-    runtime = transcript.runtime
+    runtime = ed1_runtime_from_metadata(transcript.metadata)
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column("field", style="bold cyan")
     table.add_column("value", style="bright_white")
@@ -340,8 +344,8 @@ def render_runtime(
             "task manifest hash",
             transcript.task_selection.manifest_content_hash,
         )
-    table.add_row("task model mode", transcript.task_model.kind.value)
-    table.add_row("task model", transcript.task_model.model)
+    table.add_row("task model mode", task_model.kind.value)
+    table.add_row("task model", task_model.model)
     table.add_row("row concurrency", str(transcript.concurrency))
     table.add_row(
         "preflight",
@@ -460,9 +464,11 @@ def _step_text(step, field: str) -> str:
 
 def render_candidate(
     console: Console,
-    candidate: Ed1ScoredCandidate,
-    transcript: Ed1CoproScoringTranscript,
+    candidate: ScoredCandidate,
+    transcript: ScoringTranscript,
 ) -> None:
+    blend_config = ed1_blend_config_from_metadata(transcript.metadata)
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     body = candidate.candidate.record.payload[MUTATION_FIELD]
     assert isinstance(body, str)
     console.rule(
@@ -494,18 +500,18 @@ def render_candidate(
                     rendered_generation,
                     title=(
                         f"{step.component_id}: "
-                        f"{transcript.task_model.kind.value} model output"
+                        f"{task_model.kind.value} model output"
                     ),
                     border_style="cyan",
                 )
             )
-    primary = candidate.primary_value
-    compression = candidate.compression_value
+    primary = candidate.aggregate_values[0]
+    compression = candidate.aggregate_values[1]
     reward = candidate.attempt.reward
     score = (
         None
         if compression is None
-        else compression_score(compression, transcript.blend_config)
+        else compression_score(compression, blend_config)
     )
     calculation = Table(show_header=False, box=None, pad_edge=False)
     calculation.add_column("field", style="bold cyan")
@@ -513,9 +519,7 @@ def render_candidate(
     calculation.add_row("HumanEval correctness", _value(primary))
     calculation.add_row("compression ratio", _value(compression))
     calculation.add_row("bounded compression score", _value(score))
-    calculation.add_row(
-        "compression weight", str(transcript.blend_config.weight)
-    )
+    calculation.add_row("compression weight", str(blend_config.weight))
     calculation.add_row("blended reward", _value(reward))
     calculation.add_row(
         "row state",
@@ -532,8 +536,8 @@ def render_candidate(
 
 def render_round(
     console: Console,
-    round_record: Ed1CoproScoredRound,
-    transcript: Ed1CoproScoringTranscript,
+    round_record: ScoredRound,
+    transcript: ScoringTranscript,
 ) -> None:
     plan = round_record.preview.round_plan
     console.rule(
@@ -563,8 +567,8 @@ def render_round(
 
 def render_point(
     console: Console,
-    point: Ed1CoproScoringPoint,
-    transcript: Ed1CoproScoringTranscript,
+    point: ScoringPoint,
+    transcript: ScoringTranscript,
 ) -> None:
     ratio = (
         "none"
@@ -597,18 +601,19 @@ def render_point(
 
 def render_transcript(
     console: Console,
-    transcript: Ed1CoproScoringTranscript,
+    transcript: ScoringTranscript,
     *,
     output_dir: Path,
     codex_records: Path | None,
 ) -> None:
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     proposer_kind = (
         transcript.points[0].rounds[0].preview.proposal_call.proposer_kind
     )
     console.print(
         Panel.fit(
             f"{proposer_kind} proposals → "
-            f"{transcript.task_model.kind.value} task-model generation → "
+            f"{task_model.kind.value} task-model generation → "
             "real HumanEval execution → "
             "real 90/10 bounded-compression reward → COPRO ranking",
             title="ED1 COPRO scoring preview",
@@ -619,7 +624,7 @@ def render_transcript(
         "Encoder and decoder outputs are deterministic fixtures. This run "
         "validates proposer transport, candidate intake, execution, and "
         "lifecycle wiring; its ranking is not model-quality evidence."
-        if transcript.task_model.kind is Ed1TaskModelKind.DUMMY
+        if task_model.kind is Ed1TaskModelKind.DUMMY
         else (
             "Encoder and decoder outputs came from the configured provider "
             "model. This is a tiny wiring preview, not a powered experiment."
@@ -725,7 +730,7 @@ def _observe_proposal(
 
 
 def _observe_candidate(
-    progress: Ed1CoproCandidateProgress,
+    progress: CandidateProgress,
     *,
     console: Console,
 ) -> None:
@@ -894,7 +899,7 @@ def main() -> None:
                     progress, console=console
                 ),
             )
-    except Ed1CoproRoundFailure as exc:
+    except RoundFailure as exc:
         console.print(
             Panel.fit(
                 "The proposal round failed only after its complete call "

@@ -14,24 +14,27 @@ from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
 from tests.provider import support as provider_support
-from whetstone.envs.ed1_preview import Ed1ScoringRuntimeSummary
-from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
+from whetstone.envs.ed1 import (
+    ed1_task_model_from_metadata,
+    run_ed1_anchor_baseline_preview,
+)
+from whetstone.envs.ed1_runtime import (
+    Ed1RuntimeProbe,
+    Ed1ScoringRuntimeSummary,
+)
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
 from whetstone.evaluation.analysis.power import PowerConfig
+from whetstone.evaluation.drivers.ed1_row_jobs import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
+)
+from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (
     PromptResultCache,
     execute_call,
     prompt_cache_key,
-)
-from whetstone.optimization.copro.ed1_baseline_preview import (
-    Ed1BaselinePreviewTranscript,
-    run_ed1_baseline_preview,
-)
-from whetstone.optimization.copro.ed1_task_model import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
 )
 
 _SCRIPT = (
@@ -92,9 +95,9 @@ def _task_model() -> Ed1TaskModelConfig:
     )
 
 
-def _transcript() -> Ed1BaselinePreviewTranscript:
+def _transcript() -> BaselinePreviewTranscript:
     tasks = synthetic_ed1_tasks(1)
-    return run_ed1_baseline_preview(
+    return run_ed1_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=("Synthetic/0",),
@@ -109,7 +112,7 @@ def _transcript() -> Ed1BaselinePreviewTranscript:
     )
 
 
-def _write_run(tmp_path: Path) -> tuple[Path, Ed1BaselinePreviewTranscript]:
+def _write_run(tmp_path: Path) -> tuple[Path, BaselinePreviewTranscript]:
     output = tmp_path / "matrix"
     treatment = output / "treatment-1"
     treatment.mkdir(parents=True)
@@ -128,7 +131,9 @@ def _write_run(tmp_path: Path) -> tuple[Path, Ed1BaselinePreviewTranscript]:
                 "treatment_id": "treatment-1",
                 "directory": "treatment-1",
                 "budget_ratio": 0.5,
-                "task_model": transcript.task_model.model_dump(mode="json"),
+                "task_model": ed1_task_model_from_metadata(
+                    transcript.metadata
+                ).model_dump(mode="json"),
                 "planned_rows": 4,
                 "planned_provider_calls": 8,
             }
@@ -193,10 +198,10 @@ def _write_run(tmp_path: Path) -> tuple[Path, Ed1BaselinePreviewTranscript]:
 
 
 def _write_provider_cache(
-    treatment: Path, transcript: Ed1BaselinePreviewTranscript
+    treatment: Path, transcript: BaselinePreviewTranscript
 ) -> None:
     request = provider_support.build_request(content="exact encoder prompt")
-    policy = transcript.task_model.execution_policy
+    policy = ed1_task_model_from_metadata(transcript.metadata).execution_policy
     candidate_id = transcript.baseline.evidence.candidate.record.candidate_id
     logical_call_id = f"{candidate_id}:Synthetic/0#0:enc"
     cache = PromptResultCache(treatment / "prompt-cache")

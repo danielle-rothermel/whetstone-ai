@@ -7,25 +7,28 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
-from whetstone.envs.ed1_preview import Ed1ScoringRuntimeSummary
-from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
+from whetstone.envs.ed1 import (
+    ed1_task_model_from_metadata,
+    run_ed1_anchor_baseline_preview,
+    run_ed1_anchor_baseline_sweep,
+)
+from whetstone.envs.ed1_runtime import (
+    Ed1RuntimeProbe,
+    Ed1ScoringRuntimeSummary,
+)
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
 from whetstone.evaluation.analysis.power import PowerConfig
+from whetstone.evaluation.drivers.ed1_row_jobs import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
+)
+from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitRole,
-)
-from whetstone.optimization.copro.ed1_baseline_preview import (
-    Ed1BaselinePreviewTranscript,
-    run_ed1_baseline_preview,
-    run_ed1_baseline_sweep,
-)
-from whetstone.optimization.copro.ed1_task_model import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
 )
 
 
@@ -77,7 +80,7 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
     tasks = synthetic_ed1_tasks(3)
     task_ids = ("Synthetic/2", "Synthetic/0")
 
-    transcript = run_ed1_baseline_preview(
+    transcript = run_ed1_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=task_ids,
@@ -91,8 +94,9 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
         bootstrap_seed=19,
     )
 
+    task_model = ed1_task_model_from_metadata(transcript.metadata)
     assert transcript.task_ids == task_ids
-    assert transcript.task_model.kind is Ed1TaskModelKind.DUMMY
+    assert task_model.kind is Ed1TaskModelKind.DUMMY
     assert transcript.baseline.evidence.evaluation_binding == (
         transcript.evaluation_binding
     )
@@ -108,7 +112,7 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
     assert transcript.paired_delta_ci.resamples == 200
     assert transcript.power.pool_ceiling == 3
     assert (
-        Ed1BaselinePreviewTranscript.model_validate_json(
+        BaselinePreviewTranscript.model_validate_json(
             transcript.model_dump_json()
         )
         == transcript
@@ -119,7 +123,7 @@ def test_baseline_preview_labels_progress_with_budget_mode() -> None:
     tasks = synthetic_ed1_tasks(1)
     messages: list[str] = []
 
-    run_ed1_baseline_preview(
+    run_ed1_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=("Synthetic/0",),
@@ -161,7 +165,7 @@ def test_baseline_preview_threads_partial_log_and_prompt_cache(
 ) -> None:
     partial_log = PartialLog(tmp_path / "baseline-partials.jsonl")
 
-    run_ed1_baseline_preview(
+    run_ed1_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=synthetic_ed1_tasks(1),
         task_ids=("Synthetic/0",),
@@ -180,7 +184,7 @@ def test_baseline_preview_threads_partial_log_and_prompt_cache(
 
 def test_baseline_preview_rejects_unknown_selection_before_scoring() -> None:
     with pytest.raises(ValueError, match="task IDs are unknown"):
-        run_ed1_baseline_preview(
+        run_ed1_anchor_baseline_preview(
             store=ObjectStore(MemoryBackend()),
             tasks=synthetic_ed1_tasks(1),
             task_ids=("Synthetic/missing",),
@@ -203,7 +207,7 @@ def test_baseline_sweep_preserves_manifest_role_across_budget_modes() -> None:
         task_ids=task_ids,
     )
 
-    transcript = run_ed1_baseline_sweep(
+    transcript = run_ed1_anchor_baseline_sweep(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=task_ids,

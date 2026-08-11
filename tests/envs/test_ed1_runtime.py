@@ -5,7 +5,33 @@ from pathlib import Path
 
 import pytest
 
-from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
+from whetstone.envs.ed1_runtime import (
+    Ed1RuntimeProbe,
+    Ed1ScoringRuntimeSummary,
+    build_ed1_scoring_runtime,
+    ed1_environment_fingerprint,
+)
+
+
+def test_ed1_environment_fingerprint_copies_runtime_fields() -> None:
+    runtime = Ed1ScoringRuntimeSummary(
+        evaluation_python="/copied/python",
+        dr_code_version="0.1.5",
+        runtime_identity_hash="a" * 64,
+        probe=Ed1RuntimeProbe(
+            implementation="CPython",
+            numpy_version="2.0.0",
+            python_executable="/copied/python",
+            python_version="3.13.0",
+        ),
+    )
+    fingerprint = ed1_environment_fingerprint(runtime)
+
+    assert fingerprint.dependency_versions == (
+        ("dr-code", "0.1.5"),
+        ("numpy", "2.0.0"),
+    )
+    assert fingerprint.runtime_identity == "a" * 64
 
 
 def test_scoring_runtime_requires_an_existing_python(tmp_path: Path) -> None:

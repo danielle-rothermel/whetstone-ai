@@ -30,17 +30,27 @@ from pydantic import (
 from whetstone.envs.ed1 import (
     Ed1Instance,
     build_ed1_procedure_config,
+    ed1_runtime_from_metadata,
+    ed1_task_model_from_metadata,
     load_ed1_tasks,
+    run_ed1_anchor_baseline_preview,
 )
-from whetstone.envs.ed1_preview import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
+from whetstone.envs.ed1_runtime import (
     Ed1ScoringRuntimeSummary,
+    build_ed1_scoring_runtime,
 )
-from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
-from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
+from whetstone.envs.ed1_scoring import (
+    ED1_SCORING_PREFLIGHT_TASK_ID,
+    CheckpointedCodeBatchScorer,
+)
 from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
 )
+from whetstone.evaluation.drivers.ed1_row_jobs import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
+)
+from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.evaluation.schema import RowAccounting
 from whetstone.execution._file_lock import (
     fsync_parent_directory,
@@ -52,14 +62,6 @@ from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitRole,
     load_task_split_manifest,
-)
-from whetstone.optimization.copro.ed1_baseline_preview import (
-    Ed1BaselinePreviewTranscript,
-    run_ed1_baseline_preview,
-)
-from whetstone.optimization.copro.ed1_task_model import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
 )
 from whetstone.runner.routes import (
     ProviderRoute,
@@ -516,7 +518,7 @@ def _select_tasks(
 
 
 def _validate_result(
-    transcript: Ed1BaselinePreviewTranscript,
+    transcript: BaselinePreviewTranscript,
     *,
     plan: Ed1BaselineMatrixPlan,
     treatment: Ed1BaselineMatrixTreatmentPlan,
@@ -529,8 +531,12 @@ def _validate_result(
         "pool ceiling": transcript.pool_ceiling == plan.pool_ceiling,
         "budget ratio": transcript.budget_ratio == treatment.budget_ratio,
         "concurrency": transcript.concurrency == plan.concurrency,
-        "task model": transcript.task_model == treatment.task_model,
-        "runtime": transcript.runtime == plan.runtime,
+        "task model": (
+            ed1_task_model_from_metadata(transcript.metadata)
+            == treatment.task_model
+        ),
+        "runtime": ed1_runtime_from_metadata(transcript.metadata)
+        == plan.runtime,
         "baseline procedure": (
             baseline_binding.eval_config.record.evaluation_procedure_config_hash
             == plan.procedure_config_hash
@@ -569,11 +575,11 @@ def _load_valid_result(
     *,
     plan: Ed1BaselineMatrixPlan,
     treatment: Ed1BaselineMatrixTreatmentPlan,
-) -> Ed1BaselinePreviewTranscript | None:
+) -> BaselinePreviewTranscript | None:
     if not path.exists():
         return None
     try:
-        transcript = Ed1BaselinePreviewTranscript.model_validate_json(
+        transcript = BaselinePreviewTranscript.model_validate_json(
             path.read_text(encoding="utf-8")
         )
         _validate_result(transcript, plan=plan, treatment=treatment)
@@ -582,7 +588,7 @@ def _load_valid_result(
     return transcript
 
 
-def _row_summary(transcript: Ed1BaselinePreviewTranscript) -> str:
+def _row_summary(transcript: BaselinePreviewTranscript) -> str:
     def arm(label: str, rows: RowAccounting) -> str:
         return (
             f"{label} present={rows.present}/{rows.planned}, "
@@ -688,7 +694,7 @@ def run_baseline_behavior_matrix(
             state: TreatmentState,
             *,
             treatment_id: str | None = None,
-            transcript: Ed1BaselinePreviewTranscript | None = None,
+            transcript: BaselinePreviewTranscript | None = None,
             failure_type: str | None = None,
         ) -> None:
             _append_status(
@@ -764,7 +770,7 @@ def run_baseline_behavior_matrix(
                     progress(f"{treatment_id}: {message}")
 
                 try:
-                    transcript = run_ed1_baseline_preview(
+                    transcript = run_ed1_anchor_baseline_preview(
                         store=ObjectStore(
                             SqliteBackend(treatment_dir / "objects.sqlite3")
                         ),
