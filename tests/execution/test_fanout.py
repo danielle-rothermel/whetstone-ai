@@ -10,9 +10,10 @@ import subprocess
 import sys
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 import pytest
 from dr_serialize import StrictJsonDecodeError
@@ -293,6 +294,75 @@ class _ScriptedDeadline:
     def assert_satisfied(self) -> None:
         assert not self.errors
         assert self.triggered.is_set()
+
+
+@dataclass(frozen=True)
+class _WallDeadlineScenario:
+    id: str
+    hook: Literal[
+        "spawn",
+        "serialization",
+        "decode",
+        "commit",
+        "cancellation_barrier",
+    ]
+    concurrency: int
+    use_thread_scheduler: bool
+    expected_statuses: tuple[FanoutStatus, ...]
+    expect_deadline_reached: bool
+
+
+_WALL_DEADLINE_SCENARIOS: tuple[_WallDeadlineScenario, ...] = (
+    _WallDeadlineScenario(
+        id="decode_sibling",
+        hook="decode",
+        concurrency=2,
+        use_thread_scheduler=True,
+        expected_statuses=(
+            FanoutStatus.OPERATION_DEADLINE,
+            FanoutStatus.OPERATION_DEADLINE,
+        ),
+        expect_deadline_reached=False,
+    ),
+    _WallDeadlineScenario(
+        id="slow_spawn",
+        hook="spawn",
+        concurrency=1,
+        use_thread_scheduler=False,
+        expected_statuses=(FanoutStatus.NOT_DISPATCHED,),
+        expect_deadline_reached=False,
+    ),
+    _WallDeadlineScenario(
+        id="slow_serialization",
+        hook="serialization",
+        concurrency=1,
+        use_thread_scheduler=False,
+        expected_statuses=(FanoutStatus.NOT_DISPATCHED,),
+        expect_deadline_reached=False,
+    ),
+    _WallDeadlineScenario(
+        id="slow_commit",
+        hook="commit",
+        concurrency=1,
+        use_thread_scheduler=True,
+        expected_statuses=(
+            FanoutStatus.COMPLETED,
+            FanoutStatus.NOT_DISPATCHED,
+        ),
+        expect_deadline_reached=True,
+    ),
+    _WallDeadlineScenario(
+        id="cancellation_barrier",
+        hook="cancellation_barrier",
+        concurrency=1,
+        use_thread_scheduler=False,
+        expected_statuses=(
+            FanoutStatus.UNIT_TIMEOUT,
+            FanoutStatus.NOT_DISPATCHED,
+        ),
+        expect_deadline_reached=True,
+    ),
+)
 
 
 def _open_fd_count() -> int:
@@ -2001,217 +2071,98 @@ def test_operation_deadline_kills_active_and_never_dispatches_queue(
         _assert_process_group_absent(signals.pid(key))
 
 
+@pytest.mark.parametrize(
+    "scenario",
+    _WALL_DEADLINE_SCENARIOS,
+    ids=[scenario.id for scenario in _WALL_DEADLINE_SCENARIOS],
+)
 @pytest.mark.process_integration
-def test_wall_watcher_stops_sibling_while_decode_runs_past_deadline(
+def test_operation_wall_deadline_scenarios(
+    scenario: _WallDeadlineScenario,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     signals = ProcessSignals()
-    decode_entered = threading.Event()
-    scripted_deadline = _ScriptedDeadline(decode_entered)
+    condition = threading.Event()
+    scripted_deadline = _ScriptedDeadline(condition)
     monkeypatch.setattr(
         fanout_module,
         "_wait_for_operation_deadline",
         scripted_deadline,
     )
-    sibling_stopped_during_decode: list[bool] = []
-    sibling_terminal = threading.Event()
 
-    def blocking_decode(value: JsonValue) -> JsonValue:
-        decode_entered.set()
-        assert scripted_deadline.triggered.wait(timeout=10)
-        assert sibling_terminal.wait(timeout=10)
-        for key in ("sibling-worker", "sibling-descendant"):
-            _assert_process_gone(signals.pid(key))
-        sibling_stopped_during_decode.append(True)
-        return value
+    if scenario.hook == "spawn":
+        real_popen = subprocess.Popen
 
-    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
-
-    def schedule() -> None:
-        outcomes.append(
-            run_call_pool(
-                [
-                    _gated_spec(
-                        "completed",
-                        signals=signals,
-                        decode=blocking_decode,
-                    ),
-                    _blocking_tree_spec(
-                        "sibling",
-                        signals,
-                        deadline=5.0,
-                        cancellation_barrier=sibling_terminal.set,
-                    ),
-                ],
-                concurrency=2,
-                max_wall_seconds=60.0,
-                is_rate_limited=_never_rate_limited,
+        def slow_popen(
+            *args: object, **kwargs: object
+        ) -> subprocess.Popen[bytes]:
+            process = cast(
+                "subprocess.Popen[bytes]",
+                real_popen(*args, **kwargs),  # ty: ignore[no-matching-overload]
             )
-        )
+            condition.set()
+            assert scripted_deadline.triggered.wait(timeout=10)
+            return process
 
-    scheduler = threading.Thread(target=schedule)
-    scheduler.start()
-    try:
-        signals.wait_entered(
-            ["completed", "sibling-worker", "sibling-descendant"]
-        )
-        signals.release("completed")
-        scheduler.join(timeout=10)
-    finally:
-        signals.close()
-    assert not scheduler.is_alive()
-    scripted_deadline.assert_satisfied()
-    assert len(outcomes) == 1
-    outcome = outcomes[0]
-    assert sibling_stopped_during_decode == [True]
-    assert [result.status for result in outcome.results] == [
-        FanoutStatus.OPERATION_DEADLINE,
-        FanoutStatus.OPERATION_DEADLINE,
-    ]
+        monkeypatch.setattr(fanout_module.subprocess, "Popen", slow_popen)
+        specs = [_gated_spec("queued", signals=signals)]
+    elif scenario.hook == "serialization":
+        real_write_job = fanout_module._write_job
 
+        def slow_write_job(path: Path, job: ProcessJob) -> None:
+            real_write_job(path, job)
+            condition.set()
+            assert scripted_deadline.triggered.wait(timeout=10)
 
-@pytest.mark.process_integration
-def test_slow_spawn_cannot_release_worker_after_wall(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    signals = ProcessSignals()
-    popen_entered = threading.Event()
-    scripted_deadline = _ScriptedDeadline(popen_entered)
-    monkeypatch.setattr(
-        fanout_module,
-        "_wait_for_operation_deadline",
-        scripted_deadline,
-    )
-    real_popen = subprocess.Popen
+        monkeypatch.setattr(fanout_module, "_write_job", slow_write_job)
+        specs = [_gated_spec("queued", signals=signals)]
+    elif scenario.hook == "decode":
+        sibling_stopped_during_decode: list[bool] = []
+        sibling_terminal = threading.Event()
 
-    def slow_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        process = cast(
-            "subprocess.Popen[bytes]",
-            real_popen(*args, **kwargs),  # ty: ignore[no-matching-overload]
-        )
-        popen_entered.set()
-        assert scripted_deadline.triggered.wait(timeout=10)
-        return process
+        def blocking_decode(value: JsonValue) -> JsonValue:
+            condition.set()
+            assert scripted_deadline.triggered.wait(timeout=10)
+            assert sibling_terminal.wait(timeout=10)
+            for key in ("sibling-worker", "sibling-descendant"):
+                _assert_process_gone(signals.pid(key))
+            sibling_stopped_during_decode.append(True)
+            return value
 
-    monkeypatch.setattr(fanout_module.subprocess, "Popen", slow_popen)
-    outcome = run_call_pool(
-        [_gated_spec("queued", signals=signals)],
-        concurrency=1,
-        max_wall_seconds=60.0,
-        is_rate_limited=_never_rate_limited,
-    )
-    assert outcome.results[0].status is FanoutStatus.NOT_DISPATCHED
-    scripted_deadline.assert_satisfied()
-    assert "queued" not in signals.entered_keys
-    signals.close()
+        specs = [
+            _gated_spec(
+                "completed",
+                signals=signals,
+                decode=blocking_decode,
+            ),
+            _blocking_tree_spec(
+                "sibling",
+                signals,
+                deadline=5.0,
+                cancellation_barrier=sibling_terminal.set,
+            ),
+        ]
+    elif scenario.hook == "commit":
 
+        def blocking_commit(_value: JsonValue) -> None:
+            condition.set()
+            assert scripted_deadline.triggered.wait(timeout=10)
 
-def test_slow_serialization_stops_before_spawn_after_wall(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    signals = ProcessSignals()
-    serialization_entered = threading.Event()
-    scripted_deadline = _ScriptedDeadline(serialization_entered)
-    monkeypatch.setattr(
-        fanout_module,
-        "_wait_for_operation_deadline",
-        scripted_deadline,
-    )
-    real_write_job = fanout_module._write_job
+        specs = [
+            _gated_spec(
+                "committed",
+                signals=signals,
+                commit=blocking_commit,
+            ),
+            _gated_spec("queued", signals=signals),
+        ]
+    else:
 
-    def slow_write_job(path: Path, job: ProcessJob) -> None:
-        real_write_job(path, job)
-        serialization_entered.set()
-        assert scripted_deadline.triggered.wait(timeout=10)
+        def blocking_barrier() -> None:
+            condition.set()
+            assert scripted_deadline.triggered.wait(timeout=10)
 
-    monkeypatch.setattr(fanout_module, "_write_job", slow_write_job)
-    outcome = run_call_pool(
-        [_gated_spec("queued", signals=signals)],
-        concurrency=1,
-        max_wall_seconds=60.0,
-        is_rate_limited=_never_rate_limited,
-    )
-    assert outcome.results[0].status is FanoutStatus.NOT_DISPATCHED
-    scripted_deadline.assert_satisfied()
-    assert "queued" not in signals.entered_keys
-    signals.close()
-
-
-@pytest.mark.process_integration
-def test_slow_commit_may_finish_but_wall_stops_later_dispatch(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    signals = ProcessSignals()
-    commit_entered = threading.Event()
-    scripted_deadline = _ScriptedDeadline(commit_entered)
-    monkeypatch.setattr(
-        fanout_module,
-        "_wait_for_operation_deadline",
-        scripted_deadline,
-    )
-
-    def blocking_commit(_value: JsonValue) -> None:
-        commit_entered.set()
-        assert scripted_deadline.triggered.wait(timeout=10)
-
-    outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
-
-    def schedule() -> None:
-        outcomes.append(
-            run_call_pool(
-                [
-                    _gated_spec(
-                        "committed",
-                        signals=signals,
-                        commit=blocking_commit,
-                    ),
-                    _gated_spec("queued", signals=signals),
-                ],
-                concurrency=1,
-                max_wall_seconds=60.0,
-                is_rate_limited=_never_rate_limited,
-            )
-        )
-
-    scheduler = threading.Thread(target=schedule)
-    scheduler.start()
-    try:
-        signals.wait_entered(["committed"])
-        signals.release("committed")
-        scheduler.join(timeout=10)
-    finally:
-        signals.close()
-    assert not scheduler.is_alive()
-    scripted_deadline.assert_satisfied()
-    assert len(outcomes) == 1
-    outcome = outcomes[0]
-    assert [result.status for result in outcome.results] == [
-        FanoutStatus.COMPLETED,
-        FanoutStatus.NOT_DISPATCHED,
-    ]
-    assert outcome.deadline_reached
-    assert "queued" not in signals.entered_keys
-
-
-@pytest.mark.process_integration
-def test_wall_crossing_during_cancellation_never_dispatches_queue(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    signals = ProcessSignals()
-    barrier_entered = threading.Event()
-    scripted_deadline = _ScriptedDeadline(barrier_entered)
-    monkeypatch.setattr(
-        fanout_module,
-        "_wait_for_operation_deadline",
-        scripted_deadline,
-    )
-
-    def blocking_barrier() -> None:
-        barrier_entered.set()
-        assert scripted_deadline.triggered.wait(timeout=10)
-
-    outcome = run_call_pool(
-        [
+        specs = [
             _blocking_tree_spec(
                 "timeout",
                 signals,
@@ -2219,19 +2170,62 @@ def test_wall_crossing_during_cancellation_never_dispatches_queue(
                 cancellation_barrier=blocking_barrier,
             ),
             _gated_spec("queued", signals=signals),
-        ],
-        concurrency=1,
-        max_wall_seconds=60.0,
-        is_rate_limited=_never_rate_limited,
+        ]
+
+    pool_concurrency = scenario.concurrency
+    pool_max_wall_seconds = 60.0
+
+    if scenario.use_thread_scheduler:
+        outcomes: list[fanout_module.PoolOutcome[str, JsonValue]] = []
+
+        def schedule() -> None:
+            outcomes.append(
+                run_call_pool(
+                    specs,
+                    concurrency=pool_concurrency,
+                    max_wall_seconds=pool_max_wall_seconds,
+                    is_rate_limited=_never_rate_limited,
+                )
+            )
+
+        scheduler = threading.Thread(target=schedule)
+        scheduler.start()
+        try:
+            if scenario.hook == "decode":
+                signals.wait_entered(
+                    ["completed", "sibling-worker", "sibling-descendant"]
+                )
+                signals.release("completed")
+            else:
+                signals.wait_entered(["committed"])
+                signals.release("committed")
+            scheduler.join(timeout=10)
+        finally:
+            signals.close()
+        assert not scheduler.is_alive()
+        scripted_deadline.assert_satisfied()
+        assert len(outcomes) == 1
+        outcome = outcomes[0]
+        if scenario.hook == "decode":
+            assert sibling_stopped_during_decode == [True]
+    else:
+        try:
+            outcome = run_call_pool(
+                specs,
+                concurrency=pool_concurrency,
+                max_wall_seconds=pool_max_wall_seconds,
+                is_rate_limited=_never_rate_limited,
+            )
+        finally:
+            signals.close()
+        scripted_deadline.assert_satisfied()
+
+    assert [result.status for result in outcome.results] == list(
+        scenario.expected_statuses
     )
-    assert [result.status for result in outcome.results] == [
-        FanoutStatus.UNIT_TIMEOUT,
-        FanoutStatus.NOT_DISPATCHED,
-    ]
-    assert outcome.deadline_reached
-    scripted_deadline.assert_satisfied()
+    if scenario.expect_deadline_reached:
+        assert outcome.deadline_reached
     assert "queued" not in signals.entered_keys
-    signals.close()
 
 
 @pytest.mark.process_integration

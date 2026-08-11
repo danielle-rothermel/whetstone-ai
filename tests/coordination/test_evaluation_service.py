@@ -59,6 +59,7 @@ from whetstone.evaluation.drivers.internal import (
 )
 from whetstone.evaluation.engine import (
     EngineEvaluation,
+    EvaluationEngine,
     EvaluationRequest,
 )
 from whetstone.evaluation.schema import (
@@ -83,6 +84,7 @@ from whetstone.optimization.adapters import AdapterOutput
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA_VERSION,
     BudgetDelta,
+    EvaluationIntent,
     IntentOutcome,
     IntentResolution,
     ResolutionClass,
@@ -90,6 +92,148 @@ from whetstone.optimization.contracts import (
     StepMode,
     StepStatus,
 )
+
+
+def _evaluate_intent(
+    engine: EvaluationEngine,
+    intent: EvaluationIntent,
+) -> EngineEvaluation:
+    return engine.evaluate(
+        EvaluationRequest(
+            candidate=intent.candidate.record,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+
+
+def _build_forged_evidence(
+    forgery: str,
+    *,
+    evaluated: EngineEvaluation,
+    intent: EvaluationIntent,
+    engine: EvaluationEngine,
+    store: ObjectStore,
+) -> TypedRef:
+    evidence = evaluated.evidence
+    evidence_update: dict[str, object] = {}
+
+    if forgery == "candidate":
+        other_candidate = intent.candidate.record.model_copy(
+            update={"candidate_id": "candidate-b"}
+        )
+        other = engine.evaluate(
+            EvaluationRequest(
+                candidate=other_candidate,
+                evaluation_binding=intent.evaluation_binding,
+                purpose=intent.purpose,
+            )
+        )
+        evidence_update["outputs_ref"] = other.evidence.outputs_ref
+    elif forgery == "evidence_binding":
+        evidence_update["evaluation_binding"] = _binding(
+            engine,
+            campaign="forged-binding",
+        )
+    elif forgery == "evidence_purpose":
+        evidence_update["purpose"] = "forged-purpose"
+    elif forgery == "evidence_dataset":
+        evidence_update["dataset_hash"] = "forged-dataset"
+    elif forgery == "aggregate_value":
+        assert evidence.aggregate_value is not None
+        evidence_update["aggregate_value"] = evidence.aggregate_value + 1.0
+    elif forgery == "missing_output":
+        evidence_update["outputs_ref"] = TypedRef(
+            schema_name=EVALUATION_OUTPUTS_SCHEMA,
+            content_hash="f" * 64,
+        )
+    else:
+        outputs_content = EvaluationOutputsRecord.model_validate(
+            store.get(evidence.outputs_ref.reference)
+        ).record_content()
+        if forgery == "output_binding":
+            outputs_content["evaluation_binding"] = _binding(
+                engine,
+                campaign="forged-output-binding",
+            ).model_dump(mode="json")
+        elif forgery == "output_purpose":
+            outputs_content["purpose"] = "forged-purpose"
+        elif forgery == "output_role":
+            official_binding = _binding(
+                engine,
+                role=EvaluationRole.OFFICIAL,
+                campaign="forged-output-role",
+            )
+            outputs_content["evaluation_binding"] = (
+                official_binding.model_dump(mode="json")
+            )
+            outputs_content["evaluation_role"] = "official"
+        elif forgery == "output_split":
+            outputs_content["split_role"] = "official"
+        elif forgery == "output_task":
+            outputs_content["task_hashes"] = ["forged-task"]
+            outputs_content["outputs"][0]["task_hash"] = "forged-task"
+        elif forgery == "output_repeat":
+            outputs_content["num_samples"] = 2
+        elif forgery == "output_trace":
+            outputs_content["outputs"][0]["rendered_prompt"] = "forged prompt"
+        elif forgery == "output_metadata":
+            outputs_content["outputs"][0].update(
+                {
+                    "output_text": "forged output",
+                    "finish_reason": "length",
+                    "provider_error": {"type": "forged"},
+                    "failure_code": "forged_failure",
+                }
+            )
+        elif forgery == "output_score":
+            outputs_content["outputs"][0]["score"] = 0.0
+        elif forgery == "output_empty":
+            outputs_content["outputs"] = []
+        else:
+            raise AssertionError(f"unhandled forgery {forgery}")
+        evidence_update["outputs_ref"] = _put_typed(
+            store,
+            EVALUATION_OUTPUTS_SCHEMA,
+            outputs_content,
+        )
+
+    forged_evidence = evidence.model_copy(update=evidence_update)
+    return _put_typed(
+        store,
+        EVALUATION_EVIDENCE_SCHEMA,
+        forged_evidence.record_content(),
+    )
+
+
+def _assert_restart_rejects_forged_resolution(
+    *,
+    store: ObjectStore,
+    engine: EvaluationEngine,
+    intent: EvaluationIntent,
+    evaluated: EngineEvaluation,
+    forged_evidence_ref: TypedRef,
+) -> None:
+    forged_resolution = _completed_resolution(intent, evaluated).model_copy(
+        update={"evaluation_result_ref": forged_evidence_ref}
+    )
+    service = EngineEvaluationService(store=store, engine=engine)
+    _publish_attestation(
+        service=service,
+        intent=intent,
+        resolution=_completed_resolution(intent, evaluated),
+    )
+    with pytest.raises((ObjectNotFoundError, ValueError)):
+        service._bind(intent, forged_resolution)
+    _bind_without_validation(
+        store=store,
+        service=service,
+        intent=intent,
+        resolution=forged_resolution,
+    )
+
+    with pytest.raises((ObjectNotFoundError, ValueError)):
+        service.resolve_evaluation_intent(intent)
 
 
 def test_service_rejects_provider_policy_mismatch_before_execution(
@@ -406,6 +550,7 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
         "missing_output",
     ),
 )
+@pytest.mark.process_integration
 def test_restart_rejects_forged_or_incomplete_result_graphs(
     tmp_path,
     forgery: str,
@@ -417,122 +562,21 @@ def test_restart_rejects_forged_or_incomplete_result_graphs(
         intent_id=f"forged-{forgery}",
         purpose="graph-validation",
     )
-    evaluated = engine.evaluate(
-        EvaluationRequest(
-            candidate=intent.candidate.record,
-            evaluation_binding=intent.evaluation_binding,
-            purpose=intent.purpose,
-        )
-    )
-    evidence = evaluated.evidence
-    evidence_update: dict[str, object] = {}
-
-    if forgery == "candidate":
-        other_candidate = intent.candidate.record.model_copy(
-            update={"candidate_id": "candidate-b"}
-        )
-        other = engine.evaluate(
-            EvaluationRequest(
-                candidate=other_candidate,
-                evaluation_binding=intent.evaluation_binding,
-                purpose=intent.purpose,
-            )
-        )
-        evidence_update["outputs_ref"] = other.evidence.outputs_ref
-    elif forgery == "evidence_binding":
-        evidence_update["evaluation_binding"] = _binding(
-            engine,
-            campaign="forged-binding",
-        )
-    elif forgery == "evidence_purpose":
-        evidence_update["purpose"] = "forged-purpose"
-    elif forgery == "evidence_dataset":
-        evidence_update["dataset_hash"] = "forged-dataset"
-    elif forgery == "aggregate_value":
-        assert evidence.aggregate_value is not None
-        evidence_update["aggregate_value"] = evidence.aggregate_value + 1.0
-    elif forgery == "missing_output":
-        evidence_update["outputs_ref"] = TypedRef(
-            schema_name=EVALUATION_OUTPUTS_SCHEMA,
-            content_hash="f" * 64,
-        )
-    else:
-        outputs_content = EvaluationOutputsRecord.model_validate(
-            store.get(evidence.outputs_ref.reference)
-        ).record_content()
-        if forgery == "output_binding":
-            outputs_content["evaluation_binding"] = _binding(
-                engine,
-                campaign="forged-output-binding",
-            ).model_dump(mode="json")
-        elif forgery == "output_purpose":
-            outputs_content["purpose"] = "forged-purpose"
-        elif forgery == "output_role":
-            official_binding = _binding(
-                engine,
-                role=EvaluationRole.OFFICIAL,
-                campaign="forged-output-role",
-            )
-            outputs_content["evaluation_binding"] = (
-                official_binding.model_dump(mode="json")
-            )
-            outputs_content["evaluation_role"] = "official"
-        elif forgery == "output_split":
-            outputs_content["split_role"] = "official"
-        elif forgery == "output_task":
-            outputs_content["task_hashes"] = ["forged-task"]
-            outputs_content["outputs"][0]["task_hash"] = "forged-task"
-        elif forgery == "output_repeat":
-            outputs_content["num_samples"] = 2
-        elif forgery == "output_trace":
-            outputs_content["outputs"][0]["rendered_prompt"] = "forged prompt"
-        elif forgery == "output_metadata":
-            outputs_content["outputs"][0].update(
-                {
-                    "output_text": "forged output",
-                    "finish_reason": "length",
-                    "provider_error": {"type": "forged"},
-                    "failure_code": "forged_failure",
-                }
-            )
-        elif forgery == "output_score":
-            outputs_content["outputs"][0]["score"] = 0.0
-        elif forgery == "output_empty":
-            outputs_content["outputs"] = []
-        else:
-            raise AssertionError(f"unhandled forgery {forgery}")
-        evidence_update["outputs_ref"] = _put_typed(
-            store,
-            EVALUATION_OUTPUTS_SCHEMA,
-            outputs_content,
-        )
-
-    forged_evidence = evidence.model_copy(update=evidence_update)
-    forged_evidence_ref = _put_typed(
-        store,
-        EVALUATION_EVIDENCE_SCHEMA,
-        forged_evidence.record_content(),
-    )
-    forged_resolution = _completed_resolution(intent, evaluated).model_copy(
-        update={"evaluation_result_ref": forged_evidence_ref}
-    )
-    service = EngineEvaluationService(store=store, engine=engine)
-    _publish_attestation(
-        service=service,
+    evaluated = _evaluate_intent(engine, intent)
+    forged_evidence_ref = _build_forged_evidence(
+        forgery,
+        evaluated=evaluated,
         intent=intent,
-        resolution=_completed_resolution(intent, evaluated),
-    )
-    with pytest.raises((ObjectNotFoundError, ValueError)):
-        service._bind(intent, forged_resolution)
-    _bind_without_validation(
+        engine=engine,
         store=store,
-        service=service,
-        intent=intent,
-        resolution=forged_resolution,
     )
-
-    with pytest.raises((ObjectNotFoundError, ValueError)):
-        service.resolve_evaluation_intent(intent)
+    _assert_restart_rejects_forged_resolution(
+        store=store,
+        engine=engine,
+        intent=intent,
+        evaluated=evaluated,
+        forged_evidence_ref=forged_evidence_ref,
+    )
 
 
 def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
