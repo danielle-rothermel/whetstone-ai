@@ -33,18 +33,18 @@ def _harness(store, adapter, run: OptimizationRunRef):
 def test_budget_delta_is_validated_debited_and_carried(tmp_path) -> None:
     store = make_store(tmp_path)
     adapter = CountingProposalAdapter(
-        budget_delta=BudgetDelta(consumed={"rollouts": 3})
+        budget_delta=BudgetDelta(consumed={"generations": 3})
     )
     request = proposal_request(
         budget=BudgetState(
-            consumed={"rollouts": 2},
-            remaining={"rollouts": 8},
+            consumed={"generations": 2},
+            remaining={"generations": 8},
         )
     )
     result, _ = _harness(store, adapter, request.run).run_step(request)
-    assert result.budget_delta.consumed == {"rollouts": 3}
-    assert result.budget.consumed == {"rollouts": 5}
-    assert result.budget.remaining == {"rollouts": 5}
+    assert result.budget_delta.consumed == {"generations": 3}
+    assert result.budget.consumed == {"generations": 5}
+    assert result.budget.remaining == {"generations": 5}
     assert OptimizationHarness.carry_budget_forward(result) == result.budget
 
 
@@ -52,7 +52,7 @@ def test_budget_delta_is_validated_debited_and_carried(tmp_path) -> None:
     ("delta", "message"),
     [
         (BudgetDelta(consumed={"unknown": 1}), "undeclared"),
-        (BudgetDelta(consumed={"rollouts": 11}), "only 10"),
+        (BudgetDelta(consumed={"generations": 11}), "only 10"),
     ],
 )
 def test_invalid_budget_delta_never_binds_result(

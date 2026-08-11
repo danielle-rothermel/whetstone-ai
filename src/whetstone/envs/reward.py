@@ -12,7 +12,7 @@ from whetstone.experiment.reward import (
     apply_reward_policy,
 )
 
-#: The name the internal Rollout Aggregate carries and the Reward term
+#: The name the internal Aggregate carries and the Reward term
 #: selects: the mean ``env_exact_match`` over the internal split.
 ENV_EXACT_MATCH_AGGREGATE_NAME = ENV_EXACT_MATCH_NAME
 

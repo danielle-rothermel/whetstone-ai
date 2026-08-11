@@ -332,7 +332,7 @@ def score_code_comp_submission(
     subprocess test run) and projects its typed outcome onto the ed1
     correctness
     invariant: ``PASSED`` -> passed; a typed harness failure -> infrastructure
-    unknown (the rollout fails); every completed outcome (tests failed,
+    unknown (the generation fails); every completed outcome (tests failed,
     candidate timeout, incomplete candidate coverage, extraction failed, no
     top-level functions, ...) -> definitive fail (score 0).
     """

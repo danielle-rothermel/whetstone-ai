@@ -10,10 +10,10 @@ from pydantic import ValidationError
 
 from tests.provider import support as s
 from whetstone.provider.classification import (
-    Generation,
+    ProviderGeneration,
     ProviderSemanticFailure,
     SemanticFailureClass,
-    accept_generation,
+    accept_provider_generation,
     classify_outcome,
     is_blank,
 )
@@ -22,27 +22,32 @@ from whetstone.provider.classification import (
 class TestGenerationAcceptance:
     def test_nonblank_response_projects_a_generation(self) -> None:
         response = s.response_outcome(text="the answer")
-        result = accept_generation(response)
-        assert isinstance(result, Generation)
+        result = accept_provider_generation(response)
+        assert isinstance(result, ProviderGeneration)
         assert result.text == "the answer"
         assert result.response is response
 
     @pytest.mark.parametrize("text", ["", "   ", "\n\t ", "\r\n"])
     def test_blank_response_is_a_semantic_failure(self, text: str) -> None:
         response = s.response_outcome(text=text)
-        result = accept_generation(response)
+        result = accept_provider_generation(response)
         assert isinstance(result, ProviderSemanticFailure)
-        assert result.failure_class is SemanticFailureClass.BLANK_GENERATION
+        assert (
+            result.failure_class
+            is SemanticFailureClass.BLANK_PROVIDER_GENERATION
+        )
         assert result.rejected_response is response
         assert result.transport_failure is None
 
     def test_generation_cannot_be_constructed_blank(self) -> None:
         with pytest.raises(ValueError, match="nonblank"):
-            Generation(text="  ", response=s.response_outcome(text="x"))
+            ProviderGeneration(
+                text="  ", response=s.response_outcome(text="x")
+            )
 
     def test_generation_text_must_equal_causal_response(self) -> None:
         with pytest.raises(ValueError, match="causal response text"):
-            Generation(
+            ProviderGeneration(
                 text="projected",
                 response=s.response_outcome(text="different"),
             )
@@ -141,6 +146,6 @@ class TestSemanticFailureInvariants:
             "rate-limit",
             "timeout",
             "provider-rejection",
-            "blank-generation",
+            "blank-provider-generation",
             "malformed-response",
         }

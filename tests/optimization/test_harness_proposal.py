@@ -194,7 +194,7 @@ class PoisonThenValidAdapter:
             proposed_candidates=(proposed,),
             accepted_candidates=(proposed,),
             evaluation_intents=(intent,),
-            budget_delta=BudgetDelta(consumed={"rollouts": 1}),
+            budget_delta=BudgetDelta(consumed={"generations": 1}),
             proposed_status=StepStatus.COMPLETE,
         )
 
@@ -407,7 +407,7 @@ def test_restart_reuses_terminal_intent_prefix_after_later_crash(
     store = make_store(tmp_path)
     adapter = CountingProposalAdapter(
         candidates=(candidate("first"), candidate("second")),
-        budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+        budget_delta=BudgetDelta(consumed={"generations": 2}),
     )
     request = proposal_request(contract=output_contract(2))
     service = RecordingEvaluationService(store, crash_on_call=2)
@@ -508,7 +508,7 @@ def test_terminal_replay_graph_loss_blocks_binding_without_reexecution(
     service = NestedGraphEvaluationService(store, crash_on_call=2)
     adapter = CountingProposalAdapter(
         candidates=(candidate("first"), candidate("second")),
-        budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+        budget_delta=BudgetDelta(consumed={"generations": 2}),
     )
     request = proposal_request(contract=output_contract(2))
     harness = make_harness(
@@ -563,7 +563,7 @@ def test_terminal_intent_replay_rechecks_missing_primary_result(
     store = make_store(tmp_path)
     adapter = CountingProposalAdapter(
         candidates=(candidate("first"), candidate("second")),
-        budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+        budget_delta=BudgetDelta(consumed={"generations": 2}),
     )
     request = proposal_request(contract=output_contract(2))
     crashed_service = RecordingEvaluationService(store, crash_on_call=2)

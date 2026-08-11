@@ -20,6 +20,11 @@ from whetstone.envs.code_comp.constants import (
     MUTATION_FIELD,
 )
 from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
+from whetstone.envs.code_comp.generation_graph.encdec import (
+    EncDecGenerationGraph,
+    build_encdec_generation_graph,
+    build_encoder_provider_call_config,
+)
 from whetstone.envs.code_comp.procedure import build_encdec_procedure_config
 from whetstone.envs.code_comp.registry import (
     CodeCompMode,
@@ -30,15 +35,10 @@ from whetstone.envs.code_comp.reward.blended import (
     BoundedCompressionMetricConfig,
     build_code_comp_blended_reward_policy,
 )
-from whetstone.envs.code_comp.rollout.encdec import (
-    EncDecRolloutDefinition,
-    build_encdec_rollout_definition,
-    build_encoder_provider_call_config,
-)
 from whetstone.envs.code_comp.runtime import EncDecScoringRuntimeSummary
 from whetstone.envs.code_comp.scoring import CodeScore
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.rollout_definition import env_candidate_base_ref
+from whetstone.envs.generation_graph import env_candidate_base_ref
 from whetstone.envs.sampling import (
     Completeness,
     EnvEvalConfigs,
@@ -150,17 +150,18 @@ def encdec_ceiling_candidate() -> Candidate:
 
 @dataclass(frozen=True, slots=True)
 class EncDecExperiment(EnvExperiment):
-    """An ``EnvExperiment`` carrying the ed1-specific enc-dec rollout + tasks.
+    """An ``EnvExperiment`` with the ed1 enc-dec generation graph and tasks.
 
-    Adds the enc-dec :class:`EncDecRolloutDefinition` (a 3-node graph, with the
+    Adds the enc-dec :class:`EncDecGenerationGraph` (a 3-node graph, with the
     ``budget_ratio`` folded into ``graph_hash``) on top of the base experiment
-    shape the runner reads. ``rollout_definition`` (the base field) is set to
+    shape the runner reads. ``generation_graph`` (the base field) is set to
     the
-    same enc-dec rollout so ``experiment.rollout_definition.graph_hash`` etc.
+    same enc-dec generation graph so ``experiment.generation_graph.graph_hash``
+    etc.
     resolve for the runner.
     """
 
-    encdec_rollout: EncDecRolloutDefinition | None = None
+    encdec_generation_graph: EncDecGenerationGraph | None = None
     #: The per-task Character Budget ratio, or ``None`` for the no-budget frame
     #: without a "Use at most N characters" line or MAX_BUDGET.
     #: ``None`` is the default for ed1 optimizer cells to optimize compression
@@ -219,7 +220,8 @@ def build_encdec_experiment(
 
     Loads the pinned HumanEval+ pool (or uses injected ``tasks`` for tests),
     splits it into internal/official (first-N ordered), builds the 3-node
-    enc-dec rollout at ``budget_ratio`` (folded into ``graph_hash``), the naive
+    enc-dec generation graph at ``budget_ratio`` (folded into ``graph_hash``),
+    the naive
     (A) + ceiling (B) encoder candidates, and the two Eval Configs sharing the
     code-eval Procedure identity. ED1 always advertises and applies the
     per-task bounded-compression blend; callers may configure its weight and
@@ -258,7 +260,7 @@ def build_encdec_experiment(
     if not pool:
         raise ValueError("ed1 task pool is empty")
     procedure = build_encdec_procedure_config()
-    rollout = build_encdec_rollout_definition(
+    generation_graph = build_encdec_generation_graph(
         CODE_COMP_ENV_NAME,
         provider_call_config=provider_call_config,
         procedure_config_hash=procedure.config_hash,
@@ -318,7 +320,7 @@ def build_encdec_experiment(
     )
     return EncDecExperiment(
         env_name=CODE_COMP_ENV_NAME,
-        rollout_definition=rollout,  # type: ignore[arg-type]
+        generation_graph=generation_graph,  # type: ignore[arg-type]
         initial_candidate=encdec_initial_candidate(),
         ceiling_candidate=encdec_ceiling_candidate(),
         eval_configs=eval_configs,
@@ -328,7 +330,7 @@ def build_encdec_experiment(
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),
-        encdec_rollout=rollout,
+        encdec_generation_graph=generation_graph,
         budget_ratio=budget_ratio,
         dataset_revision=CODE_COMP_DATASET_REVISION,
         scorer=scorer,

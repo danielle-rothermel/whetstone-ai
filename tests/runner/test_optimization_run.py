@@ -60,7 +60,7 @@ def _control(
     fields = {
         "run": exact_run,
         "initial_candidates": records,
-        "initial_budget": BudgetState(remaining={"rollouts": 10}),
+        "initial_budget": BudgetState(remaining={"generations": 10}),
         "step_kind": StepKind.IDENTITY,
         "adapter_replay_policy": adapter_replay_policy,
         "owner_id": "runner-test-owner",
@@ -168,7 +168,9 @@ def test_changed_initial_candidates_change_the_control_identity() -> None:
 
 def test_a_changed_budget_changes_the_control_identity() -> None:
     original = _control()
-    richer = _control(initial_budget=BudgetState(remaining={"rollouts": 99}))
+    richer = _control(
+        initial_budget=BudgetState(remaining={"generations": 99})
+    )
 
     assert richer.identity_hash() != original.identity_hash()
 

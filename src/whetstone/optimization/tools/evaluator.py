@@ -36,7 +36,7 @@ class EngineToolEvaluator:
             )
         model_route = call.args.get("model_route")
         provider_config = (
-            self._engine.experiment.rollout_definition.provider_call_config
+            self._engine.experiment.generation_graph.provider_call_config
         )
         expected_model_route = provider_config.definition.route.model
         if model_route != expected_model_route:
@@ -121,7 +121,7 @@ class EngineToolEvaluator:
                     for field in config.definition.record.output_fields
                 }
             ),
-            rollout_refs=(evaluated.evidence_ref,),
+            generation_refs=(evaluated.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
             eval_config_hash=(
                 evidence.evaluation_binding.eval_config.config_hash

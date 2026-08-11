@@ -62,7 +62,7 @@ def test_cell_records_official_arms_and_publishes_viewer(
         (root / publication.projection.relative_path).read_text()
     )
     assert projection["cell_id"] == record.cell_id
-    assert projection["rollout_row_count"] == 3
+    assert projection["generation_row_count"] == 3
     assert len(projection["evidence_summaries"]) == 3
 
 
@@ -381,7 +381,7 @@ def test_preflight_rejects_a_candidate_the_env_cannot_render(
     tmp_path: Path,
 ) -> None:
     """Preflight runs before any spend, so a bad template never costs money."""
-    from whetstone.envs.rollout_definition import PromptInputError
+    from whetstone.envs.generation_graph import PromptInputError
 
     config = cell_config(
         tmp_path, baseline=candidate("baseline", text="{nonexistent}")
@@ -428,5 +428,5 @@ def test_a_completed_line_always_cites_committed_viewer_files(
     assert publication is not None
 
     root = tmp_path / "ledger"
-    for reference in (publication.projection, publication.rollout_outputs):
+    for reference in (publication.projection, publication.generation_outputs):
         assert (root / reference.relative_path).is_file()

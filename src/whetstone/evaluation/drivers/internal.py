@@ -27,24 +27,24 @@ from whetstone_envs.core import Instance
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.factory import EnvExperiment
+from whetstone.envs.generation_graph import (
+    LLM_NODE_ID,
+    render_prompt,
+    validate_candidate_prompt,
+)
 from whetstone.envs.oracle_operator import (
     ENV_EXACT_MATCH_NAME,
     env_exact_match_score,
 )
 from whetstone.envs.registry import EnvSpec, env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
-from whetstone.envs.rollout_definition import (
-    LLM_NODE_ID,
-    render_prompt,
-    validate_candidate_prompt,
-)
 from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
 )
 from whetstone.envs.task import Task
 from whetstone.evaluation.aggregate import (
-    RolloutAggregate,
+    Aggregate,
     RowValue,
     TaskRows,
     unweighted_task_mean,
@@ -91,7 +91,7 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 @dataclass(frozen=True, slots=True)
 class RolloutOutput:
-    """One rollout row's exact execution trace, display output, and score.
+    """One generation row's exact execution trace, display output, and score.
 
     The row state and executed components are authoritative. ``output_text``
     is the full untruncated sidecar/display output and ``score`` is ``None`` on
@@ -108,14 +108,15 @@ class RolloutOutput:
     score: float | None
     failure_code: str = ""
     #: Per-call provenance (coverage-honest -- ``None`` when unknown):
-    #: ``finish_reason`` is the provider stop reason of the accepted Generation
-    #: (a truncated ``length`` is distinguishable from a clean ``stop``);
+    #: ``finish_reason`` is the provider stop reason of the accepted
+    #: provider generation (a truncated ``length`` is distinguishable from a
+    #: clean ``stop``);
     #: ``provider_error`` is the FULL typed provider-failure diagnostic for a
     #: FAILED row (not just the short ``failure_code``). Both are ``None`` when
     #: unknown.
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
-    #: ed1 enc-dec budget diagnostics on every rollout row:
+    #: ed1 enc-dec budget diagnostics on every generation row:
     #: the per-task ``max_budget`` (chars) the encoder was told to respect and
     #: the derived ``over_budget`` flag, so a consumer never re-derives
     #: ``round(budget_ratio * len)`` off-row. ``None`` for QA/d1 (no budget)
@@ -144,7 +145,7 @@ class InternalEvalResult:
     contribute 0 to the aligned per-task means.
     """
 
-    aggregate: RolloutAggregate
+    aggregate: Aggregate
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
@@ -153,7 +154,7 @@ class InternalEvalResult:
     outputs: tuple[RolloutOutput, ...]
     #: Additional aggregates cited by a reward but not used as the evidence's
     #: primary aggregate. ED1 uses this for its compression aggregate.
-    supplemental_aggregates: tuple[RolloutAggregate, ...] = ()
+    supplemental_aggregates: tuple[Aggregate, ...] = ()
     #: Every planned row-request identity for this exact Evaluation Binding,
     #: both drive ordinals. Restoration is strictly scoped to this set, so it
     #: is also the only set a caller may attribute partial rows to.
@@ -475,7 +476,7 @@ def drive_internal_row(
     result = execution.result
     telemetry = execution.telemetry()
     marks = execution.cache_marks()
-    if not result.succeeded or result.generation is None:
+    if not result.succeeded or result.provider_generation is None:
         return InternalRowOutcome(
             score=None,
             row_state=ExecutedRowState.FAILED,
@@ -493,7 +494,7 @@ def drive_internal_row(
         )
     score = env_exact_match_score(
         env=env,
-        generation=result.generation.text,
+        generation=result.provider_generation.text,
         gold=instance.gold,
         evaluation_procedure_config_hash=procedure_config_hash,
     )
@@ -505,7 +506,7 @@ def drive_internal_row(
                 trace_index=0,
                 component_id=LLM_NODE_ID,
                 prompt=prompt,
-                generation=result.generation.text,
+                generation=result.provider_generation.text,
             ),
         ),
         prompt_tokens=telemetry.prompt_tokens,
@@ -513,7 +514,7 @@ def drive_internal_row(
         total_tokens=telemetry.total_tokens,
         reasoning_tokens=telemetry.reasoning_tokens,
         latency_s=telemetry.latency_s,
-        output_text=result.generation.text,
+        output_text=result.provider_generation.text,
         finish_reason=telemetry.finish_reason,
         cache_hit=marks.cache_hit,
         cache_source_phase=marks.cache_source_phase,
@@ -541,7 +542,7 @@ def run_internal_eval(
 
     For each bound instance, ``row_job_factory`` supplies one serializable
     process job whose result decodes to :class:`InternalRowOutcome`. The
-    per-task means reduce to a single ``env_exact_match`` Rollout Aggregate.
+    per-task means reduce to a single ``env_exact_match`` Aggregate.
     The factory is the trusted execution authority: it must give its worker
     the exact :class:`InternalRowRequest` and use the declared evaluation
     procedure. The parent verifies the returned request identity before any
@@ -567,7 +568,7 @@ def run_internal_eval(
     at the exact ordinal-1 request.
     """
     env = env_spec(experiment.env_name)
-    rd = experiment.rollout_definition
+    rd = experiment.generation_graph
     procedure_hash = experiment.eval_configs.procedure_config_hash
     env_tasks = sampling.tasks
     validate_candidate_prompt(env, candidate, env_tasks)
@@ -861,7 +862,7 @@ def run_internal_eval(
             )
         )
 
-    rollout_aggregate = unweighted_task_mean(
+    aggregate = unweighted_task_mean(
         aggregate_name=ENV_EXACT_MATCH_NAME,
         graph_hash=rd.graph_hash,
         evaluation_binding_hash=evaluation_binding_id,
@@ -873,8 +874,8 @@ def run_internal_eval(
     reward = (
         reward_from_internal_aggregate(
             experiment.reward_policy,
-            env_exact_match_value=rollout_aggregate.aggregation_output.value,
-            evidence_refs=(rollout_aggregate.record_ref(),),
+            env_exact_match_value=aggregate.aggregation_output.value,
+            evidence_refs=(aggregate.record_ref(),),
         )
         if evaluation_binding.role is EvaluationRole.INTERNAL
         else None
@@ -886,7 +887,7 @@ def run_internal_eval(
         _per_task_count(task, num_samples) for task in task_rows
     )
     return InternalEvalResult(
-        aggregate=rollout_aggregate,
+        aggregate=aggregate,
         reward=reward,
         per_task_scores=per_task_scores,
         per_task_counts=per_task_counts,

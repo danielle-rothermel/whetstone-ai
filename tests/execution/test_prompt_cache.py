@@ -200,7 +200,7 @@ def test_v2_key_pins_all_semantic_identity_components() -> None:
     assert prompt_cache_key(request, policy, 0, 0) == base
     assert (
         base
-        == "215c269af431dad560b800cb3fc8865de4b251e68c1b72ddd134102d75989fb1"
+        == "9d6b9f159db7e839f8cc00c59a351eb05a2c81c081545e5d2e18b0080b77f25a"
     )
 
 
@@ -872,8 +872,8 @@ def test_corrupt_entry_is_quarantined_before_pending_publication(
         logical_call_id="repair-call",
         policy=policy,
     )
-    assert repaired.result.generation is not None
-    assert repaired.result.generation.text == "repaired"
+    assert repaired.result.provider_generation is not None
+    assert repaired.result.provider_generation.text == "repaired"
     assert restarted.counters() == {"hits": 0, "misses": 1, "stores": 1}
     assert quarantined[0].read_bytes() == corrupt_body
 

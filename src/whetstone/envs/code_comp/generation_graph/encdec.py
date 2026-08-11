@@ -22,10 +22,10 @@ EVAL_NODE_ID = "evaluate"
 #: encoder prompt (the encoder template filled with INPUT_CODE + the budget).
 ENCODER_PROMPT_EXTERNAL_INPUT = "task.encoder_prompt"
 
-#: The decoder Node's declared upstream input field (the encoder's Generation).
+#: The decoder Node's upstream input field (the encoder's provider generation).
 _DECODER_INPUT_FIELD = "description"
 
-#: The Eval Node's declared upstream input field (the decoder's Generation).
+#: The Eval Node's upstream input field (the decoder's provider generation).
 _EVAL_INPUT_FIELD = "submission"
 
 #: The Provider Call Config schema name (the LLM Call Nodes' static Variable
@@ -38,8 +38,8 @@ ENCDEC_PROCEDURE_CONFIG_SCHEMA = "whetstone.code_comp.encdec_procedure"
 
 
 @dataclass(frozen=True, slots=True)
-class EncDecRolloutDefinition:
-    """The enc-dec Rollout Definition graph + the config references it binds.
+class EncDecGenerationGraph:
+    """The enc-dec Generation Graph graph + the config references it binds.
 
     ``definition`` is the native three-node :class:`GraphDefinition`;
     ``provider_call_config`` is the shared encoder/decoder route (its Identity
@@ -86,8 +86,9 @@ def encdec_graph_definition() -> GraphDefinition:
     """The Encoder -> Decoder -> terminal Eval three-node Graph Definition.
 
     The encoder declares the Character Budget Variable; the decoder's prompt is
-    the encoder's Generation output; the Eval Node consumes the decoder's
-    Generation and is the unique terminal Node.
+    the encoder's provider-generation output; the Eval Node consumes the
+    decoder's
+    ProviderGeneration and is the unique terminal Node.
     """
     encoder = llm_call_node_definition(
         ENCODER_NODE_ID,
@@ -156,14 +157,14 @@ def build_encdec_graph_config(
     return definition.materialize(assignments)
 
 
-def build_encdec_rollout_definition(
+def build_encdec_generation_graph(
     env_name: str,
     *,
     provider_call_config: ProviderCallConfig,
     procedure_config_hash: str,
     budget_ratio: float | None,
-) -> EncDecRolloutDefinition:
-    """Build the enc-dec Rollout Definition for one exact provider route.
+) -> EncDecGenerationGraph:
+    """Build the enc-dec Generation Graph for one exact provider route.
 
     Wires the shared encoder/decoder Provider Call Config across both LLM
     nodes, the Character Budget ``ratio`` onto the encoder, and the code-eval
@@ -176,7 +177,7 @@ def build_encdec_rollout_definition(
         evaluation_procedure_config_hash=procedure_config_hash,
         budget_ratio=budget_ratio,
     )
-    return EncDecRolloutDefinition(
+    return EncDecGenerationGraph(
         env_name=env_name,
         definition=encdec_graph_definition(),
         provider_call_config=provider_call_config,
@@ -192,9 +193,9 @@ __all__ = [
     "ENCODER_NODE_ID",
     "ENCODER_PROMPT_EXTERNAL_INPUT",
     "EVAL_NODE_ID",
-    "EncDecRolloutDefinition",
+    "EncDecGenerationGraph",
+    "build_encdec_generation_graph",
     "build_encdec_graph_config",
-    "build_encdec_rollout_definition",
     "build_encoder_provider_call_config",
     "encdec_graph_definition",
 ]

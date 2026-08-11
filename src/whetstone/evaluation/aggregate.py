@@ -22,9 +22,9 @@ from whetstone.evaluation import (
     aggregate,
 )
 
-# Persisted-format contract for RolloutAggregate. Exact wire fields are pinned
+# Persisted-format contract for Aggregate. Exact wire fields are pinned
 # by a golden test; never derive them from dataclass fields.
-ROLLOUT_AGGREGATE_SCHEMA = "whetstone.rollout_aggregate"
+AGGREGATE_SCHEMA = "whetstone.aggregate"
 
 
 class RowPolicy(StrEnum):
@@ -260,8 +260,8 @@ class TaskRows:
 
 
 @dataclass(frozen=True, slots=True)
-class RolloutAggregate:
-    """A provenance-bearing Rollout Aggregate.
+class Aggregate:
+    """A provenance-bearing Aggregate.
 
     Binds a pure :class:`AggregationOutput` to the aggregate identity
     ``(graph_hash, eval_config_hash)``, the complete planned matrix
@@ -334,9 +334,7 @@ class RolloutAggregate:
         }
 
     def record_ref(self) -> TypedRef:
-        return typed_ref_for_record(
-            ROLLOUT_AGGREGATE_SCHEMA, self.record_content()
-        )
+        return typed_ref_for_record(AGGREGATE_SCHEMA, self.record_content())
 
 
 def _row_counts(rows: tuple[RowValue, ...]) -> tuple[int, int, int, int]:
@@ -453,7 +451,7 @@ def unweighted_task_mean(
     evaluation_binding_hash: str,
     task_rows: tuple[TaskRows, ...],
     plan: EvaluationMatrixPlan,
-) -> RolloutAggregate:
+) -> Aggregate:
     """Unweighted mean of caller-derived scalars over the complete Task Set.
 
     Two staged reductions:
@@ -541,7 +539,7 @@ def unweighted_task_mean(
         skipped=missing + failed + invalid,
         planned=len(all_rows),
     )
-    return RolloutAggregate(
+    return Aggregate(
         name=aggregate_name,
         graph_hash=graph_hash,
         eval_config_hash=plan.eval_config.config_hash,
@@ -557,10 +555,10 @@ def unweighted_task_mean(
 
 
 __all__ = [
-    "ROLLOUT_AGGREGATE_SCHEMA",
+    "AGGREGATE_SCHEMA",
+    "Aggregate",
     "CompletenessPolicy",
     "EvaluationMatrixPlan",
-    "RolloutAggregate",
     "RowPolicy",
     "RowValue",
     "TaskRows",

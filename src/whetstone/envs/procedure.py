@@ -22,7 +22,7 @@ EVALUATION_PROCEDURE_CONFIG_SCHEMA = SCHEMA_EVALUATION_PROCEDURE_CONFIG
 
 _DEFINITION_VERSION = "1"
 #: The Metric Question keys onto the LLM Call Node's generation output.
-_METRIC_ON = "generation"
+_METRIC_ON = "provider_generation"
 
 
 def env_metric_extraction_config(env: EnvSpec) -> MetricExtractionConfig:

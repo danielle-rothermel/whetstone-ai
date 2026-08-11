@@ -50,7 +50,7 @@ from whetstone.evaluation.drivers.code_comp.workers import (
 )
 from whetstone.evaluation.metrics.blended import compression_score
 from whetstone.evaluation.preview.scored import ScoredCandidate
-from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
+from whetstone.experiment.graph.nodes import PROVIDER_GENERATION_OUTPUT_FIELD
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitManifestError,
@@ -489,7 +489,7 @@ def render_candidate(
         )
         for step in row.executed_component_trace.executed_component_steps:
             prompt = _step_text(step, "prompt")
-            generation = _step_text(step, GENERATION_OUTPUT_FIELD)
+            generation = _step_text(step, PROVIDER_GENERATION_OUTPUT_FIELD)
             console.print(
                 Panel(
                     Text(prompt),

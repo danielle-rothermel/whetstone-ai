@@ -105,9 +105,9 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
     assert projected.eval_config_hash == engine.eval_config_ref.config_hash
-    assert len(projected.rollout_refs) == 1
+    assert len(projected.generation_refs) == 1
     assert projected.output["evaluation_evidence_ref"] == (
-        projected.rollout_refs[0].model_dump(mode="json")
+        projected.generation_refs[0].model_dump(mode="json")
     )
     artifact = TypedRef.model_validate(projected.output["output_artifact_ref"])
     assert store.get(artifact.reference)
@@ -170,7 +170,7 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
     assert projected.eval_config_hash == engine.eval_config_ref.config_hash
-    assert len(projected.rollout_refs) == 1
+    assert len(projected.generation_refs) == 1
 
 
 @pytest.mark.process_integration

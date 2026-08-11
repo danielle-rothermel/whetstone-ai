@@ -17,9 +17,9 @@ from tests.envs.support import ReplyFn, execution_policy, row_job_factory
 from whetstone.core.identity import IdentityHash, TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.factory import EnvExperiment
+from whetstone.envs.generation_graph import LLM_NODE_ID
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.evaluation.drivers.internal import (
     InternalRowOutcome,
     InternalRowRequest,
@@ -75,7 +75,7 @@ def _binding(
 
 def _correct_reply(env_name: str, tasks) -> ReplyFn:
     env = env_spec(env_name)
-    from whetstone.envs.rollout_definition import (
+    from whetstone.envs.generation_graph import (
         initial_candidate,
         render_prompt,
     )
@@ -110,7 +110,7 @@ def _internal_jobs(
     procedure_hash = experiment.eval_configs.procedure_config_hash
 
     def outcome(instance, _repeat: int, _drive_ordinal: int):
-        from whetstone.envs.rollout_definition import render_prompt
+        from whetstone.envs.generation_graph import render_prompt
 
         prompt = render_prompt(env, active_candidate, instance)
         if served is not None:

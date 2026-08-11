@@ -47,7 +47,7 @@ from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
 from whetstone.evaluation.aggregate import (
-    ROLLOUT_AGGREGATE_SCHEMA,
+    AGGREGATE_SCHEMA,
     RowValue,
     TaskRows,
     unweighted_task_mean,
@@ -170,7 +170,7 @@ def test_evaluator_uses_exact_v2_resolution_wire_and_v3_namespace(
     assert isinstance(attestation, dict)
     assert set(attestation) == {"graph_hash", "resolution"}
     assert attestation["graph_hash"] == (
-        engine.experiment.rollout_definition.graph_hash
+        engine.experiment.generation_graph.graph_hash
     )
     assert attestation["resolution"] == record
     assert record == resolution.model_dump(mode="json")
@@ -569,7 +569,7 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
             generation=rewritten_text,
             gold=instance.gold,
             evaluation_procedure_config_hash=(
-                engine.experiment.rollout_definition.procedure_config_hash
+                engine.experiment.generation_graph.procedure_config_hash
             ),
         ).value
     )
@@ -593,7 +593,7 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
     )
     rewritten_aggregate = unweighted_task_mean(
         aggregate_name=evaluated.evidence.aggregate_name,
-        graph_hash=engine.experiment.rollout_definition.graph_hash,
+        graph_hash=engine.experiment.generation_graph.graph_hash,
         evaluation_binding_hash=intent.evaluation_binding.identity_hash(),
         task_rows=(
             TaskRows(
@@ -605,7 +605,7 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
     )
     rewritten_aggregate_ref = _put_typed(
         store,
-        ROLLOUT_AGGREGATE_SCHEMA,
+        AGGREGATE_SCHEMA,
         cast(Jsonable, rewritten_aggregate.record_content()),
     )
     assert rewritten_aggregate_ref == rewritten_aggregate.record_ref()
@@ -921,7 +921,7 @@ def test_concrete_evaluation_service_reaches_harness_boundary(
                 proposed_candidates=(proposed,),
                 accepted_candidates=(proposed,),
                 evaluation_intents=(intent,),
-                budget_delta=BudgetDelta(consumed={"rollouts": 1}),
+                budget_delta=BudgetDelta(consumed={"generations": 1}),
                 proposed_status=StepStatus.COMPLETE,
             )
 
@@ -1117,7 +1117,7 @@ def test_restart_rejects_result_attested_under_another_provider_policy(
 
 
 @pytest.mark.process_integration
-def test_restart_rejects_aggregate_from_another_rollout_graph(
+def test_restart_rejects_aggregate_from_another_generation_graph(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "wrong-graph.sqlite"))
@@ -1168,7 +1168,7 @@ def test_restart_rejects_aggregate_from_another_rollout_graph(
         intent=intent,
         resolution=_completed_resolution(intent, evaluated),
     )
-    with pytest.raises(ValueError, match="another rollout graph"):
+    with pytest.raises(ValueError, match="another generation graph"):
         service._validate_result_graph(
             resolution,
             expected_intent=intent,

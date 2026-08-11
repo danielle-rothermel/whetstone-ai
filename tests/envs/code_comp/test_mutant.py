@@ -308,8 +308,10 @@ def test_build_uses_content_and_dataset_identities(
     assert isinstance(experiment, MutantExperiment)
     assert experiment.env_name == "code_comp"
     assert experiment.budget_ratio is None
-    rollout = experiment.encdec_rollout
-    assert rollout is not None and rollout.budget_rule is None
+    generation_graph = experiment.encdec_generation_graph
+    assert (
+        generation_graph is not None and generation_graph.budget_rule is None
+    )
     assert tuple(experiment.mutants) == (record.content_hash,)
     assert experiment.eval_configs.internal.tasks[0].id == (
         record.content_hash
@@ -341,7 +343,9 @@ def test_build_uses_content_and_dataset_identities(
     assert unblended.reward_policy == build_mutant_reward_policy()
 
     mutant_procedure = build_mutant_procedure_config()
-    assert rollout.procedure_config_hash == mutant_procedure.config_hash
+    assert (
+        generation_graph.procedure_config_hash == mutant_procedure.config_hash
+    )
     assert mutant_procedure.definition_ref.definition_id == (
         "whetstone.code_comp.procedure"
     )

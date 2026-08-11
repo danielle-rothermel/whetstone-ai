@@ -33,7 +33,7 @@ def _evidence_refs():
     return (
         typed_ref_for_record(
             "whetstone.test.evaluation_evidence",
-            {"rollout_id": "rollout-1"},
+            {"generation_id": "generation-1"},
         ),
     )
 

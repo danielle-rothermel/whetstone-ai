@@ -612,7 +612,7 @@ class ProviderProposerTransport:
             "provider_call_result": result.to_stable_dict(),
         }
 
-        if result.generation is None:
+        if result.provider_generation is None:
             failure = result.semantic_failure
             assert failure is not None
             response = failure.rejected_response
@@ -629,7 +629,7 @@ class ProviderProposerTransport:
             )
 
         provider_result = provider_result_from_response(
-            result.generation.response
+            result.provider_generation.response
         )
         return ProposalDraft(
             template=provider_result.text,

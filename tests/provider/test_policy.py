@@ -51,7 +51,7 @@ class TestComposition:
         assert eligibility[SemanticFailureClass.RATE_LIMIT]
         assert eligibility[SemanticFailureClass.TIMEOUT]
         assert not eligibility[SemanticFailureClass.PROVIDER_REJECTION]
-        assert not eligibility[SemanticFailureClass.BLANK_GENERATION]
+        assert not eligibility[SemanticFailureClass.BLANK_PROVIDER_GENERATION]
         assert not eligibility[SemanticFailureClass.MALFORMED_RESPONSE]
 
     def test_is_retryable_lookup(self) -> None:

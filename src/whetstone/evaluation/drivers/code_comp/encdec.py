@@ -30,6 +30,10 @@ from whetstone.envs.code_comp.constants import (
     DECODER_TEMPLATE,
 )
 from whetstone.envs.code_comp.dataset import humaneval_task_from_instance
+from whetstone.envs.code_comp.generation_graph.encdec import (
+    DECODER_NODE_ID,
+    ENCODER_NODE_ID,
+)
 from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
 from whetstone.envs.code_comp.mutant.dataset import MutantRecord
 from whetstone.envs.code_comp.mutation_surface import (
@@ -39,10 +43,6 @@ from whetstone.envs.code_comp.mutation_surface import (
 from whetstone.envs.code_comp.reward.blended import (
     code_comp_reward_from_blended,
     reward_from_primary_score,
-)
-from whetstone.envs.code_comp.rollout.encdec import (
-    DECODER_NODE_ID,
-    ENCODER_NODE_ID,
 )
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
@@ -55,7 +55,7 @@ from whetstone.envs.sampling import (
     validate_evaluation_role_for_split,
 )
 from whetstone.evaluation.aggregate import (
-    RolloutAggregate,
+    Aggregate,
     RowValue,
     TaskRows,
     unweighted_task_mean,
@@ -164,8 +164,8 @@ class EncDecEvalResult:
     sidecar; ``row_diags`` explains arm-level Nones.
     """
 
-    primary_aggregate: RolloutAggregate
-    compression_aggregate: RolloutAggregate
+    primary_aggregate: Aggregate
+    compression_aggregate: Aggregate
     reward: Reward | None
     #: The CI vector: the PER-TASK BLENDED reward when a blend config is set;
     #: otherwise the per-task primary mean. The paired bootstrap uses this.
@@ -251,7 +251,7 @@ def _validate_encdec_component_steps(
 
 
 class EncDecRowOutcome(BaseModel):
-    """One (task, sample_index) rollout's dual result + provenance.
+    """One (task, sample_index) generation's dual result + provenance.
 
     ``primary_value`` is ED1's HumanEval Submission Score or ED1M's fractional
     Fidelity to Mutant. ``attractor_pull`` is the ED1M reported contamination
@@ -609,7 +609,7 @@ def drive_encdec_row(
 ) -> EncDecRowOutcome | EncDecGeneratedRowOutcome:
     """Run one encode/decode row, optionally scoring inside the worker."""
     input_code = instance.prompt_inputs["input_code"]
-    rd = experiment.encdec_rollout
+    rd = experiment.encdec_generation_graph
     assert rd is not None
     # A None budget rule omits MAX_BUDGET and the rendered budget suffix.
     rule = rd.budget_rule
@@ -646,7 +646,7 @@ def drive_encdec_row(
         unit=cache_unit,
     )
     enc = enc_exec.result
-    if not enc.succeeded or enc.generation is None:
+    if not enc.succeeded or enc.provider_generation is None:
         from whetstone.execution.call_support import (
             failure_code_of,
             is_transient_transport_failure,
@@ -674,7 +674,7 @@ def drive_encdec_row(
             provider_error=enc_tel.provider_error,
             redrivable=is_transient_transport_failure(enc),
         )
-    encoder_text = enc.generation.text
+    encoder_text = enc.provider_generation.text
     encoder_len = len(encoder_text)
     executed_component_steps = (
         _llm_component_step(
@@ -701,7 +701,7 @@ def drive_encdec_row(
     # call this time); the encoder entry is the row's primary provenance.
     row_cache_hit = enc_exec.cache_hit and dec_exec.cache_hit
     row_cache_prov = enc_exec.provenance if row_cache_hit else None
-    if not dec.succeeded or dec.generation is None:
+    if not dec.succeeded or dec.provider_generation is None:
         from whetstone.execution.call_support import (
             failure_code_of,
             is_transient_transport_failure,
@@ -730,7 +730,7 @@ def drive_encdec_row(
             provider_error=dec_tel.provider_error,
             redrivable=is_transient_transport_failure(dec),
         )
-    decoder_text = dec.generation.text
+    decoder_text = dec.provider_generation.text
     executed_component_steps = (
         *executed_component_steps,
         _llm_component_step(
@@ -1008,7 +1008,7 @@ def run_encdec_eval(
     instances = sampling.tasks
     num_samples = sampling.sample_plan.num_samples
     split_role = sampling.split_role
-    rd = experiment.encdec_rollout
+    rd = experiment.encdec_generation_graph
     assert rd is not None
     graph_hash = rd.graph_hash
     primary_metric_name = _primary_metric_name(experiment)

@@ -155,7 +155,7 @@ def test_claim_attestation_rejects_forged_component_traces(
     elif forgery == "output":
         trace_content["rows"][0]["executed_component_trace"][
             "executed_component_steps"
-        ][0]["outputs"]["generation"] = "forged output"
+        ][0]["outputs"]["provider_generation"] = "forged output"
     elif forgery == "model_copy_dump":
         original_row = traces.rows[0]
         original_trace = original_row.executed_component_trace
@@ -642,7 +642,7 @@ def test_renewal_wins_same_event_slot_as_stale_takeover(
 
     def delayed_takeover(**kwargs):
         prior = kwargs["prior"]
-        if prior is not None and kwargs["generation"] == 1:
+        if prior is not None and kwargs["provider_generation"] == 1:
             stale_takeover_ready.set()
             assert renewal_bound.wait(timeout=2)
         return append_claim_event(**kwargs)

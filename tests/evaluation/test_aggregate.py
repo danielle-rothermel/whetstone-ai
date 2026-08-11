@@ -28,11 +28,11 @@ from whetstone.evaluation import (
     TaskSet,
 )
 from whetstone.evaluation.aggregate import (
-    ROLLOUT_AGGREGATE_SCHEMA,
+    AGGREGATE_SCHEMA,
     SKIP_TOLERANCE_VARIABLE,
+    Aggregate,
     CompletenessPolicy,
     EvaluationMatrixPlan,
-    RolloutAggregate,
     RowPolicy,
     RowValue,
     TaskRows,
@@ -69,7 +69,7 @@ def _procedure_config() -> EvaluationProcedureConfig:
 
 
 def _aggregation_config(policy: CompletenessPolicy) -> AggregationConfig:
-    return aggregation_definition("test.rollout_aggregate").materialize(
+    return aggregation_definition("test.aggregate").materialize(
         {
             "reduction": "mean",
             "missing_data": policy.missing_data,
@@ -129,7 +129,7 @@ def _task_mean(
     *,
     plan: EvaluationMatrixPlan | None = None,
     aggregate_name: str = AGGREGATE_NAME,
-) -> RolloutAggregate:
+) -> Aggregate:
     return unweighted_task_mean(
         aggregate_name=aggregate_name,
         graph_hash=FULL_HASH,
@@ -172,14 +172,14 @@ def test_aggregate_derives_identity_binding_and_shape_from_plan() -> None:
     )
 
 
-def test_rollout_aggregate_wire_contract_is_pinned() -> None:
+def test_aggregate_wire_contract_is_pinned() -> None:
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0), RowValue(value=0.0)),),
         plan=_plan(("t1",), num_samples=2),
     )
     content = aggregate.record_content()
 
-    assert ROLLOUT_AGGREGATE_SCHEMA == "whetstone.rollout_aggregate"
+    assert AGGREGATE_SCHEMA == "whetstone.aggregate"
     assert tuple(content) == (
         "name",
         "graph_hash",
@@ -194,7 +194,7 @@ def test_rollout_aggregate_wire_contract_is_pinned() -> None:
         "rows_invalid",
     )
     assert aggregate.record_ref() == typed_ref_for_record(
-        "whetstone.rollout_aggregate", content
+        "whetstone.aggregate", content
     )
 
 
@@ -295,7 +295,7 @@ def test_failed_rows_still_visible_in_provenance() -> None:
     )
     agg = unweighted_task_mean(
         aggregate_name="env_exact_match",
-        graph_hash=experiment.rollout_definition.graph_hash,
+        graph_hash=experiment.generation_graph.graph_hash,
         evaluation_binding_hash="c" * 64,
         task_rows=task_rows,
         plan=sampling.evaluation_matrix_plan,
@@ -398,7 +398,7 @@ def test_tolerance_rejects_nonfinite_and_out_of_range_values(
 
 def test_plan_rejects_noncanonical_tolerance_token() -> None:
     base = _plan()
-    aggregation = aggregation_definition("test.rollout_aggregate").materialize(
+    aggregation = aggregation_definition("test.aggregate").materialize(
         {
             "reduction": "mean",
             "missing_data": "propagate",
@@ -569,7 +569,7 @@ def test_plan_rejects_wrong_aggregation_semantics(
     message: str,
 ) -> None:
     base = _plan()
-    aggregation = aggregation_definition("test.rollout_aggregate").materialize(
+    aggregation = aggregation_definition("test.aggregate").materialize(
         assignment
     )
     eval_config = EvalDefinition(
@@ -688,7 +688,7 @@ def test_row_value_requires_explicit_state() -> None:
 
 def test_aggregate_rejects_incomplete_accounting() -> None:
     with pytest.raises(ValueError):
-        RolloutAggregate(
+        Aggregate(
             name="x",
             graph_hash=FULL_HASH,
             eval_config_hash=FULL_HASH,

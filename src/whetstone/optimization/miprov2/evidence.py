@@ -46,7 +46,7 @@ from whetstone.optimization.contracts import (
 )
 from whetstone.optimization.miprov2.bootstrap import (
     BootstrapAttemptPlan,
-    BootstrapRolloutResult,
+    BootstrapGenerationResult,
 )
 from whetstone.optimization.miprov2.demo import ObservedTraceStep
 from whetstone.optimization.miprov2.eval_config import (
@@ -587,7 +587,7 @@ class Miprov2EvidenceResolver:
     def resolve_bootstrap(
         self,
         resolution: IntentResolution,
-    ) -> BootstrapRolloutResult:
+    ) -> BootstrapGenerationResult:
         """Select the exact configured step from a successful trace row."""
 
         resolved = self._resolve_completed(resolution)
@@ -635,9 +635,9 @@ class Miprov2EvidenceResolver:
                 "graph position"
             )
         assert context.bootstrap_attempt is not None
-        return BootstrapRolloutResult(
+        return BootstrapGenerationResult(
             attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-            source_rollout_identity=resolved.evidence_ref.content_hash,
+            source_generation_identity=resolved.evidence_ref.content_hash,
             source_trace_identity=resolved.component_traces_ref.content_hash,
             source_output_identity=_selected_step_identity(selected),
             source_score_identity=resolved.reward_ref.record_ref.content_hash,
@@ -656,7 +656,7 @@ class Miprov2EvidenceResolver:
     def resolve_bootstrap_failure(
         self,
         resolution: IntentResolution,
-    ) -> BootstrapRolloutResult:
+    ) -> BootstrapGenerationResult:
         """Preserve exact failure evidence without inventing score or trace."""
 
         context = load_miprov2_intent_context(self.store, resolution.intent)
@@ -697,9 +697,9 @@ class Miprov2EvidenceResolver:
         ):
             raise ValueError("failed bootstrap cannot carry Reward evidence")
         evidence_hash = failure_ref.content_hash
-        return BootstrapRolloutResult(
+        return BootstrapGenerationResult(
             attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-            source_rollout_identity=evidence_hash,
+            source_generation_identity=evidence_hash,
             source_trace_identity=evidence_hash,
             source_output_identity=evidence_hash,
             source_score_identity=evidence_hash,

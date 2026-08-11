@@ -25,6 +25,9 @@ from whetstone_envs.core import Instance
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.code_comp.constants import CODE_COMP_SUBMISSION_SCORE_NAME
+from whetstone.envs.code_comp.generation_graph.direct import (
+    render_direct_frame,
+)
 from whetstone.envs.code_comp.input_arms import (
     direct_body,
     renamed_task,
@@ -33,20 +36,19 @@ from whetstone.envs.code_comp.input_arms import (
 from whetstone.envs.code_comp.modes.direct import DirectExperiment
 from whetstone.envs.code_comp.mutation_surface import validate_instruction_body
 from whetstone.envs.code_comp.reward.blended import reward_from_primary_score
-from whetstone.envs.code_comp.rollout.direct import render_direct_frame
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeBatchScorer,
     CodeScore,
     CodeScoringInput,
 )
-from whetstone.envs.rollout_definition import LLM_NODE_ID
+from whetstone.envs.generation_graph import LLM_NODE_ID
 from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
 )
 from whetstone.evaluation.aggregate import (
-    RolloutAggregate,
+    Aggregate,
     RowValue,
     TaskRows,
     unweighted_task_mean,
@@ -106,7 +108,7 @@ class DirectEvalResult:
     outputs feed the CI, ledger, and sidecar.
     """
 
-    submission_score_aggregate: RolloutAggregate
+    submission_score_aggregate: Aggregate
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
@@ -114,7 +116,7 @@ class DirectEvalResult:
 
 
 class DirectRowOutcome(BaseModel):
-    """One (task, sample_index) direct rollout's result + provenance."""
+    """One (task, sample_index) direct generation's result + provenance."""
 
     model_config = ConfigDict(
         frozen=True,
@@ -133,7 +135,8 @@ class DirectRowOutcome(BaseModel):
     total_tokens: int | None = None
     reasoning_tokens: int | None = None
     latency_s: float | None = None
-    #: The accepted Generation's stop reason and full typed failure diagnostic.
+    #: The accepted provider generation's stop reason and full failure
+    #: diagnostic.
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
     #: True when a TRANSIENT transport fault (timeout/stall/transport-error/
@@ -399,7 +402,7 @@ def drive_direct_row(
     result = execution.result
     telemetry = execution.telemetry()
     marks = execution.cache_marks()
-    if not result.succeeded or result.generation is None:
+    if not result.succeeded or result.provider_generation is None:
         return DirectRowOutcome(
             submission_score=None,
             output_text=None,
@@ -415,7 +418,7 @@ def drive_direct_row(
             cache_source_call_id=marks.cache_source_call_id,
             cache_source_at=marks.cache_source_at,
         )
-    output_text = result.generation.text
+    output_text = result.provider_generation.text
     executed_component_steps = (
         _llm_component_step(
             trace_index=0,
@@ -602,7 +605,7 @@ def run_direct_eval(
     instances = sampling.tasks
     num_samples = sampling.sample_plan.num_samples
     split_role = sampling.split_role
-    rd = experiment.rollout_definition
+    rd = experiment.generation_graph
     graph_hash = rd.graph_hash
     if (
         sampling.eval_config.evaluation_procedure_config_hash

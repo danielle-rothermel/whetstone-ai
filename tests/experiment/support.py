@@ -12,9 +12,9 @@ from whetstone.evaluation import (
 )
 from whetstone.evaluation.aggregate import (
     SKIP_TOLERANCE_VARIABLE,
+    Aggregate,
     CompletenessPolicy,
     EvaluationMatrixPlan,
-    RolloutAggregate,
     RowValue,
     TaskRows,
     aggregation_definition,
@@ -95,7 +95,7 @@ def quality_aggregate(
     value: float = 1.0,
     tasks: int = 2,
     num_samples: int = 2,
-) -> RolloutAggregate:
+) -> Aggregate:
     task_rows = tuple(
         TaskRows(
             task_hash=f"task-{t}",
@@ -118,7 +118,7 @@ def compression_aggregate(
     value: float = 2.0,
     tasks: int = 2,
     num_samples: int = 2,
-) -> RolloutAggregate:
+) -> Aggregate:
     task_rows = tuple(
         TaskRows(
             task_hash=f"task-{task_index}",
@@ -140,7 +140,7 @@ def incomplete_quality_aggregate(
     graph_hash: str = GRAPH_A,
     tasks: int = 2,
     num_samples: int = 2,
-) -> RolloutAggregate:
+) -> Aggregate:
     task_rows = (
         TaskRows(
             task_hash="task-0",

@@ -32,7 +32,7 @@ def test_load_evaluation_outputs_and_component_traces(tmp_path) -> None:
     assert traces.graph_hash == evaluated.evidence.graph_hash
 
 
-def test_load_aggregate_value_reads_rollout_aggregate() -> None:
+def test_load_aggregate_value_reads_aggregate() -> None:
     store = ObjectStore(MemoryBackend())
     payload = {
         "aggregation_output": AggregationOutput(
@@ -43,7 +43,7 @@ def test_load_aggregate_value_reads_rollout_aggregate() -> None:
             count_present=1,
         ).model_dump(mode="json"),
     }
-    reference, _ = store.put("whetstone.rollout_aggregate", payload)
+    reference, _ = store.put("whetstone.aggregate", payload)
     aggregate_ref = TypedRef(
         schema_name=reference.schema,
         content_hash=reference.content_hash,

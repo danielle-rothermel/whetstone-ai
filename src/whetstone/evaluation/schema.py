@@ -20,6 +20,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA as _EVALUATION_EVIDENCE_SCHEMA,
 )
@@ -108,6 +109,12 @@ class EvaluationOutputRow(BaseModel):
             )
         return self
 
+    def generation_index(self) -> GenerationIndex:
+        return GenerationIndex(
+            task_index=self.task_index,
+            sample_index=self.sample_index,
+        )
+
 
 class EvaluationComponentTraceRow(BaseModel):
     """Exact executed-component observation for one planned row."""
@@ -130,6 +137,12 @@ class EvaluationComponentTraceRow(BaseModel):
         if self.task_index < 0:
             raise ValueError("task_index must be non-negative")
         return self
+
+    def generation_index(self) -> GenerationIndex:
+        return GenerationIndex(
+            task_index=self.task_index,
+            sample_index=self.sample_index,
+        )
 
 
 class EvaluationComponentTraces(BaseModel):
@@ -170,12 +183,13 @@ class EvaluationComponentTraces(BaseModel):
         task_hash_to_id: dict[str, str] = {}
         task_id_to_hash: dict[str, str] = {}
         planned_ordinal = {
-            (task_index, sample_index): task_index * self.num_samples
-            + sample_index
+            GenerationIndex(
+                task_index=task_index, sample_index=sample_index
+            ): task_index * self.num_samples + sample_index
             for task_index, _task_hash in enumerate(self.task_hashes)
             for sample_index in range(self.num_samples)
         }
-        seen_keys: set[tuple[int, int]] = set()
+        seen_keys: set[GenerationIndex] = set()
         prior_ordinal = -1
         for row in self.rows:
             if (
@@ -190,10 +204,10 @@ class EvaluationComponentTraces(BaseModel):
                 raise ValueError(
                     "one task_id cannot name multiple task_hashes"
                 )
-            key = (row.task_index, row.sample_index)
+            key = row.generation_index()
             if key in seen_keys:
                 raise ValueError(
-                    "trace rows must have unique task_hash/sample_index keys"
+                    "trace rows must have unique generation index keys"
                 )
             seen_keys.add(key)
             ordinal = planned_ordinal.get(key)
@@ -290,10 +304,11 @@ class EvaluationOutputsRecord(BaseModel):
 
         task_hash_to_id: dict[str, str] = {}
         task_id_to_hash: dict[str, str] = {}
-        seen_keys: set[tuple[int, int]] = set()
+        seen_keys: set[GenerationIndex] = set()
         planned_ordinal = {
-            (task_index, sample_index): task_index * self.num_samples
-            + sample_index
+            GenerationIndex(
+                task_index=task_index, sample_index=sample_index
+            ): task_index * self.num_samples + sample_index
             for task_index, _task_hash in enumerate(self.task_hashes)
             for sample_index in range(self.num_samples)
         }
@@ -315,10 +330,10 @@ class EvaluationOutputsRecord(BaseModel):
                 raise ValueError(
                     "one task_id cannot name multiple task_hashes"
                 )
-            key = (row.task_index, row.sample_index)
+            key = row.generation_index()
             if key in seen_keys:
                 raise ValueError(
-                    "output rows must have unique task_hash/sample_index keys"
+                    "output rows must have unique generation index keys"
                 )
             seen_keys.add(key)
             ordinal = planned_ordinal.get(key)

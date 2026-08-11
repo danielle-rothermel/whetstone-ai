@@ -84,7 +84,7 @@ def _config(
     definition = ToolDefinition(
         tool_name="evaluate_candidate",
         input_fields=("model_route", "template"),
-        output_fields=("rollout_refs", "accepted_ordinal"),
+        output_fields=("generation_refs", "accepted_ordinal"),
     )
     return ToolConfig(
         definition=tool_definition_reference(definition),
@@ -164,17 +164,17 @@ class CountingEvaluator:
         if self.failure is not None:
             raise ToolEvaluationError(self.failure)
         evidence = typed_ref_for_record(
-            "whetstone.test.tool_rollout",
+            "whetstone.test.tool_generation",
             {"ordinal": self.evaluations},
         )
         return ToolEvaluation(
             output=ImmutableJsonObject(
                 {
-                    "rollout_refs": [evidence.model_dump(mode="json")],
+                    "generation_refs": [evidence.model_dump(mode="json")],
                     "accepted_ordinal": self.evaluations,
                 }
             ),
-            rollout_refs=(evidence,),
+            generation_refs=(evidence,),
             aggregates={"score": 1.0},
             eval_config_hash=FULL_A,
         )
@@ -366,7 +366,7 @@ def test_invalid_reward_is_terminal_failure_and_replays_exactly(
             evaluation = super().evaluate(call, config)
             return ToolEvaluation(
                 output=evaluation.output,
-                rollout_refs=evaluation.rollout_refs,
+                generation_refs=evaluation.generation_refs,
                 aggregates={},
                 eval_config_hash=evaluation.eval_config_hash,
             )
@@ -419,7 +419,7 @@ def test_terminal_effect_reconciles_missing_store_completion(tmp_path) -> None:
     assert entry.capacity_debit_ordinal == 1
     result = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     result_ref = store.persist_result(result)
@@ -695,7 +695,7 @@ def test_no_redrive_expiration_requires_recovery(tmp_path) -> None:
     clock.current += timedelta(seconds=11)
     fabricated = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     with pytest.raises(
@@ -736,7 +736,7 @@ def test_completed_admission_projection_cannot_override_recovery_required(
     accepted = store.admit(call, config)
     fabricated = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     fabricated_ref = store.persist_result(fabricated)

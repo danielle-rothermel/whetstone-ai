@@ -14,7 +14,7 @@ from whetstone.optimization.miprov2.bootstrap import (
     ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL,
     BootstrapAttemptPlan,
     BootstrapErrorLimitReached,
-    BootstrapRolloutResult,
+    BootstrapGenerationResult,
     FewshotCandidatePlan,
     FewshotSeedKind,
     TeacherSource,
@@ -124,11 +124,11 @@ def _result(
     metric_present: bool = True,
     trace_steps: tuple[ObservedTraceStep, ...] = (),
     error: str | None = None,
-) -> BootstrapRolloutResult:
-    return BootstrapRolloutResult(
+) -> BootstrapGenerationResult:
+    return BootstrapGenerationResult(
         attempt_identity_hash=attempt.identity_hash(),
-        source_rollout_identity=_identity(
-            f"rollout-{attempt.task_index}-{attempt.round_index}"
+        source_generation_identity=_identity(
+            f"generation-{attempt.task_index}-{attempt.round_index}"
         ),
         source_trace_identity=_identity(
             f"trace-{attempt.task_index}-{attempt.round_index}"
@@ -215,7 +215,7 @@ def test_bootstrap_attempt_plan_identity_payload_and_digest_are_pinned() -> (
         task_hash="6" * 64,
         round_index=1,
         copy_task_model=True,
-        rollout_id=1,
+        generation_id=1,
         temperature=1.0,
     )
 
@@ -239,11 +239,11 @@ def test_bootstrap_attempt_plan_identity_payload_and_digest_are_pinned() -> (
         "exclude_equal_task_from_all_teacher_components": True,
         "restore_teacher_demos_after_effect": True,
         "copy_task_model": True,
-        "rollout_id": 1,
+        "generation_id": 1,
         "temperature": 1.0,
     }
     assert attempt.identity_hash() == (
-        "a4445c70dbee6e5664bca287844229cfda82471ebf7bf8230cdcaf6c3ed3281e"
+        "12a1c4dce0a41eccebac246a477fc2bea9cb0f4aa2236f7989fd2021e8a95f5c"
     )
 
 
@@ -460,7 +460,7 @@ def test_attempt_plan_excludes_current_demo_and_only_copies_on_retry() -> None:
     assert first.exclude_equal_task_from_all_teacher_components is True
     assert first.restore_teacher_demos_after_effect is True
     assert first.copy_task_model is False
-    assert first.rollout_id is None
+    assert first.generation_id is None
     assert first.temperature is None
 
     failed = fold_bootstrap_result(
@@ -476,7 +476,7 @@ def test_attempt_plan_excludes_current_demo_and_only_copies_on_retry() -> None:
     assert retry.task_index == first.task_index
     assert retry.round_index == 1
     assert retry.copy_task_model is True
-    assert retry.rollout_id == 1
+    assert retry.generation_id == 1
     assert retry.temperature == 1.0
 
 

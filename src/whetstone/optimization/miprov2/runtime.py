@@ -32,7 +32,7 @@ from whetstone.optimization.miprov2.bootstrap import (
     BootstrapAttemptPlan,
     BootstrapCompilerState,
     BootstrapFoldEvidence,
-    BootstrapRolloutResult,
+    BootstrapGenerationResult,
     FewshotCandidatePlan,
     FewshotCandidatePlanningResult,
     FewshotSeedKind,
@@ -163,7 +163,7 @@ class Miprov2ReplayProjection:
 
 Miprov2EffectKind = Literal[
     "eval_config_binding",
-    "bootstrap_rollout",
+    "bootstrap_generation",
     "proposal_model",
     "baseline_evaluation",
     "sample_evaluation",
@@ -361,7 +361,7 @@ class Miprov2EffectBudget(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    bootstrap_rollouts: StrictInt
+    bootstrap_generations: StrictInt
     proposal_calls: StrictInt
     evaluations: StrictInt
     task_rows: StrictInt
@@ -370,7 +370,7 @@ class Miprov2EffectBudget(BaseModel):
     def _validate_budget(self) -> Miprov2EffectBudget:
         if (
             min(
-                self.bootstrap_rollouts,
+                self.bootstrap_generations,
                 self.proposal_calls,
                 self.evaluations,
                 self.task_rows,
@@ -386,7 +386,7 @@ class Miprov2CompletedEffect(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: Literal["bootstrap_rollouts", "proposal_calls", "evaluations"]
+    kind: Literal["bootstrap_generations", "proposal_calls", "evaluations"]
     identity_hash: StrictStr
     task_rows: StrictInt = 0
 
@@ -887,7 +887,10 @@ class Miprov2State(BaseModel):
         if len(set(completed_hashes)) != len(completed_hashes):
             raise ValueError("completed effect identities must be unique")
         for effect in self.completed_effects:
-            if effect.kind == "bootstrap_rollouts" and effect.task_rows != 1:
+            if (
+                effect.kind == "bootstrap_generations"
+                and effect.task_rows != 1
+            ):
                 raise ValueError("bootstrap ledger entries require one task")
             if effect.kind == "evaluations" and effect.task_rows <= 0:
                 raise ValueError("evaluation ledger entries require tasks")
@@ -935,7 +938,7 @@ class Miprov2State(BaseModel):
                 "study demos are not the canonical bootstrap projection"
             )
         for label in (
-            "bootstrap_rollouts",
+            "bootstrap_generations",
             "proposal_calls",
             "evaluations",
             "task_rows",
@@ -1199,7 +1202,7 @@ class Miprov2State(BaseModel):
         counts = {
             kind: sum(effect.kind == kind for effect in self.completed_effects)
             for kind in (
-                "bootstrap_rollouts",
+                "bootstrap_generations",
                 "proposal_calls",
                 "evaluations",
             )
@@ -1218,7 +1221,7 @@ class Miprov2DriverPlan(BaseModel):
     state: Miprov2State
     kind: Miprov2EffectKind | Literal["complete"]
     eval_config_binding: Miprov2EvalConfigBindingRequest | None = None
-    bootstrap_rollout: BootstrapAttemptPlan | None = None
+    bootstrap_generation: BootstrapAttemptPlan | None = None
     proposal_request: Miprov2ProposalRequest | None = None
     evaluation: Miprov2EvaluationEffect | None = None
     accepted_candidate: Candidate | None = None
@@ -1227,7 +1230,7 @@ class Miprov2DriverPlan(BaseModel):
     def _validate_plan(self) -> Miprov2DriverPlan:
         effects = (
             self.eval_config_binding,
-            self.bootstrap_rollout,
+            self.bootstrap_generation,
             self.proposal_request,
             self.evaluation,
         )
@@ -1338,8 +1341,10 @@ def _execution_policy(
                 else bootstrap_attempt.temperature
             ),
         ),
-        rollout_id=(
-            None if bootstrap_attempt is None else bootstrap_attempt.rollout_id
+        generation_id=(
+            None
+            if bootstrap_attempt is None
+            else bootstrap_attempt.generation_id
         ),
         copy_task_model=(
             False
@@ -1638,7 +1643,7 @@ def _canonical_completed_effects(
 ) -> tuple[Miprov2CompletedEffect, ...]:
     effects: list[Miprov2CompletedEffect] = [
         Miprov2CompletedEffect(
-            kind="bootstrap_rollouts",
+            kind="bootstrap_generations",
             identity_hash=event.attempt.identity_hash(),
             task_rows=1,
         )
@@ -2213,7 +2218,7 @@ class Miprov2Driver:
         if len(control.component_ids) != 1:
             raise ValueError(
                 "integrated MIPROv2 currently requires exactly one executable "
-                "prompt component because the Whetstone rollout primitive "
+                "prompt component because the Whetstone generation primitive "
                 "exposes only one provider trace"
             )
         rng = _initial_bootstrap_rng(control)
@@ -2281,11 +2286,11 @@ class Miprov2Driver:
                 raise ValueError(
                     "bootstrap attempt has no exact subset Eval Config"
                 )
-            self._require_budget(state, "bootstrap_rollouts")
+            self._require_budget(state, "bootstrap_generations")
             return Miprov2DriverPlan(
                 state=state,
-                kind="bootstrap_rollout",
-                bootstrap_rollout=state.pending_bootstrap,
+                kind="bootstrap_generation",
+                bootstrap_generation=state.pending_bootstrap,
             )
         if state.pending_proposal is not None:
             self._require_budget(state, "proposal_calls")
@@ -2347,13 +2352,13 @@ class Miprov2Driver:
     def fold_bootstrap(
         self,
         state: Miprov2State,
-        result: BootstrapRolloutResult,
+        result: BootstrapGenerationResult,
     ) -> Miprov2State:
         state = self._validated(state)
         attempt = state.pending_bootstrap
         compiler = state.bootstrap_state
         if attempt is None or compiler is None:
-            raise ValueError("no bootstrap rollout is pending")
+            raise ValueError("no bootstrap generation is pending")
         self._require_new_effect(state, attempt.identity_hash())
         plan = state.bootstrap_plans[state.bootstrap_plan_index]
         advanced = fold_bootstrap_result(
@@ -2377,7 +2382,7 @@ class Miprov2Driver:
                 "completed_effects": (
                     *state.completed_effects,
                     Miprov2CompletedEffect(
-                        kind="bootstrap_rollouts",
+                        kind="bootstrap_generations",
                         identity_hash=attempt.identity_hash(),
                         task_rows=1,
                     ),
@@ -2592,7 +2597,7 @@ class Miprov2Driver:
                 compiler_state = None
                 demo_candidates = (*demo_candidates, demos)
                 continue
-            self._require_budget(state, "bootstrap_rollouts")
+            self._require_budget(state, "bootstrap_generations")
             binding_request = Miprov2EvalConfigBindingRequest(
                 control_identity_hash=state.control.identity_hash(),
                 source_eval_config=state.control.bootstrap_eval_source,
@@ -3056,7 +3061,7 @@ class Miprov2Driver:
     def _require_budget(
         state: Miprov2State,
         label: Literal[
-            "bootstrap_rollouts",
+            "bootstrap_generations",
             "proposal_calls",
             "evaluations",
         ],

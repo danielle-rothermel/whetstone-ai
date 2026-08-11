@@ -3,7 +3,7 @@ from __future__ import annotations
 from dr_providers import ProviderTransportResponse
 
 from whetstone.evaluation import OperatorLineage
-from whetstone.provider.classification import Generation
+from whetstone.provider.classification import ProviderGeneration
 
 FULL_HASH = "0" * 64
 
@@ -18,8 +18,10 @@ def transport_response(*, text: str) -> ProviderTransportResponse:
     )
 
 
-def generation(*, text: str) -> Generation:
-    return Generation(text=text, response=transport_response(text=text))
+def generation(*, text: str) -> ProviderGeneration:
+    return ProviderGeneration(
+        text=text, response=transport_response(text=text)
+    )
 
 
 def operator_lineage() -> OperatorLineage:

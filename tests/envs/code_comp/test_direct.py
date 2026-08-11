@@ -34,12 +34,12 @@ from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeScore,
 )
+from whetstone.envs.generation_graph import LLM_NODE_ID
 from whetstone.envs.input_transform import (
     direct_prompt,
     rename_identifier,
     split_prompt,
 )
-from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.evaluation.drivers.code_comp.direct import (
     DirectGeneratedRowOutcome,
     DirectRowOutcome,
@@ -271,7 +271,7 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
     evals: set[str] = set()
     for arm in DIRECT_INPUT_ARMS:
         experiment = build_direct_experiment(input_arm=arm, tasks=tasks)
-        graphs.add(experiment.rollout_definition.graph_hash)
+        graphs.add(experiment.generation_graph.graph_hash)
         evals.add(experiment.eval_configs.official.eval_config.config_hash)
     assert len(graphs) == len(DIRECT_INPUT_ARMS)
     assert len(evals) == len(DIRECT_INPUT_ARMS)
@@ -283,8 +283,8 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
         for token in ("target_fxn", "other_fxn")
     ]
     assert (
-        renamed[0].rollout_definition.graph_hash
-        != renamed[1].rollout_definition.graph_hash
+        renamed[0].generation_graph.graph_hash
+        != renamed[1].generation_graph.graph_hash
     )
     assert (
         renamed[0].eval_configs.official.eval_config.config_hash
@@ -303,9 +303,7 @@ def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
         b = build_direct_experiment(
             input_arm=arm, tasks=tasks, rename_token="other_fxn"
         )
-        assert (
-            a.rollout_definition.graph_hash == b.rollout_definition.graph_hash
-        )
+        assert a.generation_graph.graph_hash == b.generation_graph.graph_hash
         assert (
             a.eval_configs.official.eval_config.config_hash
             == b.eval_configs.official.eval_config.config_hash
@@ -470,13 +468,13 @@ def test_d1_process_job_runs_real_row_driver() -> None:
         "trace_index": 0,
         "component_id": "generate",
         "input_field_names": ["prompt"],
-        "output_field_names": ["generation"],
+        "output_field_names": ["provider_generation"],
         "inputs": {
             "prompt": render_direct_frame(
                 DIRECT_WRAPPER_BODY_NAIVE, input_arm=input_arm
             )
         },
-        "outputs": {"generation": output.output_text},
+        "outputs": {"provider_generation": output.output_text},
     }
 
 
@@ -504,7 +502,7 @@ def test_d1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_hash == (
-        "999cf939758541a9fc07cc1f1d0866028f652ad4ebf7bc3964529b6d3e4addca"
+        "205e37d7a03a2be31b26b9db90dbc624315d4a792d5138c78464815e1f5ea6c7"
     )
 
 

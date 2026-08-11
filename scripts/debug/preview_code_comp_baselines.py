@@ -44,7 +44,7 @@ from whetstone.evaluation.preview.anchor import (
     BaselinePreviewTranscript,
     BaselineSweepTranscript,
 )
-from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
+from whetstone.experiment.graph.nodes import PROVIDER_GENERATION_OUTPUT_FIELD
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitManifestError,
@@ -307,7 +307,7 @@ def _render_arm(console: Console, arm: AnchorArmPreview) -> None:
     first = arm.component_traces.rows[0].executed_component_trace
     for step in first.executed_component_steps:
         prompt = _step_text(step, "prompt")
-        generation = _step_text(step, GENERATION_OUTPUT_FIELD)
+        generation = _step_text(step, PROVIDER_GENERATION_OUTPUT_FIELD)
         console.print(
             Panel(Text(prompt), title=f"{step.component_id}: model input")
         )

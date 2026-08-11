@@ -150,17 +150,17 @@ def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
         "record_ref": {
             "schema_name": "whetstone.provider_execution_policy",
             "content_hash": (
-                "ddb2115fb1631560c9b02b1aa16820482"
-                "e37b28523d1f43ddd7dbecbed664909"
+                "6282ea0fd226f31de13386807a249566"
+                "ed066b2a437fa5ae5fb7fb2792267f40"
             ),
         },
         "record_hash": (
-            "e11d5ffb3acb35048f57ae08dbc34cc4b68332115707ecf8fd304e8c5d147ac2"
+            "dc3b0bb25a7e0e87d461cf376518310daa7ffe318450e85733203e13e7eb1e42"
         ),
     }
     assert (
         binding.identity_hash()
-        == "9d47c2597f020b11f8354c34e57e0561a5e76088593e02fd2a942da315bde401"
+        == "75e1a5fce887b36da046c8b5fc5aa05838ac17413d4b5403ed4041eab4bd4313"
     )
     assert (
         EvaluationBinding.model_validate(binding.model_dump(mode="json"))
@@ -215,7 +215,7 @@ def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
         legacy_identity_hash
         == {
             True: (
-                "6a135b3ecdbff806908146e70e62642a547bb028db0c28650d6cd1c9f1ebcc57"
+                "eb8c90e15fb6147ce7359958ce7fbd8cd152c8170803a150effcf5fa19804b4e"
             ),
             False: (
                 "bfd74fbb8fe543f797e2901d68697c621d8b382027498bf5e6320d7369d4a75c"

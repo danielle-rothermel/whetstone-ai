@@ -1,4 +1,4 @@
-"""Viewer projection tests: strict schema, exact bytes, real rollout rows."""
+"""Viewer projection tests: strict schema, exact bytes, generation rows."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from whetstone.core.identity import TypedRef
 from whetstone.optimization.contracts import StepStatus
 from whetstone.runner.cell import run_cell
 from whetstone.runner.viewer_projection import (
+    VIEWER_GENERATION_ROW_SCHEMA,
     VIEWER_PROJECTION_SCHEMA,
-    VIEWER_ROLLOUT_ROW_SCHEMA,
     ViewerCellProjection,
     ViewerStepSummary,
     build_viewer_cell_projection,
@@ -33,20 +33,20 @@ def test_projection_bytes_match_their_recorded_hashes(tmp_path: Path) -> None:
     """The ledger records the hash of exactly the bytes it committed."""
     _outcome, publication, root = _published(tmp_path)
 
-    for reference in (publication.projection, publication.rollout_outputs):
+    for reference in (publication.projection, publication.generation_outputs):
         body = (root / reference.relative_path).read_bytes()
         assert hashlib.sha256(body).hexdigest() == reference.sha256
 
 
 def test_projection_reports_every_official_arm(tmp_path: Path) -> None:
-    """Three official arms produce three summaries and their rollout rows."""
+    """Three official arms produce three summaries and generation rows."""
     outcome, publication, root = _published(tmp_path)
     projection = json.loads(
         (root / publication.projection.relative_path).read_text()
     )
     lines = [
         json.loads(line)
-        for line in (root / publication.rollout_outputs.relative_path)
+        for line in (root / publication.generation_outputs.relative_path)
         .read_text()
         .splitlines()
         if line
@@ -55,7 +55,7 @@ def test_projection_reports_every_official_arm(tmp_path: Path) -> None:
     assert projection["schema"] == VIEWER_PROJECTION_SCHEMA
     assert projection["cell_id"] == outcome.record.cell_id
     assert len(projection["evidence_summaries"]) == 3
-    assert projection["rollout_row_count"] == len(lines)
+    assert projection["generation_row_count"] == len(lines)
     assert {
         summary["purpose"] for summary in projection["evidence_summaries"]
     } == {
@@ -64,7 +64,7 @@ def test_projection_reports_every_official_arm(tmp_path: Path) -> None:
         "official_best",
     }
     for row in lines:
-        assert row["schema"] == VIEWER_ROLLOUT_ROW_SCHEMA
+        assert row["schema"] == VIEWER_GENERATION_ROW_SCHEMA
         assert row["cell_id"] == outcome.record.cell_id
         assert row["task_hash"]
 
@@ -170,5 +170,6 @@ def test_viewer_schema_literals_are_pinned() -> None:
     """Golden literals: renaming one orphans every published cell."""
     assert VIEWER_PROJECTION_SCHEMA == "whetstone.runner.viewer_projection/v1"
     assert (
-        VIEWER_ROLLOUT_ROW_SCHEMA == "whetstone.runner.viewer_rollout_row/v1"
+        VIEWER_GENERATION_ROW_SCHEMA
+        == "whetstone.runner.viewer_generation_row/v1"
     )

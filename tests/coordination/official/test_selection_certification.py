@@ -22,7 +22,7 @@ from whetstone.coordination.official.selection import (
 )
 from whetstone.core.identity import TypedRef
 from whetstone.evaluation.aggregate import (
-    RolloutAggregate,
+    Aggregate,
     RowValue,
     TaskRows,
     unweighted_task_mean,
@@ -49,7 +49,7 @@ SPECS = (
 )
 
 
-def _quality(graph_hash: str, value: float) -> RolloutAggregate:
+def _quality(graph_hash: str, value: float) -> Aggregate:
     return unweighted_task_mean(
         aggregate_name=SELECTION_QUALITY_AGGREGATE_NAME,
         graph_hash=graph_hash,
@@ -64,7 +64,7 @@ def _quality(graph_hash: str, value: float) -> RolloutAggregate:
     )
 
 
-def _compression(graph_hash: str, value: float) -> RolloutAggregate:
+def _compression(graph_hash: str, value: float) -> Aggregate:
     return unweighted_task_mean(
         aggregate_name="mean_compression_ratio",
         graph_hash=graph_hash,
@@ -128,7 +128,7 @@ def test_selection_evidence_certified_and_persisted() -> None:
                 planned_key_set=("k0",),
                 result_key_set=("k0",),
                 aggregate_ref=TypedRef(
-                    schema_name="whetstone.rollout_aggregate",
+                    schema_name="whetstone.aggregate",
                     content_hash="9" * 64,
                 ),
             ),
@@ -145,14 +145,14 @@ def test_selection_evidence_certified_and_persisted() -> None:
             PlannedKeyResult(
                 planned_key="k0",
                 result_ref=TypedRef(
-                    schema_name="whetstone.rollout_result",
+                    schema_name="whetstone.generation_result",
                     content_hash="d" * 64,
                 ),
             ),
         ),
         aggregate_refs=(
             TypedRef(
-                schema_name="whetstone.rollout_aggregate",
+                schema_name="whetstone.aggregate",
                 content_hash="9" * 64,
             ),
         ),

@@ -28,7 +28,7 @@ from whetstone.experiment.objectives import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from whetstone.evaluation.aggregate import RolloutAggregate
+    from whetstone.evaluation.aggregate import Aggregate
 
 __all__ = [
     "IncompleteEvidenceError",
@@ -68,7 +68,7 @@ class SelectionCandidate:
     """One candidate's certified aggregate evidence for selection.
 
     A candidate is one admitted Graph Hash / curve slot. ``aggregates`` maps
-    aggregate name -> :class:`RolloutAggregate`; ``candidate_id`` is the opaque
+    aggregate name -> :class:`Aggregate`; ``candidate_id`` is the opaque
     identifier the front carries (typically the selected Materialization Record
     reference or the ``graph_hash``). This is a plain value holder — not a
     persisted record — so it is a lightweight class, not a pydantic model, and
@@ -77,7 +77,7 @@ class SelectionCandidate:
 
     candidate_id: str
     graph_hash: str
-    aggregates: Mapping[str, RolloutAggregate]
+    aggregates: Mapping[str, Aggregate]
 
     def __post_init__(self) -> None:
         if not self.candidate_id:
@@ -162,7 +162,7 @@ class SelectionEvidence(BaseModel):
 
 
 def _certified_value(
-    aggregate: RolloutAggregate,
+    aggregate: Aggregate,
 ) -> float:
     """Return the certified numeric value of a complete aggregate.
 

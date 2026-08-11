@@ -690,7 +690,7 @@ class BootstrapAttemptPlan(BaseModel):
     exclude_equal_task_from_all_teacher_components: StrictBool = True
     restore_teacher_demos_after_effect: StrictBool = True
     copy_task_model: StrictBool
-    rollout_id: StrictInt | None
+    generation_id: StrictInt | None
     temperature: float | None
 
     @model_validator(mode="after")
@@ -709,15 +709,16 @@ class BootstrapAttemptPlan(BaseModel):
         retry = self.round_index > 0
         if (
             self.copy_task_model != retry
-            or (self.rollout_id is not None) != retry
+            or (self.generation_id is not None) != retry
             or (self.temperature is not None) != retry
         ):
             raise ValueError("only rounds after zero copy the task model")
         if retry and (
-            self.rollout_id != self.round_index or self.temperature != 1.0
+            self.generation_id != self.round_index or self.temperature != 1.0
         ):
             raise ValueError(
-                "retry rollout_id must equal round and temperature must be 1.0"
+                "retry generation_id must equal round and temperature "
+                "must be 1.0"
             )
         return self
 
@@ -737,7 +738,7 @@ class BootstrapAttemptPlan(BaseModel):
                 self.restore_teacher_demos_after_effect
             ),
             "copy_task_model": self.copy_task_model,
-            "rollout_id": self.rollout_id,
+            "generation_id": self.generation_id,
             "temperature": self.temperature,
         }
 
@@ -785,18 +786,18 @@ def _next_bootstrap_attempt_unchecked(
         task_hash=plan.trainset_task_hashes[state.task_cursor],
         round_index=round_index,
         copy_task_model=round_index > 0,
-        rollout_id=round_index if round_index > 0 else None,
+        generation_id=round_index if round_index > 0 else None,
         temperature=1.0 if round_index > 0 else None,
     )
 
 
-class BootstrapRolloutResult(BaseModel):
+class BootstrapGenerationResult(BaseModel):
     """Normalized evidence returned by one canonical bootstrap evaluation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempt_identity_hash: StrictStr
-    source_rollout_identity: StrictStr
+    source_generation_identity: StrictStr
     source_trace_identity: StrictStr
     source_output_identity: StrictStr
     source_score_identity: StrictStr
@@ -806,10 +807,10 @@ class BootstrapRolloutResult(BaseModel):
     error: StrictStr | None = None
 
     @model_validator(mode="after")
-    def _validate_result(self) -> BootstrapRolloutResult:
+    def _validate_result(self) -> BootstrapGenerationResult:
         for field in (
             "attempt_identity_hash",
-            "source_rollout_identity",
+            "source_generation_identity",
             "source_trace_identity",
             "source_output_identity",
             "source_score_identity",
@@ -820,7 +821,7 @@ class BootstrapRolloutResult(BaseModel):
                 raise ValueError("error must be non-empty when present")
             if self.score is not None or self.trace_steps:
                 raise ValueError(
-                    "failed rollout cannot carry score or trace steps"
+                    "failed generation cannot carry score or trace steps"
                 )
         elif self.metric_present and self.score is None:
             raise ValueError("a present metric must have a score")
@@ -853,12 +854,12 @@ class BootstrapTerminalFailure(BaseModel):
 
 
 class BootstrapFoldEvidence(BaseModel):
-    """One append-only attempted rollout and its derived acceptance."""
+    """One append-only attempted generation and its derived acceptance."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempt: BootstrapAttemptPlan
-    result: BootstrapRolloutResult
+    result: BootstrapGenerationResult
     acceptance: BootstrapAcceptance | None
 
     @model_validator(mode="after")
@@ -884,7 +885,7 @@ class BootstrapFoldEvidence(BaseModel):
         )
         if self.acceptance != expected:
             raise ValueError(
-                "bootstrap acceptance does not match rollout evidence"
+                "bootstrap acceptance does not match generation evidence"
             )
         return self
 
@@ -918,7 +919,7 @@ def fold_bootstrap_result(
     plan: FewshotCandidatePlan,
     state: BootstrapCompilerState,
     attempt: BootstrapAttemptPlan,
-    result: BootstrapRolloutResult,
+    result: BootstrapGenerationResult,
     metric_threshold: float | None,
     component_ids: tuple[str, ...],
 ) -> BootstrapCompilerState:
@@ -1024,7 +1025,7 @@ def _apply_bootstrap_event_unchecked(
             outputs=chosen.outputs,
             augmented=True,
             source_task_hash=attempt.task_hash,
-            source_rollout_identity=result.source_rollout_identity,
+            source_generation_identity=result.source_generation_identity,
             source_trace_identity=result.source_trace_identity,
             source_output_identity=result.source_output_identity,
             source_score_identity=result.source_score_identity,
@@ -1052,12 +1053,12 @@ def _apply_bootstrap_event_unchecked(
 def _acceptance_for(
     *,
     attempt: BootstrapAttemptPlan,
-    result: BootstrapRolloutResult,
+    result: BootstrapGenerationResult,
     metric_threshold: float | None,
 ) -> BootstrapAcceptance:
     return BootstrapAcceptance(
         source_task_hash=attempt.task_hash,
-        source_rollout_identity=result.source_rollout_identity,
+        source_generation_identity=result.source_generation_identity,
         source_trace_identity=result.source_trace_identity,
         source_output_identity=result.source_output_identity,
         source_score_identity=result.source_score_identity,
@@ -1069,7 +1070,7 @@ def _acceptance_for(
 
 
 def _accept_result(
-    result: BootstrapRolloutResult,
+    result: BootstrapGenerationResult,
     metric_threshold: float | None,
 ) -> bool:
     if not result.metric_present:
@@ -1379,7 +1380,7 @@ __all__ = [
     "BootstrapCompilerState",
     "BootstrapErrorLimitReached",
     "BootstrapFoldEvidence",
-    "BootstrapRolloutResult",
+    "BootstrapGenerationResult",
     "BootstrapTerminalFailure",
     "FewshotCandidatePlan",
     "FewshotCandidatePlanningInputs",

@@ -573,12 +573,12 @@ def _official_anchor_record(
     """Validate and build the viewer-only official anchor projection."""
     sampling = config.official_engine.sampling
     expected_task_hashes = sampling.task_set.task_hashes
-    rollout_definition = config.official_engine.experiment.rollout_definition
-    expected_graph_hash = rollout_definition.graph_hash
-    expected_task_model = rollout_definition.provider_call_config.route.model
+    generation_graph = config.official_engine.experiment.generation_graph
+    expected_graph_hash = generation_graph.graph_hash
+    expected_task_model = generation_graph.provider_call_config.route.model
     if config.task_model != expected_task_model:
         raise CellError(
-            "cell task_model must match the rollout definition's provider "
+            "cell task_model must match the generation graph's provider "
             f"route model {expected_task_model!r}"
         )
     aligned_count = len(expected_task_hashes)
@@ -594,8 +594,8 @@ def _official_anchor_record(
             )
         if evidence.graph_hash != expected_graph_hash:
             raise CellError(
-                f"official {arm} graph_hash does not match the rollout "
-                "definition"
+                f"official {arm} graph_hash does not match the "
+                "generation graph definition"
             )
         if (
             evidence.aggregate_status != "ok"
@@ -886,7 +886,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
         config.ledger.write_official_anchor(
             _official_anchor_record(config, baseline=baseline, ceiling=ceiling)
         )
-    projection, rollout_lines = build_viewer_cell_projection(
+    projection, generation_lines = build_viewer_cell_projection(
         cell_id=config.cell_id,
         optimizer=config.optimizer,
         env=config.env,
@@ -906,7 +906,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
         cell_id=config.cell_id,
         env=config.env,
         projection_body=projection.to_bytes(),
-        rollout_lines=rollout_lines,
+        generation_lines=generation_lines,
     )
     record = CellRecord(
         cell_id=config.cell_id,

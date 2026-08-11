@@ -127,7 +127,7 @@ def test_c18h_procedure_identity_partition_holds(
     c18h_tiny: EnvExperiment,
 ) -> None:
     assert (
-        c18h_tiny.rollout_definition.procedure_config_hash
+        c18h_tiny.generation_graph.procedure_config_hash
         == c18h_tiny.eval_configs.procedure_config_hash
     )
 

@@ -51,7 +51,7 @@ def tool_config(
     definition = ToolDefinition(
         tool_name="evaluate_candidate",
         input_fields=("model_route", "template"),
-        output_fields=("rollout_refs", "accepted_ordinal"),
+        output_fields=("generation_refs", "accepted_ordinal"),
     )
     return ToolConfig(
         definition=tool_definition_reference(definition),
@@ -117,7 +117,7 @@ def successful_result(call: ToolCall, ordinal: int) -> ToolResult:
     return ToolResult(
         call=tool_call_reference(call),
         output={
-            "rollout_refs": [],
+            "generation_refs": [],
             "accepted_ordinal": ordinal,
         },
         provenance_ordinal=ordinal,

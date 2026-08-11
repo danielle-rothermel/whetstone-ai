@@ -198,13 +198,13 @@ def test_invalid_generation_is_an_explicit_failed_slot_not_an_underfill() -> (
     assert drafts[1].failed
     assert drafts[1].template == ""
     assert drafts[1].terminal_failure is not None
-    assert "blank-generation" in drafts[1].terminal_failure.message
+    assert "blank-provider-generation" in drafts[1].terminal_failure.message
     assert len(recording.served) == 2
     assert (
         drafts[1].response_evidence["provider_call_result"][
             "semantic_failure"
         ]["failure_class"]
-        == "blank-generation"
+        == "blank-provider-generation"
     )
 
 
@@ -230,8 +230,8 @@ def test_rejected_response_retains_accounting_and_failure_evidence() -> None:
     assert draft.terminal_failure.model_dump(mode="json") == {
         "code": "proposal_failed",
         "message": (
-            "provider proposer failed with blank-generation: provider "
-            "returned a blank or whitespace-only generation"
+            "provider proposer failed with blank-provider-generation: "
+            "provider returned a blank or whitespace-only generation"
         ),
         "details": {},
     }
@@ -241,9 +241,9 @@ def test_rejected_response_retains_accounting_and_failure_evidence() -> None:
         result_evidence["logical_call_id"]
         == (draft.request_evidence["logical_call_id"])
     )
-    assert result_evidence["generation"] is None
+    assert result_evidence["provider_generation"] is None
     assert result_evidence["semantic_failure"] == {
-        "failure_class": "blank-generation",
+        "failure_class": "blank-provider-generation",
         "message": "provider returned a blank or whitespace-only generation",
         "transport_failure": None,
         "rejected_response": response.model_dump(mode="json"),

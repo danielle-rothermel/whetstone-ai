@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.generation_graph import build_generation_graph
 from whetstone.envs.procedure import env_procedure_config
 from whetstone.envs.registry import ENV_NAMES, env_spec
-from whetstone.envs.rollout_definition import build_rollout_definition
 from whetstone.envs.sampling import (
     INTERNAL_EVAL,
     OFFICIAL,
@@ -119,7 +119,7 @@ def test_eval_config_hash_differs_graph_hash_unchanged(
     env_name: str,
 ) -> None:
     env, configs = _eval_configs(env_name)
-    rd = build_rollout_definition(env, model=_MODEL)
+    rd = build_generation_graph(env, model=_MODEL)
     validate_eval_identity_partition(
         rd.graph_config, configs.internal.eval_config
     )

@@ -14,14 +14,14 @@ def test_build_env_experiment_returns_all_five_deliverables(
     exp = tiny_experiment(env_name)
     d = exp.as_dict()
     assert set(d) == {
-        "rollout_definition",
+        "generation_graph",
         "initial_candidate",
         "ceiling_candidate",
         "eval_configs",
         "reward_policy",
     }
     assert (
-        exp.rollout_definition.procedure_config_hash
+        exp.generation_graph.procedure_config_hash
         == exp.eval_configs.procedure_config_hash
     )
 

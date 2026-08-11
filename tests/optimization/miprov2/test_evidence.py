@@ -80,19 +80,19 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
             trace_index=0,
             component_id="encode",
             input_field_names=("prompt",),
-            output_field_names=("generation",),
+            output_field_names=("provider_generation",),
             inputs=ImmutableJsonObject({"prompt": "encoder prompt"}),
             outputs=ImmutableJsonObject(
-                {"generation": "exact encoder output"}
+                {"provider_generation": "exact encoder output"}
             ),
         ),
         ExecutedComponentStep(
             trace_index=1,
             component_id="decode",
             input_field_names=("prompt",),
-            output_field_names=("generation",),
+            output_field_names=("provider_generation",),
             inputs=ImmutableJsonObject({"prompt": "decoder prompt"}),
-            outputs=ImmutableJsonObject({"generation": final_text}),
+            outputs=ImmutableJsonObject({"provider_generation": final_text}),
         ),
     )
     traces = EvaluationComponentTraces(
@@ -128,7 +128,7 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
     )
     aggregate_ref = persist_test_record(
         store,
-        "whetstone.rollout_aggregate",
+        "whetstone.aggregate",
         {"score": 0.8},
     )
     reward = apply_reward_policy(
@@ -276,10 +276,10 @@ def test_ed1_bootstrap_uses_exact_encoder_step_not_decoder_or_display(
     selected = result.trace_steps[0]
     assert selected.component_id == "encode"
     assert selected.inputs == {"prompt": "encoder prompt"}
-    assert selected.outputs == {"generation": "exact encoder output"}
+    assert selected.outputs == {"provider_generation": "exact encoder output"}
     assert "different decoded display" not in str(selected.model_dump())
     assert result.source_output_identity == (
-        "f9e2592008aebdf3fa64f8cdfc62a296136f5abe67a2f163b51d91fac26478e0"
+        "60fab16f5948734b962f4b365a884b3ead527bd3777b2f15095dda261a7f2d73"
     )
 
 
@@ -380,7 +380,7 @@ def test_tampered_trace_bytes_fail_content_reference(
     trace_ref, record = _trace_record(store, resolution)
     record["rows"][0]["executed_component_trace"]["executed_component_steps"][
         0
-    ]["outputs"]["generation"] = "tampered"
+    ]["outputs"]["provider_generation"] = "tampered"
     canonical_get = store.get
 
     def tampered(reference):
@@ -436,7 +436,7 @@ def test_bootstrap_failure_uses_exact_failure_ref_without_reward(
     assert result.score is None
     assert result.trace_steps == ()
     assert resolution.evaluation_result_ref is not None
-    assert result.source_rollout_identity == (
+    assert result.source_generation_identity == (
         resolution.evaluation_result_ref.content_hash
     )
 

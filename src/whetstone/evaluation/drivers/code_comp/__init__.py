@@ -32,7 +32,7 @@ from whetstone.evaluation.drivers.code_comp.workers import (
     DUMMY_FAILING_BODY,
     DUMMY_PASSING_BODY,
     drive_dummy_encdec_generation,
-    drive_provider_encdec_generation,
+    drive_provider_encdec_call,
 )
 
 __all__ = [
@@ -57,7 +57,7 @@ __all__ = [
     "drive_direct_row",
     "drive_dummy_encdec_generation",
     "drive_encdec_row",
-    "drive_provider_encdec_generation",
+    "drive_provider_encdec_call",
     "dummy_encdec_row_job",
     "encdec_task_model_row_job",
     "provider_encdec_row_job",

@@ -80,7 +80,7 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
         num_samples=1,
     )
     if (
-        experiment.rollout_definition.procedure_config_hash
+        experiment.generation_graph.procedure_config_hash
         != request.procedure_config_hash
     ):
         raise ValueError("D1 row procedure identity is not canonical")
@@ -202,7 +202,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
             mutants={mutant.content_hash: mutant},
         )
     elif (
-        experiment.rollout_definition.procedure_config_hash
+        experiment.generation_graph.procedure_config_hash
         != request.procedure_config_hash
     ):
         raise ValueError("ED1 row procedure identity is not canonical")

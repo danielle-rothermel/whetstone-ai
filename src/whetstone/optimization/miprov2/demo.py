@@ -74,7 +74,7 @@ class DemoSourceKind(StrEnum):
 
 
 class BootstrapAcceptance(BaseModel):
-    """The exact metric decision attached to one bootstrap rollout.
+    """The exact metric decision attached to one bootstrap generation.
 
     ``metric_threshold`` deliberately uses DSPy's truthiness rule.  In
     particular, ``0.0`` takes the truthiness branch rather than the numeric
@@ -85,7 +85,7 @@ class BootstrapAcceptance(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_task_hash: StrictStr
-    source_rollout_identity: StrictStr
+    source_generation_identity: StrictStr
     source_trace_identity: StrictStr
     source_output_identity: StrictStr
     source_score_identity: StrictStr
@@ -98,7 +98,7 @@ class BootstrapAcceptance(BaseModel):
     def _validate_decision(self) -> BootstrapAcceptance:
         for field in (
             "source_task_hash",
-            "source_rollout_identity",
+            "source_generation_identity",
             "source_trace_identity",
             "source_output_identity",
             "source_score_identity",
@@ -119,7 +119,7 @@ class BootstrapAcceptance(BaseModel):
     def identity_payload(self) -> dict[str, Any]:
         return {
             "source_task_hash": self.source_task_hash,
-            "source_rollout_identity": self.source_rollout_identity,
+            "source_generation_identity": self.source_generation_identity,
             "source_trace_identity": self.source_trace_identity,
             "source_output_identity": self.source_output_identity,
             "source_score_identity": self.source_score_identity,
@@ -229,7 +229,7 @@ class ComponentDemo(BaseModel):
     augmented: StrictBool
 
     source_task_hash: StrictStr
-    source_rollout_identity: StrictStr
+    source_generation_identity: StrictStr
     source_trace_identity: StrictStr
     source_output_identity: StrictStr
     source_score_identity: StrictStr
@@ -266,7 +266,7 @@ class ComponentDemo(BaseModel):
             raise ValueError("component_id must be non-empty")
         for field in (
             "source_task_hash",
-            "source_rollout_identity",
+            "source_generation_identity",
             "source_trace_identity",
             "source_output_identity",
             "source_score_identity",
@@ -300,7 +300,7 @@ class ComponentDemo(BaseModel):
             "outputs": self.outputs.to_json(),
             "augmented": self.augmented,
             "source_task_hash": self.source_task_hash,
-            "source_rollout_identity": self.source_rollout_identity,
+            "source_generation_identity": self.source_generation_identity,
             "source_trace_identity": self.source_trace_identity,
             "source_output_identity": self.source_output_identity,
             "source_score_identity": self.source_score_identity,
@@ -409,7 +409,7 @@ class LabeledTaskDemo(BaseModel):
             outputs=outputs,
             augmented=False,
             source_task_hash=self.source_task_hash,
-            source_rollout_identity=source_identity,
+            source_generation_identity=source_identity,
             source_trace_identity=source_identity,
             source_output_identity=source_identity,
             source_score_identity=source_identity,

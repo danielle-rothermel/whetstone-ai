@@ -148,7 +148,7 @@ class _PersistingEvaluationService:
         )
         aggregate_ref = persist_test_record(
             self.store,
-            "whetstone.rollout_aggregate",
+            "whetstone.aggregate",
             {"intent_id": intent.intent_id, "score": score},
         )
         reward = apply_reward_policy(
@@ -292,7 +292,7 @@ def test_real_adapter_reaches_terminal_and_replays_without_duplicate_effects(
     )
     initial_budget = BudgetState(
         remaining={
-            "bootstrap_rollouts": 0,
+            "bootstrap_generations": 0,
             "proposal_calls": 2,
             "evaluations": 2,
             "task_rows": 6,
@@ -352,9 +352,9 @@ def test_real_adapter_reaches_terminal_and_replays_without_duplicate_effects(
         "evaluations": 2,
         "task_rows": 6,
     }
-    assert "bootstrap_rollouts" not in results[-1].budget.consumed
+    assert "bootstrap_generations" not in results[-1].budget.consumed
     assert results[-1].budget.remaining == {
-        "bootstrap_rollouts": 0,
+        "bootstrap_generations": 0,
         "proposal_calls": 0,
         "evaluations": 0,
         "task_rows": 0,

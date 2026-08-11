@@ -42,15 +42,15 @@ LLM_NODE_ID = "generate"
 EVAL_NODE_ID = "evaluate"
 
 #: The Eval Node's declared upstream input: the LLM Call Node's generation.
-_EVAL_INPUT_FIELD = "generation"
+_EVAL_INPUT_FIELD = "provider_generation"
 
 
 @dataclass(frozen=True, slots=True)
-class EnvRolloutDefinition:
-    """The Rollout Definition role graph plus the config references it binds.
+class EnvGenerationGraph:
+    """The Generation Graph role graph plus the config references it binds.
 
     ``definition`` is the native dr-graph :class:`GraphDefinition` playing the
-    Rollout Definition role. ``provider_call_config`` and ``procedure_config``
+    Generation Graph role. ``provider_call_config`` and ``procedure_config``
     are the native configs whose Identity Hashes are the Nodes' static
     Variables; ``graph_config`` is the materialized Graph Config for this env.
     """
@@ -126,12 +126,12 @@ def build_graph_config(
     return definition.materialize(assignments)
 
 
-def build_rollout_definition(
+def build_generation_graph(
     env: EnvSpec,
     *,
     model: str,
-) -> EnvRolloutDefinition:
-    """Build the env's Rollout Definition role graph.
+) -> EnvGenerationGraph:
+    """Build the env's Generation Graph role graph.
 
     Wires one LLM Call Node (Provider Call Config = ``model``) to one terminal
     Eval Node (Evaluation Procedure Config = the env oracle procedure), and
@@ -143,7 +143,7 @@ def build_rollout_definition(
         provider_call_config_hash=provider_call_config.identity_hash,
         evaluation_procedure_config_hash=procedure.config_hash,
     )
-    return EnvRolloutDefinition(
+    return EnvGenerationGraph(
         env_name=env.name,
         definition=llm_eval_graph_definition(),
         provider_call_config=provider_call_config,
@@ -274,11 +274,11 @@ __all__ = [
     "LLM_NODE_ID",
     "PROMPT_EXTERNAL_INPUT",
     "PROVIDER_CALL_CONFIG_SCHEMA",
-    "EnvRolloutDefinition",
+    "EnvGenerationGraph",
     "PromptInputError",
+    "build_generation_graph",
     "build_graph_config",
     "build_provider_call_config",
-    "build_rollout_definition",
     "ceiling_candidate",
     "env_candidate_base_ref",
     "env_task_for",

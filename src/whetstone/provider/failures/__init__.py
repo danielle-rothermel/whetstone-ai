@@ -5,7 +5,7 @@ from dr_providers import (
 )
 
 from whetstone.provider.failures.exceptions import (
-    EmptyGenerationError,
+    EmptyProviderGenerationError,
     EvalFailureError,
     PermanentFailureError,
     RateLimitedFailureError,
@@ -34,7 +34,7 @@ from whetstone.provider.failures.recording import (
 __all__ = [
     "RECOVERABLE_FAILURE_CLASSES",
     "RETRYABLE_FAILURE_CLASSES",
-    "EmptyGenerationError",
+    "EmptyProviderGenerationError",
     "EvalFailureError",
     "FailureClass",
     "FailureSummary",

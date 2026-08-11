@@ -97,7 +97,7 @@ def test_c22h_task_hashes_are_disjoint_from_c22() -> None:
 def test_c22h_procedure_identity_partition_holds() -> None:
     exp = build_env_experiment("c22h", model=_MODEL)
     assert (
-        exp.rollout_definition.procedure_config_hash
+        exp.generation_graph.procedure_config_hash
         == exp.eval_configs.procedure_config_hash
     )
 

@@ -88,7 +88,7 @@ def test_runtime_state_and_evaluation_identity_payloads_are_pinned() -> None:
         "candidate_assembly": None,
     }
     assert spec.identity_hash() == (
-        "1ccf870ca40753d09c7235b47b953bc74718efa8e1a4e211e1969f4873ceeaab"
+        "472f9a7d5c8573cdc39927a60887679a167def686c45808c7ef9f0f80e9e2171"
     )
     assert tuple(state.identity_payload()) == (
         "schema_name",
@@ -131,7 +131,7 @@ def test_runtime_state_and_evaluation_identity_payloads_are_pinned() -> None:
     )
     assert state.identity_payload() == state.model_dump(mode="json")
     assert state.identity_hash() == (
-        "26e23c8315b5221d411fcf805f956585d49760946311d7cd1ced9d78c11adc11"
+        "2a4d1c1fdc47bb7c22afd1c7d59a435a1726610323a94ee1064f8757dfc79462"
     )
 
 
@@ -417,7 +417,7 @@ def test_runtime_nested_strict_int_cannot_bypass_state_revalidation(
 ) -> None:
     _driver, state = _runtime()
     forged_budget = Miprov2EffectBudget.model_construct(
-        bootstrap_rollouts=state.budget.bootstrap_rollouts,
+        bootstrap_generations=state.budget.bootstrap_generations,
         proposal_calls=state.budget.proposal_calls,
         evaluations=state.budget.evaluations,
         task_rows=invalid_task_rows,
@@ -479,7 +479,7 @@ def _resolved_evaluation(
         evidence_role=EvaluationRole.INTERNAL,
         evidence_refs=(
             TypedRef(
-                schema_name="whetstone.rollout_aggregate",
+                schema_name="whetstone.aggregate",
                 content_hash=f"{20_000 + nonce:064x}",
             ),
         ),
@@ -691,7 +691,7 @@ def test_minimal_runtime_flow_accounts_rows_and_returns_exact_winner() -> None:
     assert terminal.state.terminal_result is not None
     assert terminal.state.terminal_result.winner_score == 90.0
     assert terminal.state.effect_counts == {
-        "bootstrap_rollouts": 0,
+        "bootstrap_generations": 0,
         "proposal_calls": 2,
         "evaluations": 2,
         "task_rows": 6,

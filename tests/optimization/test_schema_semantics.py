@@ -206,7 +206,7 @@ def _tool_evidence(
         output=(
             None
             if failure is not None
-            else {"rollout_refs": [], "accepted_ordinal": 1}
+            else {"generation_refs": [], "accepted_ordinal": 1}
         ),
         terminal_failure=failure,
         provenance_ordinal=1,
@@ -329,7 +329,7 @@ def test_refused_tool_evidence_rejects_serialized_result_terminal_variant(
     result = ToolResult(
         call=evidence.result.record.call,
         output=(
-            {"rollout_refs": [], "accepted_ordinal": 1}
+            {"generation_refs": [], "accepted_ordinal": 1}
             if terminal_variant == "success"
             else None
         ),

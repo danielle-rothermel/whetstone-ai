@@ -269,7 +269,7 @@ def test_demo_category_identity_is_predictor_specific() -> None:
         outputs={"output": "changed"},
         augmented=False,
         source_task_hash=_hash("task"),
-        source_rollout_identity=_hash("rollout"),
+        source_generation_identity=_hash("generation"),
         source_trace_identity=_hash("trace"),
         source_output_identity=_hash("output"),
         source_score_identity=_hash("score"),

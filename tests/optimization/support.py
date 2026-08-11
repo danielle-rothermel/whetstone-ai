@@ -351,7 +351,7 @@ def pure_request(
         step_index=0,
         candidates=records,
         step_output_contract=step_contract,
-        budget=BudgetState(remaining={"rollouts": 10}),
+        budget=BudgetState(remaining={"generations": 10}),
     )
 
 
@@ -385,7 +385,7 @@ def proposal_request(
         prior_step_result_ref=prior_step_result_ref,
         candidates=candidates if candidates is not None else (candidate(),),
         step_output_contract=step_contract,
-        budget=budget or BudgetState(remaining={"rollouts": 10}),
+        budget=budget or BudgetState(remaining={"generations": 10}),
     )
 
 
@@ -433,7 +433,7 @@ def make_tool_definition_config(
     definition = ToolDefinition(
         tool_name="evaluate_candidate",
         input_fields=("model_route", "template"),
-        output_fields=("rollout_refs", "accepted_ordinal"),
+        output_fields=("generation_refs", "accepted_ordinal"),
     )
     return ToolConfig(
         definition=tool_definition_reference(definition),
@@ -626,7 +626,7 @@ class CountingProposalAdapter:
         self._status = status
         self._candidates = candidates
         self._budget_delta = budget_delta or BudgetDelta(
-            consumed={"rollouts": 1}
+            consumed={"generations": 1}
         )
 
     @property
@@ -719,7 +719,7 @@ class RecordingToolExecutor:
             result = ToolResult(
                 call=tool_call_reference(call),
                 output={
-                    "rollout_refs": [],
+                    "generation_refs": [],
                     "accepted_ordinal": entry.capacity_debit_ordinal,
                 },
                 provenance_ordinal=entry.capacity_debit_ordinal,

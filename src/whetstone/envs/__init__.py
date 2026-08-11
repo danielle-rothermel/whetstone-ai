@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.generation_graph import (
+    EnvGenerationGraph,
+    build_generation_graph,
+    ceiling_candidate,
+    initial_candidate,
+)
 from whetstone.envs.oracle_operator import (
     ENV_EXACT_MATCH_NAME,
     ENV_EXACT_MATCH_UNIT,
@@ -15,12 +21,6 @@ from whetstone.envs.registry import (
     env_spec,
 )
 from whetstone.envs.reward import build_reward_policy
-from whetstone.envs.rollout_definition import (
-    EnvRolloutDefinition,
-    build_rollout_definition,
-    ceiling_candidate,
-    initial_candidate,
-)
 from whetstone.envs.sampling import (
     Completeness,
     EnvEvalConfigs,
@@ -39,15 +39,15 @@ __all__ = [
     "Completeness",
     "EnvEvalConfigs",
     "EnvExperiment",
-    "EnvRolloutDefinition",
+    "EnvGenerationGraph",
     "EnvSpec",
     "InternalEvalResult",
     "Task",
     "UnknownEnvError",
     "build_env_experiment",
     "build_eval_configs",
+    "build_generation_graph",
     "build_reward_policy",
-    "build_rollout_definition",
     "ceiling_candidate",
     "env_exact_match_fact",
     "env_exact_match_score",

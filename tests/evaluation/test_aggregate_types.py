@@ -4,9 +4,9 @@ from dataclasses import is_dataclass
 
 import whetstone.evaluation as local_evaluation
 from whetstone.evaluation.aggregate import (
+    Aggregate,
     CompletenessPolicy,
     EvaluationMatrixPlan,
-    RolloutAggregate,
     RowValue,
     TaskRows,
 )
@@ -37,7 +37,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         count_applicable=0,
         count_present=0,
     )
-    aggregate = RolloutAggregate(
+    aggregate = Aggregate(
         name="x",
         graph_hash="0" * 64,
         eval_config_hash="1" * 64,

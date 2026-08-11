@@ -196,7 +196,7 @@ def make_miprov2_evidence_fixture(
         task_hash=MIPROV2_EVIDENCE_TASK_IDENTITY,
         round_index=0,
         copy_task_model=False,
-        rollout_id=None,
+        generation_id=None,
         temperature=None,
     )
     policy = Miprov2EvaluationExecutionPolicy(
@@ -412,7 +412,7 @@ def make_minimal_miprov2_runtime(
         proposal_trainset=proposal_trainset,
         component_field_order={component_id: ("query", "answer")},
         budget=Miprov2EffectBudget(
-            bootstrap_rollouts=0,
+            bootstrap_generations=0,
             proposal_calls=proposal_calls,
             evaluations=2,
             task_rows=6,

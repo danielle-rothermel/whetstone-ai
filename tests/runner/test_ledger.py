@@ -40,8 +40,8 @@ def _publication(cell_id: str = "copro__c18__a0") -> ViewerCellPublicationRef:
             relative_path=f"viewer_cells/{cell_id}/projection.json",
             sha256=_HASH,
         ),
-        rollout_outputs=ViewerPublishedFileRef(
-            relative_path=f"viewer_cells/{cell_id}/rollout_outputs.jsonl",
+        generation_outputs=ViewerPublishedFileRef(
+            relative_path=f"viewer_cells/{cell_id}/generation_outputs.jsonl",
             sha256=_OTHER_HASH,
         ),
     )
@@ -656,12 +656,14 @@ def test_viewer_publication_commits_by_one_atomic_rename(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=body,
-        rollout_lines=lines,
+        generation_lines=lines,
     )
 
     directory = ledger.viewer_cell_dir("copro:c18:a0")
     assert (directory / "projection.json").read_bytes() == body
-    assert (directory / "rollout_outputs.jsonl").read_text() == "".join(lines)
+    assert (directory / "generation_outputs.jsonl").read_text() == "".join(
+        lines
+    )
     assert ref.projection.relative_path == (
         "viewer_cells/copro__c18__a0/projection.json"
     )
@@ -684,7 +686,7 @@ def test_viewer_publication_hashes_the_exact_committed_bytes(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=body,
-        rollout_lines=lines,
+        generation_lines=lines,
     )
 
     directory = ledger.viewer_cell_dir("copro:c18:a0")
@@ -695,9 +697,9 @@ def test_viewer_publication_hashes_the_exact_committed_bytes(
         ).hexdigest()
     )
     assert (
-        ref.rollout_outputs.sha256
+        ref.generation_outputs.sha256
         == hashlib.sha256(
-            (directory / "rollout_outputs.jsonl").read_bytes()
+            (directory / "generation_outputs.jsonl").read_bytes()
         ).hexdigest()
     )
 
@@ -711,13 +713,13 @@ def test_republishing_identical_viewer_bytes_is_idempotent(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=b"{}",
-        rollout_lines=["{}\n"],
+        generation_lines=["{}\n"],
     )
     second = ledger.write_viewer_publication(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=b"{}",
-        rollout_lines=["{}\n"],
+        generation_lines=["{}\n"],
     )
 
     assert first == second
@@ -731,7 +733,7 @@ def test_republishing_different_viewer_bytes_is_refused(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=b"{}",
-        rollout_lines=["{}\n"],
+        generation_lines=["{}\n"],
     )
 
     with pytest.raises(RuntimeError, match="conflicts at"):
@@ -739,7 +741,7 @@ def test_republishing_different_viewer_bytes_is_refused(
             cell_id="copro:c18:a0",
             env="c18",
             projection_body=b'{"changed":1}',
-            rollout_lines=["{}\n"],
+            generation_lines=["{}\n"],
         )
 
 
@@ -751,7 +753,7 @@ def test_viewer_publication_refuses_a_mismatched_env(tmp_path: Path) -> None:
             cell_id="copro:c18:a0",
             env="c22",
             projection_body=b"{}",
-            rollout_lines=[],
+            generation_lines=[],
         )
 
 
@@ -762,9 +764,9 @@ def test_viewer_publication_ref_requires_the_canonical_file_pair() -> None:
                 relative_path="viewer_cells/copro__c18__a0/projection.json",
                 sha256=_HASH,
             ),
-            rollout_outputs=ViewerPublishedFileRef(
+            generation_outputs=ViewerPublishedFileRef(
                 relative_path="viewer_cells/copro__c22__a0/"
-                "rollout_outputs.jsonl",
+                "generation_outputs.jsonl",
                 sha256=_OTHER_HASH,
             ),
         )

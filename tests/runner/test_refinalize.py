@@ -31,9 +31,9 @@ def _publication() -> ViewerCellPublicationRef:
             relative_path="viewer_cells/copro__c18__a0/projection.json",
             sha256=_HASH,
         ),
-        rollout_outputs=ViewerPublishedFileRef(
+        generation_outputs=ViewerPublishedFileRef(
             relative_path=(
-                "viewer_cells/copro__c18__a0/rollout_outputs.jsonl"
+                "viewer_cells/copro__c18__a0/generation_outputs.jsonl"
             ),
             sha256=_OTHER_HASH,
         ),

@@ -221,7 +221,7 @@ def _proposal_request(
         candidates=(candidate(),),
         step_output_contract=contract
         or OutputContract(returned_proposal_count=1),
-        budget=budget or BudgetState(remaining={"rollouts": 10}),
+        budget=budget or BudgetState(remaining={"generations": 10}),
     )
 
 
@@ -289,7 +289,7 @@ def test_intent_resolution_v2_wire_contract_is_exact() -> None:
     assert record["reward_evidence_refs"] == []
     assert (
         typed_ref_for_record(INTENT_RESOLUTION_SCHEMA, record).content_hash
-        == "350a1188dbcafc34f68bd479c524cb6b68231ac408e24c5e143370d26a732e7b"
+        == "4fef9b65817a2a59a051472fc30cbac4dfe72ab09acd14fead536c317b31f620"
     )
 
 
@@ -743,11 +743,11 @@ def test_optimization_run_owns_proposal_reward_policy() -> None:
 def test_budget_validates_overlapping_maps_independently() -> None:
     with pytest.raises(ValidationError, match=r"consumed.*cannot be negative"):
         BudgetState(
-            consumed={"rollouts": -1},
-            remaining={"rollouts": 10},
+            consumed={"generations": -1},
+            remaining={"generations": 10},
         )
     with pytest.raises(ValidationError, match="strict integer"):
-        BudgetState(remaining={"rollouts": True})
+        BudgetState(remaining={"generations": True})
 
 
 def test_optimization_run_composes_exact_contract_refs() -> None:
@@ -1053,7 +1053,7 @@ def test_tool_chain_is_exact_and_terminal_variants_are_exclusive() -> None:
     call_ref = tool_call_reference(call)
     success = ToolResult(
         call=call_ref,
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     assert tool_result_reference(success).record == success
@@ -1079,7 +1079,7 @@ def test_tool_chain_is_exact_and_terminal_variants_are_exclusive() -> None:
     with pytest.raises(ValidationError, match="exactly success"):
         ToolResult(
             call=call_ref,
-            output={"rollout_refs": [], "accepted_ordinal": 1},
+            output={"generation_refs": [], "accepted_ordinal": 1},
             refusal={"refusal_class": "capacity", "reason": "full"},
         )
 
@@ -1131,5 +1131,5 @@ def test_tool_definition_config_call_and_result_cannot_diverge() -> None:
     with pytest.raises(ValidationError, match="output_fields"):
         ToolResult(
             call=tool_call_reference(call),
-            output={"rollout_refs": []},
+            output={"generation_refs": []},
         )

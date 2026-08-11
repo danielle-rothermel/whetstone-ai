@@ -46,7 +46,7 @@ class RecordingFailureError(PermanentFailureError):
     """Worker could not produce a storable record of what it did."""
 
 
-class EmptyGenerationError(PermanentFailureError):
+class EmptyProviderGenerationError(PermanentFailureError):
     """LM returned no usable text for a required output field."""
 
 

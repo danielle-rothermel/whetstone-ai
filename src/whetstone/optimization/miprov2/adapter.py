@@ -57,7 +57,7 @@ from whetstone.optimization.proposal.proposer import (
 
 MIPROV2_ADAPTER_KEY = "miprov2"
 MIPROV2_STATE_KEY = "miprov2_state"
-MIPROV2_BOOTSTRAP = "bootstrap_rollout"
+MIPROV2_BOOTSTRAP = "bootstrap_generation"
 MIPROV2_PROPOSAL = "proposal_model"
 MIPROV2_BASELINE = "baseline_evaluation"
 MIPROV2_SAMPLE = "sample_evaluation"
@@ -375,10 +375,10 @@ class Miprov2Adapter:
                 },
             )
         if plan.kind == MIPROV2_BOOTSTRAP:
-            assert plan.bootstrap_rollout is not None
+            assert plan.bootstrap_generation is not None
             assert plan.state.resolved_eval_binding is not None
             assert plan.state.pending_bootstrap_candidate is not None
-            attempt = plan.bootstrap_rollout
+            attempt = plan.bootstrap_generation
             self._preflight_task_rows(request.budget, 1)
             teacher_candidate = plan.state.pending_bootstrap_candidate
             intent_id = (
@@ -433,7 +433,7 @@ class Miprov2Adapter:
                 proposed_candidates=(teacher_candidate.record,),
                 evaluation_intents=(intent,),
                 budget_delta=BudgetDelta(
-                    consumed={"bootstrap_rollouts": 1, "task_rows": 1}
+                    consumed={"bootstrap_generations": 1, "task_rows": 1}
                 ),
                 state_delta={
                     MIPROV2_STATE_KEY: plan.state.model_dump(mode="json"),
@@ -525,7 +525,7 @@ class Miprov2Adapter:
         """Require the harness budget to project the durable effect journal."""
 
         for label in (
-            "bootstrap_rollouts",
+            "bootstrap_generations",
             "proposal_calls",
             "evaluations",
             "task_rows",

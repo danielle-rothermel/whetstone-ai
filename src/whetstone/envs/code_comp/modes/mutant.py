@@ -8,6 +8,10 @@ from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
 from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
+from whetstone.envs.code_comp.generation_graph.encdec import (
+    build_encdec_generation_graph,
+    build_encoder_provider_call_config,
+)
 from whetstone.envs.code_comp.modes.encdec import (
     EncDecExperiment,
     _code_comp_split,
@@ -21,10 +25,6 @@ from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.reward.blended import (
     BoundedCompressionMetricConfig,
     build_code_comp_blended_reward_policy,
-)
-from whetstone.envs.code_comp.rollout.encdec import (
-    build_encdec_rollout_definition,
-    build_encoder_provider_call_config,
 )
 from whetstone.envs.code_comp.scoring import CodeScore
 from whetstone.envs.factory import EnvEvalConfigs
@@ -109,7 +109,8 @@ class MutantExperiment(EncDecExperiment):
 
     Carries the per-instance mutant map (``mutants`` keyed by Instance id) so
     :func:`score_mutant_row` scores a reconstruction against the right mutant's
-    dual oracle. Everything else (enc-dec rollout, blend config, budget frame,
+    dual oracle. Everything else (enc-dec generation graph, blend config,
+    budget frame,
     reward policy, completeness) is inherited from
     :class:`EncDecExperiment`, so the ed1 eval / cell / telemetry pipeline
     flows unchanged.
@@ -178,7 +179,8 @@ def build_mutant_experiment(
 
     Verifies the retained artifact schemas, hashes, identities, ordering, and
     internal consistency, then packs its ``MutantRecord`` values as Instances
-    and builds the same enc-dec rollout, configs, and blended reward as ed1
+    and builds the same enc-dec generation graph, configs, and blended reward
+    as ed1
     with the mutant oracle as scorer. The manifest's
     ``canonical_suite_digest`` is opaque recorded provenance; the external
     canonical suite is not independently reauthenticated. ``budget_ratio=None``
@@ -199,7 +201,7 @@ def build_mutant_experiment(
         raise ValueError("ed1m mutant pool is empty")
 
     procedure = build_mutant_procedure_config()
-    rollout = build_encdec_rollout_definition(
+    generation_graph = build_encdec_generation_graph(
         CODE_COMP_ENV_NAME,
         provider_call_config=provider_call_config,
         procedure_config_hash=procedure.config_hash,
@@ -245,7 +247,7 @@ def build_mutant_experiment(
     )
     experiment = MutantExperiment(
         env_name=CODE_COMP_ENV_NAME,
-        rollout_definition=rollout,  # type: ignore[arg-type]
+        generation_graph=generation_graph,  # type: ignore[arg-type]
         initial_candidate=encdec_initial_candidate(),
         ceiling_candidate=encdec_ceiling_candidate(),
         eval_configs=eval_configs,
@@ -259,7 +261,7 @@ def build_mutant_experiment(
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),
-        encdec_rollout=rollout,
+        encdec_generation_graph=generation_graph,
         budget_ratio=budget_ratio,
         dataset_revision=loaded.manifest.dataset_hash,
         scorer=scorer,

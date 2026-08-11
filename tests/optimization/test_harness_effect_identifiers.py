@@ -73,7 +73,7 @@ class DuplicateIntentAdapter:
             proposed_candidates=(proposed,),
             accepted_candidates=(proposed,),
             evaluation_intents=(intent, intent),
-            budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+            budget_delta=BudgetDelta(consumed={"generations": 2}),
             proposed_status=StepStatus.COMPLETE,
         )
 
@@ -108,7 +108,7 @@ class SampleedCandidateAdapter:
             proposed_candidates=(proposed, proposed),
             accepted_candidates=(proposed, proposed),
             evaluation_intents=(first, second),
-            budget_delta=BudgetDelta(consumed={"rollouts": 2}),
+            budget_delta=BudgetDelta(consumed={"generations": 2}),
             proposed_status=StepStatus.COMPLETE,
         )
 
@@ -205,7 +205,7 @@ def test_intent_effect_and_result_namespaces_are_v2(tmp_path) -> None:
     assert INTENT_EFFECT_KEY_SCHEMA_VERSION == 2
     assert effect_request.semantic_key == (
         f"{INTENT_EFFECT_KEY_PREFIX}"
-        "a4baae56a974a8bb18fb3292ca81260018952424aa4cbc77dccb3f19acaade5a"
+        "6a73a06854c98d56d6516a8e9d0e96f95ffd771be65508309a78cc6717e842e0"
     )
     assert harness._result_binding_key(request.run_id, 0) == (
         f"{STEP_RESULT_BINDING_PREFIX}{request.run_id}#0"
@@ -244,7 +244,7 @@ def test_prior_result_must_embed_the_current_exact_run(tmp_path) -> None:
         text="foreign",
     )
     proposed_ref = candidate_reference(proposed)
-    delta = BudgetDelta(consumed={"rollouts": 1})
+    delta = BudgetDelta(consumed={"generations": 1})
     foreign_result = OptimizationStepResult(
         request=step_request_reference(foreign_request),
         proposed_candidates=(proposed_ref,),

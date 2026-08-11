@@ -17,8 +17,8 @@ from whetstone.coordination.evaluation_service import EngineEvaluationService
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.generation_graph import LLM_NODE_ID, render_prompt
 from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
 from whetstone.evaluation.drivers.internal import (
     InternalRowJobFactory,
     InternalRowOutcome,
@@ -196,7 +196,7 @@ def _bind_with_forged_terminal_attestation(
     resolution: IntentResolution,
 ) -> None:
     attestation = EvaluationResultAttestation(
-        graph_hash=service._engine.experiment.rollout_definition.graph_hash,
+        graph_hash=service._engine.experiment.generation_graph.graph_hash,
         resolution=resolution,
     )
     attestation_ref = _put_typed(

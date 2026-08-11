@@ -5,19 +5,19 @@ import pytest
 from dr_graph import graph_hash
 
 from whetstone.core.identity import typed_ref_for_record
-from whetstone.envs.registry import ENV_NAMES, env_spec
-from whetstone.envs.rollout_definition import (
+from whetstone.envs.generation_graph import (
     ENV_CANDIDATE_BASE_SCHEMA,
     EVAL_NODE_ID,
     LLM_NODE_ID,
     PROMPT_EXTERNAL_INPUT,
+    build_generation_graph,
     build_provider_call_config,
-    build_rollout_definition,
     ceiling_candidate,
     env_candidate_base_ref,
     initial_candidate,
     render_prompt,
 )
+from whetstone.envs.registry import ENV_NAMES, env_spec
 from whetstone.experiment.candidate import (
     Candidate,
     TemplateRenderKind,
@@ -41,7 +41,7 @@ def test_env_candidate_base_wire_contract_is_pinned() -> None:
 
 
 def test_graph_has_one_llm_call_and_one_terminal_eval_node() -> None:
-    rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
+    rd = build_generation_graph(env_spec("c22"), model=_MODEL)
     assert isinstance(rd.definition, dr_graph.GraphDefinition)
     nodes = rd.graph_config.nodes
     types = [n.node_type for n in nodes]
@@ -51,7 +51,7 @@ def test_graph_has_one_llm_call_and_one_terminal_eval_node() -> None:
 
 
 def test_prompt_is_the_only_llm_input_source() -> None:
-    rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
+    rd = build_generation_graph(env_spec("c22"), model=_MODEL)
     llm = next(n for n in rd.graph_config.nodes if n.node_id == LLM_NODE_ID)
     assert list(llm.input_sources) == ["prompt"]
     source = llm.input_sources["prompt"]
@@ -61,26 +61,26 @@ def test_prompt_is_the_only_llm_input_source() -> None:
 
 
 def test_eval_node_carries_the_procedure_config_reference() -> None:
-    rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
+    rd = build_generation_graph(env_spec("c22"), model=_MODEL)
     ev = next(n for n in rd.graph_config.nodes if n.node_id == EVAL_NODE_ID)
     assert eval_node_procedure_hash(ev.variables) == rd.procedure_config_hash
 
 
 def test_provider_config_change_changes_graph_hash() -> None:
-    rd = build_rollout_definition(env_spec("c22"), model="model-a")
-    other = build_rollout_definition(env_spec("c22"), model="model-b")
+    rd = build_generation_graph(env_spec("c22"), model="model-a")
+    other = build_generation_graph(env_spec("c22"), model="model-b")
     assert rd.graph_hash != other.graph_hash
 
 
 def test_procedure_change_changes_graph_hash() -> None:
-    a = build_rollout_definition(env_spec("c22"), model=_MODEL)
-    b = build_rollout_definition(env_spec("c11"), model=_MODEL)
+    a = build_generation_graph(env_spec("c22"), model=_MODEL)
+    b = build_generation_graph(env_spec("c11"), model=_MODEL)
     assert a.procedure_config_hash != b.procedure_config_hash
     assert a.graph_hash != b.graph_hash
 
 
 def test_graph_hash_matches_native_dr_graph() -> None:
-    rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
+    rd = build_generation_graph(env_spec("c22"), model=_MODEL)
     assert rd.graph_hash == graph_hash(rd.graph_config)
 
 
@@ -165,7 +165,7 @@ def test_surface_render_matches_env_probe_bytes(env_name: str) -> None:
 
 def test_provider_config_identity_is_the_llm_node_variable() -> None:
     config = build_provider_call_config(_MODEL)
-    rd = build_rollout_definition(env_spec("c22"), model=_MODEL)
+    rd = build_generation_graph(env_spec("c22"), model=_MODEL)
     llm = next(n for n in rd.graph_config.nodes if n.node_id == LLM_NODE_ID)
     ref = llm.variables["provider_call_config_ref"]
     assert ref["identity_hash"] == config.identity_hash

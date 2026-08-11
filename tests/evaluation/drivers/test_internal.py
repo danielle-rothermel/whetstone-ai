@@ -23,8 +23,8 @@ from tests.evaluation.drivers.support import (
     _successful_internal_outcome,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.generation_graph import PromptInputError
 from whetstone.envs.reward import CandidateEvaluationFailure
-from whetstone.envs.rollout_definition import PromptInputError
 from whetstone.evaluation import AggregationStatus
 from whetstone.evaluation.drivers.internal import (
     InternalRowOutcome,
@@ -280,7 +280,7 @@ def test_internal_process_job_runs_real_row_driver() -> None:
     step = output.executed_component_steps[0]
     assert output.row_state is ExecutedRowState.SUCCESS
     assert step.component_id == "generate"
-    assert step.outputs == {"generation": output.output_text}
+    assert step.outputs == {"provider_generation": output.output_text}
     assert step.input_field_names == ("prompt",)
 
 

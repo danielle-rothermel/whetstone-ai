@@ -6,6 +6,9 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_code_comp_tasks
+from whetstone.envs.code_comp.generation_graph.encdec import (
+    build_encoder_provider_call_config,
+)
 from whetstone.envs.code_comp.modes.encdec import (
     EncDecTaskModelConfig,
     EncDecTaskModelKind,
@@ -13,9 +16,6 @@ from whetstone.envs.code_comp.modes.encdec import (
 )
 from whetstone.envs.code_comp.preview import (
     run_code_comp_copro_scoring_preview,
-)
-from whetstone.envs.code_comp.rollout.encdec import (
-    build_encoder_provider_call_config,
 )
 from whetstone.envs.code_comp.runtime import (
     CodeCompRuntimeProbe,

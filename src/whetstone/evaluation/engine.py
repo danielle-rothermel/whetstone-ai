@@ -11,22 +11,24 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
+from whetstone.envs.code_comp.generation_graph.direct import (
+    render_direct_frame,
+)
 from whetstone.envs.code_comp.modes.direct import DirectExperiment
 from whetstone.envs.code_comp.mutation_surface import (
     render_encoder_frame,
     validate_instruction_body,
 )
 from whetstone.envs.code_comp.registry import CodeCompMode, code_comp_mode_for
-from whetstone.envs.code_comp.rollout.direct import render_direct_frame
 from whetstone.envs.code_comp.scoring import CodeBatchScorer
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import (
+from whetstone.envs.generation_graph import (
     render_prompt,
     validate_candidate_prompt,
 )
+from whetstone.envs.registry import env_spec
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
-from whetstone.evaluation.aggregate import ROLLOUT_AGGREGATE_SCHEMA
+from whetstone.evaluation.aggregate import AGGREGATE_SCHEMA
 from whetstone.evaluation.drivers.code_comp.direct import DirectRowJobFactory
 from whetstone.evaluation.drivers.code_comp.dispatch import run_code_comp_eval
 from whetstone.evaluation.drivers.code_comp.encdec import EncDecRowJobFactory
@@ -35,6 +37,7 @@ from whetstone.evaluation.drivers.internal import (
     InternalRowJobFactory,
     run_internal_eval,
 )
+from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
@@ -161,9 +164,7 @@ class EvaluationEngine:
     def task_model_identity_hash(self) -> str:
         """Identity of the exact task-model Provider Call Config route."""
 
-        provider_config = (
-            self.experiment.rollout_definition.provider_call_config
-        )
+        provider_config = self.experiment.generation_graph.provider_call_config
         return provider_config.identity_hash
 
     @property
@@ -325,7 +326,7 @@ class EvaluationEngine:
             candidate=candidate_reference(request.candidate),
             evaluation_binding=request.evaluation_binding,
             evaluation_role=request.evaluation_binding.role,
-            graph_hash=self.experiment.rollout_definition.graph_hash,
+            graph_hash=self.experiment.generation_graph.graph_hash,
             purpose=request.purpose,
             split_role=self.sampling.split_role,
             task_hashes=self.sampling.task_set.task_hashes,
@@ -359,7 +360,9 @@ class EvaluationEngine:
         }
         num_samples = self.sampling.sample_plan.num_samples
         planned_ordinal = {
-            (task_id, sample_index): task_index * num_samples + sample_index
+            GenerationIndex(
+                task_index=task_index, sample_index=sample_index
+            ): task_index * num_samples + sample_index
             for task_index, task_id in enumerate(task_ids)
             for sample_index in range(num_samples)
         }
@@ -371,8 +374,12 @@ class EvaluationEngine:
                 raise ValueError(
                     "evaluation trace candidate_id does not match request"
                 )
-            key = (output.task_id, output.sample_index)
-            ordinal = planned_ordinal.get(key)
+            task_index = task_index_by_id[output.task_id]
+            generation_index = GenerationIndex(
+                task_index=task_index,
+                sample_index=output.sample_index,
+            )
+            ordinal = planned_ordinal.get(generation_index)
             if ordinal is None:
                 raise ValueError(
                     "evaluation trace row is outside the exact sampling plan"
@@ -384,7 +391,6 @@ class EvaluationEngine:
                 )
             prior_ordinal = ordinal
             task_hash = task_hash_by_instance[output.task_id]
-            task_index = task_index_by_id[output.task_id]
             trace_rows.append(
                 EvaluationComponentTraceRow(
                     task_id=output.task_id,
@@ -429,7 +435,7 @@ class EvaluationEngine:
                 candidate=candidate_reference(request.candidate),
                 evaluation_binding=request.evaluation_binding,
                 evaluation_role=request.evaluation_binding.role,
-                graph_hash=self.experiment.rollout_definition.graph_hash,
+                graph_hash=self.experiment.generation_graph.graph_hash,
                 purpose=request.purpose,
                 split_role=self.sampling.split_role,
                 task_hashes=task_hashes,
@@ -596,12 +602,12 @@ class EvaluationEngine:
         )
         aggregation_output = aggregate.aggregation_output
         aggregate_record = aggregate.record_content()
-        aggregate_ref = self._put(ROLLOUT_AGGREGATE_SCHEMA, aggregate_record)
+        aggregate_ref = self._put(AGGREGATE_SCHEMA, aggregate_record)
         if aggregate_ref != aggregate.record_ref():
             raise ValueError("persisted aggregate reference diverged")
         for supplemental in result.supplemental_aggregates:
             supplemental_ref = self._put(
-                ROLLOUT_AGGREGATE_SCHEMA, supplemental.record_content()
+                AGGREGATE_SCHEMA, supplemental.record_content()
             )
             if supplemental_ref != supplemental.record_ref():
                 raise ValueError(

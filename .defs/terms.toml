@@ -74,7 +74,7 @@ part_of = ["provider call result"]
 name = "provider call result"
 definition = """
 The terminal semantic result of one logical provider call, containing its \
-ordered completed attempts and exactly one final generation or semantic \
+ordered completed attempts and exactly one final provider generation or semantic \
 failure."""
 exported_symbols = ["whetstone.provider.ProviderCallResult"]
 categories = ["provider execution"]
@@ -129,14 +129,14 @@ name = "generation graph"
 definition = """
 The structure of the steps of the flow used to convert task input into task \
 outputs that will then be scored."""
-exported_symbols = ["whetstone.envs.factory.RolloutDefinitionLike"]
+exported_symbols = ["whetstone.envs.factory.GenerationGraphLike"]
 categories = ["generation"]
 
 [[terms]]
 name = "generation"
 definition = """
 One run of the generation graph."""
-exported_symbols = ["whetstone.provider.classification.Generation"]
+exported_symbols = ["whetstone.evaluation.generation.Generation"]
 categories = ["generation"]
 
 [[terms]]
@@ -144,8 +144,17 @@ name = "generation index"
 definition = """
 A (task index, sample index) tuple that defines a specific planned generation \
 slot."""
-exported_symbols = ["whetstone.evaluation.schema.EvaluationOutputRow"]
+exported_symbols = ["whetstone.evaluation.generation.GenerationIndex"]
 categories = ["generation", "sampling"]
+
+[[terms]]
+name = "aggregate"
+definition = """
+A provenance-bearing aggregate over an explicit planned task-and-sample matrix \
+whose present, missing, failed, and invalid rows are completely accounted for."""
+exported_symbols = ["whetstone.evaluation.aggregate.Aggregate"]
+categories = ["evaluation", "aggregation"]
+part_of = ["evaluation evidence"]
 
 [[terms]]
 name = "dataset hash"
@@ -228,7 +237,7 @@ name = "code_comp row request schema"
 definition = """
 The persisted row-request schema for one code_comp evaluation mode: \
 code_comp_direct_row_request for direct generation and \
-code_comp_encdec_row_request for encoder-decoder rollouts."""
+code_comp_encdec_row_request for encoder-decoder generations."""
 exported_symbols = [
     "whetstone.evaluation.drivers.code_comp.DirectRowRequest",
     "whetstone.evaluation.drivers.code_comp.EncDecRowRequest",

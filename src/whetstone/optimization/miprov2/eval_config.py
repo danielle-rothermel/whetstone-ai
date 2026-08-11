@@ -59,7 +59,7 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
     provider_parameters: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )
-    rollout_id: StrictInt | None = None
+    generation_id: StrictInt | None = None
     copy_task_model: StrictBool = False
 
     @model_validator(mode="after")
@@ -68,8 +68,8 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
             raise ValueError("num_threads must be positive when present")
         if self.max_errors <= 0:
             raise ValueError("max_errors must be positive")
-        if self.rollout_id is not None and self.rollout_id < 0:
-            raise ValueError("rollout_id cannot be negative")
+        if self.generation_id is not None and self.generation_id < 0:
+            raise ValueError("generation_id cannot be negative")
         for field in (
             "task_model_identity_hash",
             "provider_execution_policy_hash",
@@ -109,7 +109,7 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
                 self.provider_execution_policy_hash
             ),
             "provider_parameters": self.provider_parameters.to_json(),
-            "rollout_id": self.rollout_id,
+            "generation_id": self.generation_id,
             "copy_task_model": self.copy_task_model,
         }
 

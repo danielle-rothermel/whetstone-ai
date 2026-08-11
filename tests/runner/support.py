@@ -207,7 +207,7 @@ def identity_controller(
     control = OptimizationRunControl(
         run=run,
         initial_candidates=records,
-        initial_budget=BudgetState(remaining={"rollouts": 10}),
+        initial_budget=BudgetState(remaining={"generations": 10}),
         step_kind=StepKind.IDENTITY,
         adapter_replay_policy=ReplayPolicy.IDEMPOTENT,
         owner_id="runner-cell-owner",

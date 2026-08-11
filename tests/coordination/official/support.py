@@ -46,11 +46,11 @@ def record_ref(char: str) -> TypedRef:
 
 
 def aggregate_ref(char: str) -> TypedRef:
-    return content_ref("whetstone.rollout_aggregate", char)
+    return content_ref("whetstone.aggregate", char)
 
 
 def result_ref(char: str) -> TypedRef:
-    return content_ref("whetstone.rollout_result", char)
+    return content_ref("whetstone.generation_result", char)
 
 
 def oer_ref(char: str) -> TypedRef:

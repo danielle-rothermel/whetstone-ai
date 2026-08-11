@@ -453,7 +453,7 @@ def _study_observation(
         evidence_role=EvaluationRole.INTERNAL,
         evidence_refs=(
             TypedRef(
-                schema_name="whetstone.rollout_aggregate",
+                schema_name="whetstone.aggregate",
                 content_hash=f"{20_000 + nonce:064x}",
             ),
         ),

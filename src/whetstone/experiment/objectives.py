@@ -40,7 +40,7 @@ class ObjectiveDerivationSource(StrEnum):
     """The complete set of evidence from which an objective may derive."""
 
     SCORE = "score"
-    ROLLOUT_AGGREGATE = "rollout_aggregate"
+    AGGREGATE = "aggregate"
 
 
 class RewardIsNotAnObjectiveError(ValueError):
@@ -285,7 +285,7 @@ def objective_from_aggregate_value(
     eval_config_hash: str | None = None,
     derivation_id: str = "identity",
 ) -> Objective:
-    """Derive an objective from one Rollout Aggregate value."""
+    """Derive an objective from one Aggregate value."""
 
     reject_reward_name(name)
     return Objective(
@@ -293,7 +293,7 @@ def objective_from_aggregate_value(
         value=value,
         direction=direction,
         derivation=ObjectiveDerivation(
-            source=ObjectiveDerivationSource.ROLLOUT_AGGREGATE,
+            source=ObjectiveDerivationSource.AGGREGATE,
             source_name=source_name,
             graph_hash=graph_hash,
             eval_config_hash=eval_config_hash,

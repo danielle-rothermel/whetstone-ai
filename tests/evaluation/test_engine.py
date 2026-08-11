@@ -35,14 +35,14 @@ from whetstone.envs.code_comp.constants import (
     CODE_COMP_ENV_NAME,
     DECODER_TEMPLATE,
 )
-from whetstone.envs.code_comp.rollout.encdec import (
+from whetstone.envs.code_comp.generation_graph.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
-    build_encdec_rollout_definition,
+    build_encdec_generation_graph,
     build_encoder_provider_call_config,
 )
+from whetstone.envs.generation_graph import render_prompt
 from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import render_prompt
 from whetstone.evaluation import engine as evaluation_engine_module
 from whetstone.evaluation.aggregate import (
     RowValue,
@@ -91,13 +91,13 @@ def _ed1_graph_engine(*, store: ObjectStore) -> EvaluationEngine:
     base_experiment = _experiment()
     experiment = replace(
         base_experiment,
-        rollout_definition=build_encdec_rollout_definition(
+        generation_graph=build_encdec_generation_graph(
             CODE_COMP_ENV_NAME,
             provider_call_config=build_encoder_provider_call_config(
                 "openai/test"
             ),
             procedure_config_hash=(
-                base_experiment.rollout_definition.procedure_config_hash
+                base_experiment.generation_graph.procedure_config_hash
             ),
             budget_ratio=None,
         ),
@@ -224,7 +224,7 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     assert (
         component_traces.rows[0]
         .executed_component_trace.executed_component_steps[0]
-        .outputs["generation"]
+        .outputs["provider_generation"]
         == output_record.outputs[0].output_text
     )
     assert tuple(row.task_hash for row in output_record.outputs) == (
@@ -339,7 +339,7 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
             )
             aggregate = unweighted_task_mean(
                 aggregate_name=result.aggregate.name,
-                graph_hash=experiment.rollout_definition.graph_hash,
+                graph_hash=experiment.generation_graph.graph_hash,
                 evaluation_binding_hash=(
                     kwargs["evaluation_binding"].identity_hash()
                 ),
@@ -403,11 +403,15 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
         .executed_component_trace
     )
     assert (
-        successful_trace.executed_component_steps[0].outputs["generation"]
+        successful_trace.executed_component_steps[0].outputs[
+            "provider_generation"
+        ]
         == encoder_text
     )
     assert (
-        successful_trace.executed_component_steps[1].outputs["generation"]
+        successful_trace.executed_component_steps[1].outputs[
+            "provider_generation"
+        ]
         != encoder_text
     )
 
@@ -428,7 +432,7 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
         step.component_id for step in failed_trace.executed_component_steps
     ) == (ENCODER_NODE_ID,)
     assert (
-        failed_trace.executed_component_steps[0].outputs["generation"]
+        failed_trace.executed_component_steps[0].outputs["provider_generation"]
         == encoder_text
     )
     assert failed_outputs.outputs[0].failed
@@ -456,7 +460,9 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
         engine.sampling.tasks[0].gold
     )
     assert (
-        post_score_trace.executed_component_steps[-1].outputs["generation"]
+        post_score_trace.executed_component_steps[-1].outputs[
+            "provider_generation"
+        ]
         == post_score_outputs.outputs[0].output_text
     )
 
@@ -862,7 +868,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
         candidate=candidate_ref,
         evaluation_binding=binding,
         evaluation_role=EvaluationRole.INTERNAL,
-        graph_hash=engine.experiment.rollout_definition.graph_hash,
+        graph_hash=engine.experiment.generation_graph.graph_hash,
         purpose="wire-contract",
         split_role=engine.sampling.split_role,
         task_hashes=("task-1",),
@@ -895,7 +901,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
         "candidate": candidate_ref.model_dump(mode="json"),
         "evaluation_binding": binding.model_dump(mode="json"),
         "evaluation_role": "internal",
-        "graph_hash": engine.experiment.rollout_definition.graph_hash,
+        "graph_hash": engine.experiment.generation_graph.graph_hash,
         "purpose": "wire-contract",
         "split_role": "internal_eval",
         "task_hashes": ["task-1"],
@@ -1067,7 +1073,7 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
             candidate=candidate_reference(engine.experiment.initial_candidate),
             evaluation_binding=_binding(engine),
             evaluation_role=EvaluationRole.INTERNAL,
-            graph_hash=engine.experiment.rollout_definition.graph_hash,
+            graph_hash=engine.experiment.generation_graph.graph_hash,
             purpose="mismatch",
             split_role=engine.sampling.split_role,
             task_hashes=("task-1",),

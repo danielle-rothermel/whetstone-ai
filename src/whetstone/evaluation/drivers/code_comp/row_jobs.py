@@ -15,8 +15,7 @@ _DUMMY_ROW_ENTRYPOINT = (
     "drive_dummy_encdec_generation"
 )
 _PROVIDER_ROW_ENTRYPOINT = (
-    "whetstone.evaluation.drivers.code_comp.workers:"
-    "drive_provider_encdec_generation"
+    "whetstone.evaluation.drivers.code_comp.workers:drive_provider_encdec_call"
 )
 
 

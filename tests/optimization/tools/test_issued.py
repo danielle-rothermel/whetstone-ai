@@ -1020,7 +1020,7 @@ def test_issued_ledger_keys_and_exact_record_schemas_are_golden(
     claim_key = _issued_tool_call_binding_key(exact_request, "golden")
     assert claim_key == (
         f"{ISSUED_TOOL_CALL_KEY_PREFIX}"
-        "daf4fb4f56249fac2fce650bc7541c2005bf7d6d1dfd39fdf264e04bbde8e896"
+        "86cd9645d25f17a73438df4306ba8862fb019099e0fc178270478109fc8e9ef0"
     )
     claim_object_ref = store.resolve(claim_key)
     assert claim_object_ref is not None
@@ -1045,7 +1045,7 @@ def test_issued_ledger_keys_and_exact_record_schemas_are_golden(
     slot_key = _issued_tool_call_slot_binding_key(exact_request, 0)
     assert slot_key == (
         f"{ISSUED_TOOL_CALL_SLOT_KEY_PREFIX}"
-        "1189280b800c6468f123da78c235d0acbf54e749d090fd69dcca5f4bf139e4ed"
+        "4ad9356931099f9e3210dea54020f1180b156fdb6b5ae05fe3f2b1062c004875"
     )
     slot_ref = store.resolve(slot_key)
     assert slot_ref is not None
@@ -1059,7 +1059,7 @@ def test_issued_ledger_keys_and_exact_record_schemas_are_golden(
     terminal_key = _issued_tool_call_terminal_binding_key(claim)
     assert terminal_key == (
         f"{ISSUED_TOOL_CALL_TERMINAL_KEY_PREFIX}"
-        "4b2a5a85b6c80013655371ff315a122d734f21c86e705716a7abca7163fd6938"
+        "ee64c9caeb34d2ee98533716257e07ab00cfee14fe6d41e77bb85910de0b529c"
     )
     terminal_ref = store.resolve(terminal_key)
     assert terminal_ref is not None

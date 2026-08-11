@@ -32,6 +32,14 @@ from whetstone.envs.code_comp.constants import (
     DECODER_TEMPLATE,
     ENCODER_BODY_A,
 )
+from whetstone.envs.code_comp.generation_graph.encdec import (
+    DECODER_NODE_ID,
+    ENCODER_NODE_ID,
+    EVAL_NODE_ID,
+    build_encdec_generation_graph,
+    build_encoder_provider_call_config,
+    encdec_graph_definition,
+)
 from whetstone.envs.code_comp.modes.encdec import (
     build_encdec_experiment,
     encdec_initial_candidate,
@@ -46,14 +54,6 @@ from whetstone.envs.code_comp.reward.blended import (
     CODE_COMP_DEFAULT_BLEND_CONFIG,
     BoundedCompressionMetricConfig,
     build_code_comp_blended_reward_policy,
-)
-from whetstone.envs.code_comp.rollout.encdec import (
-    DECODER_NODE_ID,
-    ENCODER_NODE_ID,
-    EVAL_NODE_ID,
-    build_encdec_rollout_definition,
-    build_encoder_provider_call_config,
-    encdec_graph_definition,
 )
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
@@ -401,7 +401,7 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
         EVAL_NODE_ID,
     ]
     assert definition.terminal_node_id == EVAL_NODE_ID
-    base = build_encdec_rollout_definition(
+    base = build_encdec_generation_graph(
         CODE_COMP_ENV_NAME,
         provider_call_config=build_encoder_provider_call_config(
             CODE_COMP_CANONICAL_MODEL
@@ -409,7 +409,7 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
         procedure_config_hash="a" * 64,
         budget_ratio=0.5,
     )
-    ratio = build_encdec_rollout_definition(
+    ratio = build_encdec_generation_graph(
         CODE_COMP_ENV_NAME,
         provider_call_config=build_encoder_provider_call_config(
             CODE_COMP_CANONICAL_MODEL
@@ -417,7 +417,7 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
         procedure_config_hash="a" * 64,
         budget_ratio=0.75,
     )
-    model = build_encdec_rollout_definition(
+    model = build_encdec_generation_graph(
         CODE_COMP_ENV_NAME,
         provider_call_config=build_encoder_provider_call_config(
             "openai/gpt-5-nano"
@@ -444,8 +444,8 @@ def test_ed1_experiment_preserves_the_exact_provider_call_config() -> None:
         official_n=1,
     )
 
-    assert experiment.encdec_rollout is not None
-    assert experiment.encdec_rollout.provider_call_config == (
+    assert experiment.encdec_generation_graph is not None
+    assert experiment.encdec_generation_graph.provider_call_config == (
         provider_call_config
     )
 
@@ -657,9 +657,11 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
     ]
     encoder_step = output.executed_component_steps[0]
     assert encoder_step.outputs == {
-        "generation": "A compact executable reconstruction description."
+        "provider_generation": (
+            "A compact executable reconstruction description."
+        )
     }
-    assert encoder_step.outputs["generation"] != output.output_text
+    assert encoder_step.outputs["provider_generation"] != output.output_text
     assert encoder_step.inputs == {
         "prompt": render_encoder_frame(
             str(candidate.payload[MUTATION_FIELD]),
@@ -698,13 +700,13 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
     def scorer_must_not_run(**_kwargs):
         raise AssertionError("decoder failure must not reach scoring")
 
-    rollout = experiment.encdec_rollout
-    assert rollout is not None
+    generation_graph = experiment.encdec_generation_graph
+    assert generation_graph is not None
     outcome = drive_encdec_row(
         experiment=experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         instance=instance,
-        provider_call_config=rollout.provider_call_config,
+        provider_call_config=generation_graph.provider_call_config,
         execution_policy=policy,
         transport=transport,
         scorer=scorer_must_not_run,
@@ -724,7 +726,7 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
         step.component_id for step in outcome.executed_component_steps
     ] == ["encode"]
     assert outcome.executed_component_steps[0].outputs == {
-        "generation": encoder_text
+        "provider_generation": encoder_text
     }
     assert outcome.latency_s is not None
     assert outcome.provider_error is not None
@@ -753,13 +755,13 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
     def scorer_must_not_run(**_kwargs):
         raise AssertionError("encoder failure must not reach scoring")
 
-    rollout = experiment.encdec_rollout
-    assert rollout is not None
+    generation_graph = experiment.encdec_generation_graph
+    assert generation_graph is not None
     outcome = drive_encdec_row(
         experiment=experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         instance=instance,
-        provider_call_config=rollout.provider_call_config,
+        provider_call_config=generation_graph.provider_call_config,
         execution_policy=policy,
         transport=transport,
         scorer=scorer_must_not_run,
@@ -809,7 +811,7 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_hash == (
-        "c4b668d9e77bedf1ab19f0caed773b256094f96d74e4800248ecbbfd5bad21fa"
+        "d0691f6c5bf903316735ee86074af394f8d88f029ef9bc1bc6e623f50d37d26f"
     )
 
 

@@ -272,7 +272,7 @@ def _trace_values(trace: Any) -> dict[str, str | None]:
     }
     for step in trace.executed_component_trace.executed_component_steps:
         prompt = step.inputs.to_json().get("prompt")
-        generation = step.outputs.to_json().get("generation")
+        generation = step.outputs.to_json().get("provider_generation")
         if step.component_id == "encode":
             values["encoder_prompt"] = (
                 prompt if isinstance(prompt, str) else None

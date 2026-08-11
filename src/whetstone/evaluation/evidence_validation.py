@@ -8,18 +8,18 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.envs.code_comp.constants import DECODER_TEMPLATE
-from whetstone.envs.code_comp.rollout.encdec import (
+from whetstone.envs.code_comp.generation_graph.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
 )
+from whetstone.envs.generation_graph import LLM_NODE_ID, render_prompt
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
 from whetstone.envs.sampling import validate_evaluation_role_for_split
 from whetstone.evaluation import AggregationOutput
 from whetstone.evaluation.aggregate import (
-    ROLLOUT_AGGREGATE_SCHEMA,
-    RolloutAggregate,
+    AGGREGATE_SCHEMA,
+    Aggregate,
     RowValue,
     TaskRows,
     unweighted_task_mean,
@@ -202,9 +202,9 @@ class EvaluationEvidenceValidation:
             raise ValueError("evaluation outputs use another Evaluation Role")
         if (
             outputs.graph_hash
-            != self._engine.experiment.rollout_definition.graph_hash
+            != self._engine.experiment.generation_graph.graph_hash
         ):
-            raise ValueError("evaluation outputs use another rollout graph")
+            raise ValueError("evaluation outputs use another generation graph")
         if outputs.purpose != intent.purpose:
             raise ValueError("evaluation outputs use another purpose")
         if outputs.split_role != self._engine.sampling.split_role:
@@ -229,7 +229,7 @@ class EvaluationEvidenceValidation:
         }
         spec = env_spec(self._engine.experiment.env_name)
         procedure_config_hash = (
-            self._engine.experiment.rollout_definition.procedure_config_hash
+            self._engine.experiment.generation_graph.procedure_config_hash
         )
         for row in outputs.outputs:
             instance = expected_instance_by_task[row.task_hash]
@@ -319,9 +319,9 @@ class EvaluationEvidenceValidation:
             raise ValueError("component traces use another Evaluation Role")
         if (
             traces.graph_hash
-            != self._engine.experiment.rollout_definition.graph_hash
+            != self._engine.experiment.generation_graph.graph_hash
         ):
-            raise ValueError("component traces use another rollout graph")
+            raise ValueError("component traces use another generation graph")
         if traces.purpose != intent.purpose:
             raise ValueError("component traces use another purpose")
         if traces.split_role != self._engine.sampling.split_role:
@@ -341,23 +341,23 @@ class EvaluationEvidenceValidation:
                 "component traces and outputs must cover the same rows"
             )
 
-        rollout_definition = getattr(
-            self._engine.experiment.rollout_definition,
+        generation_graph = getattr(
+            self._engine.experiment.generation_graph,
             "definition",
             None,
         )
-        if rollout_definition is None:
+        if generation_graph is None:
             raise ValueError(
-                "rollout graph must expose its exact Node Definition"
+                "generation graph must expose its exact Node Definition"
             )
         llm_nodes = tuple(
             node
-            for node in rollout_definition.nodes
+            for node in generation_graph.nodes
             if node.node_type == "whetstone.llm-call/v1"
         )
         if not llm_nodes:
             raise ValueError(
-                "rollout graph must declare an executed LLM component"
+                "generation graph must declare an executed LLM component"
             )
         component_ids = tuple(node.node_id for node in llm_nodes)
         if component_ids not in {
@@ -365,7 +365,7 @@ class EvaluationEvidenceValidation:
             (ENCODER_NODE_ID, DECODER_NODE_ID),
         }:
             raise ValueError(
-                "rollout graph uses an unsupported LLM component transition"
+                "generation graph uses an unsupported LLM component transition"
             )
 
         expected_instance_by_task = {
@@ -465,7 +465,7 @@ class EvaluationEvidenceValidation:
                 and len(trace.executed_component_steps) == 2
             ):
                 encode_step, decode_step = trace.executed_component_steps
-                encoder_generation = encode_step.outputs["generation"]
+                encoder_generation = encode_step.outputs["provider_generation"]
                 if type(encoder_generation) is not str:
                     raise ValueError(
                         "ED1 encoder generation must be an exact string"
@@ -500,10 +500,10 @@ class EvaluationEvidenceValidation:
         self,
         evidence: EvaluationEvidence,
         intent: EvaluationIntent,
-    ) -> RolloutAggregate:
+    ) -> Aggregate:
         _aggregate_ref, content = self._load_exact(
             evidence.aggregate_ref,
-            expected_schema=ROLLOUT_AGGREGATE_SCHEMA,
+            expected_schema=AGGREGATE_SCHEMA,
         )
         expected_fields = {
             "name",
@@ -519,7 +519,7 @@ class EvaluationEvidenceValidation:
             "rows_invalid",
         }
         if set(content) != expected_fields:
-            raise ValueError("Rollout Aggregate wire fields are not exact")
+            raise ValueError("Aggregate wire fields are not exact")
         for field in (
             "name",
             "graph_hash",
@@ -527,7 +527,7 @@ class EvaluationEvidenceValidation:
             "evaluation_binding_hash",
         ):
             if type(content[field]) is not str:
-                raise ValueError(f"Rollout Aggregate {field} must be a string")
+                raise ValueError(f"Aggregate {field} must be a string")
         for field in (
             "task_count",
             "num_samples",
@@ -537,10 +537,8 @@ class EvaluationEvidenceValidation:
             "rows_invalid",
         ):
             if type(content[field]) is not int:
-                raise ValueError(
-                    f"Rollout Aggregate {field} must be an integer"
-                )
-        aggregate = RolloutAggregate(
+                raise ValueError(f"Aggregate {field} must be an integer")
+        aggregate = Aggregate(
             name=content["name"],
             graph_hash=content["graph_hash"],
             eval_config_hash=content["eval_config_hash"],
@@ -556,40 +554,38 @@ class EvaluationEvidenceValidation:
             rows_invalid=content["rows_invalid"],
         )
         if aggregate.record_content() != content:
-            raise ValueError("Rollout Aggregate content is not canonical")
+            raise ValueError("Aggregate content is not canonical")
         if aggregate.graph_hash != evidence.graph_hash:
             raise ValueError("Evaluation Evidence graph hash is inconsistent")
         if (
             aggregate.graph_hash
-            != self._engine.experiment.rollout_definition.graph_hash
+            != self._engine.experiment.generation_graph.graph_hash
         ):
-            raise ValueError("Rollout Aggregate uses another rollout graph")
+            raise ValueError("Aggregate uses another generation graph")
         if evidence.graph_config_ref != aggregate.graph_hash:
             raise ValueError(
                 "Evaluation Evidence graph config is inconsistent"
             )
         if aggregate.eval_config_hash != intent.target_eval_config.config_hash:
-            raise ValueError("Rollout Aggregate uses another Eval Config")
+            raise ValueError("Aggregate uses another Eval Config")
         if (
             aggregate.evaluation_binding_hash
             != intent.evaluation_binding.identity_hash()
         ):
-            raise ValueError(
-                "Rollout Aggregate uses another Evaluation Binding"
-            )
+            raise ValueError("Aggregate uses another Evaluation Binding")
         if aggregate.task_count != len(evidence.task_hashes):
-            raise ValueError("Rollout Aggregate task count is inconsistent")
+            raise ValueError("Aggregate task count is inconsistent")
         if aggregate.num_samples != evidence.num_samples:
-            raise ValueError("Rollout Aggregate repeat count is inconsistent")
+            raise ValueError("Aggregate repeat count is inconsistent")
         if aggregate.name != evidence.aggregate_name:
-            raise ValueError("Rollout Aggregate name is inconsistent")
+            raise ValueError("Aggregate name is inconsistent")
         if aggregate.aggregation_output.value != evidence.aggregate_value:
-            raise ValueError("Rollout Aggregate value is inconsistent")
+            raise ValueError("Aggregate value is inconsistent")
         if (
             aggregate.aggregation_output.status.value
             != evidence.aggregate_status
         ):
-            raise ValueError("Rollout Aggregate status is inconsistent")
+            raise ValueError("Aggregate status is inconsistent")
         row_accounting = evidence.row_accounting
         if (
             row_accounting.planned
@@ -609,7 +605,7 @@ class EvaluationEvidenceValidation:
         *,
         outputs: EvaluationOutputsRecord,
         evidence: EvaluationEvidence,
-        aggregate: RolloutAggregate,
+        aggregate: Aggregate,
         intent: EvaluationIntent,
     ) -> None:
         rows_by_task: dict[str, list[RowValue]] = {
@@ -654,14 +650,14 @@ class EvaluationEvidenceValidation:
             )
         expected_aggregate = unweighted_task_mean(
             aggregate_name=evidence.aggregate_name,
-            graph_hash=self._engine.experiment.rollout_definition.graph_hash,
+            graph_hash=self._engine.experiment.generation_graph.graph_hash,
             evaluation_binding_hash=intent.evaluation_binding.identity_hash(),
             task_rows=task_rows,
             plan=self._engine.sampling.evaluation_matrix_plan,
         )
         if aggregate.record_content() != expected_aggregate.record_content():
             raise ValueError(
-                "Rollout Aggregate is not derived from the exact output rows"
+                "Aggregate is not derived from the exact output rows"
             )
 
     def _load_reward(

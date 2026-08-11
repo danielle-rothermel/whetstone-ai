@@ -15,23 +15,23 @@ from whetstone.envs.code_comp.constants import (
     MUTATION_FIELD,
 )
 from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
+from whetstone.envs.code_comp.generation_graph.direct import (
+    DIRECT_DEFAULT_RENAME_TOKEN,
+    DIRECT_INPUT_ARMS,
+    DIRECT_RENAMED_ARM,
+    DirectGenerationGraph,
+    build_direct_generation_graph,
+    direct_graph_definition,
+    render_direct_frame,
+)
 from whetstone.envs.code_comp.procedure import build_encdec_procedure_config
 from whetstone.envs.code_comp.registry import (
     CodeCompMode,
     code_comp_identity_prefix,
 )
-from whetstone.envs.code_comp.rollout.direct import (
-    DIRECT_DEFAULT_RENAME_TOKEN,
-    DIRECT_INPUT_ARMS,
-    DIRECT_RENAMED_ARM,
-    DirectRolloutDefinition,
-    build_direct_rollout_definition,
-    direct_graph_definition,
-    render_direct_frame,
-)
 from whetstone.envs.code_comp.scoring import CodeScore
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.rollout_definition import env_candidate_base_ref
+from whetstone.envs.generation_graph import env_candidate_base_ref
 from whetstone.envs.sampling import (
     Completeness,
     EnvEvalConfigs,
@@ -198,7 +198,7 @@ def build_direct_experiment(
     if not pool:
         raise ValueError("d1 task pool is empty")
     procedure = build_direct_procedure_config()
-    rollout = build_direct_rollout_definition(
+    generation_graph = build_direct_generation_graph(
         model=model,
         procedure_config_hash=procedure.config_hash,
         input_arm=input_arm,
@@ -259,7 +259,7 @@ def build_direct_experiment(
     )
     return DirectExperiment(
         env_name=CODE_COMP_ENV_NAME,
-        rollout_definition=rollout,  # type: ignore[arg-type]
+        generation_graph=generation_graph,  # type: ignore[arg-type]
         initial_candidate=direct_initial_candidate(),
         ceiling_candidate=direct_ceiling_candidate(),
         eval_configs=eval_configs,
@@ -289,11 +289,11 @@ __all__ = [
     "DIRECT_WRAPPER_BODY_CEILING",
     "DIRECT_WRAPPER_BODY_NAIVE",
     "DirectExperiment",
-    "DirectRolloutDefinition",
+    "DirectGenerationGraph",
     "build_direct_experiment",
+    "build_direct_generation_graph",
     "build_direct_procedure_config",
     "build_direct_reward_policy",
-    "build_direct_rollout_definition",
     "direct_ceiling_candidate",
     "direct_graph_definition",
     "direct_initial_candidate",

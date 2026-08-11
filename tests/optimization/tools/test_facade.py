@@ -295,7 +295,7 @@ def test_persist_result_stores_embedded_reward_before_public_result_load(
     reward = reward_reference(reward_record(policy))
     result = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         reward=reward,
         evaluation_evidence_refs=reward.record.evidence_refs,
         provenance_ordinal=1,
@@ -330,7 +330,7 @@ def test_persist_result_rejects_embedded_reward_collision() -> None:
     reward = reward_reference(reward_record(policy))
     result = ToolResult(
         call=tool_call_reference(tool_call(config, "collision")),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         reward=reward,
         evaluation_evidence_refs=reward.record.evidence_refs,
         provenance_ordinal=1,
@@ -465,7 +465,7 @@ def test_completed_result_is_terminally_immutable(tmp_path) -> None:
         store.complete(
             ToolResult(
                 call=tool_call_reference(call),
-                output={"rollout_refs": [], "accepted_ordinal": 2},
+                output={"generation_refs": [], "accepted_ordinal": 2},
                 provenance_ordinal=1,
             ),
             terminal=terminal,
@@ -518,7 +518,7 @@ def test_completion_requires_positive_provenance_ordinal(
     store.admit(call, config)
     valid_result = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     hostile_result = ToolResult.model_construct(

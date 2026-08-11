@@ -16,7 +16,7 @@ these areas:
   computation graphs, objectives, rewards, and realized evaluation settings
   into immutable configurations.
 - **[Environments and sampling](src/whetstone/envs/)** assemble task pools,
-  internal and official splits, rollout definitions, and reward policies for
+  internal and official splits, generation graphs, and reward policies for
   code-generation and encoder-decoder experiments.
 - **[Provider interaction](src/whetstone/provider/)** classifies transport
   outcomes, applies bounded semantic retry policy, and retains the exact
@@ -43,7 +43,7 @@ The repository boundaries follow the same shape:
 | --- | --- | --- |
 | Core | `whetstone.core` | Shared identity, roles, and effect primitives |
 | Experiment | `whetstone.experiment` | Candidates, bindings, graph identity, objectives, and rewards |
-| Environments | `whetstone.envs` | Task pools, sampling, rollout definitions, and environment-specific policy |
+| Environments | `whetstone.envs` | Task pools, sampling, generation graphs, and environment-specific policy |
 | Provider | `whetstone.provider` | Provider requests, attempt evidence, classification, and retry policy |
 | Execution | `whetstone.execution` | Process fanout, partial progress, prompt caching, and resume behavior |
 | Evaluation | `whetstone.evaluation` | Evaluation configs, plans, drivers, traces, measurements, compression, scoring, evidence, and aggregates |
@@ -125,7 +125,7 @@ Environment packages compose reusable evaluation inputs without coupling the
 evaluation engine to a particular task family or graph implementation.
 
 ```python
-class RolloutDefinitionLike(Protocol):
+class GenerationGraphLike(Protocol):
     @property
     def graph_hash(self) -> str: ...
     @property
@@ -136,7 +136,7 @@ class RolloutDefinitionLike(Protocol):
 @dataclass(frozen=True, slots=True)
 class EnvExperiment:
     env_name: str
-    rollout_definition: RolloutDefinitionLike
+    generation_graph: GenerationGraphLike
     initial_candidate: Candidate
     ceiling_candidate: Candidate
     eval_configs: EnvEvalConfigs
@@ -160,7 +160,7 @@ class ProviderCallAttempt(BaseModel):
     attempt_number: StrictInt
     execution_policy_hash: StrictStr
     evidence: ProviderInvocationEvidence
-    generation: Generation | None
+    provider_generation: ProviderGeneration | None
     semantic_failure: ProviderSemanticFailure | None
 
 class ProviderCallResult(BaseModel):
@@ -168,7 +168,7 @@ class ProviderCallResult(BaseModel):
     request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
     attempts: tuple[ProviderCallAttempt, ...]
-    generation: Generation | None
+    provider_generation: ProviderGeneration | None
     semantic_failure: ProviderSemanticFailure | None
 ```
 
@@ -518,7 +518,7 @@ so both paths share one registration invariant.
 MIPROv2 persists the exact optimization run, optimizer configuration,
 proposal-executor policy, and proposer-transport durability identity in its
 runtime state. Its durable effect budget accounts for task rows alongside
-rollouts, proposal calls, and evaluations; the adapter verifies the persisted
+generations, proposal calls, and evaluations; the adapter verifies the persisted
 ceiling and preflights the next row batch before resolving an Eval Config,
 publishing an Evaluation Intent, or invoking a proposal effect. Candidate
 assembly uses the run's render contract and rejects literal-replacement input

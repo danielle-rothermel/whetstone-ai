@@ -81,13 +81,13 @@ def _reconstruct_worker_experiment(
             num_samples=1,
         ),
     )
-    rollout = experiment.encdec_rollout
-    assert rollout is not None
-    if rollout.graph_hash != request.graph_hash:
+    generation_graph = experiment.encdec_generation_graph
+    assert generation_graph is not None
+    if generation_graph.graph_hash != request.graph_hash:
         raise ValueError("ED1 worker reconstructed a different graph")
-    if rollout.procedure_config_hash != request.procedure_config_hash:
+    if generation_graph.procedure_config_hash != request.procedure_config_hash:
         raise ValueError("ED1 worker reconstructed a different procedure")
-    if rollout.provider_call_config != request.provider_call_config:
+    if generation_graph.provider_call_config != request.provider_call_config:
         raise ValueError(
             "ED1 worker reconstructed a different provider config"
         )
@@ -191,7 +191,7 @@ def drive_dummy_encdec_generation(payload: JsonValue) -> JsonValue:
     ).model_dump(mode="json")
 
 
-def drive_provider_encdec_generation(payload: JsonValue) -> JsonValue:
+def drive_provider_encdec_call(payload: JsonValue) -> JsonValue:
     """Drive one ED1 row through real dr-providers encoder/decoder calls."""
 
     request = EncDecRowRequest.from_process_payload(payload)
@@ -225,5 +225,5 @@ __all__ = [
     "DUMMY_FAILING_BODY",
     "DUMMY_PASSING_BODY",
     "drive_dummy_encdec_generation",
-    "drive_provider_encdec_generation",
+    "drive_provider_encdec_call",
 ]

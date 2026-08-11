@@ -48,9 +48,9 @@ def test_executed_component_step_pins_wire_fields_and_order() -> None:
         "trace_index": 0,
         "component_id": "generate",
         "input_field_names": ["prompt"],
-        "output_field_names": ["generation"],
+        "output_field_names": ["provider_generation"],
         "inputs": {"prompt": "exact prompt"},
-        "outputs": {"generation": "exact generation"},
+        "outputs": {"provider_generation": "exact generation"},
     }
 
     ordered = ExecutedComponentStep.model_validate(
@@ -58,9 +58,9 @@ def test_executed_component_step_pins_wire_fields_and_order() -> None:
             "trace_index": 0,
             "component_id": "generate",
             "input_field_names": ("second", "first"),
-            "output_field_names": ("generation",),
+            "output_field_names": ("provider_generation",),
             "inputs": {"first": 1, "second": 2},
-            "outputs": {"generation": "ok"},
+            "outputs": {"provider_generation": "ok"},
         },
         strict=True,
     )
@@ -89,9 +89,9 @@ def test_executed_component_step_rejects_non_strict_json(malformed) -> None:
                 "trace_index": 0,
                 "component_id": "generate",
                 "input_field_names": ("prompt",),
-                "output_field_names": ("generation",),
+                "output_field_names": ("provider_generation",),
                 "inputs": {"prompt": malformed},
-                "outputs": {"generation": "ok"},
+                "outputs": {"provider_generation": "ok"},
             },
             strict=True,
         )
@@ -106,9 +106,9 @@ def test_executed_component_step_is_deeply_mutation_isolated() -> None:
             "trace_index": 0,
             "component_id": "generate",
             "input_field_names": ("payload",),
-            "output_field_names": ("generation",),
+            "output_field_names": ("provider_generation",),
             "inputs": source,
-            "outputs": {"generation": "accepted"},
+            "outputs": {"provider_generation": "accepted"},
         },
         strict=True,
     )
@@ -163,7 +163,7 @@ def test_executed_component_trace_enforces_all_fixed_bounds() -> None:
             trace_index=index,
             component_id="generate",
             prompt="prompt",
-            generation="generation",
+            generation="provider_generation",
         )
         for index in range(MAX_EXECUTED_COMPONENT_STEPS)
     )
@@ -176,7 +176,7 @@ def test_executed_component_trace_enforces_all_fixed_bounds() -> None:
                     trace_index=MAX_EXECUTED_COMPONENT_STEPS,
                     component_id="generate",
                     prompt="prompt",
-                    generation="generation",
+                    generation="provider_generation",
                 ),
             )
         )

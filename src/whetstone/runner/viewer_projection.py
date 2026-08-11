@@ -1,7 +1,8 @@
 """The immutable per-cell viewer projection published beside the ledger.
 
 One finalized cell publishes exactly two files: ``projection.json``, the strict
-summary of what the run produced, and ``rollout_outputs.jsonl``, one line per
+summary of what the run produced, and ``generation_outputs.jsonl``,
+one line per
 driven evaluation output row. Both are derived, never authoritative: every
 number here is recomputable from the content-addressed records the ObjectStore
 already holds, and nothing in the runner ever reads a projection back to decide
@@ -52,8 +53,8 @@ from whetstone.experiment.candidate import CandidateRef
 from whetstone.optimization.contracts import OptimizationResult, StepStatus
 
 __all__ = [
+    "VIEWER_GENERATION_ROW_SCHEMA",
     "VIEWER_PROJECTION_SCHEMA",
-    "VIEWER_ROLLOUT_ROW_SCHEMA",
     "ViewerCandidate",
     "ViewerCellProjection",
     "ViewerEvaluationSummary",
@@ -66,7 +67,7 @@ __all__ = [
 #: reads them to decide how to parse the file, so renaming one orphans every
 #: already-published cell directory.
 VIEWER_PROJECTION_SCHEMA = "whetstone.runner.viewer_projection/v1"
-VIEWER_ROLLOUT_ROW_SCHEMA = "whetstone.runner.viewer_rollout_row/v1"
+VIEWER_GENERATION_ROW_SCHEMA = "whetstone.runner.viewer_generation_row/v1"
 
 
 def _canonical_json(value: object) -> str:
@@ -185,8 +186,8 @@ class ViewerRolloutRow(BaseModel):
     )
 
     #: Persisted-format contract: keep this exact wire key and version.
-    schema_: Literal["whetstone.runner.viewer_rollout_row/v1"] = Field(
-        default=VIEWER_ROLLOUT_ROW_SCHEMA,
+    schema_: Literal["whetstone.runner.viewer_generation_row/v1"] = Field(
+        default=VIEWER_GENERATION_ROW_SCHEMA,
         alias="schema",
     )
     cell_id: StrictStr
@@ -212,9 +213,9 @@ class ViewerRolloutRow(BaseModel):
             self.candidate_identity_hash, field="candidate_identity_hash"
         )
         if self.evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA:
-            raise ValueError("rollout row must cite evaluation evidence")
+            raise ValueError("generation row must cite evaluation evidence")
         if self.sample_index < 0:
-            raise ValueError("rollout repeat cannot be negative")
+            raise ValueError("generation repeat cannot be negative")
         return self
 
     def to_line(self) -> str:
@@ -247,7 +248,7 @@ class ViewerCellProjection(BaseModel):
     candidates: tuple[ViewerCandidate, ...]
     proposals: tuple[CandidateRef, ...]
     evidence_summaries: tuple[ViewerEvaluationSummary, ...]
-    rollout_row_count: StrictInt
+    generation_row_count: StrictInt
 
     @model_validator(mode="after")
     def _validate_projection(self) -> ViewerCellProjection:
@@ -268,8 +269,8 @@ class ViewerCellProjection(BaseModel):
         )
         if len(identities) != len(set(identities)):
             raise ValueError("ordered candidates must be identity-unique")
-        if self.rollout_row_count < 0:
-            raise ValueError("rollout_row_count cannot be negative")
+        if self.generation_row_count < 0:
+            raise ValueError("generation_row_count cannot be negative")
         if self.steps[-1].status is not self.terminal_status:
             raise ValueError(
                 "terminal_status must match the final step's status"
@@ -313,7 +314,7 @@ def _evaluation_summary(
     )
 
 
-def _rollout_rows(
+def _generation_rows(
     *,
     cell_id: str,
     evaluation: EngineEvaluation,
@@ -408,9 +409,9 @@ def build_viewer_cell_projection(
     store: ObjectStore,
     official_evaluations: Sequence[EngineEvaluation],
 ) -> tuple[ViewerCellProjection, tuple[str, ...]]:
-    """Build one strict viewer projection and its rollout output lines.
+    """Build one strict viewer projection and its generation output lines.
 
-    Returns the projection and the already-serialized rollout lines. The caller
+    Returns the projection and serialized generation lines. The caller
     passes both to :meth:`Ledger.write_viewer_publication`, which commits
     exactly these bytes under exactly the hashes it records.
     """
@@ -422,7 +423,9 @@ def build_viewer_cell_projection(
     for evaluation in official_evaluations:
         summaries.append(_evaluation_summary(evaluation))
         rows.extend(
-            _rollout_rows(cell_id=cell_id, evaluation=evaluation, store=store)
+            _generation_rows(
+                cell_id=cell_id, evaluation=evaluation, store=store
+            )
         )
     projection = ViewerCellProjection(
         cell_id=cell_id,
@@ -436,6 +439,6 @@ def build_viewer_cell_projection(
         candidates=_ordered_candidates(result),
         proposals=tuple(proposal.candidate for proposal in result.proposals),
         evidence_summaries=tuple(summaries),
-        rollout_row_count=len(rows),
+        generation_row_count=len(rows),
     )
     return projection, tuple(row.to_line() for row in rows)

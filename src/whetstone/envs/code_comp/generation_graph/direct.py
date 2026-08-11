@@ -6,7 +6,7 @@ from dr_graph import GraphConfig, GraphDefinition, graph_hash
 from dr_providers import ProviderCallConfig, openrouter_chat_config
 
 from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
-from whetstone.envs.rollout_definition import (
+from whetstone.envs.generation_graph import (
     EVAL_NODE_ID,
     LLM_NODE_ID,
     PROMPT_EXTERNAL_INPUT,
@@ -48,8 +48,8 @@ def render_direct_frame(body: str, *, input_arm: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class DirectRolloutDefinition:
-    """The d1 direct Rollout Definition graph + the config references it binds.
+class DirectGenerationGraph:
+    """The d1 direct Generation Graph graph + the config references it binds.
 
     A single LLM Call Node -> terminal Eval Node (the SAME two-node shape the
     QA envs use), with the code-eval Evaluation Procedure on the Eval Node. The
@@ -87,7 +87,7 @@ def direct_graph_definition() -> GraphDefinition:
     )
     ev = eval_node_definition(
         EVAL_NODE_ID,
-        upstream_sources={"generation": LLM_NODE_ID},
+        upstream_sources={"provider_generation": LLM_NODE_ID},
     )
     return GraphDefinition(nodes=(llm, ev), terminal_node_id=EVAL_NODE_ID)
 
@@ -138,14 +138,14 @@ def build_direct_graph_config(
     return definition.materialize(assignments)
 
 
-def build_direct_rollout_definition(
+def build_direct_generation_graph(
     *,
     model: str,
     procedure_config_hash: str,
     input_arm: str,
     rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN,
-) -> DirectRolloutDefinition:
-    """Build the d1 direct Rollout Definition for one (model, input arm)."""
+) -> DirectGenerationGraph:
+    """Build the d1 direct Generation Graph for one (model, input arm)."""
     provider_call_config = openrouter_chat_config(model=model)
     graph_config = build_direct_graph_config(
         provider_call_config_hash=provider_call_config.identity_hash,
@@ -153,7 +153,7 @@ def build_direct_rollout_definition(
         input_arm=input_arm,
         rename_token=rename_token,
     )
-    return DirectRolloutDefinition(
+    return DirectGenerationGraph(
         env_name=CODE_COMP_ENV_NAME,
         definition=direct_graph_definition(),
         provider_call_config=provider_call_config,
@@ -170,9 +170,9 @@ __all__ = [
     "DIRECT_PROCEDURE_CONFIG_SCHEMA",
     "DIRECT_RENAMED_ARM",
     "DIRECT_WRAPPER_FRAME",
-    "DirectRolloutDefinition",
+    "DirectGenerationGraph",
+    "build_direct_generation_graph",
     "build_direct_graph_config",
-    "build_direct_rollout_definition",
     "direct_arm_token",
     "direct_graph_definition",
     "render_direct_frame",

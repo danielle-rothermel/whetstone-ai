@@ -28,7 +28,7 @@ EVALUATION_PROCEDURE_CONFIG_VARIABLE = "evaluation_procedure_config_ref"
 CHARACTER_BUDGET_VARIABLE = "character_budget_rule"
 
 # Primary declared outputs.
-GENERATION_OUTPUT_FIELD = "generation"
+PROVIDER_GENERATION_OUTPUT_FIELD = "provider_generation"
 EVAL_OUTPUT_FIELD = "evaluation"
 
 
@@ -68,7 +68,7 @@ def llm_call_node_definition(
     *,
     prompt_source: str,
     declares_character_budget: bool = False,
-    output_field: str = GENERATION_OUTPUT_FIELD,
+    output_field: str = PROVIDER_GENERATION_OUTPUT_FIELD,
 ) -> NodeDefinition:
     """Build the closed ``whetstone.llm-call/v1`` Node Definition.
 
@@ -195,9 +195,9 @@ __all__ = [
     "EVALUATION_PROCEDURE_CONFIG_VARIABLE",
     "EVAL_NODE_TYPE",
     "EVAL_OUTPUT_FIELD",
-    "GENERATION_OUTPUT_FIELD",
     "LLM_CALL_NODE_TYPE",
     "PROVIDER_CALL_CONFIG_VARIABLE",
+    "PROVIDER_GENERATION_OUTPUT_FIELD",
     "eval_node_definition",
     "eval_node_procedure_hash",
     "eval_variable_assignment",

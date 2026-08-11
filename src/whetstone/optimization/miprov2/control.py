@@ -264,7 +264,8 @@ class Miprov2InjectedDefaults(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: ProposerConfig
-    # Source authorities, not fixed per-effect configs. Bootstrap rollouts and
+    # Source authorities, not fixed per-effect configs. Bootstrap generations
+    # and
     # each randomly sampled validation minibatch derive an exact ordered-subset
     # Eval Config from the corresponding source before issuing an Intent.
     bootstrap_eval_source: EvalConfigRef

@@ -39,7 +39,7 @@ ENV_NAMES: tuple[str, ...] = (
 #: Base modules reused by variant environment names.
 _ENV_MODULE_NAME: dict[str, str] = {"c22h": "c22", "c18h": "c18"}
 
-#: Generation presets selected by variant environment names.
+#: ProviderGeneration presets selected by variant environment names.
 _ENV_POOL_PRESET: dict[str, str] = {
     "c22h": "HARD_PRESET",
     "c18h": "HARD_PRESET",

@@ -44,6 +44,6 @@ def load_aggregate_value(
 ) -> float | None:
     raw = store.get(reference.reference)
     if not isinstance(raw, dict):
-        raise RuntimeError("persisted rollout aggregate is missing")
+        raise RuntimeError("persisted aggregate is missing")
     output = AggregationOutput.model_validate(raw.get("aggregation_output"))
     return output.value

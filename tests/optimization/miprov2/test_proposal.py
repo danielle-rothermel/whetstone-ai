@@ -236,7 +236,7 @@ def test_dataset_summary_has_one_initial_nine_followups_and_final() -> None:
     assert state.dataset_descriptor_calls == 10
     assert state.dataset_summary == "compact dataset"
     assert all(item.request.temperature == 1.0 for item in state.evidence)
-    assert all(item.request.rollout_id is None for item in state.evidence)
+    assert all(item.request.generation_id is None for item in state.evidence)
 
 
 def test_dataset_complete_skips_are_cumulative_and_observations_concat() -> (
@@ -477,8 +477,8 @@ def test_two_components_are_predictor_major_with_exact_rng_draws() -> None:
     assert [
         (draw.operation, draw.result) for draw in state.rng_checkpoint.draws
     ] == expected
-    assert len({request.rollout_id for request in requests[:3]}) == 1
-    assert requests[0].rollout_id != requests[3].rollout_id
+    assert len({request.generation_id for request in requests[:3]}) == 1
+    assert requests[0].generation_id != requests[3].generation_id
     assert state.instruction_pools[0][0] == "First {input}."
     assert state.instruction_pools[1][0] == "Second {input}."
 
@@ -743,7 +743,7 @@ def test_proposal_request_hash_payload_and_digest_are_pinned() -> None:
         "effect": "instruction_proposal",
         "schema_tag": "miprov2-instruction-proposal/v1",
         "temperature": 0.7,
-        "rollout_id": request.rollout_id,
+        "generation_id": request.generation_id,
         "component_index": 0,
         "component_id": "user_prompt_template",
         "proposal_index": 0,
@@ -753,7 +753,7 @@ def test_proposal_request_hash_payload_and_digest_are_pinned() -> None:
         "prompt": request.prompt,
     }
     assert request.identity_hash == (
-        "ee3de3e21d9c396deca205b688af3f61ff94ec85369e50c0ea271fb0810db69a"
+        "5508e5f133da6af8a364a68afbf5e38ae485a506c6afdec439d9f98e740185df"
     )
 
 
@@ -801,7 +801,7 @@ def test_bootstrap_demo_bridge_preserves_order_fields_and_key_presence() -> (
         outputs={"output": "boot-answer"},
         augmented=True,
         source_task_hash=_identity("boot-task"),
-        source_rollout_identity=_identity("rollout"),
+        source_generation_identity=_identity("generation"),
         source_trace_identity=_identity("trace"),
         source_output_identity=_identity("output"),
         source_score_identity=_identity("score"),
