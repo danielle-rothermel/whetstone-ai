@@ -71,9 +71,6 @@ TASK_MODEL = "openai/test"
 PROPOSER_MODEL = "openai/test-proposer"
 
 
-in_process_row_job_factory = in_process_internal_row_job_factory
-
-
 def official_engine(
     store: ObjectStore,
     *,
@@ -93,7 +90,7 @@ def official_engine(
         experiment=experiment,
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(),
-        row_job_factory=in_process_row_job_factory(reply_for),
+        row_job_factory=in_process_internal_row_job_factory(reply_for),
     )
 
 
@@ -223,7 +220,6 @@ __all__ = [
     "TASK_MODEL",
     "cell_config",
     "identity_controller",
-    "in_process_row_job_factory",
     "official_binding",
     "official_engine",
     "registry",

@@ -150,11 +150,6 @@ def process_row_job_factory(
     return build
 
 
-_PROCESS_INTERNAL_ROW_JOB_FACTORY = process_row_job_factory(
-    "tests.envs.process_workers:drive_internal_success"
-)
-
-
 def in_process_internal_row_job_factory(
     reply_for: ReplyFn | None = None,
 ) -> Callable[[BaseModel], ProcessJob]:
