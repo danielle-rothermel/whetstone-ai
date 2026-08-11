@@ -35,16 +35,6 @@ from dr_store import SqliteRecordCache
 ED1_SCORING_PROFILE_ID = HUMANEVAL_SCORING_PROFILE_ID
 ED1_SCORING_PROFILE_VERSION = HUMANEVAL_SCORING_PROFILE_VERSION
 
-#: The outcomes that are INFRASTRUCTURE-UNKNOWN (no definitive pass/fail): the
-#: rollout fails, never scores 0. A :class:`HarnessFailure` is handled
-#: separately because it is not a completed submission outcome.
-_INFRASTRUCTURE_UNKNOWN_OUTCOMES = frozenset(
-    {
-        SubmissionOutcome.EVALUATION_INCOMPLETE,
-        SubmissionOutcome.TIMED_OUT,
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class CodeScore:
@@ -52,10 +42,10 @@ class CodeScore:
 
     ``passed`` is the natural typed boolean projection of dr-code's
     :class:`SubmissionOutcome`: it is true exactly for ``PASSED``.
-    ``infrastructure_unknown`` is true when dr-code could not deliver a
-    definitive verdict (harness failure / evaluation incomplete / timeout);
-    the rollout must fail, never score 0. ``outcome`` retains the dr-code
-    label.
+    ``infrastructure_unknown`` is true only for dr-code's typed
+    :class:`HarnessFailure`. Every :class:`CompletedScore` retains its
+    definitive zero/one projection, including candidate timeouts and
+    incomplete candidate coverage. ``outcome`` retains the dr-code label.
 
     ED1M extends the projection with ``fidelity_to_mutant``, the fractional
     reward-bearing row value (fraction of inputs matching the mutant).
@@ -275,12 +265,6 @@ def _project_submission_score(result: HumanEvalSubmissionScore) -> CodeScore:
             outcome=result.kind,
         )
     outcome = result.outcome
-    if outcome in _INFRASTRUCTURE_UNKNOWN_OUTCOMES:
-        return CodeScore(
-            passed=False,
-            infrastructure_unknown=True,
-            outcome=str(outcome),
-        )
     return CodeScore(
         passed=outcome is SubmissionOutcome.PASSED,
         infrastructure_unknown=False,
@@ -299,10 +283,10 @@ def score_ed1_submission(
     Delegates to dr-code's ``score_humaneval_submission`` (preprocessing +
     subprocess test run) and projects its typed outcome onto the ed1
     correctness
-    invariant: ``PASSED`` -> passed; a typed harness failure,
-    ``EVALUATION_INCOMPLETE``, or ``TIMED_OUT`` -> infrastructure unknown (the
-    rollout fails); every other completed outcome (tests failed, extraction
-    failed, no top-level functions, ...) -> definitive fail (score 0).
+    invariant: ``PASSED`` -> passed; a typed harness failure -> infrastructure
+    unknown (the rollout fails); every completed outcome (tests failed,
+    candidate timeout, incomplete candidate coverage, extraction failed, no
+    top-level functions, ...) -> definitive fail (score 0).
     """
     result = score_humaneval_submission(
         raw_submission=raw_submission,

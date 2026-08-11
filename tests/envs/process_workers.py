@@ -169,6 +169,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         task_fixture = ed1_instance_from_task(task)
         decoder_source = mutant.mutated_full_source
     experiment = build_ed1_experiment(
+        provider_call_config=request.provider_call_config,
         budget_ratio=request.budget_ratio,
         tasks=(task_fixture,),
         internal_n=1,
@@ -204,7 +205,8 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         raise ValueError("ED1 row procedure identity is not canonical")
 
     def reply(prompt: str) -> str:
-        if prompt.startswith(DECODER_TEMPLATE.split("{encoder_output}")[0]):
+        decoder_prefix = DECODER_TEMPLATE.split("{encoder_output}", 1)[0]
+        if prompt.startswith(decoder_prefix):
             return decoder_source
         return "A compact executable reconstruction description."
 

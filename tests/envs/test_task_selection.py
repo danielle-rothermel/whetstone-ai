@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -10,9 +11,16 @@ from whetstone.envs.d1 import build_d1_experiment
 from whetstone.envs.ed1 import build_ed1_experiment
 from whetstone.envs.task_selection import (
     TASK_SELECTION_SCHEMA,
+    TaskRoleSelectionMethod,
     TaskSplitManifestError,
+    TaskSplitRole,
     parse_task_split_manifest,
     resolve_manifest_split,
+)
+
+_COPRO_MANIFEST = (
+    Path(__file__).parents[2]
+    / "src/whetstone/optimization/copro/humaneval_copro_challenge_v1.json"
 )
 
 
@@ -94,6 +102,29 @@ def test_roles_are_train_then_val_and_test_exactly() -> None:
     assert ed1.official_ids == ("Synthetic/3", "Synthetic/4")
     assert d1.internal_ids == ("Synthetic/0", "Synthetic/1")
     assert d1.official_ids == ("Synthetic/2", "Synthetic/3")
+
+
+@pytest.mark.parametrize(
+    ("role", "expected"),
+    [
+        (TaskSplitRole.TRAIN, ("Synthetic/0", "Synthetic/1")),
+        (TaskSplitRole.VALIDATION, ("Synthetic/2",)),
+        (TaskSplitRole.TEST, ("Synthetic/3", "Synthetic/4")),
+    ],
+)
+def test_select_role_preserves_role_and_manifest_order(
+    role: TaskSplitRole, expected: tuple[str, ...]
+) -> None:
+    manifest = parse_task_split_manifest(_manifest())
+
+    selected = manifest.select_role(env="ed1", role=role)
+
+    assert selected.manifest_content_hash == manifest.content_hash
+    assert selected.pool_key == "ed1"
+    assert selected.role is role
+    assert selected.task_ids == expected
+    assert selected.selection_method is TaskRoleSelectionMethod.FULL_ROLE
+    assert selected.eligible_pool_count == len(expected)
 
 
 @pytest.mark.parametrize("env", ["ed1m", "c18"])
@@ -187,3 +218,59 @@ def test_cross_role_duplicate_ids_are_rejected(
 def test_train_val_test_roles_stay_disjoint_end_to_end() -> None:
     roles = parse_task_split_manifest(_manifest()).for_env("ed1")
     assert not set(roles.internal_ids) & set(roles.official_ids)
+
+
+def test_frozen_copro_challenge_manifest_matches_reference_metadata() -> None:
+    payload = json.loads(_COPRO_MANIFEST.read_text())
+    manifest = parse_task_split_manifest(payload)
+    roles = manifest.for_env("ed1")
+    rates = payload["selection"]["historical_pass_rates"]
+
+    assert tuple(
+        map(len, (roles.train_ids, roles.val_ids, roles.test_ids))
+    ) == (
+        46,
+        15,
+        15,
+    )
+    assert set(rates) == roles.all_role_ids()
+    assert all(0.0 < value < 1.0 for value in rates.values())
+    assert sum(value < 0.5 for value in rates.values()) == 4
+    assert sum(0.5 <= value < 0.75 for value in rates.values()) == 20
+    assert sum(0.75 <= value < 0.9 for value in rates.values()) == 31
+    assert sum(0.9 <= value < 1.0 for value in rates.values()) == 21
+
+
+def test_copro_probe_selects_five_worst_eligible_train_tasks() -> None:
+    manifest = parse_task_split_manifest(_COPRO_MANIFEST.read_bytes())
+    excluded = (
+        "HumanEval/39",
+        "HumanEval/113",
+        "HumanEval/116",
+        "HumanEval/149",
+        "HumanEval/162",
+    )
+
+    selection = manifest.select_lowest_historical_pass_rate(
+        env="ed1",
+        role=TaskSplitRole.TRAIN,
+        count=5,
+        excluded_task_ids=excluded,
+    )
+
+    assert selection.selection_method is (
+        TaskRoleSelectionMethod.LOWEST_HISTORICAL_PASS_RATE
+    )
+    assert selection.task_ids == (
+        "HumanEval/32",
+        "HumanEval/163",
+        "HumanEval/160",
+        "HumanEval/124",
+        "HumanEval/132",
+    )
+    assert selection.historical_pass_rates == pytest.approx(
+        (0.3636363636, 0.4, 0.5, 0.5384615385, 0.5555555556)
+    )
+    assert selection.source_role_count == 46
+    assert selection.eligible_pool_count == 43
+    assert selection.excluded_task_ids == excluded

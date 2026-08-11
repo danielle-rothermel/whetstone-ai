@@ -174,6 +174,10 @@ class Ed1EvalResult:
     #: no attractor sample; empty for ed1/QA.
     per_task_attractor: tuple[float | None, ...] = ()
     row_diags: tuple[Ed1RowDiag, ...] = ()
+    request_identities: frozenset[str] = frozenset()
+    concurrency_halved: bool = False
+    deadline_reached: bool = False
+    guard_timeouts: int = 0
 
     @property
     def diagnostics(self) -> Ed1EvalDiagnostics:
@@ -566,13 +570,14 @@ def _sum_telemetry(a: CallTelemetry, b: CallTelemetry) -> CallTelemetry:
 def _render_encoder(
     body: str, *, input_code: str, max_budget: int | None
 ) -> str:
-    """Render the encoder prompt: the immutable frame around a strategy body.
+    """Render the encoder prompt: the immutable frame around an instruction.
 
-    ``body`` is the Mutation-Surface payload (the strategy sentence ONLY); the
-    budget clause + fenced code block come from ``ENCODER_FRAME``, so every
-    candidate keeps them by construction. A body carrying a ``{placeholder}``
-    would raise here (KeyError/IndexError/ValueError) -> a per-row failure, but
-    intake validation rejects such bodies first.
+    ``body`` is the Mutation-Surface payload (the instruction ONLY); the
+    input code, optional budget suffix, and punctuation come from
+    ``ENCODER_FRAME``, so every candidate keeps them by construction. A body
+    carrying a ``{placeholder}`` would raise here
+    (KeyError/IndexError/ValueError) -> a per-row failure, but intake
+    validation rejects such bodies first.
     """
     return render_encoder_frame(
         body, input_code=input_code, max_budget=max_budget
@@ -599,7 +604,7 @@ def drive_ed1_row(
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_rollout
     assert rd is not None
-    # A None budget rule omits both MAX_BUDGET and the rendered budget clause.
+    # A None budget rule omits MAX_BUDGET and the rendered budget suffix.
     rule = rd.budget_rule
     max_budget = (
         None
@@ -1104,6 +1109,11 @@ def run_ed1_eval(
         for instance in instances
         for index in range(repeats)
     }
+    planned_request_identities = frozenset(
+        request.request_identity
+        for requests in requests_by_key.values()
+        for request in requests
+    )
     partial_records = index_partial_records(
         () if partial_log is None else partial_log.load(),
         phase=split_role,
@@ -1168,7 +1178,12 @@ def run_ed1_eval(
 
     def _drive(
         requests: list[Ed1RowRequest],
-    ) -> dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome]:
+    ) -> tuple[
+        dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome],
+        bool,
+        bool,
+        int,
+    ]:
         nonlocal effective_concurrency
         specs = [_spec(request) for request in requests]
         request_by_key = {
@@ -1220,9 +1235,14 @@ def run_ed1_eval(
                     row_state=ExecutedRowState.MISSING,
                     executed_component_steps=(),
                 )
-        return out
+        return (
+            out,
+            pool.concurrency_halved,
+            pool.deadline_reached,
+            pool.guard_timeouts,
+        )
 
-    first_driven = _drive(initial_requests)
+    first_driven, halved_1, deadline_1, guard_1 = _drive(initial_requests)
     driven.update(first_driven)
 
     # --- ONE bounded re-drive of timed-out / transient-transport rows. ---
@@ -1237,13 +1257,18 @@ def run_ed1_eval(
         for key, outcome in first_driven.items()
         if isinstance(outcome, Ed1RowOutcome) and _should_redrive(outcome)
     ]
+    halved_2 = deadline_2 = False
+    guard_2 = 0
     if redrive_requests:
-        redriven = _drive(redrive_requests)
+        redriven, halved_2, deadline_2, guard_2 = _drive(redrive_requests)
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
             if not isinstance(outcome, Ed1RowOutcome) or not outcome.missing
         )
+    concurrency_halved = halved_1 or halved_2
+    deadline_reached = deadline_1 or deadline_2
+    guard_timeouts = guard_1 + guard_2
 
     generated_keys = [
         (str(instance.id), index)
@@ -1445,12 +1470,12 @@ def run_ed1_eval(
         plan=sampling.evaluation_matrix_plan,
     )
 
-    # When a blend config is set, the
-    # CERTIFICATION metric + the per-task CI vector are the PER-TASK blended
-    # reward (primary score + compression are always reported separately). The
-    # blend is composed per task, so the paired bootstrap operates on blended
-    # rewards exactly as env_exact_match does for QA. With no blend,
-    # ``per_task_scores`` is the per-task primary mean.
+    # ED1 always uses the PER-TASK blended reward for internal selection and
+    # the official comparison vector (primary score + compression are always
+    # reported separately). ED1M shares this driver and may retain its
+    # primary-only behavior. The blend is composed per task, so the paired
+    # bootstrap operates on blended rewards exactly as env_exact_match does for
+    # QA.
     blend_config = experiment.blend_config
     primary_scores = tuple(per_task_scores)
     if blend_config is not None:
@@ -1503,6 +1528,10 @@ def run_ed1_eval(
         per_task_attractor=tuple(per_task_attractor),
         outputs=tuple(outputs),
         row_diags=tuple(row_diags),
+        request_identities=planned_request_identities,
+        concurrency_halved=concurrency_halved,
+        deadline_reached=deadline_reached,
+        guard_timeouts=guard_timeouts,
     )
 
 

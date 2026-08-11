@@ -28,7 +28,10 @@ __all__: list[str] = []
 
 _START_TOKEN = b"\x01"
 _GUARDIAN_READY_TOKEN = b"\x01"
-_GUARDIAN_READY_TIMEOUT_SECONDS = 1.0
+# High-concurrency launches can leave a newly spawned guardian runnable but
+# unscheduled for more than one second. Readiness still requires its token;
+# this bound is only the local-startup watchdog.
+_GUARDIAN_READY_TIMEOUT_SECONDS = 10.0
 _PRE_GATE_READY_TOKEN = b"\x01"
 
 

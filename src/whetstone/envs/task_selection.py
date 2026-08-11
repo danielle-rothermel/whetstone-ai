@@ -2,12 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from enum import UNIQUE, StrEnum, verify
+from pathlib import Path
 from typing import Literal
 
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    model_validator,
+)
 
 TASK_SELECTION_SCHEMA = "whetstone.run.task_selection/v1"
 _ENV_TO_POOL: dict[str, str] = {"d1": "d1", "ed1": "ed1"}
@@ -15,6 +24,70 @@ _ENV_TO_POOL: dict[str, str] = {"d1": "d1", "ed1": "ed1"}
 
 class TaskSplitManifestError(ValueError):
     """A typed failure parsing or applying a task-selection manifest."""
+
+
+@verify(UNIQUE)
+class TaskSplitRole(StrEnum):
+    """One explicit role from a persisted task-selection manifest."""
+
+    TRAIN = "train"
+    VALIDATION = "validation"
+    TEST = "test"
+
+
+@verify(UNIQUE)
+class TaskRoleSelectionMethod(StrEnum):
+    """How an ordered selection was derived from its manifest role."""
+
+    FULL_ROLE = "full_role"
+    LOWEST_HISTORICAL_PASS_RATE = "lowest_historical_pass_rate"
+
+
+class TaskRoleSelection(BaseModel):
+    """The exact persisted manifest-derived selection for one evaluation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    manifest_content_hash: str
+    pool_key: str
+    role: TaskSplitRole
+    task_ids: tuple[str, ...]
+    selection_method: TaskRoleSelectionMethod = (
+        TaskRoleSelectionMethod.FULL_ROLE
+    )
+    source_role_count: int | None = None
+    eligible_pool_count: int | None = None
+    excluded_task_ids: tuple[str, ...] = ()
+    historical_pass_rates: tuple[float, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> TaskRoleSelection:
+        if self.historical_pass_rates and len(
+            self.historical_pass_rates
+        ) != len(self.task_ids):
+            raise ValueError(
+                "historical pass rates must align with selected task IDs"
+            )
+        if self.source_role_count is not None and self.source_role_count < len(
+            self.task_ids
+        ):
+            raise ValueError(
+                "source role count cannot be smaller than selection"
+            )
+        if (
+            self.eligible_pool_count is not None
+            and self.eligible_pool_count < len(self.task_ids)
+        ):
+            raise ValueError(
+                "eligible pool count cannot be smaller than selection"
+            )
+        return self
+
+
+class _HistoricalSelectionMetadata(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    historical_pass_rates: dict[str, float]
 
 
 class _PoolRoles(BaseModel):
@@ -55,6 +128,7 @@ class TaskSplitManifest(BaseModel):
         alias="schema"
     )
     pools: dict[str, _PoolRoles]
+    selection: _HistoricalSelectionMetadata | None = None
     content_hash: str = Field(exclude=True)
 
     def for_env(self, env: str) -> TaskSplitRoles:
@@ -85,6 +159,100 @@ class TaskSplitManifest(BaseModel):
             content_hash=self.content_hash,
         )
 
+    def select_role(
+        self, *, env: str, role: TaskSplitRole
+    ) -> TaskRoleSelection:
+        """Resolve and record one ordered role without folding role meaning."""
+        roles = self.for_env(env)
+        return TaskRoleSelection(
+            manifest_content_hash=self.content_hash,
+            pool_key=roles.pool_key,
+            role=role,
+            task_ids=roles.ids_for(role),
+            source_role_count=len(roles.ids_for(role)),
+            eligible_pool_count=len(roles.ids_for(role)),
+        )
+
+    def select_lowest_historical_pass_rate(
+        self,
+        *,
+        env: str,
+        role: TaskSplitRole,
+        count: int,
+        excluded_task_ids: tuple[str, ...] = (),
+    ) -> TaskRoleSelection:
+        """Select lowest-rate tasks with stable ID tie-breaking."""
+        if count < 1:
+            raise TaskSplitManifestError(
+                "selected task count must be positive"
+            )
+        if len(set(excluded_task_ids)) != len(excluded_task_ids):
+            raise TaskSplitManifestError("excluded task IDs must be unique")
+        roles = self.for_env(env)
+        unknown_exclusions = tuple(
+            task_id
+            for task_id in excluded_task_ids
+            if task_id not in roles.all_role_ids()
+        )
+        if unknown_exclusions:
+            raise TaskSplitManifestError(
+                "excluded task IDs are absent from the manifest pool: "
+                f"{unknown_exclusions}"
+            )
+        metadata = self.selection
+        if metadata is None:
+            raise TaskSplitManifestError(
+                "manifest has no historical pass-rate metadata"
+            )
+        excluded = frozenset(excluded_task_ids)
+        source_ids = roles.ids_for(role)
+        eligible_ids = tuple(
+            task_id for task_id in source_ids if task_id not in excluded
+        )
+        if count > len(eligible_ids):
+            raise TaskSplitManifestError(
+                f"requested {count} tasks from {len(eligible_ids)} eligible "
+                f"tasks in role {role.value!r}"
+            )
+        rates = metadata.historical_pass_rates
+        missing_rates = tuple(
+            task_id for task_id in eligible_ids if task_id not in rates
+        )
+        if missing_rates:
+            raise TaskSplitManifestError(
+                "historical pass rates are missing for eligible tasks: "
+                f"{missing_rates}"
+            )
+        invalid_rates = tuple(
+            task_id
+            for task_id in eligible_ids
+            if not math.isfinite(rates[task_id])
+        )
+        if invalid_rates:
+            raise TaskSplitManifestError(
+                f"historical pass rates are non-finite: {invalid_rates}"
+            )
+        selected_ids = tuple(
+            sorted(
+                eligible_ids, key=lambda task_id: (rates[task_id], task_id)
+            )[:count]
+        )
+        return TaskRoleSelection(
+            manifest_content_hash=self.content_hash,
+            pool_key=roles.pool_key,
+            role=role,
+            task_ids=selected_ids,
+            selection_method=(
+                TaskRoleSelectionMethod.LOWEST_HISTORICAL_PASS_RATE
+            ),
+            source_role_count=len(source_ids),
+            eligible_pool_count=len(eligible_ids),
+            excluded_task_ids=excluded_task_ids,
+            historical_pass_rates=tuple(
+                rates[task_id] for task_id in selected_ids
+            ),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class TaskSplitRoles:
@@ -106,6 +274,14 @@ class TaskSplitRoles:
 
     def all_role_ids(self) -> frozenset[str]:
         return frozenset(self.train_ids + self.val_ids + self.test_ids)
+
+    def ids_for(self, role: TaskSplitRole) -> tuple[str, ...]:
+        """Return one role exactly as ordered in the manifest."""
+        if role is TaskSplitRole.TRAIN:
+            return self.train_ids
+        if role is TaskSplitRole.VALIDATION:
+            return self.val_ids
+        return self.test_ids
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,6 +339,17 @@ def parse_task_split_manifest(
         ) from exc
 
 
+def load_task_split_manifest(path: Path) -> TaskSplitManifest:
+    """Read and validate one environment-owned manifest from disk."""
+    try:
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise TaskSplitManifestError(
+            f"cannot read task-selection manifest {path}: {exc}"
+        ) from exc
+    return parse_task_split_manifest(payload)
+
+
 def resolve_manifest_split[T](
     *,
     roles: TaskSplitRoles,
@@ -208,9 +395,13 @@ def resolve_manifest_split[T](
 __all__ = [
     "TASK_SELECTION_SCHEMA",
     "ResolvedSplit",
+    "TaskRoleSelection",
+    "TaskRoleSelectionMethod",
     "TaskSplitManifest",
     "TaskSplitManifestError",
+    "TaskSplitRole",
     "TaskSplitRoles",
+    "load_task_split_manifest",
     "parse_task_split_manifest",
     "resolve_manifest_split",
 ]

@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from dr_store import ObjectStore
+from whetstone_envs.core import Instance
 
 from whetstone.core.identity import (
     IdentityRef,
     TypedRef,
     typed_ref_for_record,
 )
+from whetstone.envs.ed1 import (
+    ED1_ENV_NAME,
+    Ed1Experiment,
+    render_encoder_frame,
+    validate_ed1_body,
+)
+from whetstone.envs.ed1_scoring import CodeBatchScorer
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import (
@@ -18,6 +26,10 @@ from whetstone.envs.rollout_definition import (
 )
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
 from whetstone.evaluation.code.aggregate import ROLLOUT_AGGREGATE_SCHEMA
+from whetstone.evaluation.drivers.ed1 import (
+    Ed1RowJobFactory,
+    run_ed1_eval,
+)
 from whetstone.evaluation.drivers.internal import (
     InternalEvalResult,
     InternalRowJobFactory,
@@ -56,6 +68,7 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.experiment.reward import REWARD_SCHEMA, reward_reference
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
@@ -106,11 +119,12 @@ class EvaluationEngine:
         experiment: EnvExperiment,
         sampling: EnvSplitSampling,
         execution_policy: ProviderExecutionPolicy,
-        row_job_factory: InternalRowJobFactory,
+        row_job_factory: InternalRowJobFactory | Ed1RowJobFactory,
         concurrency: int = DEFAULT_CONCURRENCY,
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
         prompt_cache: PromptResultCache | None = None,
+        batch_scorer: CodeBatchScorer | None = None,
     ) -> None:
         self._store = store
         self.experiment = experiment
@@ -121,6 +135,7 @@ class EvaluationEngine:
         self._max_wall_seconds = max_wall_seconds
         self._partial_log = partial_log
         self._prompt_cache = prompt_cache
+        self._batch_scorer = batch_scorer
         expected = experiment.eval_configs.eval_config_for(sampling.split_role)
         if expected != sampling.eval_config:
             canonical = (
@@ -244,13 +259,21 @@ class EvaluationEngine:
             sampling=derived,
             execution_policy=self._execution_policy,
             row_job_factory=self._row_job_factory,
+            concurrency=self._concurrency,
             max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
+            batch_scorer=self._batch_scorer,
         )
 
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
+        if isinstance(self.experiment, Ed1Experiment):
+            body = candidate.payload.get(MUTATION_FIELD)
+            if type(body) is not str:
+                raise ValueError("ED1 candidate body must be a strict string")
+            validate_ed1_body(body)
+            return
         validate_candidate_prompt(
             env_spec(self.experiment.env_name),
             candidate,
@@ -374,10 +397,10 @@ class EvaluationEngine:
                     instance_id=output.instance_id,
                     task_identity=task_identity,
                     repeat=output.repeat,
-                    rendered_prompt=render_prompt(
-                        env_spec(self.experiment.env_name),
+                    rendered_prompt=self._rendered_prompt(
                         request.candidate,
                         instance_by_id[output.instance_id],
+                        max_budget=output.max_budget,
                     ),
                     output_text=output.output_text,
                     score=output.score,
@@ -407,14 +430,70 @@ class EvaluationEngine:
             tuple(output_rows),
         )
 
+    def _rendered_prompt(
+        self,
+        candidate: Candidate,
+        instance: Instance,
+        *,
+        max_budget: int | None,
+    ) -> str:
+        if isinstance(self.experiment, Ed1Experiment):
+            body = candidate.payload[MUTATION_FIELD]
+            if type(body) is not str:
+                raise ValueError("ED1 candidate body must be a strict string")
+            return render_encoder_frame(
+                body,
+                input_code=instance.prompt_inputs["input_code"],
+                max_budget=max_budget,
+            )
+        return render_prompt(
+            env_spec(self.experiment.env_name), candidate, instance
+        )
+
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
         self.validate_request(request)
-        result = run_internal_eval(
+        result = self._run(request)
+        return self._persist(request, result)
+
+    def _run(self, request: EvaluationRequest) -> InternalEvalResult:
+        if isinstance(self.experiment, Ed1Experiment):
+            if self.experiment.env_name != ED1_ENV_NAME:
+                raise ValueError("EvaluationEngine supports ED1, not ED1M")
+            body = request.candidate.payload[MUTATION_FIELD]
+            if type(body) is not str:
+                raise ValueError("ED1 candidate body must be a strict string")
+            result = run_ed1_eval(
+                self.experiment,
+                candidate_template=body,
+                candidate_id=request.candidate.candidate_id,
+                sampling=self.sampling,
+                execution_policy=self._execution_policy,
+                row_job_factory=cast(Ed1RowJobFactory, self._row_job_factory),
+                evaluation_binding=request.evaluation_binding,
+                concurrency=self._concurrency,
+                max_wall_seconds=self._max_wall_seconds,
+                partial_log=self._partial_log,
+                cache=self._prompt_cache,
+                batch_scorer=self._batch_scorer,
+            )
+            return InternalEvalResult(
+                aggregate=result.primary_aggregate,
+                reward=result.reward,
+                per_task_scores=result.per_task_scores,
+                per_task_counts=result.per_task_counts,
+                outputs=result.outputs,
+                supplemental_aggregates=(result.compression_aggregate,),
+                request_identities=result.request_identities,
+                concurrency_halved=result.concurrency_halved,
+                deadline_reached=result.deadline_reached,
+                guard_timeouts=result.guard_timeouts,
+            )
+        return run_internal_eval(
             self.experiment,
             candidate=request.candidate,
             sampling=self.sampling,
             execution_policy=self._execution_policy,
-            row_job_factory=self._row_job_factory,
+            row_job_factory=cast(InternalRowJobFactory, self._row_job_factory),
             evaluation_binding=request.evaluation_binding,
             concurrency=self._concurrency,
             max_wall_seconds=self._max_wall_seconds,
@@ -422,7 +501,6 @@ class EvaluationEngine:
             render_guard=True,
             cache=self._prompt_cache,
         )
-        return self._persist(request, result)
 
     def _persist(
         self, request: EvaluationRequest, result: InternalEvalResult
@@ -465,6 +543,14 @@ class EvaluationEngine:
         aggregate_ref = self._put(ROLLOUT_AGGREGATE_SCHEMA, aggregate_record)
         if aggregate_ref != aggregate.record_ref():
             raise ValueError("persisted aggregate reference diverged")
+        for supplemental in result.supplemental_aggregates:
+            supplemental_ref = self._put(
+                ROLLOUT_AGGREGATE_SCHEMA, supplemental.record_content()
+            )
+            if supplemental_ref != supplemental.record_ref():
+                raise ValueError(
+                    "persisted supplemental aggregate reference diverged"
+                )
         reward_ref = None
         if result.reward is not None:
             reward_ref = reward_reference(result.reward)

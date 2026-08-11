@@ -53,7 +53,7 @@ def _proposal_request(
 
 def _transport(
     *outcomes: ProviderTransportOutcome,
-    temperature: float = 1.4,
+    temperature: float | None = 1.4,
     max_attempts: int = 1,
     resolved_provider_config: ProviderCallConfig | None = None,
 ):
@@ -133,6 +133,17 @@ def test_exact_batch_uses_identical_prompt_and_temperature() -> None:
         len({draft.request_evidence["logical_call_id"] for draft in drafts})
         == 3
     )
+
+
+def test_unset_temperature_is_not_added_to_provider_controls() -> None:
+    proposer, config, recording, _ = _transport(
+        provider_support.response_outcome(text="candidate"),
+        temperature=None,
+    )
+
+    proposer.draft(config, _proposal_request(), 1)
+
+    assert recording.served[0].config.controls.temperature is None
 
 
 def test_preserves_provider_response_usage_cost_and_attempt_evidence() -> None:

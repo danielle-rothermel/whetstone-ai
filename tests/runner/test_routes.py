@@ -90,6 +90,14 @@ def test_reasoning_effort_folds_into_the_config_identity() -> None:
     assert high.call_config.identity_hash != low.call_config.identity_hash
 
 
+def test_task_routes_accept_exact_token_limits() -> None:
+    openrouter = canonical_task_route(token_limit=2048)
+    openai = openai_direct_route(token_limit=1024)
+
+    assert openrouter.call_config.controls.token_limit == 2048
+    assert openai.call_config.controls.token_limit == 1024
+
+
 def test_absent_reasoning_leaves_the_provider_default() -> None:
     assert reasoning_effort_for(None) is None
     assert reasoning_effort_for("high") is ReasoningEffort.HIGH

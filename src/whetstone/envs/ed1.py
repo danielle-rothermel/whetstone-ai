@@ -10,6 +10,7 @@ from dr_code.humaneval import (
     load_humaneval_plus,
 )
 from dr_code.humaneval.plus_dataset import HF_REVISION
+from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
 from whetstone.core.identity import TypedRef
@@ -23,6 +24,7 @@ from whetstone.envs.ed1_scoring import (
 from whetstone.envs.encdec_rollout import (
     EncDecRolloutDefinition,
     build_encdec_rollout_definition,
+    build_encoder_provider_call_config,
 )
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.rollout_definition import env_candidate_base_ref
@@ -65,8 +67,12 @@ ED1_ENV_NAME = "ed1"
 #: The canonical enc/dec task model (same route plays both encoder + decoder).
 #: ``--task-model`` overrides and folds into ``graph_hash``.
 ED1_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
+_ED1_CANONICAL_PROVIDER_CALL_CONFIG = build_encoder_provider_call_config(
+    ED1_CANONICAL_MODEL
+)
 
 ED1_DEFAULT_BUDGET_RATIO = 0.5
+ED1_DEFAULT_BLEND_CONFIG = BoundedCompressionMetricConfig()
 
 ED1_DATASET_ID = "evalplus/humanevalplus"
 ED1_DATASET_REVISION = identity_hash_for(
@@ -90,56 +96,54 @@ _ED1_STRATUM = "humaneval_plus"
 
 _DEFINITION_VERSION = "1"
 
-# --- Encoder prompt: an IMMUTABLE FRAME + a mutable strategy body ------------
+# --- Encoder prompt: an IMMUTABLE FRAME + a mutable instruction body ---------
 #
-# The encoder Mutation Surface is limited to the leading strategy body: the
-# proposer/probe vary ONLY the leading STRATEGY-SENTENCE body; the budget
-# clause and the fenced code block are a FIXED frame every candidate keeps by
-# construction. The Mutation Surface payload is the BODY string; rendering
-# composes ``ENCODER_FRAME.format(body=, max_budget=, input_code=)`` so the
-# budget line + code block can never be dropped or mutated. Intake validation
-# applies to the BODY before evaluation: a body carrying a
-# ``{placeholder}`` or a code fence is a TYPED rejection (the frame owns them).
+# The encoder Mutation Surface is limited to the instruction body: the
+# proposer/probe vary ONLY the instruction body; the input code, optional
+# budget suffix, and terminal punctuation are a FIXED frame every candidate
+# keeps by construction. The Mutation Surface payload is the BODY string;
+# rendering composes ``ENCODER_FRAME.format(body=, max_budget=, input_code=)``
+# so the code and budget suffix can never be dropped or mutated. Intake
+# validation applies to the BODY before evaluation: a body carrying a
+# ``{placeholder}`` or a code fence is a TYPED rejection.
 
 #: The immutable encoder frame WITH a budget clause. ``{body}`` is the ONLY
-#: mutable region (the strategy sentence); the budget + fenced code block
+#: mutable region (the instruction); the budget line and fenced Python code
 #: are fixed. The ``{max_budget}`` / ``{input_code}`` placeholders live in the
 #: frame, so a body never needs (or is allowed) placeholders of its own.
 ENCODER_FRAME = (
     "{body}\n"
     "Use at most {max_budget} characters.\n"
-    "```python\n"
-    "{input_code}\n"
-    "```"
+    "```python\n{input_code}\n```"
 )
 
-#: The no-budget frame has no "Use at most N characters." line or MAX_BUDGET.
-#: Used when ``budget_ratio is None`` to optimize compression without listing
-#: a budget; the blended
-#: reward's compression term carries the pressure. Identity-folded (a no-budget
-#: rollout is a distinct graph variant).
+#: The no-budget frame omits the budget line. Used when ``budget_ratio is
+#: None`` to optimize compression without listing a bound; the blended
+#: reward's compression term carries the pressure. Identity-folded (a
+#: no-budget rollout is a distinct graph variant).
 ENCODER_FRAME_NO_BUDGET = "{body}\n```python\n{input_code}\n```"
 
-#: Encoder body A -- "concise description" (the naive floor strategy sentence).
+#: Encoder body A -- "concise description" (the naive floor instruction).
 ENCODER_BODY_A = "Provide a concise description of the following code."
 
 #: Encoder body B -- "compress for reconstruction by another agent" (the
-#: ceiling-ish informative strategy sentence).
+#: ceiling-ish informative instruction).
 ENCODER_BODY_B = (
-    "Compress the following code into a description another agent can use\n"
-    "to reconstruct a function with the same behavior."
+    "Please compress the following code into a description another agent can "
+    "use to reconstruct a function that behaves the same as the following "
+    "code."
 )
 
 
 def render_encoder_frame(
     body: str, *, input_code: str, max_budget: int | None
 ) -> str:
-    """Compose the immutable encoder frame around a mutable strategy body.
+    """Compose the immutable encoder frame around a mutable instruction body.
 
-    The body is the ONLY mutable region; the fenced code block is fixed by the
-    frame, so EVERY candidate keeps it by construction. When ``max_budget`` is
-    ``None`` the NO-BUDGET frame is used (no "Use at most N characters." line);
-    otherwise the budget clause is included. The body must NOT carry
+    The body is the ONLY mutable region; the input code is fixed by the frame,
+    so EVERY candidate keeps it by construction. When ``max_budget`` is
+    ``None`` the NO-BUDGET frame omits the budget line; otherwise the budget
+    line is included. The body must NOT carry
     ``{placeholder}`` tokens (the frame owns them) -- the intake validator
     rejects such bodies before this is ever called.
     """
@@ -168,19 +172,19 @@ class Ed1BodyError(ValueError):
     def __init__(self, offending: tuple[str, ...]) -> None:
         self.offending = offending
         super().__init__(
-            f"{self.code}: body contains frame-owned tokens {list(offending)}"
+            f"{self.code}: body contains forbidden tokens {list(offending)}"
         )
 
 
 def ed1_body_rejection(body: str) -> tuple[str, ...]:
     """The offending tokens that make an ed1 encoder body invalid, else empty.
 
-    The narrowed ed1 Mutation Surface is the STRATEGY SENTENCE only: the body
+    The narrowed ed1 Mutation Surface is the INSTRUCTION only: the body
     must carry NO ``{placeholder}`` tokens (the frame owns ``{max_budget}`` /
-    ``{input_code}``) and NO code fence (the frame owns the fenced code block).
+    ``{input_code}``) and NO code fence (the body is instruction text only).
     Returns the ordered, de-duplicated offending tokens (a ``{field}`` name or
     a triple-backtick code fence); an empty tuple means the body is a clean
-    strategy sentence the frame can wrap.
+    instruction the frame can wrap.
 
     A MALFORMED brace (``'Explain {code'``) is an offending token too, not a
     bare parse error: the contract's parser raises ``ValueError`` on it, and
@@ -214,8 +218,7 @@ def validate_ed1_body(body: str) -> None:
 #: The decoder user template (fixed; not the Mutation Surface).
 DECODER_TEMPLATE = (
     "Decode the description into functional Python code. Output only Python "
-    "code.\n"
-    "{encoder_output}"
+    "code.\n\n{encoder_output}"
 )
 
 
@@ -382,6 +385,7 @@ def build_ed1_procedure_config(
             ("scorer", "dr_code.humaneval.score_humaneval_submission"),
             ("scoring_profile_id", ED1_SCORING_PROFILE_ID),
             ("scoring_profile_version", ED1_SCORING_PROFILE_VERSION),
+            ("completed_outcome_projection", "definitive_score"),
         ),
         zero_denominator=zero_denominator,
     )
@@ -426,8 +430,8 @@ def _ed1_split(
 
 
 def _ed1_candidate(*, candidate_id: str, body: str) -> Candidate:
-    # The Mutation Surface payload is the STRATEGY-SENTENCE BODY only; the
-    # budget clause + code block are the immutable frame composed at render.
+    # The Mutation Surface payload is the INSTRUCTION BODY only; the code,
+    # budget suffix, and punctuation are composed by the immutable frame.
     return Candidate(
         candidate_id=candidate_id,
         base_ref=env_candidate_base_ref(ED1_ENV_NAME),
@@ -444,25 +448,6 @@ def ed1_initial_candidate() -> Candidate:
 def ed1_ceiling_candidate() -> Candidate:
     return _ed1_candidate(
         candidate_id=f"{ED1_ENV_NAME}-ceiling", body=ENCODER_BODY_B
-    )
-
-
-def build_ed1_reward_policy() -> RewardPolicy:
-    """The ED1 Reward Policy: maximize HumanEval Submission Score only.
-
-    Compression is reported alongside but is not a Reward term.
-    """
-    return RewardPolicy(
-        policy_name=f"whetstone.env.{ED1_ENV_NAME}.reward",
-        reward_name="reward",
-        terms=(
-            RewardTerm(
-                name=ED1_SUBMISSION_SCORE_NAME,
-                weight=1.0,
-                maximize=True,
-            ),
-        ),
-        missing_data=MissingDataPolicy.FAIL,
     )
 
 
@@ -570,7 +555,7 @@ class Ed1Experiment(EnvExperiment):
 
     encdec_rollout: EncDecRolloutDefinition | None = None
     #: The per-task Character Budget ratio, or ``None`` for the no-budget frame
-    #: with no "Use at most N characters." line or MAX_BUDGET.
+    #: without a "Use at most N characters" line or MAX_BUDGET.
     #: ``None`` is the default for ed1 optimizer cells to optimize compression
     #: without listing a budget at all; the reward's
     #: compression term carries the pressure instead.
@@ -582,19 +567,24 @@ class Ed1Experiment(EnvExperiment):
     #: which runs candidate code through the caller's explicit dr-exec
     #: executor.
     scorer: Callable[..., CodeScore] | None = None
-    #: The weighted-blend reward config, or ``None`` for primary
-    #: score only.
-    #: When set, the official certification metric + internal selection use the
-    #: PER-TASK blended reward; primary score + compression are ALWAYS
-    #: reported separately. Optimizer cells REQUIRE this (the guard rail);
-    #: eval anchors set it so anchors pair with optimizer cells on the same
-    #: metric.
-    blend_config: BoundedCompressionMetricConfig | None = None
+    #: ED1 always uses this per-task blend for internal selection and the
+    #: official comparison vector; primary score + compression are still
+    #: reported separately. The optional type is required only because ED1M
+    #: shares this runtime model and retains its independent reward behavior.
+    blend_config: BoundedCompressionMetricConfig | None = field(
+        default_factory=BoundedCompressionMetricConfig
+    )
+
+    def __post_init__(self) -> None:
+        if self.env_name == ED1_ENV_NAME and self.blend_config is None:
+            raise ValueError("ED1 requires a bounded compression blend config")
 
 
 def build_ed1_experiment(
     *,
-    model: str = ED1_CANONICAL_MODEL,
+    provider_call_config: ProviderCallConfig = (
+        _ED1_CANONICAL_PROVIDER_CALL_CONFIG
+    ),
     budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO,
     scorer: Callable[..., CodeScore] | None = None,
     snapshot_path: Path | None = None,
@@ -606,7 +596,7 @@ def build_ed1_experiment(
     repeats: int = 3,
     tasks: tuple[Ed1Instance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
-    blend_config: BoundedCompressionMetricConfig | None = None,
+    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
     split_manifest: TaskSplitRoles | None = None,
 ) -> Ed1Experiment:
     """Build the ed1 enc-dec experiment the runner cell consumes.
@@ -615,9 +605,9 @@ def build_ed1_experiment(
     splits it into internal/official (first-N ordered), builds the 3-node
     enc-dec rollout at ``budget_ratio`` (folded into ``graph_hash``), the naive
     (A) + ceiling (B) encoder candidates, and the two Eval Configs sharing the
-    code-eval Procedure identity. ``blend_config=None`` selects the
-    primary-only advertised and applied Reward Policy; a blend config selects
-    the blended advertised and applied Reward Policy.
+    code-eval Procedure identity. ED1 always advertises and applies the
+    per-task bounded-compression blend; callers may configure its weight and
+    bounds but cannot disable it.
 
     ``exclude_task_ids`` drops those task ids from the pool before the split:
     excluded tasks are removed from the train / eval / test (internal /
@@ -638,6 +628,8 @@ def build_ed1_experiment(
     ``exclude_task_ids`` (the caller enforces the CLI refusal). The manifest's
     content hash + pool folds into each split's Task Set identity.
     """
+    if not isinstance(blend_config, BoundedCompressionMetricConfig):
+        raise TypeError("ED1 requires a bounded compression blend config")
     pool = (
         tasks
         if tasks is not None
@@ -652,7 +644,7 @@ def build_ed1_experiment(
     procedure = build_ed1_procedure_config()
     rollout = build_encdec_rollout_definition(
         ED1_ENV_NAME,
-        model=model,
+        provider_call_config=provider_call_config,
         procedure_config_hash=procedure.config_identity_hash,
         budget_ratio=budget_ratio,
     )
@@ -716,12 +708,8 @@ def build_ed1_experiment(
         initial_candidate=ed1_initial_candidate(),
         ceiling_candidate=ed1_ceiling_candidate(),
         eval_configs=eval_configs,
-        reward_policy=(
-            build_ed1_reward_policy()
-            if blend_config is None
-            else build_ed1_blended_reward_policy(
-                blend_config, env_name=ED1_ENV_NAME
-            )
+        reward_policy=build_ed1_blended_reward_policy(
+            blend_config, env_name=ED1_ENV_NAME
         ),
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
@@ -737,15 +725,13 @@ def build_ed1_experiment(
 #: Callable type for reconstructing a HumanEvalTask (test injection point).
 HumanEvalTaskFromInstance = Callable[[Instance], HumanEvalTask]
 
-_ = field  # keep the dataclass field import referenced
-
-
 __all__ = [
     "DECODER_TEMPLATE",
     "ED1_CANONICAL_MODEL",
     "ED1_COMPRESSION_NAME",
     "ED1_DATASET_ID",
     "ED1_DATASET_REVISION",
+    "ED1_DEFAULT_BLEND_CONFIG",
     "ED1_DEFAULT_BUDGET_RATIO",
     "ED1_ENV_NAME",
     "ED1_INVALID_BODY",
@@ -759,7 +745,6 @@ __all__ = [
     "build_code_eval_procedure_config",
     "build_ed1_experiment",
     "build_ed1_procedure_config",
-    "build_ed1_reward_policy",
     "ed1_body_rejection",
     "ed1_ceiling_candidate",
     "ed1_initial_candidate",

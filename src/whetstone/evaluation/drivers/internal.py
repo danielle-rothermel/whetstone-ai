@@ -150,6 +150,9 @@ class InternalEvalResult:
     #: Exact row state, trace, display output, and score for every planned row
     #: in instance/repeat order, including exact partial restores.
     outputs: tuple[RolloutOutput, ...]
+    #: Additional aggregates cited by a reward but not used as the evidence's
+    #: primary aggregate. ED1 uses this for its compression aggregate.
+    supplemental_aggregates: tuple[RolloutAggregate, ...] = ()
     #: Every planned row-request identity for this exact Evaluation Binding,
     #: both drive ordinals. Restoration is strictly scoped to this set, so it
     #: is also the only set a caller may attribute partial rows to.

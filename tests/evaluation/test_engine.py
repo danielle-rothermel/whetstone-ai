@@ -36,6 +36,7 @@ from whetstone.envs.encdec_rollout import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
     build_encdec_rollout_definition,
+    build_encoder_provider_call_config,
 )
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import render_prompt
@@ -89,7 +90,9 @@ def _ed1_graph_engine(*, store: ObjectStore) -> EvaluationEngine:
         base_experiment,
         rollout_definition=build_encdec_rollout_definition(
             "ed1",
-            model="openai/test",
+            provider_call_config=build_encoder_provider_call_config(
+                "openai/test"
+            ),
             procedure_config_hash=(
                 base_experiment.rollout_definition.procedure_config_hash
             ),

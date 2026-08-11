@@ -100,14 +100,10 @@ def _entry(
     ).model_dump(mode="json")
 
 
-def test_public_hyperparameter_defaults_match_dspy() -> None:
+def test_public_hyperparameter_defaults_are_search_shape_only() -> None:
     config = CoproConfig()
 
-    assert (config.breadth, config.depth, config.init_temperature) == (
-        10,
-        3,
-        1.4,
-    )
+    assert (config.breadth, config.depth) == (10, 3)
     assert config.track_stats is False
     with pytest.raises(ValueError, match="greater than 1"):
         CoproConfig(breadth=1)
@@ -117,7 +113,7 @@ def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
     None
 ):
     adapter, transport, control = make_test_copro_adapter(
-        {(SEED_PROPOSAL, 0): ('"new {input}"', "other {input}")}
+        {(SEED_PROPOSAL, 0): ('"Describe behavior"', "Explain reconstruction")}
     )
     request = copro_step_request(control)
 
@@ -128,8 +124,8 @@ def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
         item.payload["user_prompt_template"]
         for item in output.proposed_candidates
     ] == [
-        "new {input}",
-        "other {input}",
+        "Describe behavior",
+        "Explain reconstruction",
     ]
     assert output.accepted_candidates == output.proposed_candidates
     assert len(output.evaluation_intents) == 3
@@ -145,6 +141,16 @@ def test_seed_round_proposes_breadth_minus_one_and_evaluates_exact_base() -> (
         request.candidates[0]
     )
     assert transport.calls[0][2] == 2
+    proposal_request = transport.calls[0][1]
+    assert proposal_request.context["instruction_contract"] == (
+        control.proposal_contract.model_dump(mode="json")
+    )
+    assert proposal_request.context["instruction_history"] == ()
+    proposal_prompt = proposal_request.context["proposal_prompt"]
+    assert isinstance(proposal_prompt, str)
+    assert control.proposal_contract.encoder_frame in proposal_prompt
+    assert control.proposal_contract.decoder_template in proposal_prompt
+    assert control.proposal_contract.output_rule in proposal_prompt
 
 
 def test_adapter_requires_the_executor_durable_workflow_replay() -> None:
@@ -187,7 +193,7 @@ def test_idempotent_harness_rejects_before_copro_effects(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     adapter, transport, control = make_test_copro_adapter(
-        {(SEED_PROPOSAL, 0): ("new {input}", "other {input}")}
+        {(SEED_PROPOSAL, 0): ("Describe behavior", "Explain reconstruction")}
     )
     store = make_store(tmp_path)
     service = RecordingEvaluationService(
@@ -225,7 +231,7 @@ def test_durable_workflow_harness_reaches_copro_and_replays_result(
     tmp_path,
 ) -> None:
     adapter, transport, control = make_test_copro_adapter(
-        {(SEED_PROPOSAL, 0): ("new {input}", "other {input}")}
+        {(SEED_PROPOSAL, 0): ("Describe behavior", "Explain reconstruction")}
     )
     store = make_store(tmp_path)
     service = RecordingEvaluationService(
@@ -260,16 +266,22 @@ def test_history_uses_top_unique_attempts_and_immutable_prompt_context() -> (
 ):
     control = configure_test_copro(depth=3)
     history = [
-        _entry(control, 0, "a-old", "a {input}", 0.7),
-        _entry(control, 1, "b", "b {input}", 0.9),
-        _entry(control, 2, "c", "c {input}", 0.8),
-        _entry(control, 3, "a-new", "a {input}", 0.9),
-        _entry(control, 4, "d", "d {input}", 0.95),
-        _entry(control, 5, "e", "e {input}", 0.1),
+        _entry(control, 0, "a-old", "instruction a", 0.7),
+        _entry(control, 1, "b", "instruction b", 0.9),
+        _entry(control, 2, "c", "instruction c", 0.8),
+        _entry(control, 3, "a-new", "instruction a", 0.9),
+        _entry(control, 4, "d", "instruction d", 0.95),
+        _entry(control, 5, "e", "instruction e", 0.1),
     ]
     original = deepcopy(history)
     adapter, transport, _ = make_test_copro_adapter(
-        {(HISTORY_PROPOSAL, 2): ("x {input}", "y {input}", "z {input}")},
+        {
+            (HISTORY_PROPOSAL, 2): (
+                "instruction x",
+                "instruction y",
+                "instruction z",
+            )
+        },
         control=control,
     )
 
@@ -280,13 +292,13 @@ def test_history_uses_top_unique_attempts_and_immutable_prompt_context() -> (
     assert history == original
     request = transport.calls[0][1]
     assert [
-        item["candidate_id"] for item in request.context["prompt_history"]
+        item["candidate_id"] for item in request.context["instruction_history"]
     ] == [
         "b",
         "a-new",
         "d",
     ]
-    assert "Instruction #3: d {input}" in str(
+    assert "Instruction #3: instruction d" in str(
         request.context["proposal_prompt"]
     )
     assert len(output.evaluation_intents) == 3
@@ -296,7 +308,7 @@ def test_duplicate_templates_are_evaluated_before_history_deduplication() -> (
     None
 ):
     adapter, _, control = make_test_copro_adapter(
-        {(SEED_PROPOSAL, 0): ("duplicate {input}", "duplicate {input}")}
+        {(SEED_PROPOSAL, 0): ("duplicate", "duplicate")}
     )
 
     output = adapter.invoke(copro_step_request(control), ())
@@ -305,27 +317,27 @@ def test_duplicate_templates_are_evaluated_before_history_deduplication() -> (
     assert [
         item.payload["user_prompt_template"]
         for item in output.proposed_candidates
-    ] == ["duplicate {input}", "duplicate {input}"]
+    ] == ["duplicate", "duplicate"]
 
 
 def test_driver_owns_round_counts_ranking_and_statistics() -> None:
     control = configure_test_copro(depth=2, track_stats=True)
     driver = CoproDriver(CoproConfig(breadth=3, depth=2, track_stats=True))
-    initial = copro_candidate("baseline", "base {input}")
+    initial = copro_candidate("baseline", "base instruction")
     first = tuple(
         CoproAttempt.model_validate(item)
         for item in (
-            _entry(control, 0, "x", "x {input}", 0.2),
-            _entry(control, 1, "y", "y {input}", 0.6),
-            _entry(control, 2, "baseline", "base {input}", 0.4),
+            _entry(control, 0, "x", "instruction x", 0.2),
+            _entry(control, 1, "y", "instruction y", 0.6),
+            _entry(control, 2, "baseline", "base instruction", 0.4),
         )
     )
     second = tuple(
         CoproAttempt.model_validate(item)
         for item in (
-            _entry(control, 3, "x2", "x {input}", 0.7),
-            _entry(control, 4, "z", "z {input}", 0.9),
-            _entry(control, 5, "w", "w {input}", 0.8),
+            _entry(control, 3, "x2", "instruction x", 0.7),
+            _entry(control, 4, "z", "instruction z", 0.9),
+            _entry(control, 5, "w", "instruction w", 0.8),
         )
     )
 
@@ -374,7 +386,7 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
     )
     intent = EvaluationIntent(
         intent_id="copro-run:0:0",
-        candidate=candidate_reference(copro_candidate("a", "a {input}")),
+        candidate=candidate_reference(copro_candidate("a", "instruction a")),
         target_eval_config=control.evaluation_binding.eval_config,
         evaluation_binding=control.evaluation_binding,
         purpose=SEED_PROPOSAL,
@@ -460,7 +472,7 @@ def test_attempt_folds_exact_reward_ref_and_evaluation_binding() -> None:
 def test_attempt_wire_pins_separate_result_and_ordered_reward_refs() -> None:
     control = configure_test_copro()
     attempt = CoproAttempt.model_validate(
-        _entry(control, 0, "a", "a {input}", 0.75)
+        _entry(control, 0, "a", "instruction a", 0.75)
     )
     record = attempt.model_dump(mode="json")
 
@@ -485,13 +497,13 @@ def test_attempt_wire_pins_separate_result_and_ordered_reward_refs() -> None:
     assert typed_ref_for_record(
         "test.copro_attempt_wire", record
     ).content_hash == (
-        "dc542e8b75a3d7f3febd33b53d8a8759755a0b933acef0f97a6bec0c1d4db88d"
+        "ad6d543cc89f1c54e923a2949ea773f5426c7555e2494dff1efa211ee019bf6f"
     )
 
 
 def test_attempt_replay_rejects_missing_or_mismatched_result_ref() -> None:
     control = configure_test_copro()
-    record = _entry(control, 0, "a", "a {input}", 0.75)
+    record = _entry(control, 0, "a", "instruction a", 0.75)
 
     missing = dict(record)
     missing.pop("evaluation_result_ref")
@@ -518,7 +530,7 @@ def test_attempt_replay_preserves_reward_citation_order() -> None:
             evidence_refs=(first, second),
         )
     )
-    record = _entry(control, 0, "a", "a {input}", 0.75)
+    record = _entry(control, 0, "a", "instruction a", 0.75)
     record["reward_ref"] = reward_ref.model_dump(mode="json")
     record["reward_evidence_refs"] = [
         second.model_dump(mode="json"),
@@ -540,7 +552,7 @@ def test_completed_resolution_requires_exact_primary_result() -> None:
     control = configure_test_copro()
     intent = EvaluationIntent(
         intent_id="copro-run:0:0",
-        candidate=candidate_reference(copro_candidate("a", "a {input}")),
+        candidate=candidate_reference(copro_candidate("a", "instruction a")),
         target_eval_config=control.evaluation_binding.eval_config,
         evaluation_binding=control.evaluation_binding,
         purpose=SEED_PROPOSAL,
@@ -616,7 +628,7 @@ def test_exact_control_and_transport_are_verified_before_effects() -> None:
 def test_round_index_must_match_step_index_before_any_spend() -> None:
     control = configure_test_copro(depth=2)
     adapter, transport, _ = make_test_copro_adapter(
-        {(SEED_PROPOSAL, 0): ("x {input}", "y {input}")},
+        {(SEED_PROPOSAL, 0): ("instruction x", "instruction y")},
         control=control,
     )
     mismatched = copro_step_request(control, step_index=1).model_copy(
@@ -633,7 +645,7 @@ def test_render_contract_rejection_and_underfill_are_terminal_failures() -> (
     None
 ):
     adapter, _, control = make_test_copro_adapter(
-        {(SEED_PROPOSAL, 0): ("missing field", "valid {input}")}
+        {(SEED_PROPOSAL, 0): ("Explain {input}", "valid instruction")}
     )
 
     output = adapter.invoke(copro_step_request(control), ())
@@ -645,7 +657,7 @@ def test_render_contract_rejection_and_underfill_are_terminal_failures() -> (
     assert output.evaluation_intents == ()
     evidence = output.state_delta["proposer_evidence"]
     assert evidence[0]["disposition"] == "rejected"
-    assert "required field" in str(evidence[0]["reason"])
+    assert "forbidden tokens" in str(evidence[0]["reason"])
 
 
 def test_budget_exhaustion_is_an_exact_terminal_failure() -> None:
@@ -662,13 +674,19 @@ def test_budget_exhaustion_is_an_exact_terminal_failure() -> None:
 def test_history_lineage_uses_current_exact_request_base() -> None:
     control = configure_test_copro(depth=2)
     history = [
-        _entry(control, 0, "a", "a {input}", 0.1),
-        _entry(control, 1, "b", "b {input}", 0.2),
-        _entry(control, 2, "c", "c {input}", 0.3),
+        _entry(control, 0, "a", "instruction a", 0.1),
+        _entry(control, 1, "b", "instruction b", 0.2),
+        _entry(control, 2, "c", "instruction c", 0.3),
     ]
-    current = copro_candidate("c", "c {input}", parent="prior-round")
+    current = copro_candidate("c", "instruction c", parent="prior-round")
     adapter, _, _ = make_test_copro_adapter(
-        {(HISTORY_PROPOSAL, 1): ("x {input}", "y {input}", "z {input}")},
+        {
+            (HISTORY_PROPOSAL, 1): (
+                "instruction x",
+                "instruction y",
+                "instruction z",
+            )
+        },
         control=control,
     )
 

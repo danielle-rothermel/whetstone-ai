@@ -43,19 +43,23 @@ from whetstone.optimization.contracts import (
     StepMode,
     StepStatus,
 )
-from whetstone.optimization.copro.control import CoproControl
+from whetstone.optimization.copro.control import (
+    CoproControl,
+    CoproProposerConfig,
+)
 from whetstone.optimization.proposal.mutation import (
     MUTATION_FIELD,
     DiffCheckError,
     candidate_from_draft,
 )
 from whetstone.optimization.proposal.prompts import (
+    COPRO_INSTRUCTION_CONTRACT_KEY,
+    COPRO_INSTRUCTION_HISTORY_KEY,
     copro_proposal_prompt,
 )
 from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
     ProposalRequest,
-    ProposerConfig,
     ProposerTransport,
 )
 
@@ -65,19 +69,16 @@ HISTORY_PROPOSAL = "history_proposal"
 
 
 class CoproConfig(BaseModel):
-    """COPRO hyperparameters, with the DSPy defaults.
+    """COPRO search-shape hyperparameters.
 
-    Whetstone binds DSPy's ``prompt_model`` and ``metric`` constructor
-    arguments through, respectively, the adapter's exact
-    :class:`ProposerConfig` and the control's exact Evaluation Binding.
-    They are deliberately not duplicated as loose string hyperparameters.
+    Proposal sampling controls belong to the configured proposer route, not
+    to COPRO. Breadth and depth remain the algorithm-owned sweep axes.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     breadth: StrictInt = 10
     depth: StrictInt = 3
-    init_temperature: float = 1.4
     track_stats: StrictBool = False
 
     @model_validator(mode="after")
@@ -86,8 +87,6 @@ class CoproConfig(BaseModel):
             raise ValueError("COPRO breadth must be greater than 1")
         if self.depth < 1:
             raise ValueError("COPRO depth must be positive")
-        if not math.isfinite(self.init_temperature):
-            raise ValueError("COPRO init_temperature must be finite")
         return self
 
 
@@ -101,7 +100,7 @@ class CoproRoundPlan(BaseModel):
     proposal_count: StrictInt
     include_initial_candidate: StrictBool
     # DSPy presents the selected best attempts from low score to high score.
-    prompt_history: tuple[ImmutableJsonObject, ...] = Field(
+    instruction_history: tuple[ImmutableJsonObject, ...] = Field(
         default_factory=tuple
     )
 
@@ -156,8 +155,7 @@ class CoproAttempt(BaseModel):
         template = self.candidate.record.payload.get(MUTATION_FIELD)
         if not isinstance(template, str) or not template:
             raise ValueError(
-                "COPRO attempt candidate requires a non-empty "
-                "user_prompt_template"
+                "COPRO attempt candidate requires a non-empty instruction"
             )
         if (
             self.evaluation_result_ref.schema_name
@@ -189,7 +187,7 @@ class CoproAttempt(BaseModel):
         return self.candidate.record.candidate_id
 
     @property
-    def template(self) -> str:
+    def instruction(self) -> str:
         value = self.candidate.record.payload[MUTATION_FIELD]
         assert isinstance(value, str)
         return value
@@ -264,7 +262,7 @@ class CoproAttempt(BaseModel):
             {
                 "occurrence_ordinal": self.occurrence_ordinal,
                 "candidate_id": self.candidate_id,
-                "template": self.template,
+                "instruction": self.instruction,
                 "reward": self.reward,
             }
         )
@@ -345,17 +343,17 @@ def _unique_measured_attempts(
     """Keep the best observation per template in first-seen template order.
 
     DSPy keys its evaluated-candidate mapping by the complete mutable prompt
-    assignment. Whetstone's COPRO mutation surface contains only
-    ``user_prompt_template``, so template text is the corresponding key.
-    Replacing a duplicate with a better observation does not move the key,
-    preserving DSPy's stable first-seen ordering for score ties.
+    assignment. ED1 COPRO's mutation surface contains only the encoder
+    instruction, so instruction text is the corresponding key. Replacing a
+    duplicate with a better observation does not move the key, preserving
+    DSPy's stable first-seen ordering for score ties.
     """
 
     unique: dict[str, CoproAttempt] = {}
     for entry in entries:
-        prior = unique.get(entry.template)
+        prior = unique.get(entry.instruction)
         if prior is None or entry.reward > prior.reward:
-            unique[entry.template] = entry
+            unique[entry.instruction] = entry
     return tuple(unique.values())
 
 
@@ -420,7 +418,7 @@ class CoproDriver:
             proposal_mode=HISTORY_PROPOSAL,
             proposal_count=self.config.breadth,
             include_initial_candidate=False,
-            prompt_history=tuple(
+            instruction_history=tuple(
                 attempt.prompt_entry()
                 for attempt in reversed(selected_best_first)
             ),
@@ -508,8 +506,7 @@ class CoproDriver:
             }
             if attempt_fixed != initial_fixed:
                 raise ValueError(
-                    "COPRO attempt changes a field outside "
-                    "user_prompt_template"
+                    "COPRO attempt changes a field outside the instruction"
                 )
         return CoproState(
             initial_candidate=state.initial_candidate,
@@ -530,7 +527,7 @@ class CoproDriver:
         occurrence sequence: whole breadth-sized rounds, contiguous occurrence
         ordinals in evaluation order, unique intent IDs, and one shared run,
         Evaluation Binding, and Reward Policy. Each occurrence must also leave
-        every payload field outside ``user_prompt_template`` equal to the
+        every payload field outside the instruction mutation equal to the
         supplied initial candidate.
 
         The initial candidate itself is the controller's input, not an anchored
@@ -659,9 +656,7 @@ def _normalize_initial_candidate(
 ) -> Candidate:
     raw = candidate.payload.get(MUTATION_FIELD)
     if not isinstance(raw, str):
-        raise ValueError(
-            "COPRO initial candidate requires user_prompt_template"
-        )
+        raise ValueError("COPRO initial candidate requires an instruction")
     request.run.record.template_render_contract.validate_template(raw)
     return candidate
 
@@ -673,7 +668,7 @@ def _validate_attempt_placeholders(
     for attempt in attempts:
         try:
             request.run.record.template_render_contract.validate_template(
-                attempt.template
+                attempt.instruction
             )
         except ValueError as error:
             raise ValueError(
@@ -725,7 +720,7 @@ class CoproAdapter:
         return self._proposal_executor
 
     @property
-    def proposer_config(self) -> ProposerConfig:
+    def proposer_config(self) -> CoproProposerConfig:
         return self._control.prompt_model
 
     @property
@@ -766,7 +761,6 @@ class CoproAdapter:
         config = CoproConfig(
             breadth=self._control.breadth,
             depth=self._control.depth,
-            init_temperature=self._control.init_temperature,
             track_stats=self._control.track_stats,
         )
         expected_policy_hash = self._control.provider_execution_policy_hash
@@ -793,6 +787,9 @@ class CoproAdapter:
                 "single-prompt COPRO requires exactly one initial candidate"
             )
         initial = _normalize_initial_candidate(request.candidates[0], request)
+        self._control.proposal_contract.validate_instruction(
+            str(initial.payload[MUTATION_FIELD])
+        )
         history = attempt_history_entries(request)
         for attempt in history:
             if attempt.run_id != request.run_id:
@@ -849,7 +846,12 @@ class CoproAdapter:
         ranked = driver.terminal_ranking(history)
         base = initial
         context: dict[str, Any] = {
-            "prompt_history": [item.to_json() for item in plan.prompt_history],
+            COPRO_INSTRUCTION_CONTRACT_KEY: (
+                self._control.proposal_contract.model_dump(mode="json")
+            ),
+            COPRO_INSTRUCTION_HISTORY_KEY: [
+                item.to_json() for item in plan.instruction_history
+            ],
         }
         proposal_request = ProposalRequest(
             proposal_mode=plan.proposal_mode,
@@ -869,7 +871,7 @@ class CoproAdapter:
             context={**context, "proposal_prompt": prompt},
         )
         drafts = self._proposal_executor.execute(
-            config=self._control.prompt_model,
+            config=self.proposer_config,
             request=proposal_request,
             transport=self._transport,
             count=plan.proposal_count,
@@ -897,13 +899,17 @@ class CoproAdapter:
                     if draft.failed
                     else draft.model_copy(update={"template": template})
                 )
+                if not normalized_draft.failed:
+                    self._control.proposal_contract.validate_instruction(
+                        normalized_draft.template
+                    )
                 candidate = candidate_from_draft(
                     base=base,
                     candidate_id=candidate_id,
                     draft=normalized_draft,
                     run=request.run,
                 )
-            except DiffCheckError as exc:
+            except (DiffCheckError, ValueError) as exc:
                 disposition = "provider_failed" if draft.failed else "rejected"
                 reason = str(exc)
                 rejected.append(

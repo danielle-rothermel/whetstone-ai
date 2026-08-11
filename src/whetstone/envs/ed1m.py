@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import (
@@ -17,7 +18,10 @@ from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.ed1m_dataset import MutantRecord, load_dataset
 from whetstone.envs.ed1m_oracle import MutantScore
-from whetstone.envs.encdec_rollout import build_encdec_rollout_definition
+from whetstone.envs.encdec_rollout import (
+    build_encdec_rollout_definition,
+    build_encoder_provider_call_config,
+)
 from whetstone.envs.factory import EnvEvalConfigs
 from whetstone.envs.sampling import Completeness
 from whetstone.experiment.reward import (
@@ -29,6 +33,9 @@ from whetstone.experiment.reward import (
 ED1M_ENV_NAME = "ed1m"
 #: ed1m uses the same task model as ed1 (deepseek), a distinct provider Config.
 ED1M_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
+_ED1M_CANONICAL_PROVIDER_CALL_CONFIG = build_encoder_provider_call_config(
+    ED1M_CANONICAL_MODEL
+)
 #: The per-row metric, aggregate, and Reward-term identity for ED1M fidelity.
 ED1M_FIDELITY_NAME = "fidelity_to_mutant"
 
@@ -145,7 +152,9 @@ def score_ed1m_row(
 def build_ed1m_experiment(
     *,
     artifact_dir: Path,
-    model: str = ED1M_CANONICAL_MODEL,
+    provider_call_config: ProviderCallConfig = (
+        _ED1M_CANONICAL_PROVIDER_CALL_CONFIG
+    ),
     budget_ratio: float | None = None,
     limit: int | None = None,
     internal_n: int | None = None,
@@ -184,7 +193,7 @@ def build_ed1m_experiment(
     procedure = build_ed1m_procedure_config()
     rollout = build_encdec_rollout_definition(
         ED1M_ENV_NAME,
-        model=model,
+        provider_call_config=provider_call_config,
         procedure_config_hash=procedure.config_identity_hash,
         budget_ratio=budget_ratio,
     )

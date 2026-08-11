@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from pydantic import (
@@ -23,6 +22,8 @@ from whetstone.experiment.binding import (
     EvalConfigRef,
     EvaluationBinding,
 )
+from whetstone.optimization.codex.proposer import CodexCliProposerConfig
+from whetstone.optimization.copro.ed1_contract import Ed1CoproProposalContract
 from whetstone.optimization.proposal.prompts import (
     COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
 )
@@ -35,7 +36,9 @@ from whetstone.provider.language_model import PlainPromptAdapter
 COPRO_ALGORITHM_VERSION = "dspy_copro_single_prompt/v1"
 COPRO_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 COPRO_CONTROL_SCHEMA = "whetstone.copro_optimizer_config"
-COPRO_CONTROL_SCHEMA_VERSION = 1
+COPRO_CONTROL_SCHEMA_VERSION = 2
+
+type CoproProposerConfig = ProposerConfig | CodexCliProposerConfig
 
 
 class CoproInjectedDefaults(BaseModel):
@@ -43,7 +46,8 @@ class CoproInjectedDefaults(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    prompt_model: ProposerConfig
+    prompt_model: CoproProposerConfig
+    proposal_contract: Ed1CoproProposalContract
     evaluation_binding: EvaluationBinding
     expected_reward_policy_hash: StrictStr
     provider_execution_policy_hash: StrictStr
@@ -76,12 +80,12 @@ class CoproControl(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    prompt_model: ProposerConfig
+    prompt_model: CoproProposerConfig
+    proposal_contract: Ed1CoproProposalContract
     evaluation_binding: EvaluationBinding
     expected_reward_policy_hash: StrictStr
     breadth: StrictInt = 10
     depth: StrictInt = 3
-    init_temperature: float = 1.4
     track_stats: StrictBool = False
     provider_execution_policy_hash: StrictStr
     prompt_adapter_identity_hash: StrictStr
@@ -94,11 +98,12 @@ class CoproControl(BaseModel):
             raise ValueError("COPRO breadth must be greater than 1")
         if self.depth < 1:
             raise ValueError("COPRO depth must be positive")
-        if not math.isfinite(self.init_temperature):
-            raise ValueError("COPRO init_temperature must be finite")
-        if self.prompt_model.temperature != self.init_temperature:
+        if (
+            isinstance(self.prompt_model, ProposerConfig)
+            and self.prompt_model.temperature is not None
+        ):
             raise ValueError(
-                "prompt_model temperature conflicts with init_temperature"
+                "COPRO provider proposer must leave temperature unset"
             )
         require_full_hash(
             self.expected_reward_policy_hash,
@@ -136,6 +141,9 @@ class CoproControl(BaseModel):
                 "identity_hash": self.prompt_model.identity_hash(),
                 "config": self.prompt_model.identity_payload(),
             },
+            "proposal_contract": self.proposal_contract.model_dump(
+                mode="json"
+            ),
             "evaluation_binding": {
                 "identity_hash": self.evaluation_binding.identity_hash(),
                 "record": self.evaluation_binding.model_dump(mode="json"),
@@ -143,7 +151,6 @@ class CoproControl(BaseModel):
             "expected_reward_policy_hash": self.expected_reward_policy_hash,
             "breadth": self.breadth,
             "depth": self.depth,
-            "init_temperature": self.init_temperature,
             "track_stats": self.track_stats,
         }
 
@@ -185,7 +192,6 @@ class CoproControl(BaseModel):
         return {
             "breadth": self.breadth,
             "depth": self.depth,
-            "init_temperature": self.init_temperature,
             "track_stats": self.track_stats,
             "round_index": iteration,
             "evaluation_binding": self.evaluation_binding.model_dump(
@@ -194,6 +200,9 @@ class CoproControl(BaseModel):
             "expected_reward_policy_hash": self.expected_reward_policy_hash,
             "algorithm_version": self.algorithm_version,
             "proposal_prompt_schema_tag": self.proposal_prompt_schema_tag,
+            "proposal_contract": self.proposal_contract.model_dump(
+                mode="json"
+            ),
             "provider_execution_policy_hash": (
                 self.provider_execution_policy_hash
             ),
@@ -204,11 +213,10 @@ class CoproControl(BaseModel):
 
 
 def configure_copro(
-    prompt_model: ProposerConfig | None = None,
+    prompt_model: CoproProposerConfig | None = None,
     metric: EvalConfigRef | None = None,
     breadth: int = 10,
     depth: int = 3,
-    init_temperature: float = 1.4,
     track_stats: bool = False,
     *,
     defaults: CoproInjectedDefaults,
@@ -216,9 +224,8 @@ def configure_copro(
     """Resolve DSPy's public COPRO arguments through explicit defaults.
 
     ``None`` means the corresponding binding from ``defaults``. There is no
-    ambient model, metric, provider policy, or prompt adapter. An explicit
-    prompt model whose generation temperature disagrees with
-    ``init_temperature`` is rejected instead of silently choosing one source.
+    ambient model, metric, provider policy, prompt adapter, or COPRO-owned
+    sampling temperature.
     """
 
     resolved_prompt_model = (
@@ -236,11 +243,11 @@ def configure_copro(
     )
     return CoproControl(
         prompt_model=resolved_prompt_model,
+        proposal_contract=defaults.proposal_contract,
         evaluation_binding=resolved_binding,
         expected_reward_policy_hash=defaults.expected_reward_policy_hash,
         breadth=breadth,
         depth=depth,
-        init_temperature=init_temperature,
         track_stats=track_stats,
         provider_execution_policy_hash=(
             defaults.provider_execution_policy_hash
@@ -258,5 +265,6 @@ __all__ = [
     "COPRO_REFERENCE_COMMIT",
     "CoproControl",
     "CoproInjectedDefaults",
+    "CoproProposerConfig",
     "configure_copro",
 ]

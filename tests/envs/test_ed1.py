@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
-from dr_code.humaneval import SubmissionOutcome
+from dr_code.humaneval import HumanEvalSubmissionScore, SubmissionOutcome
 from dr_exec import Executor, ExecutorFailure, FakeExecutor
-from dr_providers import FailureClass
+from dr_providers import FailureClass, GenerationControls, openai_chat_config
 from dr_serialize import IdentityDocument
 
 from tests.envs.support import (
@@ -25,6 +26,7 @@ from whetstone.envs.ed1 import (
     ED1_BLENDED_REWARD_NAME,
     ED1_CANONICAL_MODEL,
     ED1_DATASET_REVISION,
+    ED1_DEFAULT_BLEND_CONFIG,
     ED1_ENV_NAME,
     ED1_INVALID_BODY,
     ED1_SUBMISSION_SCORE_NAME,
@@ -32,7 +34,6 @@ from whetstone.envs.ed1 import (
     Ed1BodyError,
     build_ed1_blended_reward_policy,
     build_ed1_experiment,
-    build_ed1_reward_policy,
     ed1_body_rejection,
     ed1_initial_candidate,
     render_encoder_frame,
@@ -44,6 +45,7 @@ from whetstone.envs.ed1_scoring import (
     CheckpointedCodeBatchScorer,
     CodeScore,
     CodeScoringInput,
+    _project_submission_score,
     score_ed1_submission,
 )
 from whetstone.envs.encdec_rollout import (
@@ -51,6 +53,7 @@ from whetstone.envs.encdec_rollout import (
     ENCODER_NODE_ID,
     EVAL_NODE_ID,
     build_encdec_rollout_definition,
+    build_encoder_provider_call_config,
     encdec_graph_definition,
 )
 from whetstone.envs.reward import CandidateEvaluationFailure
@@ -345,7 +348,7 @@ def _evaluate(
     outcome_for=None,
     partial_log: PartialLog | None = None,
     apply_reward: bool = False,
-    blend_config: BoundedCompressionMetricConfig | None = None,
+    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
 ):
     selected = tasks or _tasks()
     experiment = build_ed1_experiment(
@@ -391,25 +394,50 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
     assert definition.terminal_node_id == EVAL_NODE_ID
     base = build_encdec_rollout_definition(
         ED1_ENV_NAME,
-        model=ED1_CANONICAL_MODEL,
+        provider_call_config=build_encoder_provider_call_config(
+            ED1_CANONICAL_MODEL
+        ),
         procedure_config_hash="a" * 64,
         budget_ratio=0.5,
     )
     ratio = build_encdec_rollout_definition(
         ED1_ENV_NAME,
-        model=ED1_CANONICAL_MODEL,
+        provider_call_config=build_encoder_provider_call_config(
+            ED1_CANONICAL_MODEL
+        ),
         procedure_config_hash="a" * 64,
         budget_ratio=0.75,
     )
     model = build_encdec_rollout_definition(
         ED1_ENV_NAME,
-        model="openai/gpt-5-nano",
+        provider_call_config=build_encoder_provider_call_config(
+            "openai/gpt-5-nano"
+        ),
         procedure_config_hash="a" * 64,
         budget_ratio=0.5,
     )
     assert base.graph_hash != ratio.graph_hash != model.graph_hash
     assert base.provider_call_config.definition.route.model == (
         ED1_CANONICAL_MODEL
+    )
+
+
+def test_ed1_experiment_preserves_the_exact_provider_call_config() -> None:
+    provider_call_config = openai_chat_config(
+        model="openai/test",
+        controls=GenerationControls(token_limit=2048),
+    )
+
+    experiment = build_ed1_experiment(
+        provider_call_config=provider_call_config,
+        tasks=_tasks(1),
+        internal_n=1,
+        official_n=1,
+    )
+
+    assert experiment.encdec_rollout is not None
+    assert experiment.encdec_rollout.provider_call_config == (
+        provider_call_config
     )
 
 
@@ -478,6 +506,28 @@ def test_humaneval_scoring_projects_harness_failure() -> None:
     assert harness_failure.infrastructure_unknown is True
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        SubmissionOutcome.TIMED_OUT,
+        SubmissionOutcome.EVALUATION_INCOMPLETE,
+    ],
+)
+def test_humaneval_scoring_projects_completed_failure_as_zero(
+    outcome: SubmissionOutcome,
+) -> None:
+    score = _project_submission_score(
+        cast(
+            HumanEvalSubmissionScore,
+            SimpleNamespace(outcome=outcome),
+        )
+    )
+
+    assert score.outcome == outcome.value
+    assert score.passed is False
+    assert score.infrastructure_unknown is False
+
+
 def test_body_validation_rejects_before_transport() -> None:
     assert ed1_body_rejection("Solve {input_code}") == ("{input_code}",)
     assert ed1_body_rejection("```python\npass\n```") == ("```",)
@@ -508,14 +558,35 @@ def test_body_validation_rejects_before_transport() -> None:
     assert served == []
 
 
-def test_no_budget_frame_omits_budget_instruction() -> None:
-    rendered = render_encoder_frame(
+def test_encoder_frames_match_prompt_contract() -> None:
+    budgeted = render_encoder_frame(
+        ENCODER_BODY_A,
+        input_code="def f(): pass",
+        max_budget=42,
+    )
+    unbudgeted = render_encoder_frame(
         ENCODER_BODY_A,
         input_code="def f(): pass",
         max_budget=None,
     )
-    assert "Use at most" not in rendered
-    assert "```python\ndef f(): pass\n```" in rendered
+    assert budgeted == (
+        "Provide a concise description of the following code.\n"
+        "Use at most 42 characters.\n"
+        "```python\ndef f(): pass\n```"
+    )
+    assert unbudgeted == (
+        "Provide a concise description of the following code.\n"
+        "```python\ndef f(): pass\n```"
+    )
+
+
+def test_decoder_prompt_matches_fixed_prompt_contract() -> None:
+    assert DECODER_TEMPLATE.format(
+        encoder_output="A concise description."
+    ) == (
+        "Decode the description into functional Python code. Output only "
+        "Python code.\n\nA concise description."
+    )
 
 
 def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
@@ -534,7 +605,7 @@ def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
         ED1_SUBMISSION_SCORE_NAME
     }
     assert result.reward is not None
-    assert result.reward.input_citations[0].name == ED1_SUBMISSION_SCORE_NAME
+    assert result.reward.input_citations[0].name == ED1_BLENDED_REWARD_NAME
     assert len(result.outputs) == len(_tasks()) * 2
     assert all("ENCODER:" in (row.output_text or "") for row in result.outputs)
     assert experiment.dataset_revision == ED1_DATASET_REVISION
@@ -832,7 +903,7 @@ def test_blended_reward_refuses_an_incomplete_evaluation() -> None:
         )
 
 
-def test_unblended_and_blended_agree_on_refusing_incompleteness() -> None:
+def test_default_blend_refuses_an_incomplete_evaluation() -> None:
     with pytest.raises(CandidateEvaluationFailure):
         _evaluate(outcome_for=_one_failed_row, apply_reward=True)
 
@@ -872,16 +943,23 @@ def test_complete_evaluation_produces_exact_blended_reward() -> None:
     )
 
 
-def test_advertised_reward_policy_matches_the_policy_applied() -> None:
-    blend = BoundedCompressionMetricConfig(weight=0.1)
-    blended = build_ed1_experiment(tasks=_tasks(1), blend_config=blend)
-    expected = build_ed1_blended_reward_policy(blend, env_name=ED1_ENV_NAME)
-    assert blended.reward_policy.policy_name == expected.policy_name
-    assert blended.reward_policy == expected
+def test_default_reward_policy_is_the_advertised_blend() -> None:
+    experiment = build_ed1_experiment(tasks=_tasks(1))
+    expected = build_ed1_blended_reward_policy(
+        ED1_DEFAULT_BLEND_CONFIG, env_name=ED1_ENV_NAME
+    )
+    assert experiment.blend_config == ED1_DEFAULT_BLEND_CONFIG
+    assert experiment.reward_policy == expected
 
-    plain = build_ed1_experiment(tasks=_tasks(1))
-    assert plain.reward_policy == build_ed1_reward_policy()
-    assert plain.reward_policy.policy_name != expected.policy_name
+
+def test_ed1_rejects_disabling_the_blended_reward() -> None:
+    with pytest.raises(
+        TypeError, match="ED1 requires a bounded compression blend config"
+    ):
+        build_ed1_experiment(
+            tasks=_tasks(1),
+            blend_config=None,  # ty: ignore[invalid-argument-type]
+        )
 
 
 def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:

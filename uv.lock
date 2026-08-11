@@ -2240,6 +2240,7 @@ dev = [
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-xdist" },
+    { name = "rich" },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -2268,6 +2269,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.6.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "rich", specifier = ">=15.0.0" },
     { name = "ruff", specifier = ">=0.15.10" },
     { name = "ty", specifier = ">=0.0.54" },
 ]

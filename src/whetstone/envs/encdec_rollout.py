@@ -159,17 +159,18 @@ def build_encdec_graph_config(
 def build_encdec_rollout_definition(
     env_name: str,
     *,
-    model: str,
+    provider_call_config: ProviderCallConfig,
     procedure_config_hash: str,
     budget_ratio: float | None,
 ) -> EncDecRolloutDefinition:
-    """Build the enc-dec Rollout Definition graph for one (model, ratio).
+    """Build the enc-dec Rollout Definition for one exact provider route.
 
-    Wires the shared encoder/decoder Provider Call Config (``model``) across
-    both LLM nodes, the Character Budget ``ratio`` onto the encoder, and the
-    code-eval Evaluation Procedure Config onto the terminal Eval Node.
+    Wires the shared encoder/decoder Provider Call Config across both LLM
+    nodes, the Character Budget ``ratio`` onto the encoder, and the code-eval
+    Evaluation Procedure Config onto the terminal Eval Node. Provider lane,
+    protocol, model, and generation controls therefore fold into graph
+    identity through the exact Config.
     """
-    provider_call_config = build_encoder_provider_call_config(model)
     graph_config = build_encdec_graph_config(
         provider_call_config_hash=provider_call_config.identity_hash,
         evaluation_procedure_config_hash=procedure_config_hash,

@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
+whetstone-copro-propose = "whetstone.optimization.copro.preview_cli:main"
 whetstone-validate = "whetstone.runner.cli:main"
 
 [dependency-groups]
@@ -33,6 +34,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=8.4.2",
     "pytest-xdist>=3.8.0",
+    "rich>=15.0.0",
     "ruff>=0.15.10",
     "ty>=0.0.54",
 ]

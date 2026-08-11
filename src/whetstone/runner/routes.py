@@ -312,6 +312,7 @@ def canonical_task_route(
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
     reasoning: ReasoningEffort | None = None,
+    token_limit: int | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -322,11 +323,12 @@ def canonical_task_route(
     ``OPENROUTER_API_KEY``. Temperature defaults to 0; pass ``None`` to leave
     the control unset. The absolute cap accommodates reasoning-model
     generations while the idle timeout is the real stall detector.
-    ``reasoning`` sets the output-affecting reasoning effort, which folds into
-    the config identity.
+    ``reasoning`` and ``token_limit`` are output-affecting controls that fold
+    into the config identity.
     """
     call_config = openrouter_chat_config(
-        model=model, controls=_controls(temperature, reasoning)
+        model=model,
+        controls=_controls(temperature, reasoning, token_limit),
     )
     transport_policy = policy_for(
         ProviderKind.OPENROUTER,
@@ -354,6 +356,7 @@ def openai_direct_route(
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
     reasoning: ReasoningEffort | None = None,
+    token_limit: int | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -365,10 +368,11 @@ def openai_direct_route(
     ``ProviderKind.OPENAI`` -- so the config identity, hence the graph route
     identity, is distinct from the OpenRouter route for the same model. Chosen
     when temperature must hold. ``reasoning`` serializes as
-    ``reasoning_effort`` and folds into the config identity.
+    ``reasoning_effort``; it and ``token_limit`` fold into config identity.
     """
     call_config = openai_chat_config(
-        model=model, controls=_controls(temperature, reasoning)
+        model=model,
+        controls=_controls(temperature, reasoning, token_limit),
     )
     transport_policy = policy_for(
         ProviderKind.OPENAI,
