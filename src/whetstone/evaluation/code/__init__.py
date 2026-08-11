@@ -10,7 +10,6 @@ from whetstone.evaluation.code.compression_selection import (
 from whetstone.evaluation.code.scoring import (
     COMPRESSED_DESCRIPTION_LENGTH_NAME,
     COMPRESSION_RATIO_NAME,
-    ZSTD_LEVEL,
     compressed_description_length_bytes,
     compressed_description_length_fact,
     compression_ratio_score,
@@ -26,7 +25,6 @@ __all__ = [
     "COMPRESSION_RATIO_NAME",
     "COMPRESSION_REFERENCE_NAMESPACE",
     "SELECTED_FIELD",
-    "ZSTD_LEVEL",
     "ExperimentTaskView",
     "build_resolver",
     "compressed_description_length_bytes",

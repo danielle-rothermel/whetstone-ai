@@ -5,11 +5,13 @@ from whetstone.evaluation.aggregation import (
     aggregate,
 )
 from whetstone.evaluation.compression import (
+    ZSTD_LEVEL,
     CompressionReferenceArtifact,
     CompressionReferenceKey,
     CompressionReferenceResolver,
     ReferenceResolutionError,
     compression_ratio,
+    zstd_compressed_utf8_byte_length,
 )
 from whetstone.evaluation.config import (
     SCHEMA_EVAL_CONFIG,
@@ -55,6 +57,7 @@ __all__ = [
     "SCHEMA_EVALUATION_PROCEDURE_CONFIG",
     "SCHEMA_EVAL_CONFIG",
     "SCHEMA_SAMPLING_CONFIG",
+    "ZSTD_LEVEL",
     "AggregationConfig",
     "AggregationDefinition",
     "AggregationInput",
@@ -94,4 +97,5 @@ __all__ = [
     "identity_hash_for",
     "repeat_plan_from_provenance",
     "resolve_assignment",
+    "zstd_compressed_utf8_byte_length",
 ]

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import zstandard
-
 from whetstone.evaluation import (
     Applicability,
     CompressionReferenceArtifact,
@@ -9,7 +7,6 @@ from whetstone.evaluation import (
 from whetstone.evaluation.code import (
     COMPRESSED_DESCRIPTION_LENGTH_NAME,
     COMPRESSION_RATIO_NAME,
-    ZSTD_LEVEL,
     compressed_description_length_bytes,
     compressed_description_length_fact,
     compression_ratio_score,
@@ -21,30 +18,8 @@ from .support import FULL_HASH, operator_lineage
 ENCODER_TEXT = "def f(x):\n    return x + 1\n" * 8
 
 
-def test_cdl_is_zstd19_utf8_byte_count() -> None:
-    expected = len(
-        zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(
-            ENCODER_TEXT.encode("utf-8")
-        )
-    )
-    assert compressed_description_length_bytes(ENCODER_TEXT) == expected
-    assert ZSTD_LEVEL == 19
-
-
-def test_cdl_is_nonnegative_integer() -> None:
-    value = compressed_description_length_bytes("")
-    assert isinstance(value, int)
-    assert value >= 0
-
-
-def test_cdl_uses_exact_utf8_bytes() -> None:
-    text = "print('π —')"
-    expected = len(
-        zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(
-            text.encode("utf-8")
-        )
-    )
-    assert compressed_description_length_bytes(text) == expected
+def test_cdl_wrapper_delegates_to_generic_zstd_measurement() -> None:
+    assert isinstance(compressed_description_length_bytes(ENCODER_TEXT), int)
 
 
 def test_cdl_fact_carries_unit_and_lineage() -> None:

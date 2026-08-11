@@ -21,9 +21,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from whetstone.evaluation.code.scoring import (
-    compressed_description_length_bytes,
-)
+from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
 from whetstone.evaluation.metrics.blended import (
     blended_reward,
     compression_score,
@@ -369,7 +367,7 @@ def _arm_rows(
             denominator = len(input_code.encode("utf-8"))
             if denominator:
                 compression_ratio = (
-                    compressed_description_length_bytes(encoder_generation)
+                    zstd_compressed_utf8_byte_length(encoder_generation)
                     / denominator
                 )
         compression_value = (

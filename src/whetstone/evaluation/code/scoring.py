@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import zstandard
-
 from whetstone.evaluation import (
     Applicability,
     CompressionReferenceArtifact,
@@ -9,11 +7,8 @@ from whetstone.evaluation import (
     OperatorLineage,
     Score,
     compression_ratio,
+    zstd_compressed_utf8_byte_length,
 )
-
-#: The pinned zstd level for Compressed Description Length. Fixed by the
-#: experiment; a level change is a deliberate breaking measurement change.
-ZSTD_LEVEL = 19
 
 COMPRESSED_DESCRIPTION_LENGTH_NAME = "compressed_description_length"
 COMPRESSION_RATIO_NAME = "compression_ratio"
@@ -29,9 +24,7 @@ def compressed_description_length_bytes(encoder_generation: str) -> int:
     exact encoder Generation encoded as UTF-8. Pure and deterministic.
     """
 
-    payload = encoder_generation.encode("utf-8")
-    compressed = zstandard.ZstdCompressor(level=ZSTD_LEVEL).compress(payload)
-    return len(compressed)
+    return zstd_compressed_utf8_byte_length(encoder_generation)
 
 
 def compressed_description_length_fact(
@@ -104,7 +97,6 @@ def compression_ratio_score(
 __all__ = [
     "COMPRESSED_DESCRIPTION_LENGTH_NAME",
     "COMPRESSION_RATIO_NAME",
-    "ZSTD_LEVEL",
     "compressed_description_length_bytes",
     "compressed_description_length_fact",
     "compression_ratio_score",
