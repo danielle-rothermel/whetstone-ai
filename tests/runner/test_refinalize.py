@@ -346,6 +346,21 @@ def test_the_corrected_line_survives_a_full_reload(tmp_path: Path) -> None:
     assert len(Ledger(tmp_path / "run").cells()) == 2
 
 
+def test_the_corrected_line_supersedes_for_resumability(
+    tmp_path: Path,
+) -> None:
+    ledger = Ledger(tmp_path / "run")
+    ledger.append_cell(_cell(status="halted", delta=0.1))
+
+    refinalize_cell(ledger, optimizer="copro", env="c18", attempt=0)
+
+    reread = Ledger(tmp_path / "run")
+    latest = reread.for_attempt("copro", "c18", 0)
+    assert latest is not None
+    assert latest.status == "inconclusive"
+    assert reread.completed_keys() == {("copro", "c18", 0)}
+
+
 def test_an_absent_cell_is_refused(tmp_path: Path) -> None:
     ledger = Ledger(tmp_path / "run")
 
