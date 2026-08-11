@@ -4,32 +4,32 @@ import json
 
 import pytest
 
-from whetstone.envs.ed1 import (
+from whetstone.envs.code_comp.constants import (
     DECODER_TEMPLATE,
     ENCODER_BODY_A,
     ENCODER_FRAME,
     ENCODER_FRAME_NO_BUDGET,
-    ed1_initial_candidate,
 )
+from whetstone.envs.code_comp.modes.encdec import encdec_initial_candidate
 from whetstone.optimization.copro.adapter import CoproDriver
-from whetstone.optimization.copro.ed1_contract import (
-    ed1_copro_proposal_contract,
+from whetstone.optimization.copro.code_comp.contract import (
+    encdec_copro_proposal_contract,
 )
-from whetstone.optimization.copro.ed1_dry_run import (
+from whetstone.optimization.copro.code_comp.dry_run import (
+    CodeCompCoproDryRunTranscript,
+    CodeCompCoproPreviewTask,
+    CodeCompCoproProposalRejectionKind,
+    CodeCompCoproSweepRanges,
     DummyCoproProposerConfig,
     DummyCoproProposerTransport,
-    Ed1CoproDryRunTranscript,
-    Ed1CoproPreviewTask,
-    Ed1CoproProposalRejectionKind,
-    Ed1CoproSweepRanges,
     attempt_ed1_copro_round,
-    run_ed1_copro_dry_run,
+    run_code_comp_copro_dry_run,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
-def _task() -> Ed1CoproPreviewTask:
-    return Ed1CoproPreviewTask(
+def _task() -> CodeCompCoproPreviewTask:
+    return CodeCompCoproPreviewTask(
         task_id="HumanEval/0",
         input_code="def add(a, b):\n    return a + b",
     )
@@ -46,7 +46,7 @@ def _proposer() -> DummyCoproProposerConfig:
 
 
 def test_sweep_ranges_expand_in_declared_cartesian_order() -> None:
-    sweep = Ed1CoproSweepRanges(
+    sweep = CodeCompCoproSweepRanges(
         budget_ratios=(None, 0.5),
         breadths=(3, 4),
         depths=(1,),
@@ -64,14 +64,14 @@ def test_sweep_ranges_expand_in_declared_cartesian_order() -> None:
 
 
 def test_dry_run_logs_baseline_fill_and_body_only_seed_mutations() -> None:
-    sweep = Ed1CoproSweepRanges(
+    sweep = CodeCompCoproSweepRanges(
         budget_ratios=(None, 0.5),
         breadths=(3,),
         depths=(1,),
     )
     logged: list[str] = []
 
-    transcript = run_ed1_copro_dry_run(
+    transcript = run_code_comp_copro_dry_run(
         sweep=sweep,
         preview_task=_task(),
         dummy_proposer=_proposer(),
@@ -161,12 +161,14 @@ def test_dry_run_logs_baseline_fill_and_body_only_seed_mutations() -> None:
 
 
 def test_round_attempt_preserves_valid_and_rejected_proposal_slots() -> None:
-    settings = Ed1CoproSweepRanges(
+    settings = CodeCompCoproSweepRanges(
         budget_ratios=(None,),
         breadths=(3,),
         depths=(1,),
     ).expand()[0]
-    state = CoproDriver(settings.copro).initial_state(ed1_initial_candidate())
+    state = CoproDriver(settings.copro).initial_state(
+        encdec_initial_candidate()
+    )
 
     attempt = attempt_ed1_copro_round(
         settings=settings,
@@ -188,15 +190,15 @@ def test_round_attempt_preserves_valid_and_rejected_proposal_slots() -> None:
     assert attempt.rejections[0].proposal_ordinal == 0
     assert attempt.rejections[0].proposed_body == "Explain {input_code}"
     assert attempt.rejections[0].kind is (
-        Ed1CoproProposalRejectionKind.REJECTED
+        CodeCompCoproProposalRejectionKind.REJECTED
     )
-    assert "ed1_invalid_encoder_body" in attempt.rejections[0].reason
+    assert "code_comp_invalid_encoder_body" in attempt.rejections[0].reason
     assert attempt.terminal_failure is not None
 
 
 def test_dry_run_transcript_round_trips_as_json() -> None:
-    transcript = run_ed1_copro_dry_run(
-        sweep=Ed1CoproSweepRanges(
+    transcript = run_code_comp_copro_dry_run(
+        sweep=CodeCompCoproSweepRanges(
             budget_ratios=(None,),
             breadths=(2,),
             depths=(1,),
@@ -206,7 +208,7 @@ def test_dry_run_transcript_round_trips_as_json() -> None:
     )
 
     assert (
-        Ed1CoproDryRunTranscript.model_validate_json(
+        CodeCompCoproDryRunTranscript.model_validate_json(
             transcript.model_dump_json()
         )
         == transcript
@@ -216,9 +218,9 @@ def test_dry_run_transcript_round_trips_as_json() -> None:
 def test_dummy_output_uses_the_same_post_generation_validation() -> None:
     scripted = DummyCoproProposerConfig(bodies=("Explain {input_code}",))
 
-    with pytest.raises(ValueError, match="ed1_invalid_encoder_body"):
-        run_ed1_copro_dry_run(
-            sweep=Ed1CoproSweepRanges(
+    with pytest.raises(ValueError, match="code_comp_invalid_encoder_body"):
+        run_code_comp_copro_dry_run(
+            sweep=CodeCompCoproSweepRanges(
                 budget_ratios=(None,),
                 breadths=(2,),
                 depths=(1,),
@@ -240,7 +242,7 @@ def test_dummy_output_uses_the_same_post_generation_validation() -> None:
 def test_instruction_contract_rejects_fixed_frame_content(
     instruction: str,
 ) -> None:
-    contract = ed1_copro_proposal_contract(budget_ratio=0.5)
+    contract = encdec_copro_proposal_contract(budget_ratio=0.5)
 
     with pytest.raises(ValueError):
         contract.validate_instruction(instruction)
@@ -248,8 +250,8 @@ def test_instruction_contract_rejects_fixed_frame_content(
 
 def test_dummy_proposer_must_fill_largest_seed_round() -> None:
     with pytest.raises(ValueError, match="fewer bodies"):
-        run_ed1_copro_dry_run(
-            sweep=Ed1CoproSweepRanges(
+        run_code_comp_copro_dry_run(
+            sweep=CodeCompCoproSweepRanges(
                 budget_ratios=(None,),
                 breadths=(4,),
                 depths=(1,),
@@ -261,8 +263,8 @@ def test_dummy_proposer_must_fill_largest_seed_round() -> None:
 
 def test_dummy_proposal_rejects_punctuated_baseline_body() -> None:
     with pytest.raises(ValueError, match="must omit terminal punctuation"):
-        run_ed1_copro_dry_run(
-            sweep=Ed1CoproSweepRanges(
+        run_code_comp_copro_dry_run(
+            sweep=CodeCompCoproSweepRanges(
                 budget_ratios=(None,),
                 breadths=(2,),
                 depths=(1,),

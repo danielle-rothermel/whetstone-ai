@@ -8,18 +8,18 @@ from typing import Literal
 import pytest
 from dr_providers import ProviderKind, ReasoningEffort
 
-from whetstone.envs import ed1_behavior_matrix
 from whetstone.envs.code_comp import behavior_matrix as matrix
-from whetstone.envs.ed1_behavior_matrix import (
+from whetstone.envs.code_comp.behavior_matrix import (
     EXCLUDED_TASK_IDS,
     FULL_BUDGET_RATIOS,
-    Ed1BehaviorMatrixPlan,
+    BehaviorMatrixPlan,
     build_matrix_plan,
     map_openai_credential,
 )
-from whetstone.envs.ed1_runtime import (
-    Ed1RuntimeProbe,
-    Ed1ScoringRuntimeSummary,
+from whetstone.envs.code_comp.registry import CodeCompMode
+from whetstone.envs.code_comp.runtime import (
+    CodeCompRuntimeProbe,
+    EncDecScoringRuntimeSummary,
 )
 from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
@@ -43,12 +43,12 @@ _EXPECTED_TASK_IDS = (
     "HumanEval/76",
     "HumanEval/55",
 )
-_MANIFEST = Path(__file__).resolve().parents[2] / (
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_MANIFEST = _REPO_ROOT / (
     "src/whetstone/experiment/task_selection/humaneval_copro_challenge_v1.json"
 )
 _ROUTES_MODULE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "scripts/experiments/code_comp_matrix_routes.py"
+    _REPO_ROOT / "scripts/experiments/code_comp_matrix_routes.py"
 )
 
 
@@ -63,12 +63,12 @@ def _baseline_provider_routes():
     return module.baseline_provider_routes()
 
 
-def _runtime(evaluation_python: Path) -> Ed1ScoringRuntimeSummary:
-    return Ed1ScoringRuntimeSummary(
+def _runtime(evaluation_python: Path) -> EncDecScoringRuntimeSummary:
+    return EncDecScoringRuntimeSummary(
         evaluation_python=str(evaluation_python),
         dr_code_version="0.1.5",
         runtime_identity_hash="a" * 64,
-        probe=Ed1RuntimeProbe(
+        probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
             python_executable=str(evaluation_python),
@@ -82,7 +82,7 @@ def _selection(
 ) -> TaskRoleSelection:
     return TaskRoleSelection(
         manifest_content_hash="b" * 64,
-        pool_key="ed1",
+        pool_key="encdec",
         role=TaskSplitRole.TRAIN,
         task_ids=task_ids,
         source_role_count=46,
@@ -96,7 +96,7 @@ def _plan(
     tmp_path: Path,
     *,
     mode: Literal["full", "smoke"] = "full",
-) -> Ed1BehaviorMatrixPlan:
+) -> BehaviorMatrixPlan:
     evaluation_python = tmp_path / "python"
     snapshot = tmp_path / "snapshot.json"
     manifest = tmp_path / "tasks.json"
@@ -158,7 +158,8 @@ def test_frozen_manifest_selection_matches_declared_screen() -> None:
 
     selection = select_lowest_historical_pass_rate_for_env(
         manifest,
-        env="ed1",
+        env="code_comp",
+        mode=CodeCompMode.ENCDEC,
         role=TaskSplitRole.TRAIN,
         count=10,
         excluded_task_ids=EXCLUDED_TASK_IDS,
@@ -167,7 +168,7 @@ def test_frozen_manifest_selection_matches_declared_screen() -> None:
     assert selection.task_ids == _EXPECTED_TASK_IDS
     assert selection.excluded_task_ids == EXCLUDED_TASK_IDS
     assert selection.manifest_content_hash == (
-        "fb0db70a652f070869080c13b60e067829eb2db36d86c36a625b90226602d8d2"
+        "c3f3919ff8163c0331feefaed822e37c8b7c1b7b88af9fdc969a4a15856d49f2"
     )
 
 
@@ -219,16 +220,16 @@ def test_manifest_resume_requires_exact_plan_equality(tmp_path: Path) -> None:
         plan,
         path=path,
         resume=False,
-        plan_type=Ed1BehaviorMatrixPlan,
+        plan_type=BehaviorMatrixPlan,
     )
     prepare_manifest(
         plan,
         path=path,
         resume=True,
-        plan_type=Ed1BehaviorMatrixPlan,
+        plan_type=BehaviorMatrixPlan,
     )
 
-    restored = Ed1BehaviorMatrixPlan.model_validate_json(path.read_text())
+    restored = BehaviorMatrixPlan.model_validate_json(path.read_text())
     assert restored == plan
     mismatched = plan.model_copy(update={"concurrency": 99})
     with pytest.raises(RuntimeError, match="does not exactly match"):
@@ -236,7 +237,7 @@ def test_manifest_resume_requires_exact_plan_equality(tmp_path: Path) -> None:
             mismatched,
             path=path,
             resume=True,
-            plan_type=Ed1BehaviorMatrixPlan,
+            plan_type=BehaviorMatrixPlan,
         )
 
 
@@ -253,7 +254,7 @@ def test_openai_credential_mapping_never_overwrites_runtime_name() -> None:
     assert environment["OPENAI_API_KEY"] == "runtime-secret"
 
 
-def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
+def test_run_code_comp_baseline_behavior_matrix_delegates_to_generic_runner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -281,7 +282,7 @@ def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
         def __exit__(self, *_args: object) -> None:
             return None
 
-    def fake_run_behavior_matrix(**kwargs: object) -> Ed1BehaviorMatrixPlan:
+    def fake_run_behavior_matrix(**kwargs: object) -> BehaviorMatrixPlan:
         captured["kwargs"] = kwargs
         return plan
 
@@ -292,7 +293,7 @@ def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
     )
     monkeypatch.setattr(
         matrix,
-        "build_ed1_scoring_runtime",
+        "build_code_comp_scoring_runtime",
         lambda **_kwargs: _FakeRuntime(),
     )
     monkeypatch.setattr(matrix, "build_matrix_plan", lambda **_kwargs: plan)
@@ -309,7 +310,7 @@ def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
         lambda *_args, **_kwargs: _FakeScorer(),
     )
 
-    result = ed1_behavior_matrix.run_ed1_baseline_behavior_matrix(
+    result = matrix.run_code_comp_baseline_behavior_matrix(
         provider_routes=_baseline_provider_routes(),
         evaluation_python=evaluation_python,
         snapshot_path=snapshot,
@@ -325,10 +326,7 @@ def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
 
 
 def test_cli_requires_paths_and_exposes_resume_smoke_and_concurrency() -> None:
-    script = (
-        Path(__file__).parents[2]
-        / "scripts/experiments/run_baseline_behavior_matrix.py"
-    )
+    script = _REPO_ROOT / "scripts/experiments/run_baseline_behavior_matrix.py"
     spec = importlib.util.spec_from_file_location(
         "test_run_baseline_behavior_matrix_cli",
         script,

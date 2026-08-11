@@ -15,20 +15,23 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from whetstone.envs.code_comp.constants import ED1_CANONICAL_MODEL
+from whetstone.envs.code_comp.constants import CODE_COMP_CANONICAL_MODEL
 from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1TaskModelKind,
     EncDecTaskModelConfig,
-    ed1_task_model_from_metadata,
+    EncDecTaskModelKind,
+    encdec_task_model_from_metadata,
 )
-from whetstone.envs.code_comp.preview import run_ed1_anchor_baseline_sweep
+from whetstone.envs.code_comp.preview import (
+    run_code_comp_anchor_baseline_sweep,
+)
+from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.runtime import (
-    Ed1ScoringRuntimeSummary,
-    build_ed1_scoring_runtime,
+    EncDecScoringRuntimeSummary,
+    build_code_comp_scoring_runtime,
 )
 from whetstone.envs.code_comp.scoring import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
+    CODE_COMP_SCORING_PREFLIGHT_TASK_ID,
     CheckpointedCodeBatchScorer,
 )
 from whetstone.envs.task_pools import (
@@ -133,7 +136,7 @@ def _parse_args() -> argparse.Namespace:
         choices=("dummy", "provider"),
         default="dummy",
     )
-    parser.add_argument("--provider-model", default=ED1_CANONICAL_MODEL)
+    parser.add_argument("--provider-model", default=CODE_COMP_CANONICAL_MODEL)
     parser.add_argument(
         "--bootstrap-resamples",
         type=_positive_int,
@@ -187,11 +190,17 @@ def _select_tasks(
             manifest = load_task_split_manifest(args.task_manifest)
             role = TaskSplitRole(args.task_role)
             selection = (
-                select_role_for_env(manifest, env="ed1", role=role)
+                select_role_for_env(
+                    manifest,
+                    env="code_comp",
+                    mode=CodeCompMode.ENCDEC,
+                    role=role,
+                )
                 if args.worst_task_count is None
                 else select_lowest_historical_pass_rate_for_env(
                     manifest,
-                    env="ed1",
+                    env="code_comp",
+                    mode=CodeCompMode.ENCDEC,
                     role=role,
                     count=args.worst_task_count,
                     excluded_task_ids=tuple(args.excluded_task_ids),
@@ -203,7 +212,7 @@ def _select_tasks(
         return (
             _tasks_by_id(pool, selection.task_ids),
             selection,
-            _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
+            _tasks_by_id(pool, (CODE_COMP_SCORING_PREFLIGHT_TASK_ID,))[0],
         )
     if args.task_ids:
         pool = load_tasks(snapshot_path=args.snapshot_path)
@@ -211,7 +220,7 @@ def _select_tasks(
         return (
             _tasks_by_id(pool, task_ids),
             None,
-            _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
+            _tasks_by_id(pool, (CODE_COMP_SCORING_PREFLIGHT_TASK_ID,))[0],
         )
     selected = load_tasks(
         snapshot_path=args.snapshot_path,
@@ -223,13 +232,13 @@ def _select_tasks(
 def _task_model(
     args: argparse.Namespace,
 ) -> EncDecTaskModelConfig:
-    kind = Ed1TaskModelKind(args.task_model)
+    kind = EncDecTaskModelKind(args.task_model)
     route = canonical_task_route(
         model=args.provider_model,
         temperature=None,
         max_attempts=1,
     )
-    if kind is Ed1TaskModelKind.PROVIDER:
+    if kind is EncDecTaskModelKind.PROVIDER:
         return EncDecTaskModelConfig(
             kind=kind,
             provider_call_config=route.call_config,
@@ -316,7 +325,7 @@ def _render_preview(
     console: Console,
     transcript: BaselinePreviewTranscript,
 ) -> None:
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     budget = (
         "unbudgeted"
         if transcript.budget_ratio is None
@@ -532,11 +541,11 @@ def main() -> None:
         pool_ceiling=pool_ceiling,
         output_dir=output_dir,
     )
-    runtime = build_ed1_scoring_runtime(
+    runtime = build_code_comp_scoring_runtime(
         runtime_executable=args.evaluation_python,
         record_root=output_dir / "execution-records",
     )
-    runtime_summary = Ed1ScoringRuntimeSummary(
+    runtime_summary = EncDecScoringRuntimeSummary(
         evaluation_python=runtime.probe.python_executable,
         dr_code_version=version("dr-code"),
         runtime_identity_hash=runtime.runtime_identity_hash,
@@ -548,7 +557,7 @@ def main() -> None:
         runtime_identity=runtime.runtime_identity,
         executor=runtime.executor,
     ) as scorer:
-        transcript = run_ed1_anchor_baseline_sweep(
+        transcript = run_code_comp_anchor_baseline_sweep(
             store=store,
             tasks=tasks,
             task_ids=task_ids,

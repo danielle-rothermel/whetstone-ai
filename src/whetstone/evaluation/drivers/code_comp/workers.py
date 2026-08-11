@@ -24,9 +24,9 @@ from whetstone.envs.code_comp.registry import (
     build_code_comp_experiment,
 )
 from whetstone.evaluation.drivers.code_comp.encdec import (
-    Ed1RowRequest,
-    Ed1RowResult,
-    drive_ed1_row,
+    EncDecRowRequest,
+    EncDecRowResult,
+    drive_encdec_row,
 )
 from whetstone.execution.prompt_cache import PromptResultCache
 
@@ -62,7 +62,7 @@ def _description_for(body: str) -> str:
 
 
 def _reconstruct_worker_experiment(
-    request: Ed1RowRequest,
+    request: EncDecRowRequest,
 ) -> tuple[EncDecExperiment, CodeCompTaskInstance]:
     if request.mutant_record is not None:
         raise ValueError("COPRO scoring preview supports ED1 only")
@@ -94,7 +94,7 @@ def _reconstruct_worker_experiment(
     return experiment, fixture
 
 
-def _prompt_cache(request: Ed1RowRequest) -> PromptResultCache | None:
+def _prompt_cache(request: EncDecRowRequest) -> PromptResultCache | None:
     if request.cache_root is None:
         return None
     return PromptResultCache(Path(request.cache_root))
@@ -102,7 +102,7 @@ def _prompt_cache(request: Ed1RowRequest) -> PromptResultCache | None:
 
 @dataclass(slots=True)
 class _DummyGenerationTransport:
-    request: Ed1RowRequest
+    request: EncDecRowRequest
     passing_source: str
     failing_source: str
     description: str
@@ -152,10 +152,10 @@ class _DummyGenerationTransport:
         )
 
 
-def drive_dummy_ed1_generation(payload: JsonValue) -> JsonValue:
+def drive_dummy_encdec_generation(payload: JsonValue) -> JsonValue:
     """Drive one real ED1 encode/decode row with scripted model responses."""
 
-    request = Ed1RowRequest.from_process_payload(payload)
+    request = EncDecRowRequest.from_process_payload(payload)
     experiment, fixture = _reconstruct_worker_experiment(request)
     instance = fixture.instance
     task = fixture.humaneval_task
@@ -168,7 +168,7 @@ def drive_dummy_ed1_generation(payload: JsonValue) -> JsonValue:
         ),
         description=description,
     )
-    outcome = drive_ed1_row(
+    outcome = drive_encdec_row(
         experiment=experiment,
         candidate_template=request.candidate_template,
         instance=instance,
@@ -185,21 +185,21 @@ def drive_dummy_ed1_generation(payload: JsonValue) -> JsonValue:
     )
     if transport.call_index != 2:
         raise ValueError("dummy ED1 row did not complete both provider calls")
-    return Ed1RowResult(
+    return EncDecRowResult(
         request_identity=request.request_identity,
         outcome=outcome,
     ).model_dump(mode="json")
 
 
-def drive_provider_ed1_generation(payload: JsonValue) -> JsonValue:
+def drive_provider_encdec_generation(payload: JsonValue) -> JsonValue:
     """Drive one ED1 row through real dr-providers encoder/decoder calls."""
 
-    request = Ed1RowRequest.from_process_payload(payload)
+    request = EncDecRowRequest.from_process_payload(payload)
     experiment, fixture = _reconstruct_worker_experiment(request)
     with HttpProvider(
         policy=request.execution_policy.transport_policy
     ) as provider:
-        outcome = drive_ed1_row(
+        outcome = drive_encdec_row(
             experiment=experiment,
             candidate_template=request.candidate_template,
             instance=fixture.instance,
@@ -214,7 +214,7 @@ def drive_provider_ed1_generation(payload: JsonValue) -> JsonValue:
             cache_phase=request.cache_phase,
             cache_unit=request.cache_unit,
         )
-    return Ed1RowResult(
+    return EncDecRowResult(
         request_identity=request.request_identity,
         outcome=outcome,
     ).model_dump(mode="json")
@@ -224,6 +224,6 @@ __all__ = [
     "DUMMY_ALTERNATE_PASSING_BODY",
     "DUMMY_FAILING_BODY",
     "DUMMY_PASSING_BODY",
-    "drive_dummy_ed1_generation",
-    "drive_provider_ed1_generation",
+    "drive_dummy_encdec_generation",
+    "drive_provider_encdec_generation",
 ]

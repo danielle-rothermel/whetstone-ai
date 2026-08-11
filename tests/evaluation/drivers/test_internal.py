@@ -69,8 +69,14 @@ def test_tiny_experiment_split_fit_search_is_bounded(monkeypatch) -> None:
 
 
 def test_process_row_wire_schemas_are_pinned() -> None:
-    from whetstone.evaluation.drivers.d1 import D1RowRequest, D1RowResult
-    from whetstone.evaluation.drivers.ed1 import Ed1RowRequest, Ed1RowResult
+    from whetstone.evaluation.drivers.code_comp.direct import (
+        DirectRowRequest,
+        DirectRowResult,
+    )
+    from whetstone.evaluation.drivers.code_comp.encdec import (
+        EncDecRowRequest,
+        EncDecRowResult,
+    )
 
     assert InternalRowRequest.model_fields["schema_name"].default == (
         "whetstone.envs.internal_row_request/v2"
@@ -78,17 +84,17 @@ def test_process_row_wire_schemas_are_pinned() -> None:
     assert InternalRowResult.model_fields["schema_name"].default == (
         "whetstone.envs.internal_row_result/v3"
     )
-    assert D1RowRequest.model_fields["schema_name"].default == (
-        "whetstone.envs.d1_row_request/v2"
+    assert DirectRowRequest.model_fields["schema_name"].default == (
+        "whetstone.envs.code_comp_direct_row_request/v2"
     )
-    assert D1RowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.d1_row_result/v3"
+    assert DirectRowResult.model_fields["schema_name"].default == (
+        "whetstone.envs.code_comp_direct_row_result/v3"
     )
-    assert Ed1RowRequest.model_fields["schema_name"].default == (
-        "whetstone.envs.ed1_row_request/v2"
+    assert EncDecRowRequest.model_fields["schema_name"].default == (
+        "whetstone.envs.code_comp_encdec_row_request/v2"
     )
-    assert Ed1RowResult.model_fields["schema_name"].default == (
-        "whetstone.envs.ed1_row_result/v3"
+    assert EncDecRowResult.model_fields["schema_name"].default == (
+        "whetstone.envs.code_comp_encdec_row_result/v3"
     )
     assert tuple(InternalRowRequest.model_fields) == (
         "schema_name",
@@ -107,7 +113,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "cache_root",
         "render_guard",
     )
-    assert tuple(D1RowRequest.model_fields) == (
+    assert tuple(DirectRowRequest.model_fields) == (
         "schema_name",
         "candidate_body",
         "candidate_id",
@@ -126,7 +132,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "cache_unit",
         "cache_root",
     )
-    assert tuple(Ed1RowRequest.model_fields) == (
+    assert tuple(EncDecRowRequest.model_fields) == (
         "schema_name",
         "env_name",
         "dataset_revision",
@@ -153,12 +159,12 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "request_identity",
         "outcome",
     )
-    assert tuple(D1RowResult.model_fields) == (
+    assert tuple(DirectRowResult.model_fields) == (
         "schema_name",
         "request_identity",
         "outcome",
     )
-    assert tuple(Ed1RowResult.model_fields) == (
+    assert tuple(EncDecRowResult.model_fields) == (
         "schema_name",
         "request_identity",
         "outcome",

@@ -5,32 +5,32 @@ from dr_code.humaneval.plus_dataset import HF_REVISION
 
 from whetstone.evaluation import identity_hash_for
 
-ENCDEC_ENV_NAME = "ed1"
-ED1_ENV_NAME = ENCDEC_ENV_NAME
+CODE_COMP_ENV_NAME = "code_comp"
+
 
 BLENDED_METRIC_ID = "primary_score_with_bounded_compression_penalty"
 
-ED1_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
+CODE_COMP_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 
-ED1_DEFAULT_BUDGET_RATIO = 0.5
+CODE_COMP_DEFAULT_BUDGET_RATIO = 0.5
 
-ED1_DATASET_ID = "evalplus/humanevalplus"
-ED1_DATASET_REVISION = identity_hash_for(
+CODE_COMP_DATASET_ID = "evalplus/humanevalplus"
+CODE_COMP_DATASET_REVISION = identity_hash_for(
     schema="whetstone.humaneval.dataset_coordinate",
     payload={
-        "dataset_id": ED1_DATASET_ID,
+        "dataset_id": CODE_COMP_DATASET_ID,
         "upstream_revision": HF_REVISION,
         "override_set": HUMANEVAL_OVERRIDE_SET.model_dump(mode="json"),
     },
 )
 
-ED1_SUBMISSION_SCORE_NAME = "humaneval_submission_score"
+CODE_COMP_SUBMISSION_SCORE_NAME = "humaneval_submission_score"
 
-ED1_BLENDED_REWARD_NAME = "blended_reward"
-ED1_COMPRESSED_DESCRIPTION_LENGTH_NAME = "compressed_description_length"
-ED1_COMPRESSION_NAME = "compression_ratio"
+CODE_COMP_BLENDED_REWARD_NAME = "blended_reward"
+CODE_COMP_COMPRESSED_DESCRIPTION_LENGTH_NAME = "compressed_description_length"
+CODE_COMP_COMPRESSION_NAME = "compression_ratio"
 
-ED1_STRATUM = "humaneval_plus"
+CODE_COMP_STRATUM = "humaneval_plus"
 
 DEFINITION_VERSION = "1"
 
@@ -50,7 +50,7 @@ ENCODER_BODY_B = (
     "code."
 )
 
-ED1_INVALID_BODY = "ed1_invalid_encoder_body"
+CODE_COMP_INVALID_BODY = "code_comp_invalid_encoder_body"
 
 MUTATION_FIELD = "user_prompt_template"
 
@@ -61,20 +61,19 @@ DECODER_TEMPLATE = (
 
 __all__ = [
     "BLENDED_METRIC_ID",
+    "CODE_COMP_BLENDED_REWARD_NAME",
+    "CODE_COMP_CANONICAL_MODEL",
+    "CODE_COMP_COMPRESSED_DESCRIPTION_LENGTH_NAME",
+    "CODE_COMP_COMPRESSION_NAME",
+    "CODE_COMP_DATASET_ID",
+    "CODE_COMP_DATASET_REVISION",
+    "CODE_COMP_DEFAULT_BUDGET_RATIO",
+    "CODE_COMP_ENV_NAME",
+    "CODE_COMP_INVALID_BODY",
+    "CODE_COMP_STRATUM",
+    "CODE_COMP_SUBMISSION_SCORE_NAME",
     "DECODER_TEMPLATE",
     "DEFINITION_VERSION",
-    "ED1_BLENDED_REWARD_NAME",
-    "ED1_CANONICAL_MODEL",
-    "ED1_COMPRESSED_DESCRIPTION_LENGTH_NAME",
-    "ED1_COMPRESSION_NAME",
-    "ED1_DATASET_ID",
-    "ED1_DATASET_REVISION",
-    "ED1_DEFAULT_BUDGET_RATIO",
-    "ED1_ENV_NAME",
-    "ED1_INVALID_BODY",
-    "ED1_STRATUM",
-    "ED1_SUBMISSION_SCORE_NAME",
-    "ENCDEC_ENV_NAME",
     "ENCODER_BODY_A",
     "ENCODER_BODY_B",
     "ENCODER_FRAME",

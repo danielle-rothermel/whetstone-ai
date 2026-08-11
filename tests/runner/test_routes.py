@@ -146,7 +146,7 @@ def test_route_for_applies_the_task_model_override() -> None:
 
 def test_task_model_for_env_prefers_the_explicit_override() -> None:
     assert task_model_for_env("c18") == DEEPSEEK_TASK_MODEL
-    assert task_model_for_env("ed1") == ENCDEC_DEFAULT_TASK_MODEL
+    assert task_model_for_env("code_comp") == ENCDEC_DEFAULT_TASK_MODEL
     assert task_model_for_env("unlisted") == CANONICAL_TASK_MODEL
     assert task_model_for_env("c18", override="vendor/x") == "vendor/x"
 
@@ -154,7 +154,7 @@ def test_task_model_for_env_prefers_the_explicit_override() -> None:
 def test_completeness_defaults_to_strict_propagate() -> None:
     assert completeness_for_env("unlisted") == ("propagate", 0.0)
     assert completeness_for_env("c18") == ("skip", 0.02)
-    assert completeness_for_env("ed1") == ("skip", 0.15)
+    assert completeness_for_env("code_comp") == ("skip", 0.15)
 
 
 def test_identity_summary_carries_no_secret_material() -> None:

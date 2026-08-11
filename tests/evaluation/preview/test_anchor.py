@@ -6,20 +6,24 @@ from pathlib import Path
 import pytest
 from dr_store import MemoryBackend, ObjectStore
 
-from tests.envs.support import execution_policy, synthetic_ed1_tasks
-from whetstone.envs.ed1 import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
-    ed1_task_model_from_metadata,
-    run_ed1_anchor_baseline_preview,
-    run_ed1_anchor_baseline_sweep,
+from tests.envs.support import execution_policy, synthetic_code_comp_tasks
+from whetstone.envs.code_comp.modes.encdec import (
+    EncDecTaskModelConfig,
+    EncDecTaskModelKind,
+    encdec_task_model_from_metadata,
 )
-from whetstone.envs.ed1_runtime import (
-    Ed1RuntimeProbe,
-    Ed1ScoringRuntimeSummary,
+from whetstone.envs.code_comp.preview import (
+    run_code_comp_anchor_baseline_preview,
+    run_code_comp_anchor_baseline_sweep,
 )
-from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
-from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
+from whetstone.envs.code_comp.rollout.encdec import (
+    build_encoder_provider_call_config,
+)
+from whetstone.envs.code_comp.runtime import (
+    CodeCompRuntimeProbe,
+    EncDecScoringRuntimeSummary,
+)
+from whetstone.envs.code_comp.scoring import CodeScore, CodeScoringInput
 from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.execution.partials import PartialLog
@@ -50,12 +54,12 @@ def _score(
     )
 
 
-def _runtime() -> Ed1ScoringRuntimeSummary:
-    return Ed1ScoringRuntimeSummary(
+def _runtime() -> EncDecScoringRuntimeSummary:
+    return EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
         runtime_identity_hash="a" * 64,
-        probe=Ed1RuntimeProbe(
+        probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
             python_executable="/copied/python",
@@ -64,9 +68,9 @@ def _runtime() -> Ed1ScoringRuntimeSummary:
     )
 
 
-def _task_model() -> Ed1TaskModelConfig:
-    return Ed1TaskModelConfig(
-        kind=Ed1TaskModelKind.DUMMY,
+def _task_model() -> EncDecTaskModelConfig:
+    return EncDecTaskModelConfig(
+        kind=EncDecTaskModelKind.DUMMY,
         provider_call_config=build_encoder_provider_call_config(
             "test/task-model"
         ),
@@ -75,10 +79,10 @@ def _task_model() -> Ed1TaskModelConfig:
 
 
 def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
-    tasks = synthetic_ed1_tasks(3)
+    tasks = synthetic_code_comp_tasks(3)
     task_ids = ("Synthetic/2", "Synthetic/0")
 
-    transcript = run_ed1_anchor_baseline_preview(
+    transcript = run_code_comp_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=task_ids,
@@ -92,9 +96,9 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
         bootstrap_seed=19,
     )
 
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     assert transcript.task_ids == task_ids
-    assert task_model.kind is Ed1TaskModelKind.DUMMY
+    assert task_model.kind is EncDecTaskModelKind.DUMMY
     assert transcript.baseline.evidence.evaluation_binding == (
         transcript.evaluation_binding
     )
@@ -118,10 +122,10 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
 
 
 def test_baseline_preview_labels_progress_with_budget_mode() -> None:
-    tasks = synthetic_ed1_tasks(1)
+    tasks = synthetic_code_comp_tasks(1)
     messages: list[str] = []
 
-    run_ed1_anchor_baseline_preview(
+    run_code_comp_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=("Synthetic/0",),
@@ -163,9 +167,9 @@ def test_baseline_preview_threads_partial_log_and_prompt_cache(
 ) -> None:
     partial_log = PartialLog(tmp_path / "baseline-partials.jsonl")
 
-    run_ed1_anchor_baseline_preview(
+    run_code_comp_anchor_baseline_preview(
         store=ObjectStore(MemoryBackend()),
-        tasks=synthetic_ed1_tasks(1),
+        tasks=synthetic_code_comp_tasks(1),
         task_ids=("Synthetic/0",),
         pool_ceiling=1,
         task_model=_task_model(),
@@ -182,9 +186,9 @@ def test_baseline_preview_threads_partial_log_and_prompt_cache(
 
 def test_baseline_preview_rejects_unknown_selection_before_scoring() -> None:
     with pytest.raises(ValueError, match="task IDs are unknown"):
-        run_ed1_anchor_baseline_preview(
+        run_code_comp_anchor_baseline_preview(
             store=ObjectStore(MemoryBackend()),
-            tasks=synthetic_ed1_tasks(1),
+            tasks=synthetic_code_comp_tasks(1),
             task_ids=("Synthetic/missing",),
             pool_ceiling=1,
             task_model=_task_model(),
@@ -196,16 +200,16 @@ def test_baseline_preview_rejects_unknown_selection_before_scoring() -> None:
 
 
 def test_baseline_sweep_preserves_manifest_role_across_budget_modes() -> None:
-    tasks = synthetic_ed1_tasks(2)
+    tasks = synthetic_code_comp_tasks(2)
     task_ids = ("Synthetic/1", "Synthetic/0")
     selection = TaskRoleSelection(
         manifest_content_hash="b" * 64,
-        pool_key="ed1",
+        pool_key="encdec",
         role=TaskSplitRole.TRAIN,
         task_ids=task_ids,
     )
 
-    transcript = run_ed1_anchor_baseline_sweep(
+    transcript = run_code_comp_anchor_baseline_sweep(
         store=ObjectStore(MemoryBackend()),
         tasks=tasks,
         task_ids=task_ids,

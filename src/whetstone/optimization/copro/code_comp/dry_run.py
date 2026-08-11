@@ -25,7 +25,7 @@ from whetstone.envs.code_comp.constants import (
     ENCODER_FRAME,
     ENCODER_FRAME_NO_BUDGET,
 )
-from whetstone.envs.code_comp.modes.encdec import ed1_initial_candidate
+from whetstone.envs.code_comp.modes.encdec import encdec_initial_candidate
 from whetstone.envs.code_comp.mutation_surface import (
     render_encoder_frame,
     validate_instruction_body,
@@ -50,8 +50,8 @@ from whetstone.optimization.copro.adapter import (
     CoproState,
 )
 from whetstone.optimization.copro.code_comp.contract import (
-    Ed1CoproProposalContract,
-    ed1_copro_proposal_contract,
+    EncDecCoproProposalContract,
+    encdec_copro_proposal_contract,
 )
 from whetstone.optimization.proposal.mutation import (
     MUTATION_FIELD,
@@ -85,7 +85,7 @@ def _ordered_tuple(value: Any, info: ValidationInfo) -> Any:
     return value
 
 
-class Ed1CoproSweepPoint(BaseModel):
+class CodeCompCoproSweepPoint(BaseModel):
     """One concrete ED1 prompt-only COPRO configuration."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -95,7 +95,7 @@ class Ed1CoproSweepPoint(BaseModel):
     copro: CoproConfig
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproSweepPoint:
+    def _validate(self) -> CodeCompCoproSweepPoint:
         if self.sweep_ordinal < 0:
             raise ValueError("sweep_ordinal cannot be negative")
         if self.budget_ratio is not None:
@@ -103,7 +103,7 @@ class Ed1CoproSweepPoint(BaseModel):
         return self
 
 
-class Ed1CoproSweepRanges(BaseModel):
+class CodeCompCoproSweepRanges(BaseModel):
     """Ordered experiment-setting axes for the ED1 COPRO sweep."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -123,7 +123,7 @@ class Ed1CoproSweepRanges(BaseModel):
         return _ordered_tuple(value, info)
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproSweepRanges:
+    def _validate(self) -> CodeCompCoproSweepRanges:
         for name in (
             "budget_ratios",
             "breadths",
@@ -147,10 +147,10 @@ class Ed1CoproSweepRanges(BaseModel):
             )
         return self
 
-    def expand(self) -> tuple[Ed1CoproSweepPoint, ...]:
+    def expand(self) -> tuple[CodeCompCoproSweepPoint, ...]:
         """Expand axes in declared order into concrete sweep points."""
 
-        points: list[Ed1CoproSweepPoint] = []
+        points: list[CodeCompCoproSweepPoint] = []
         for ordinal, (ratio, breadth, depth) in enumerate(
             product(
                 self.budget_ratios,
@@ -159,7 +159,7 @@ class Ed1CoproSweepRanges(BaseModel):
             )
         ):
             points.append(
-                Ed1CoproSweepPoint(
+                CodeCompCoproSweepPoint(
                     sweep_ordinal=ordinal,
                     budget_ratio=ratio,
                     copro=CoproConfig(
@@ -171,7 +171,7 @@ class Ed1CoproSweepRanges(BaseModel):
         return tuple(points)
 
 
-class Ed1CoproPreviewTask(BaseModel):
+class CodeCompCoproPreviewTask(BaseModel):
     """One named HumanEval prompt input used only for rendered previews."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -180,7 +180,7 @@ class Ed1CoproPreviewTask(BaseModel):
     input_code: StrictStr
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproPreviewTask:
+    def _validate(self) -> CodeCompCoproPreviewTask:
         if not self.task_id:
             raise ValueError("preview task_id must be non-empty")
         if not self.input_code:
@@ -330,7 +330,7 @@ class Ed1PromptPreview(BaseModel):
     rendered_prompt: StrictStr
 
 
-class Ed1CoproCandidateMutation(BaseModel):
+class CodeCompCoproCandidateMutation(BaseModel):
     """One body-only proposal mutation plus its rendered prompt preview."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -342,13 +342,13 @@ class Ed1CoproCandidateMutation(BaseModel):
     prompt: Ed1PromptPreview
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproCandidateMutation:
+    def _validate(self) -> CodeCompCoproCandidateMutation:
         if self.proposal_ordinal < 0:
             raise ValueError("proposal_ordinal cannot be negative")
         return self
 
 
-class Ed1CoproProposalCall(BaseModel):
+class CodeCompCoproProposalCall(BaseModel):
     """The exact config, request, and drafts at one proposer boundary."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -364,7 +364,7 @@ class Ed1CoproProposalCall(BaseModel):
     drafts: tuple[ProposalDraft, ...]
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproProposalCall:
+    def _validate(self) -> CodeCompCoproProposalCall:
         if not self.proposer_kind:
             raise ValueError("proposer_kind must be non-empty")
         for field_name in (
@@ -392,35 +392,35 @@ class Ed1CoproProposalCall(BaseModel):
         return self
 
     @property
-    def instruction_contract(self) -> Ed1CoproProposalContract:
+    def instruction_contract(self) -> EncDecCoproProposalContract:
         raw = self.request.context.get(COPRO_INSTRUCTION_CONTRACT_KEY)
         if not isinstance(raw, ImmutableJsonObject):
             raise ValueError(
                 "proposal call instruction contract must be a record"
             )
-        return Ed1CoproProposalContract.model_validate(raw.to_json())
+        return EncDecCoproProposalContract.model_validate(raw.to_json())
 
 
 @verify(UNIQUE)
-class Ed1CoproProposalRejectionKind(StrEnum):
+class CodeCompCoproProposalRejectionKind(StrEnum):
     """Why one requested proposal slot could not become a candidate."""
 
     PROVIDER_FAILED = "provider_failed"
     REJECTED = "rejected"
 
 
-class Ed1CoproProposalRejection(BaseModel):
+class CodeCompCoproProposalRejection(BaseModel):
     """One failed proposal slot with its returned body and exact reason."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     proposal_ordinal: StrictInt
     proposed_body: StrictStr
-    kind: Ed1CoproProposalRejectionKind
+    kind: CodeCompCoproProposalRejectionKind
     reason: StrictStr
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproProposalRejection:
+    def _validate(self) -> CodeCompCoproProposalRejection:
         if self.proposal_ordinal < 0:
             raise ValueError("proposal_ordinal cannot be negative")
         if not self.reason:
@@ -428,20 +428,20 @@ class Ed1CoproProposalRejection(BaseModel):
         return self
 
 
-class Ed1CoproRoundAttempt(BaseModel):
+class CodeCompCoproRoundAttempt(BaseModel):
     """A complete proposal call with every accepted or rejected slot."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     starting_state: CoproState
     round_plan: CoproRoundPlan
-    proposal_call: Ed1CoproProposalCall
-    candidate_mutations: tuple[Ed1CoproCandidateMutation, ...]
-    rejections: tuple[Ed1CoproProposalRejection, ...]
+    proposal_call: CodeCompCoproProposalCall
+    candidate_mutations: tuple[CodeCompCoproCandidateMutation, ...]
+    rejections: tuple[CodeCompCoproProposalRejection, ...]
     terminal_failure: StrictStr | None = None
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproRoundAttempt:
+    def _validate(self) -> CodeCompCoproRoundAttempt:
         accepted = {
             mutation.proposal_ordinal for mutation in self.candidate_mutations
         }
@@ -467,17 +467,20 @@ class Ed1CoproRoundAttempt(BaseModel):
     def succeeded(self) -> bool:
         return self.terminal_failure is None
 
-    def require_preview(self) -> Ed1CoproRoundPreview:
+    def require_preview(self) -> CodeCompCoproRoundPreview:
         """Return the successful preview or raise its intake error."""
 
         if self.rejections:
             first = self.rejections[0]
-            if first.kind is Ed1CoproProposalRejectionKind.PROVIDER_FAILED:
+            if (
+                first.kind
+                is CodeCompCoproProposalRejectionKind.PROVIDER_FAILED
+            ):
                 raise ValueError(
                     "COPRO proposer returned a failed draft: " + first.reason
                 )
             raise ValueError(first.reason)
-        return Ed1CoproRoundPreview(
+        return CodeCompCoproRoundPreview(
             starting_state=self.starting_state,
             round_plan=self.round_plan,
             proposal_call=self.proposal_call,
@@ -485,45 +488,45 @@ class Ed1CoproRoundAttempt(BaseModel):
         )
 
 
-class Ed1CoproSweepTranscript(BaseModel):
+class CodeCompCoproSweepTranscript(BaseModel):
     """The initialized lifecycle and seed mutations for one sweep point."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    settings: Ed1CoproSweepPoint
+    settings: CodeCompCoproSweepPoint
     initial_state: CoproState
     round_plan: CoproRoundPlan
     baseline_candidate: CandidateRef
     baseline_prompt: Ed1PromptPreview
-    proposal_call: Ed1CoproProposalCall
-    candidate_mutations: tuple[Ed1CoproCandidateMutation, ...]
+    proposal_call: CodeCompCoproProposalCall
+    candidate_mutations: tuple[CodeCompCoproCandidateMutation, ...]
 
 
-class Ed1CoproRoundPreview(BaseModel):
+class CodeCompCoproRoundPreview(BaseModel):
     """One proposal boundary projected from an exact COPRO state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     starting_state: CoproState
     round_plan: CoproRoundPlan
-    proposal_call: Ed1CoproProposalCall
-    candidate_mutations: tuple[Ed1CoproCandidateMutation, ...]
+    proposal_call: CodeCompCoproProposalCall
+    candidate_mutations: tuple[CodeCompCoproCandidateMutation, ...]
 
 
-class Ed1CoproDryRunTranscript(BaseModel):
+class CodeCompCoproDryRunTranscript(BaseModel):
     """JSON-serializable record of a proposal-only ED1 COPRO sweep."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sweep: Ed1CoproSweepRanges
-    preview_task: Ed1CoproPreviewTask
+    sweep: CodeCompCoproSweepRanges
+    preview_task: CodeCompCoproPreviewTask
     proposer: ImmutableJsonObject
-    points: tuple[Ed1CoproSweepTranscript, ...]
+    points: tuple[CodeCompCoproSweepTranscript, ...]
 
 
 def _prompt_preview(
     *,
-    task: Ed1CoproPreviewTask,
+    task: CodeCompCoproPreviewTask,
     body: str,
     budget_ratio: float | None,
 ) -> Ed1PromptPreview:
@@ -574,14 +577,14 @@ def _candidate_from_body(
 
 def attempt_ed1_copro_round(
     *,
-    settings: Ed1CoproSweepPoint,
+    settings: CodeCompCoproSweepPoint,
     state: CoproState,
-    preview_task: Ed1CoproPreviewTask,
+    preview_task: CodeCompCoproPreviewTask,
     proposer_kind: str,
     proposer_config: ProposerRouteConfig,
     transport: ProposerTransport,
     request_ordinal: int,
-) -> Ed1CoproRoundAttempt:
+) -> CodeCompCoproRoundAttempt:
     """Run one proposer call and account for every returned proposal slot."""
 
     driver = CoproDriver(settings.copro)
@@ -589,7 +592,9 @@ def attempt_ed1_copro_round(
     baseline = state.initial_candidate
     baseline_body = baseline.payload[MUTATION_FIELD]
     assert isinstance(baseline_body, str)
-    contract = ed1_copro_proposal_contract(budget_ratio=settings.budget_ratio)
+    contract = encdec_copro_proposal_contract(
+        budget_ratio=settings.budget_ratio
+    )
     context: dict[str, Any] = {
         COPRO_INSTRUCTION_CONTRACT_KEY: contract.model_dump(mode="json"),
         COPRO_INSTRUCTION_HISTORY_KEY: [
@@ -600,7 +605,7 @@ def attempt_ed1_copro_round(
         proposal_mode=plan.proposal_mode,
         request_ordinal=request_ordinal,
         proposal_authority_identity_hash=compute_identity_hash(
-            schema="whetstone.ed1_copro_preview_authority",
+            schema="whetstone.code_comp_encdec_copro_preview_authority",
             schema_version=1,
             payload=settings.model_dump(mode="json"),
         ),
@@ -622,7 +627,7 @@ def attempt_ed1_copro_round(
         proposal_request,
         plan.proposal_count,
     )
-    proposal_call = Ed1CoproProposalCall(
+    proposal_call = CodeCompCoproProposalCall(
         proposer_kind=proposer_kind,
         proposer_config=proposer_config.identity_payload(),
         proposer_config_identity_hash=proposer_config.identity_hash(),
@@ -637,17 +642,17 @@ def attempt_ed1_copro_round(
         requested_count=plan.proposal_count,
         drafts=drafts,
     )
-    mutations: list[Ed1CoproCandidateMutation] = []
-    rejections: list[Ed1CoproProposalRejection] = []
+    mutations: list[CodeCompCoproCandidateMutation] = []
+    rejections: list[CodeCompCoproProposalRejection] = []
     for proposal_ordinal, draft in enumerate(drafts):
         body = draft.template.strip('"').strip()
         if draft.failed:
             detail = draft.terminal_failure
             rejections.append(
-                Ed1CoproProposalRejection(
+                CodeCompCoproProposalRejection(
                     proposal_ordinal=proposal_ordinal,
                     proposed_body=body,
-                    kind=Ed1CoproProposalRejectionKind.PROVIDER_FAILED,
+                    kind=CodeCompCoproProposalRejectionKind.PROVIDER_FAILED,
                     reason=(
                         detail.message
                         if detail is not None
@@ -668,16 +673,16 @@ def attempt_ed1_copro_round(
             )
         except ValueError as exc:
             rejections.append(
-                Ed1CoproProposalRejection(
+                CodeCompCoproProposalRejection(
                     proposal_ordinal=proposal_ordinal,
                     proposed_body=body,
-                    kind=Ed1CoproProposalRejectionKind.REJECTED,
+                    kind=CodeCompCoproProposalRejectionKind.REJECTED,
                     reason=str(exc),
                 )
             )
             continue
         mutations.append(
-            Ed1CoproCandidateMutation(
+            CodeCompCoproCandidateMutation(
                 proposal_ordinal=proposal_ordinal,
                 candidate=candidate_reference(candidate),
                 previous_body=baseline_body,
@@ -695,7 +700,7 @@ def attempt_ed1_copro_round(
             f"{len(rejections)} of {proposal_call.requested_count} proposal "
             "slots failed validation"
         )
-    return Ed1CoproRoundAttempt(
+    return CodeCompCoproRoundAttempt(
         starting_state=state,
         round_plan=plan,
         proposal_call=proposal_call,
@@ -705,16 +710,16 @@ def attempt_ed1_copro_round(
     )
 
 
-def preview_ed1_copro_round(
+def preview_code_comp_copro_round(
     *,
-    settings: Ed1CoproSweepPoint,
+    settings: CodeCompCoproSweepPoint,
     state: CoproState,
-    preview_task: Ed1CoproPreviewTask,
+    preview_task: CodeCompCoproPreviewTask,
     proposer_kind: str,
     proposer_config: ProposerRouteConfig,
     transport: ProposerTransport,
     request_ordinal: int,
-) -> Ed1CoproRoundPreview:
+) -> CodeCompCoproRoundPreview:
     """Preview one successful proposer call from the lifecycle state."""
 
     return attempt_ed1_copro_round(
@@ -728,20 +733,20 @@ def preview_ed1_copro_round(
     ).require_preview()
 
 
-def run_ed1_copro_dry_run(
+def run_code_comp_copro_dry_run(
     *,
-    sweep: Ed1CoproSweepRanges,
-    preview_task: Ed1CoproPreviewTask,
+    sweep: CodeCompCoproSweepRanges,
+    preview_task: CodeCompCoproPreviewTask,
     dummy_proposer: DummyCoproProposerConfig,
     log: Callable[[str], None] | None = None,
-) -> Ed1CoproDryRunTranscript:
+) -> CodeCompCoproDryRunTranscript:
     """Start every sweep point, preview seed proposals, and do no evaluation.
 
     When ``log`` is provided, it receives the exact indented JSON transcript
     once. The returned typed transcript is identical to those logged bytes.
     """
 
-    return _run_ed1_copro_preview(
+    return _run_code_comp_copro_preview(
         sweep=sweep,
         preview_task=preview_task,
         proposer_kind="dummy",
@@ -751,17 +756,17 @@ def run_ed1_copro_dry_run(
     )
 
 
-def run_ed1_copro_codex_preview(
+def run_code_comp_copro_codex_preview(
     *,
-    sweep: Ed1CoproSweepRanges,
-    preview_task: Ed1CoproPreviewTask,
+    sweep: CodeCompCoproSweepRanges,
+    preview_task: CodeCompCoproPreviewTask,
     proposer_config: CodexCliProposerConfig,
     transport: CodexCliProposerTransport,
     log: Callable[[str], None] | None = None,
-) -> Ed1CoproDryRunTranscript:
+) -> CodeCompCoproDryRunTranscript:
     """Use Codex CLI to propose seed mutations without evaluating them."""
 
-    return _run_ed1_copro_preview(
+    return _run_code_comp_copro_preview(
         sweep=sweep,
         preview_task=preview_task,
         proposer_kind="codex_cli",
@@ -771,23 +776,23 @@ def run_ed1_copro_codex_preview(
     )
 
 
-def _run_ed1_copro_preview(
+def _run_code_comp_copro_preview(
     *,
-    sweep: Ed1CoproSweepRanges,
-    preview_task: Ed1CoproPreviewTask,
+    sweep: CodeCompCoproSweepRanges,
+    preview_task: CodeCompCoproPreviewTask,
     proposer_kind: str,
     proposer_config: ProposerRouteConfig,
     transport: ProposerTransport,
     log: Callable[[str], None] | None,
-) -> Ed1CoproDryRunTranscript:
-    baseline = ed1_initial_candidate()
+) -> CodeCompCoproDryRunTranscript:
+    baseline = encdec_initial_candidate()
     baseline_body = baseline.payload[MUTATION_FIELD]
     assert isinstance(baseline_body, str)
-    points: list[Ed1CoproSweepTranscript] = []
+    points: list[CodeCompCoproSweepTranscript] = []
     for settings in sweep.expand():
         driver = CoproDriver(settings.copro)
         state = driver.initial_state(baseline)
-        round_preview = preview_ed1_copro_round(
+        round_preview = preview_code_comp_copro_round(
             settings=settings,
             state=state,
             preview_task=preview_task,
@@ -797,7 +802,7 @@ def _run_ed1_copro_preview(
             request_ordinal=settings.sweep_ordinal,
         )
         points.append(
-            Ed1CoproSweepTranscript(
+            CodeCompCoproSweepTranscript(
                 settings=settings,
                 initial_state=state,
                 round_plan=round_preview.round_plan,
@@ -811,7 +816,7 @@ def _run_ed1_copro_preview(
                 candidate_mutations=round_preview.candidate_mutations,
             )
         )
-    transcript = Ed1CoproDryRunTranscript(
+    transcript = CodeCompCoproDryRunTranscript(
         sweep=sweep,
         preview_task=preview_task,
         proposer=ImmutableJsonObject(
@@ -831,23 +836,23 @@ def _run_ed1_copro_preview(
 __all__ = [
     "DUMMY_COPRO_PROPOSER_CONFIG_SCHEMA",
     "DUMMY_COPRO_PROPOSER_CONFIG_SCHEMA_VERSION",
+    "CodeCompCoproCandidateMutation",
+    "CodeCompCoproDryRunTranscript",
+    "CodeCompCoproPreviewTask",
+    "CodeCompCoproProposalCall",
+    "CodeCompCoproProposalRejection",
+    "CodeCompCoproProposalRejectionKind",
+    "CodeCompCoproRoundAttempt",
+    "CodeCompCoproRoundPreview",
+    "CodeCompCoproSweepPoint",
+    "CodeCompCoproSweepRanges",
+    "CodeCompCoproSweepTranscript",
     "DummyCoproProposerConfig",
     "DummyCoproProposerTransport",
-    "Ed1CoproCandidateMutation",
-    "Ed1CoproDryRunTranscript",
-    "Ed1CoproPreviewTask",
-    "Ed1CoproProposalCall",
-    "Ed1CoproProposalRejection",
-    "Ed1CoproProposalRejectionKind",
-    "Ed1CoproRoundAttempt",
-    "Ed1CoproRoundPreview",
-    "Ed1CoproSweepPoint",
-    "Ed1CoproSweepRanges",
-    "Ed1CoproSweepTranscript",
     "Ed1PromptFill",
     "Ed1PromptPreview",
     "attempt_ed1_copro_round",
-    "preview_ed1_copro_round",
-    "run_ed1_copro_codex_preview",
-    "run_ed1_copro_dry_run",
+    "preview_code_comp_copro_round",
+    "run_code_comp_copro_codex_preview",
+    "run_code_comp_copro_dry_run",
 ]

@@ -34,7 +34,7 @@ _EVAL_INPUT_FIELD = "submission"
 PROVIDER_CALL_CONFIG_SCHEMA = "dr_providers.provider_call_config"
 
 #: The Evaluation Procedure Config schema for the enc-dec code eval procedure.
-ENCDEC_PROCEDURE_CONFIG_SCHEMA = "whetstone.encdec_code_eval_procedure"
+ENCDEC_PROCEDURE_CONFIG_SCHEMA = "whetstone.code_comp.encdec_procedure"
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,8 +8,8 @@ from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.code_comp.constants import (
     BLENDED_METRIC_ID,
-    ED1_BLENDED_REWARD_NAME,
-    ED1_ENV_NAME,
+    CODE_COMP_BLENDED_REWARD_NAME,
+    CODE_COMP_ENV_NAME,
 )
 from whetstone.evaluation.metrics.blended import BoundedCompressionBlendConfig
 from whetstone.evaluation.preview.persisted import load_aggregate_value
@@ -35,10 +35,10 @@ class BoundedCompressionMetricConfig(BoundedCompressionBlendConfig):
         return f"{self.metric_id}|{self.blend_identity_key()}"
 
 
-ED1_DEFAULT_BLEND_CONFIG = BoundedCompressionMetricConfig()
+CODE_COMP_DEFAULT_BLEND_CONFIG = BoundedCompressionMetricConfig()
 
 
-def ed1_blended_aggregate_values(
+def code_comp_blended_aggregate_values(
     store: ObjectStore,
     reward_ref: RewardRef,
 ) -> tuple[float | None, float | None]:
@@ -82,10 +82,10 @@ def reward_from_primary_score(
         ) from exc
 
 
-def build_ed1_blended_reward_policy(
+def build_code_comp_blended_reward_policy(
     blend_config: BoundedCompressionMetricConfig,
     *,
-    env_name: str = ED1_ENV_NAME,
+    env_name: str = CODE_COMP_ENV_NAME,
 ) -> RewardPolicy:
     """An ED1-family blended Reward Policy with one blended-reward term."""
     return RewardPolicy(
@@ -96,14 +96,14 @@ def build_ed1_blended_reward_policy(
         reward_name="reward",
         terms=(
             RewardTerm(
-                name=ED1_BLENDED_REWARD_NAME, weight=1.0, maximize=True
+                name=CODE_COMP_BLENDED_REWARD_NAME, weight=1.0, maximize=True
             ),
         ),
         missing_data=MissingDataPolicy.FAIL,
     )
 
 
-def ed1_reward_from_blended(
+def code_comp_reward_from_blended(
     blend_config: BoundedCompressionMetricConfig,
     *,
     env_name: str,
@@ -113,30 +113,30 @@ def ed1_reward_from_blended(
     """Apply the blended Reward Policy to the mean per-task blended reward."""
     from whetstone.envs.reward import CandidateEvaluationFailure
 
-    policy = build_ed1_blended_reward_policy(
+    policy = build_code_comp_blended_reward_policy(
         blend_config,
         env_name=env_name,
     )
     try:
         return apply_reward_policy(
             policy,
-            aggregates={ED1_BLENDED_REWARD_NAME: blended},
+            aggregates={CODE_COMP_BLENDED_REWARD_NAME: blended},
             evidence_role=EvaluationRole.INTERNAL,
             evidence_refs=evidence_refs,
         )
     except ValueError as exc:
         raise CandidateEvaluationFailure(
-            "ed1 internal candidate has no computable blended Reward: the "
-            f"{ED1_BLENDED_REWARD_NAME!r} aggregate is missing under FAIL "
-            f"(blended={blended!r})"
+            "code_comp internal candidate has no computable blended Reward: "
+            f"the {CODE_COMP_BLENDED_REWARD_NAME!r} aggregate is missing "
+            f"under FAIL (blended={blended!r})"
         ) from exc
 
 
 __all__ = [
-    "ED1_DEFAULT_BLEND_CONFIG",
+    "CODE_COMP_DEFAULT_BLEND_CONFIG",
     "BoundedCompressionMetricConfig",
-    "build_ed1_blended_reward_policy",
-    "ed1_blended_aggregate_values",
-    "ed1_reward_from_blended",
+    "build_code_comp_blended_reward_policy",
+    "code_comp_blended_aggregate_values",
+    "code_comp_reward_from_blended",
     "reward_from_primary_score",
 ]

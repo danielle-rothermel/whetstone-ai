@@ -78,17 +78,17 @@ def row_job_factory(
 ) -> Callable[[BaseModel], ProcessJob]:
 
     def build(request: BaseModel) -> ProcessJob:
-        from whetstone.evaluation.drivers.d1 import (
-            D1GeneratedRowOutcome,
-            D1RowOutcome,
-            D1RowRequest,
-            D1RowResult,
+        from whetstone.evaluation.drivers.code_comp.direct import (
+            DirectGeneratedRowOutcome,
+            DirectRowOutcome,
+            DirectRowRequest,
+            DirectRowResult,
         )
-        from whetstone.evaluation.drivers.ed1 import (
-            Ed1GeneratedRowOutcome,
-            Ed1RowOutcome,
-            Ed1RowRequest,
-            Ed1RowResult,
+        from whetstone.evaluation.drivers.code_comp.encdec import (
+            EncDecGeneratedRowOutcome,
+            EncDecRowOutcome,
+            EncDecRowRequest,
+            EncDecRowResult,
         )
         from whetstone.evaluation.drivers.internal import (
             InternalRowOutcome,
@@ -97,7 +97,7 @@ def row_job_factory(
         )
 
         if not isinstance(
-            request, InternalRowRequest | D1RowRequest | Ed1RowRequest
+            request, InternalRowRequest | DirectRowRequest | EncDecRowRequest
         ):
             raise TypeError(f"unsupported row request {type(request)!r}")
         instance = request.instance.to_instance()
@@ -111,17 +111,21 @@ def row_job_factory(
                 request_identity=request.request_identity,
                 outcome=outcome,
             )
-        elif isinstance(request, D1RowRequest):
-            if not isinstance(outcome, D1RowOutcome | D1GeneratedRowOutcome):
+        elif isinstance(request, DirectRowRequest):
+            if not isinstance(
+                outcome, DirectRowOutcome | DirectGeneratedRowOutcome
+            ):
                 raise TypeError("D1 request requires a D1 row outcome")
-            envelope = D1RowResult(
+            envelope = DirectRowResult(
                 request_identity=request.request_identity,
                 outcome=outcome,
             )
         else:
-            if not isinstance(outcome, Ed1RowOutcome | Ed1GeneratedRowOutcome):
+            if not isinstance(
+                outcome, EncDecRowOutcome | EncDecGeneratedRowOutcome
+            ):
                 raise TypeError("ED1 request requires an ED1 row outcome")
-            envelope = Ed1RowResult(
+            envelope = EncDecRowResult(
                 request_identity=request.request_identity,
                 outcome=outcome,
             )
@@ -222,7 +226,9 @@ def constant_reply(text: str) -> ReplyFn:
     return _reply
 
 
-def synthetic_ed1_tasks(count: int = 3) -> tuple[CodeCompTaskInstance, ...]:
+def synthetic_code_comp_tasks(
+    count: int = 3,
+) -> tuple[CodeCompTaskInstance, ...]:
     tasks: list[CodeCompTaskInstance] = []
     for index in range(count):
         entry_point = f"add_{index}"

@@ -23,8 +23,8 @@ from whetstone.envs.code_comp.mutant.dataset import (
     MutantRecord,
 )
 
-_RESULT_BEGIN: Final = "<<<WHETSTONE_ED1M_V1_BEGIN>>>"
-_RESULT_END: Final = "<<<WHETSTONE_ED1M_V1_END>>>"
+_RESULT_BEGIN: Final = "<<<WHETSTONE_MUTANT_V1_BEGIN>>>"
+_RESULT_END: Final = "<<<WHETSTONE_MUTANT_V1_END>>>"
 _PROTOCOL_VERSION: Final = 1
 
 
@@ -165,7 +165,7 @@ class MutantScore:
     infrastructure_unknown: bool
 
 
-def score_ed1m_reconstruction(
+def score_mutant_reconstruction(
     *,
     reconstruction: str,
     mutant: MutantRecord,
@@ -307,4 +307,4 @@ def _parse_outcomes(
     )
 
 
-__all__ = ["MutantScore", "score_ed1m_reconstruction"]
+__all__ = ["MutantScore", "score_mutant_reconstruction"]

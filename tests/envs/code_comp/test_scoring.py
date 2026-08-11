@@ -4,11 +4,11 @@ from collections.abc import Sequence
 
 import pytest
 
-from tests.envs.support import synthetic_ed1_tasks
-from whetstone.envs.ed1_scoring import (
+from tests.envs.support import synthetic_code_comp_tasks
+from whetstone.envs.code_comp.scoring import (
     CodeScore,
     CodeScoringInput,
-    run_ed1_scoring_preflight,
+    run_encdec_scoring_preflight,
 )
 
 
@@ -28,16 +28,16 @@ def _score(
     )
 
 
-def test_run_ed1_scoring_preflight_passes_for_ground_truth() -> None:
-    tasks = synthetic_ed1_tasks(1)
-    result = run_ed1_scoring_preflight(tasks, _score)
+def test_run_encdec_scoring_preflight_passes_for_ground_truth() -> None:
+    tasks = synthetic_code_comp_tasks(1)
+    result = run_encdec_scoring_preflight(tasks, _score)
 
     assert result.passed is True
     assert result.task_id == tasks[0].humaneval_task.task_id
 
 
-def test_run_ed1_scoring_preflight_rejects_failed_score() -> None:
-    tasks = synthetic_ed1_tasks(1)
+def test_run_encdec_scoring_preflight_rejects_failed_score() -> None:
+    tasks = synthetic_code_comp_tasks(1)
 
     def failing_score(
         inputs: Sequence[CodeScoringInput],
@@ -54,4 +54,4 @@ def test_run_ed1_scoring_preflight_rejects_failed_score() -> None:
         )
 
     with pytest.raises(RuntimeError, match="preflight did not pass"):
-        run_ed1_scoring_preflight(tasks, failing_score)
+        run_encdec_scoring_preflight(tasks, failing_score)

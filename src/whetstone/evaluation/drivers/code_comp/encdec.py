@@ -25,9 +25,9 @@ from whetstone_envs.core import Instance
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.code_comp.constants import (
+    CODE_COMP_COMPRESSION_NAME,
+    CODE_COMP_SUBMISSION_SCORE_NAME,
     DECODER_TEMPLATE,
-    ED1_COMPRESSION_NAME,
-    ED1_SUBMISSION_SCORE_NAME,
 )
 from whetstone.envs.code_comp.dataset import humaneval_task_from_instance
 from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
@@ -37,7 +37,7 @@ from whetstone.envs.code_comp.mutation_surface import (
     validate_instruction_body,
 )
 from whetstone.envs.code_comp.reward.blended import (
-    ed1_reward_from_blended,
+    code_comp_reward_from_blended,
     reward_from_primary_score,
 )
 from whetstone.envs.code_comp.rollout.encdec import (
@@ -89,6 +89,7 @@ from whetstone.execution.fanout import (
     CallSpec,
     FanoutStatus,
     ProcessJob,
+    run_call_pool,
 )
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (
@@ -98,6 +99,7 @@ from whetstone.execution.prompt_cache import (
     partial_cache_marks,
 )
 from whetstone.execution.resume import (
+    index_partial_records,
     resolve_exact_resume,
 )
 from whetstone.experiment.binding import (
@@ -112,14 +114,8 @@ from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 
-def _ed1_compat():
-    import whetstone.evaluation.drivers.ed1 as compat
-
-    return compat
-
-
 @dataclass(frozen=True, slots=True)
-class Ed1RowDiag:
+class EncDecRowDiag:
     """Per-row diagnostics; exceeding the budget never clips or fails a row."""
 
     instance_id: str
@@ -149,7 +145,7 @@ class Ed1RowDiag:
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1EvalDiagnostics:
+class EncDecEvalDiagnostics:
     """Aggregate health summary derived from typed row diagnostics."""
 
     present_rows: int
@@ -158,7 +154,7 @@ class Ed1EvalDiagnostics:
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1EvalResult:
+class EncDecEvalResult:
     """One candidate's ED1-family evaluation over a split (dual aggregates).
 
     ``primary_aggregate`` is HumanEval Submission Score for ED1 and Fidelity to
@@ -184,14 +180,14 @@ class Ed1EvalResult:
     #: discriminating inputs that snapped to canonical); ``None`` per task with
     #: no attractor sample; empty for ed1/QA.
     per_task_attractor: tuple[float | None, ...] = ()
-    row_diags: tuple[Ed1RowDiag, ...] = ()
+    row_diags: tuple[EncDecRowDiag, ...] = ()
     request_identities: frozenset[str] = frozenset()
     concurrency_halved: bool = False
     deadline_reached: bool = False
     guard_timeouts: int = 0
 
     @property
-    def diagnostics(self) -> Ed1EvalDiagnostics:
+    def diagnostics(self) -> EncDecEvalDiagnostics:
         """Summarize whether the evaluation produced usable rows."""
         present = self.primary_aggregate.rows_present
         failed = self.primary_aggregate.rows_failed
@@ -206,14 +202,14 @@ class Ed1EvalResult:
                 codes.most_common(1)[0] if codes else ("no_present_rows", 0)
             )
             none_reason = f"0 present rows; {dominant} affected {count} row(s)"
-        return Ed1EvalDiagnostics(
+        return EncDecEvalDiagnostics(
             present_rows=present,
             failed_rows=failed,
             none_reason=none_reason,
         )
 
 
-def _validate_ed1_component_steps(
+def _validate_encdec_component_steps(
     steps: tuple[ExecutedComponentStep, ...],
     *,
     encoder_text: str | None,
@@ -254,7 +250,7 @@ def _validate_ed1_component_steps(
             raise ValueError("ED1 decoder trace must match decoder execution")
 
 
-class Ed1RowOutcome(BaseModel):
+class EncDecRowOutcome(BaseModel):
     """One (task, repeat) rollout's dual result + provenance.
 
     ``primary_value`` is ED1's HumanEval Submission Score or ED1M's fractional
@@ -315,8 +311,8 @@ class Ed1RowOutcome(BaseModel):
     cache_provenance: CacheProvenance | None = None
 
     @model_validator(mode="after")
-    def _valid_outcome(self) -> Ed1RowOutcome:
-        _validate_ed1_component_steps(
+    def _valid_outcome(self) -> EncDecRowOutcome:
+        _validate_encdec_component_steps(
             self.executed_component_steps,
             encoder_text=self.encoder_text,
             decoder_text=self.decoder_text,
@@ -363,7 +359,7 @@ class Ed1RowOutcome(BaseModel):
         return self.encoder_len > self.max_budget
 
 
-class Ed1GeneratedRowOutcome(BaseModel):
+class EncDecGeneratedRowOutcome(BaseModel):
     """A completed encode/decode row awaiting coordinator-side scoring."""
 
     model_config = ConfigDict(
@@ -389,8 +385,8 @@ class Ed1GeneratedRowOutcome(BaseModel):
     cache_provenance: CacheProvenance | None = None
 
     @model_validator(mode="after")
-    def _valid_generated_outcome(self) -> Ed1GeneratedRowOutcome:
-        _validate_ed1_component_steps(
+    def _valid_generated_outcome(self) -> EncDecGeneratedRowOutcome:
+        _validate_encdec_component_steps(
             self.executed_component_steps,
             encoder_text=self.encoder_text,
             decoder_text=self.decoder_text,
@@ -406,7 +402,7 @@ class Ed1GeneratedRowOutcome(BaseModel):
         return self
 
 
-class Ed1PartialPayload(BaseModel):
+class EncDecPartialPayload(BaseModel):
     """Strict ED1-family state stored beside generic partial-call fields."""
 
     model_config = ConfigDict(
@@ -426,8 +422,8 @@ class Ed1PartialPayload(BaseModel):
     executed_component_steps: tuple[ExecutedComponentStep, ...]
 
     @model_validator(mode="after")
-    def _valid_trace(self) -> Ed1PartialPayload:
-        _validate_ed1_component_steps(
+    def _valid_trace(self) -> EncDecPartialPayload:
+        _validate_encdec_component_steps(
             self.executed_component_steps,
             encoder_text=self.encoder_text,
             decoder_text=self.decoder_text,
@@ -445,23 +441,25 @@ class Ed1PartialPayload(BaseModel):
         return self
 
     @classmethod
-    def from_json_value(cls, payload: JsonValue | None) -> Ed1PartialPayload:
+    def from_json_value(
+        cls, payload: JsonValue | None
+    ) -> EncDecPartialPayload:
         """Validate a decoded partial payload using strict JSON semantics."""
         return cls.model_validate_json(json.dumps(payload))
 
 
-_ED1_ROW_REQUEST_SCHEMA = "whetstone.envs.ed1_row_request/v2"
-_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.ed1_row_result/v3"
+_ED1_ROW_REQUEST_SCHEMA = "whetstone.envs.code_comp_encdec_row_request/v2"
+_ED1_ROW_RESULT_SCHEMA = "whetstone.envs.code_comp_encdec_row_result/v3"
 
 
-class Ed1RowRequest(BaseModel):
+class EncDecRowRequest(BaseModel):
     """Complete serializable request and provenance for one ED1-family row."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     _submitted_request_identity: str | None = PrivateAttr(default=None)
 
-    schema_name: Literal["whetstone.envs.ed1_row_request/v2"] = (
+    schema_name: Literal["whetstone.envs.code_comp_encdec_row_request/v2"] = (
         _ED1_ROW_REQUEST_SCHEMA
     )
     env_name: str
@@ -485,20 +483,22 @@ class Ed1RowRequest(BaseModel):
     mutant_record: MutantRecord | None = None
 
     @model_validator(mode="after")
-    def _valid_mutant_binding(self) -> Ed1RowRequest:
-        from whetstone.envs.code_comp.modes.mutant import ED1M_ENV_NAME
+    def _valid_mutant_binding(self) -> EncDecRowRequest:
+        from whetstone.envs.code_comp.modes.mutant import (
+            CODE_COMP_MUTANT_FIDELITY_NAME,
+        )
 
-        if self.env_name == ED1M_ENV_NAME:
+        if self.primary_metric_name == CODE_COMP_MUTANT_FIDELITY_NAME:
             if self.mutant_record is None:
                 raise ValueError(
-                    "an ED1M row requires its authenticated mutant"
+                    "an encdec_mutant row requires its authenticated mutant"
                 )
             if self.mutant_record.content_identity != self.instance.id:
                 raise ValueError(
-                    "ED1M mutant identity does not match the row instance"
+                    "encdec_mutant identity does not match the row instance"
                 )
         elif self.mutant_record is not None:
-            raise ValueError("a non-ED1M row forbids mutant oracle data")
+            raise ValueError("a non-mutant row forbids mutant oracle data")
         return self
 
     @property
@@ -508,7 +508,7 @@ class Ed1RowRequest(BaseModel):
         )
 
     @classmethod
-    def from_process_payload(cls, payload: JsonValue) -> Ed1RowRequest:
+    def from_process_payload(cls, payload: JsonValue) -> EncDecRowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
         request = cls.model_validate_json(json.dumps(payload))
         request._submitted_request_identity = _process_payload_identity(
@@ -517,24 +517,24 @@ class Ed1RowRequest(BaseModel):
         return request
 
 
-class Ed1RowResult(BaseModel):
+class EncDecRowResult(BaseModel):
     """An ED1 outcome cryptographically bound to its submitted request."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    schema_name: Literal["whetstone.envs.ed1_row_result/v3"] = (
+    schema_name: Literal["whetstone.envs.code_comp_encdec_row_result/v3"] = (
         _ED1_ROW_RESULT_SCHEMA
     )
     request_identity: str
-    outcome: Ed1RowOutcome | Ed1GeneratedRowOutcome
+    outcome: EncDecRowOutcome | EncDecGeneratedRowOutcome
 
     @classmethod
-    def from_process_payload(cls, payload: JsonValue) -> Ed1RowResult:
+    def from_process_payload(cls, payload: JsonValue) -> EncDecRowResult:
         """Validate a decoded worker result using JSON semantics."""
         return cls.model_validate_json(json.dumps(payload))
 
 
-type Ed1RowJobFactory = Callable[[Ed1RowRequest], ProcessJob]
+type EncDecRowJobFactory = Callable[[EncDecRowRequest], ProcessJob]
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -595,7 +595,7 @@ def _render_encoder(
     )
 
 
-def drive_ed1_row(
+def drive_encdec_row(
     *,
     experiment: EncDecExperiment,
     candidate_template: str,
@@ -610,7 +610,7 @@ def drive_ed1_row(
     cache: PromptResultCache | None,
     cache_phase: str,
     cache_unit: str,
-) -> Ed1RowOutcome | Ed1GeneratedRowOutcome:
+) -> EncDecRowOutcome | EncDecGeneratedRowOutcome:
     """Run one encode/decode row, optionally scoring inside the worker."""
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_rollout
@@ -627,7 +627,7 @@ def drive_ed1_row(
             candidate_template, input_code=input_code, max_budget=max_budget
         )
     except (KeyError, IndexError, ValueError):
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=None,
@@ -660,7 +660,7 @@ def drive_ed1_row(
         # failed call has no usage, so tokens stay None -- coverage-honest --
         # but its accepted latency is real spend and is recorded).
         enc_tel = call_telemetry(enc)
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=None,
@@ -716,7 +716,7 @@ def drive_ed1_row(
         # decoder's telemetry adds its accepted latency (it has no usage).
         dec_tel = call_telemetry(dec)
         fail_tel = _sum_telemetry(call_telemetry(enc), dec_tel)
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
@@ -749,7 +749,7 @@ def drive_ed1_row(
     compression = _compression_ratio(encoder_text, input_code)
 
     if scorer is None:
-        return Ed1GeneratedRowOutcome(
+        return EncDecGeneratedRowOutcome(
             compression_value=compression,
             encoder_text=encoder_text,
             decoder_text=decoder_text,
@@ -772,7 +772,7 @@ def drive_ed1_row(
     # (encoder output) is always computed (it does not depend on the sandbox).
     code_score = _score_row(experiment, instance, decoder_text, scorer)
     if code_score.infrastructure_unknown:
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
@@ -791,7 +791,7 @@ def drive_ed1_row(
             cache_hit=row_cache_hit,
             cache_provenance=row_cache_prov,
         )
-    return Ed1RowOutcome(
+    return EncDecRowOutcome(
         primary_value=code_score.row_value,
         compression_value=compression,
         encoder_text=encoder_text,
@@ -827,11 +827,11 @@ def _score_row(
     """
     from whetstone.envs.code_comp.modes.mutant import (
         MutantExperiment,
-        score_ed1m_row,
+        score_mutant_row,
     )
 
     if isinstance(experiment, MutantExperiment):
-        return score_ed1m_row(
+        return score_mutant_row(
             experiment,
             instance,
             decoder_text,
@@ -844,9 +844,9 @@ def _score_row(
     return score
 
 
-def _ed1_partial_payload(outcome: Ed1RowOutcome) -> Ed1PartialPayload:
+def _encdec_partial_payload(outcome: EncDecRowOutcome) -> EncDecPartialPayload:
     """Extract the strict ED1-family portion of a partial observation."""
-    return Ed1PartialPayload(
+    return EncDecPartialPayload(
         compression_value=outcome.compression_value,
         encoder_text=outcome.encoder_text,
         decoder_text=outcome.decoder_text,
@@ -858,16 +858,16 @@ def _ed1_partial_payload(outcome: Ed1RowOutcome) -> Ed1PartialPayload:
     )
 
 
-def _ed1_outcome_from_record(record: PartialCallRecord) -> Ed1RowOutcome:
+def _encdec_outcome_from_record(record: PartialCallRecord) -> EncDecRowOutcome:
     """Rebuild the accepted outcome stored for one exact ED1 request."""
-    payload = Ed1PartialPayload.from_json_value(record.observation_payload)
+    payload = EncDecPartialPayload.from_json_value(record.observation_payload)
     if record.output_text != payload.decoder_text:
         raise ValueError(
             "ED1 partial output_text does not match its observation payload"
         )
     if record.failed != (payload.row_state is ExecutedRowState.FAILED):
         raise ValueError("ED1 partial row state conflicts with failed flag")
-    return Ed1RowOutcome(
+    return EncDecRowOutcome(
         primary_value=None if record.score is None else float(record.score),
         compression_value=payload.compression_value,
         encoder_text=payload.encoder_text,
@@ -889,17 +889,17 @@ def _ed1_outcome_from_record(record: PartialCallRecord) -> Ed1RowOutcome:
     )
 
 
-def _should_redrive(outcome: Ed1RowOutcome) -> bool:
+def _should_redrive(outcome: EncDecRowOutcome) -> bool:
     """Whether an ordinal-0 ED1 result requires the bounded second attempt."""
     return outcome.failure_code == "runner_timeout" or outcome.redrivable
 
 
 def _finish_generated_row(
-    outcome: Ed1GeneratedRowOutcome,
+    outcome: EncDecGeneratedRowOutcome,
     score: CodeScore,
-) -> Ed1RowOutcome:
+) -> EncDecRowOutcome:
     if score.infrastructure_unknown:
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=outcome.compression_value,
             encoder_text=outcome.encoder_text,
@@ -918,7 +918,7 @@ def _finish_generated_row(
             cache_hit=outcome.cache_hit,
             cache_provenance=outcome.cache_provenance,
         )
-    return Ed1RowOutcome(
+    return EncDecRowOutcome(
         primary_value=score.row_value,
         compression_value=outcome.compression_value,
         encoder_text=outcome.encoder_text,
@@ -964,30 +964,30 @@ class _RefView:
 def _primary_metric_name(experiment: EncDecExperiment) -> str:
     """Return the concrete primary metric identity for this ED1-family env."""
     from whetstone.envs.code_comp.modes.mutant import (
-        ED1M_FIDELITY_NAME,
+        CODE_COMP_MUTANT_FIDELITY_NAME,
         MutantExperiment,
     )
 
     if isinstance(experiment, MutantExperiment):
-        return ED1M_FIDELITY_NAME
-    return ED1_SUBMISSION_SCORE_NAME
+        return CODE_COMP_MUTANT_FIDELITY_NAME
+    return CODE_COMP_SUBMISSION_SCORE_NAME
 
 
-def run_ed1_eval(
+def run_encdec_eval(
     experiment: EncDecExperiment,
     *,
     candidate_template: str,
     candidate_id: str,
     sampling: EnvSplitSampling,
     execution_policy: ProviderExecutionPolicy,
-    row_job_factory: Ed1RowJobFactory,
+    row_job_factory: EncDecRowJobFactory,
     evaluation_binding: EvaluationBinding,
     concurrency: int = DEFAULT_CONCURRENCY,
     max_wall_seconds: float | None = None,
     partial_log: PartialLog | None = None,
     cache: PromptResultCache | None = None,
     batch_scorer: CodeBatchScorer | None = None,
-) -> Ed1EvalResult:
+) -> EncDecEvalResult:
     """Drive ``candidate_template`` over an ed1 split -> dual aggregates.
 
     Fans out one serializable enc->dec process job per (task, repeat),
@@ -1039,7 +1039,7 @@ def run_ed1_eval(
     def _persist(
         instance: Instance,
         index: int,
-        outcome: Ed1RowOutcome,
+        outcome: EncDecRowOutcome,
         *,
         request_identity: str,
         redrive_pending: bool,
@@ -1067,9 +1067,9 @@ def run_ed1_eval(
                 reasoning_tokens=outcome.reasoning_tokens,
                 latency_s=None if marks.cache_hit else outcome.latency_s,
                 output_text=outcome.decoder_text,
-                observation_payload=_ed1_partial_payload(outcome).model_dump(
-                    mode="json"
-                ),
+                observation_payload=_encdec_partial_payload(
+                    outcome
+                ).model_dump(mode="json"),
                 finish_reason=outcome.finish_reason,
                 provider_error=outcome.provider_error,
                 cache_hit=marks.cache_hit,
@@ -1085,7 +1085,7 @@ def run_ed1_eval(
         index: int,
         *,
         drive_ordinal: int,
-    ) -> Ed1RowRequest:
+    ) -> EncDecRowRequest:
         from whetstone.envs.code_comp.modes.mutant import MutantExperiment
 
         mutant_record = (
@@ -1093,7 +1093,7 @@ def run_ed1_eval(
             if isinstance(experiment, MutantExperiment)
             else None
         )
-        return Ed1RowRequest(
+        return EncDecRowRequest(
             env_name=rd.env_name,
             dataset_revision=experiment.dataset_revision,
             primary_metric_name=primary_metric_name,
@@ -1128,15 +1128,17 @@ def run_ed1_eval(
         for requests in requests_by_key.values()
         for request in requests
     )
-    partial_records = _ed1_compat().index_partial_records(
+    partial_records = index_partial_records(
         () if partial_log is None else partial_log.load(),
         phase=split_role,
         unit=candidate_id,
     )
-    driven: dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome] = {}
-    completed_requests: dict[tuple[str, int], Ed1RowRequest] = {}
-    initial_requests: list[Ed1RowRequest] = []
-    resumed_redrive_requests: list[Ed1RowRequest] = []
+    driven: dict[
+        tuple[str, int], EncDecRowOutcome | EncDecGeneratedRowOutcome
+    ] = {}
+    completed_requests: dict[tuple[str, int], EncDecRowRequest] = {}
+    initial_requests: list[EncDecRowRequest] = []
+    resumed_redrive_requests: list[EncDecRowRequest] = []
     for key, (ordinal_0, ordinal_1) in requests_by_key.items():
         decision = resolve_exact_resume(
             partial_records,
@@ -1146,21 +1148,23 @@ def run_ed1_eval(
             ordinal_1_request_identity=ordinal_1.request_identity,
         )
         if decision.record is not None:
-            driven[key] = _ed1_outcome_from_record(decision.record)
+            driven[key] = _encdec_outcome_from_record(decision.record)
         if decision.drive_ordinal == 0:
             initial_requests.append(ordinal_0)
         elif decision.drive_ordinal == 1:
             resumed_redrive_requests.append(ordinal_1)
 
     def _spec(
-        request: Ed1RowRequest,
-    ) -> CallSpec[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome]:
+        request: EncDecRowRequest,
+    ) -> CallSpec[
+        tuple[str, int], EncDecRowOutcome | EncDecGeneratedRowOutcome
+    ]:
         instance = by_instance[request.instance.id]
 
         def _decode(
             value: JsonValue,
-        ) -> Ed1RowOutcome | Ed1GeneratedRowOutcome:
-            result = Ed1RowResult.from_process_payload(value)
+        ) -> EncDecRowOutcome | EncDecGeneratedRowOutcome:
+            result = EncDecRowResult.from_process_payload(value)
             if result.request_identity != request.request_identity:
                 raise ValueError(
                     "ED1 row result does not match its submitted request"
@@ -1182,7 +1186,7 @@ def run_ed1_eval(
                         request.drive_ordinal == 0 and _should_redrive(outcome)
                     ),
                 )
-                if isinstance(outcome, Ed1RowOutcome)
+                if isinstance(outcome, EncDecRowOutcome)
                 else None
             ),
         )
@@ -1191,9 +1195,9 @@ def run_ed1_eval(
     effective_concurrency = concurrency
 
     def _drive(
-        requests: list[Ed1RowRequest],
+        requests: list[EncDecRowRequest],
     ) -> tuple[
-        dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome],
+        dict[tuple[str, int], EncDecRowOutcome | EncDecGeneratedRowOutcome],
         bool,
         bool,
         int,
@@ -1204,14 +1208,16 @@ def run_ed1_eval(
             (request.instance.id, request.repeat_index): request
             for request in requests
         }
-        pool = _ed1_compat().run_call_pool(
+        pool = run_call_pool(
             specs,
             concurrency=effective_concurrency,
             is_rate_limited=lambda _o: False,
             max_wall_seconds=remaining_phase_wall_seconds(phase_deadline),
         )
         effective_concurrency = pool.effective_concurrency
-        out: dict[tuple[str, int], Ed1RowOutcome | Ed1GeneratedRowOutcome] = {}
+        out: dict[
+            tuple[str, int], EncDecRowOutcome | EncDecGeneratedRowOutcome
+        ] = {}
         for res in pool.results:
             if res.status is FanoutStatus.COMPLETED and res.value is not None:
                 out[res.key] = res.value
@@ -1222,7 +1228,7 @@ def run_ed1_eval(
                 # before it lands as a failed row (a single hung row must not
                 # kill an anchor arm under the FAIL policy).
                 request = request_by_key[res.key]
-                outcome = Ed1RowOutcome(
+                outcome = EncDecRowOutcome(
                     primary_value=None,
                     compression_value=None,
                     encoder_text=None,
@@ -1241,7 +1247,7 @@ def run_ed1_eval(
                     redrive_pending=request.drive_ordinal == 0,
                 )
             else:
-                out[res.key] = Ed1RowOutcome(
+                out[res.key] = EncDecRowOutcome(
                     primary_value=None,
                     compression_value=None,
                     encoder_text=None,
@@ -1269,7 +1275,7 @@ def run_ed1_eval(
     redrive_requests = resumed_redrive_requests + [
         requests_by_key[key][1]
         for key, outcome in first_driven.items()
-        if isinstance(outcome, Ed1RowOutcome) and _should_redrive(outcome)
+        if isinstance(outcome, EncDecRowOutcome) and _should_redrive(outcome)
     ]
     halved_2 = deadline_2 = False
     guard_2 = 0
@@ -1278,7 +1284,7 @@ def run_ed1_eval(
         driven.update(
             (key, outcome)
             for key, outcome in redriven.items()
-            if not isinstance(outcome, Ed1RowOutcome) or not outcome.missing
+            if not isinstance(outcome, EncDecRowOutcome) or not outcome.missing
         )
     concurrency_halved = halved_1 or halved_2
     deadline_reached = deadline_1 or deadline_2
@@ -1289,7 +1295,7 @@ def run_ed1_eval(
         for instance in instances
         for index in range(repeats)
         if isinstance(
-            driven[(str(instance.id), index)], Ed1GeneratedRowOutcome
+            driven[(str(instance.id), index)], EncDecGeneratedRowOutcome
         )
     ]
     if generated_keys:
@@ -1308,7 +1314,7 @@ def run_ed1_eval(
             )
             for instance_id, index in generated_keys
             for generated in (driven[(instance_id, index)],)
-            if isinstance(generated, Ed1GeneratedRowOutcome)
+            if isinstance(generated, EncDecGeneratedRowOutcome)
         )
         remaining_wall_seconds = remaining_phase_wall_seconds(phase_deadline)
         if remaining_wall_seconds == 0.0:
@@ -1325,7 +1331,7 @@ def run_ed1_eval(
                 scores = None
         if scores is None:
             for key in generated_keys:
-                driven[key] = Ed1RowOutcome(
+                driven[key] = EncDecRowOutcome(
                     primary_value=None,
                     compression_value=None,
                     encoder_text=None,
@@ -1342,7 +1348,7 @@ def run_ed1_eval(
                 )
             for key, score in zip(generated_keys, scores, strict=True):
                 generated = driven[key]
-                if not isinstance(generated, Ed1GeneratedRowOutcome):
+                if not isinstance(generated, EncDecGeneratedRowOutcome):
                     raise AssertionError(
                         "generated ED1 row changed before scoring"
                     )
@@ -1362,7 +1368,7 @@ def run_ed1_eval(
     primary_rows: list[tuple[str, list[RowValue]]] = []
     comp_rows: list[tuple[str, list[RowValue]]] = []
     outputs: list[RolloutOutput] = []
-    row_diags: list[Ed1RowDiag] = []
+    row_diags: list[EncDecRowDiag] = []
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
     per_task_compression: list[float | None] = []
@@ -1375,12 +1381,12 @@ def run_ed1_eval(
         attr_vals: list[float] = []
         for index in range(repeats):
             outcome = driven[(task_id, index)]
-            if not isinstance(outcome, Ed1RowOutcome):
+            if not isinstance(outcome, EncDecRowOutcome):
                 raise AssertionError("ED1 row was not scored")
             if outcome.attractor_pull is not None:
                 attr_vals.append(outcome.attractor_pull)
             row_diags.append(
-                Ed1RowDiag(
+                EncDecRowDiag(
                     instance_id=task_id,
                     repeat=index,
                     metric_name=primary_metric_name,
@@ -1471,7 +1477,7 @@ def run_ed1_eval(
         plan=sampling.evaluation_matrix_plan,
     )
     compression_aggregate = unweighted_task_mean(
-        aggregate_name=ED1_COMPRESSION_NAME,
+        aggregate_name=CODE_COMP_COMPRESSION_NAME,
         graph_hash=graph_hash,
         evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
@@ -1513,7 +1519,7 @@ def run_ed1_eval(
                 and primary_aggregate.aggregation_output.value is not None
                 else None
             )
-            reward = ed1_reward_from_blended(
+            reward = code_comp_reward_from_blended(
                 blend_config,
                 env_name=experiment.env_name,
                 blended=mean_blended,
@@ -1530,7 +1536,7 @@ def run_ed1_eval(
             )
     else:
         reward = None
-    return Ed1EvalResult(
+    return EncDecEvalResult(
         primary_aggregate=primary_aggregate,
         compression_aggregate=compression_aggregate,
         reward=reward,
@@ -1549,7 +1555,7 @@ def run_ed1_eval(
     )
 
 
-def _row_output_text(outcome: Ed1RowOutcome) -> str | None:
+def _row_output_text(outcome: EncDecRowOutcome) -> str | None:
     """The sidecar output text: the encoder + decoder outputs (both kept)."""
     if outcome.encoder_text is None and outcome.decoder_text is None:
         return None
@@ -1575,13 +1581,13 @@ def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
 
 
 __all__ = [
-    "Ed1EvalDiagnostics",
-    "Ed1EvalResult",
-    "Ed1GeneratedRowOutcome",
-    "Ed1PartialPayload",
-    "Ed1RowDiag",
-    "Ed1RowJobFactory",
-    "Ed1RowOutcome",
-    "drive_ed1_row",
-    "run_ed1_eval",
+    "EncDecEvalDiagnostics",
+    "EncDecEvalResult",
+    "EncDecGeneratedRowOutcome",
+    "EncDecPartialPayload",
+    "EncDecRowDiag",
+    "EncDecRowJobFactory",
+    "EncDecRowOutcome",
+    "drive_encdec_row",
+    "run_encdec_eval",
 ]

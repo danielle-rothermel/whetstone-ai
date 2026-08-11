@@ -35,16 +35,6 @@ def test_code_comp_registry_imports_exclude_runner_and_optimization() -> None:
         )
 
 
-def test_legacy_env_shims_expose_public_builders() -> None:
-    import whetstone.envs.d1 as d1
-    import whetstone.envs.ed1 as ed1
-    import whetstone.envs.ed1m as ed1m
-
-    assert hasattr(d1, "build_d1_experiment")
-    assert hasattr(ed1, "build_ed1_experiment")
-    assert hasattr(ed1m, "build_ed1m_experiment")
-
-
 def test_code_comp_surface_modules_exclude_runner_and_optimization() -> None:
     root = Path("src/whetstone/envs/code_comp")
     targets = [

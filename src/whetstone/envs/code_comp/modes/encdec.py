@@ -11,27 +11,31 @@ from pydantic import BaseModel, ConfigDict
 from whetstone_envs.core import Instance
 
 from whetstone.envs.code_comp.constants import (
-    ED1_CANONICAL_MODEL,
-    ED1_DATASET_REVISION,
-    ED1_DEFAULT_BUDGET_RATIO,
-    ED1_ENV_NAME,
+    CODE_COMP_CANONICAL_MODEL,
+    CODE_COMP_DATASET_REVISION,
+    CODE_COMP_DEFAULT_BUDGET_RATIO,
+    CODE_COMP_ENV_NAME,
     ENCODER_BODY_A,
     ENCODER_BODY_B,
     MUTATION_FIELD,
 )
 from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
-from whetstone.envs.code_comp.procedure import build_ed1_procedure_config
+from whetstone.envs.code_comp.procedure import build_encdec_procedure_config
+from whetstone.envs.code_comp.registry import (
+    CodeCompMode,
+    code_comp_identity_prefix,
+)
 from whetstone.envs.code_comp.reward.blended import (
-    ED1_DEFAULT_BLEND_CONFIG,
+    CODE_COMP_DEFAULT_BLEND_CONFIG,
     BoundedCompressionMetricConfig,
-    build_ed1_blended_reward_policy,
+    build_code_comp_blended_reward_policy,
 )
 from whetstone.envs.code_comp.rollout.encdec import (
     EncDecRolloutDefinition,
     build_encdec_rollout_definition,
     build_encoder_provider_call_config,
 )
-from whetstone.envs.code_comp.runtime import Ed1ScoringRuntimeSummary
+from whetstone.envs.code_comp.runtime import EncDecScoringRuntimeSummary
 from whetstone.envs.code_comp.scoring import CodeScore
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.rollout_definition import env_candidate_base_ref
@@ -53,8 +57,8 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 
 @verify(UNIQUE)
-class Ed1TaskModelKind(StrEnum):
-    """Execution route for ED1 encoder and decoder generations."""
+class EncDecTaskModelKind(StrEnum):
+    """Execution route for encdec encoder and decoder generations."""
 
     DUMMY = "dummy"
     PROVIDER = "provider"
@@ -65,7 +69,7 @@ class EncDecTaskModelConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: Ed1TaskModelKind
+    kind: EncDecTaskModelKind
     provider_call_config: ProviderCallConfig
     execution_policy: ProviderExecutionPolicy
 
@@ -78,13 +82,13 @@ class EncDecTaskModelConfig(BaseModel):
 #: The canonical enc/dec task model (same route plays both encoder + decoder).
 #: ``--task-model`` overrides and folds into ``graph_hash``.
 _ED1_CANONICAL_PROVIDER_CALL_CONFIG = build_encoder_provider_call_config(
-    ED1_CANONICAL_MODEL
+    CODE_COMP_CANONICAL_MODEL
 )
 
 
-def _ed1_split(
+def _code_comp_split(
     *,
-    env_name: str = ED1_ENV_NAME,
+    env_name: str = CODE_COMP_ENV_NAME,
     dataset_revision: str,
     split_role: str,
     instances: tuple[Instance, ...],
@@ -96,7 +100,7 @@ def _ed1_split(
 ) -> EnvSplitSampling:
     policy = completeness.to_policy(max_skip_fraction=max_skip_fraction)
     aggregation = aggregation_definition(
-        f"whetstone.{env_name}.aggregation"
+        f"{code_comp_identity_prefix(CodeCompMode.ENCDEC)}.aggregation"
     ).materialize(
         {
             "reduction": "mean",
@@ -105,7 +109,7 @@ def _ed1_split(
             "max_skip_fraction": policy.skip_fraction_token(),
         }
     )
-    namespace = f"whetstone.{env_name}"
+    namespace = code_comp_identity_prefix(CodeCompMode.ENCDEC)
     if manifest_tag is not None:
         namespace = f"{namespace}.{manifest_tag}"
     return derive_split_sampling(
@@ -120,25 +124,27 @@ def _ed1_split(
     )
 
 
-def _ed1_candidate(*, candidate_id: str, body: str) -> Candidate:
+def _encdec_candidate(*, candidate_id: str, body: str) -> Candidate:
     # The Mutation Surface payload is the INSTRUCTION BODY only; the code,
     # budget suffix, and punctuation are composed by the immutable frame.
     return Candidate(
         candidate_id=candidate_id,
-        base_ref=env_candidate_base_ref(ED1_ENV_NAME),
+        base_ref=env_candidate_base_ref(CODE_COMP_ENV_NAME),
         payload={MUTATION_FIELD: body},
     )
 
 
-def ed1_initial_candidate() -> Candidate:
-    return _ed1_candidate(
-        candidate_id=f"{ED1_ENV_NAME}-naive", body=ENCODER_BODY_A
+def encdec_initial_candidate() -> Candidate:
+    prefix = code_comp_identity_prefix(CodeCompMode.ENCDEC)
+    return _encdec_candidate(
+        candidate_id=f"{prefix}-naive", body=ENCODER_BODY_A
     )
 
 
-def ed1_ceiling_candidate() -> Candidate:
-    return _ed1_candidate(
-        candidate_id=f"{ED1_ENV_NAME}-ceiling", body=ENCODER_BODY_B
+def encdec_ceiling_candidate() -> Candidate:
+    prefix = code_comp_identity_prefix(CodeCompMode.ENCDEC)
+    return _encdec_candidate(
+        candidate_id=f"{prefix}-ceiling", body=ENCODER_BODY_B
     )
 
 
@@ -160,11 +166,12 @@ class EncDecExperiment(EnvExperiment):
     #: ``None`` is the default for ed1 optimizer cells to optimize compression
     #: without listing a budget at all; the reward's
     #: compression term carries the pressure instead.
-    budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO
-    dataset_revision: str = ED1_DATASET_REVISION
+    budget_ratio: float | None = CODE_COMP_DEFAULT_BUDGET_RATIO
+    dataset_revision: str = CODE_COMP_DATASET_REVISION
     #: The injectable code scorer (raw_submission, task) -> CodeScore. The
     #: scorer is INJECTED by the caller that drives rows; the production
-    #: injection is :func:`whetstone.envs.ed1_scoring.score_ed1_submission`,
+    #: injection is
+    #: :func:`whetstone.envs.code_comp.scoring.score_code_comp_submission`,
     #: which runs candidate code through the caller's explicit dr-exec
     #: executor.
     scorer: Callable[..., CodeScore] | None = None
@@ -177,8 +184,14 @@ class EncDecExperiment(EnvExperiment):
     )
 
     def __post_init__(self) -> None:
-        if self.env_name == ED1_ENV_NAME and self.blend_config is None:
-            raise ValueError("ED1 requires a bounded compression blend config")
+        from whetstone.envs.code_comp.modes.mutant import MutantExperiment
+
+        if isinstance(self, MutantExperiment):
+            return
+        if self.env_name == CODE_COMP_ENV_NAME and self.blend_config is None:
+            raise ValueError(
+                "encdec requires a bounded compression blend config"
+            )
 
 
 def build_encdec_experiment(
@@ -186,7 +199,7 @@ def build_encdec_experiment(
     provider_call_config: ProviderCallConfig = (
         _ED1_CANONICAL_PROVIDER_CALL_CONFIG
     ),
-    budget_ratio: float | None = ED1_DEFAULT_BUDGET_RATIO,
+    budget_ratio: float | None = CODE_COMP_DEFAULT_BUDGET_RATIO,
     scorer: Callable[..., CodeScore] | None = None,
     snapshot_path: Path | None = None,
     limit: int | None = None,
@@ -197,7 +210,9 @@ def build_encdec_experiment(
     repeats: int = 3,
     tasks: tuple[CodeCompTaskInstance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
-    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
+    blend_config: BoundedCompressionMetricConfig = (
+        CODE_COMP_DEFAULT_BLEND_CONFIG
+    ),
     split_manifest: TaskSplitRoles | None = None,
 ) -> EncDecExperiment:
     """Build the ed1 enc-dec experiment the runner cell consumes.
@@ -242,9 +257,9 @@ def build_encdec_experiment(
         )
     if not pool:
         raise ValueError("ed1 task pool is empty")
-    procedure = build_ed1_procedure_config()
+    procedure = build_encdec_procedure_config()
     rollout = build_encdec_rollout_definition(
-        ED1_ENV_NAME,
+        CODE_COMP_ENV_NAME,
         provider_call_config=provider_call_config,
         procedure_config_hash=procedure.config_identity_hash,
         budget_ratio=budget_ratio,
@@ -276,8 +291,8 @@ def build_encdec_experiment(
         )
         if not official_instances:
             official_instances = internal_instances
-    internal_split = _ed1_split(
-        dataset_revision=ED1_DATASET_REVISION,
+    internal_split = _code_comp_split(
+        dataset_revision=CODE_COMP_DATASET_REVISION,
         split_role="internal_eval",
         instances=internal_instances,
         procedure=procedure,
@@ -286,8 +301,8 @@ def build_encdec_experiment(
         repeats=repeats,
         manifest_tag=manifest_tag,
     )
-    official_split = _ed1_split(
-        dataset_revision=ED1_DATASET_REVISION,
+    official_split = _code_comp_split(
+        dataset_revision=CODE_COMP_DATASET_REVISION,
         split_role="official",
         instances=official_instances,
         procedure=procedure,
@@ -297,36 +312,36 @@ def build_encdec_experiment(
         manifest_tag=manifest_tag,
     )
     eval_configs = EnvEvalConfigs(
-        env_name=ED1_ENV_NAME,
+        env_name=CODE_COMP_ENV_NAME,
         procedure_config_hash=procedure.config_identity_hash,
         internal=internal_split,
         official=official_split,
         held_out_task_identities=(),
     )
     return EncDecExperiment(
-        env_name=ED1_ENV_NAME,
+        env_name=CODE_COMP_ENV_NAME,
         rollout_definition=rollout,  # type: ignore[arg-type]
-        initial_candidate=ed1_initial_candidate(),
-        ceiling_candidate=ed1_ceiling_candidate(),
+        initial_candidate=encdec_initial_candidate(),
+        ceiling_candidate=encdec_ceiling_candidate(),
         eval_configs=eval_configs,
-        reward_policy=build_ed1_blended_reward_policy(
-            blend_config, env_name=ED1_ENV_NAME
+        reward_policy=build_code_comp_blended_reward_policy(
+            blend_config, env_name=CODE_COMP_ENV_NAME
         ),
         completeness_policy=completeness.to_policy(
             max_skip_fraction=max_skip_fraction
         ),
         encdec_rollout=rollout,
         budget_ratio=budget_ratio,
-        dataset_revision=ED1_DATASET_REVISION,
+        dataset_revision=CODE_COMP_DATASET_REVISION,
         scorer=scorer,
         blend_config=blend_config,
     )
 
 
-def ed1_preview_metadata(
+def encdec_preview_metadata(
     *,
     task_model: EncDecTaskModelConfig,
-    runtime: Ed1ScoringRuntimeSummary,
+    runtime: EncDecScoringRuntimeSummary,
     blend_config: BoundedCompressionMetricConfig,
 ) -> PreviewMetadata:
     """Persist ED1-specific preview fields alongside generic transcripts."""
@@ -340,7 +355,7 @@ def ed1_preview_metadata(
     )
 
 
-def ed1_task_model_from_metadata(
+def encdec_task_model_from_metadata(
     metadata: PreviewMetadata,
 ) -> EncDecTaskModelConfig:
     return EncDecTaskModelConfig.model_validate(
@@ -348,15 +363,15 @@ def ed1_task_model_from_metadata(
     )
 
 
-def ed1_runtime_from_metadata(
+def encdec_runtime_from_metadata(
     metadata: PreviewMetadata,
-) -> Ed1ScoringRuntimeSummary:
-    return Ed1ScoringRuntimeSummary.model_validate(
+) -> EncDecScoringRuntimeSummary:
+    return EncDecScoringRuntimeSummary.model_validate(
         metadata.model_dump(mode="python")["runtime"]
     )
 
 
-def ed1_blend_config_from_metadata(
+def encdec_blend_config_from_metadata(
     metadata: PreviewMetadata,
 ) -> BoundedCompressionMetricConfig:
     return BoundedCompressionMetricConfig.model_validate(
@@ -368,16 +383,16 @@ def ed1_blend_config_from_metadata(
 HumanEvalTaskFromInstance = Callable[[Instance], HumanEvalTask]
 
 __all__ = [
-    "Ed1TaskModelKind",
     "EncDecExperiment",
     "EncDecTaskModelConfig",
+    "EncDecTaskModelKind",
     "HumanEvalTaskFromInstance",
-    "_ed1_split",
+    "_code_comp_split",
     "build_encdec_experiment",
-    "ed1_blend_config_from_metadata",
-    "ed1_ceiling_candidate",
-    "ed1_initial_candidate",
-    "ed1_preview_metadata",
-    "ed1_runtime_from_metadata",
-    "ed1_task_model_from_metadata",
+    "encdec_blend_config_from_metadata",
+    "encdec_ceiling_candidate",
+    "encdec_initial_candidate",
+    "encdec_preview_metadata",
+    "encdec_runtime_from_metadata",
+    "encdec_task_model_from_metadata",
 ]

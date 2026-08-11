@@ -10,7 +10,7 @@ from dr_exec import ExecutorFailure, FakeExecutor
 from dr_store import ObjectStore, SqliteBackend
 
 from tests.execution.fake_python import local_python_executor
-from whetstone.envs.ed1m_dataset import (
+from whetstone.envs.code_comp.mutant.dataset import (
     DatasetValidationError,
     ExpectedOutcome,
     FamilyCount,
@@ -138,9 +138,11 @@ def test_loader_rejects_duplicate_record_key(
 
 
 def test_build_requires_explicit_path() -> None:
-    from whetstone.envs.ed1m import build_ed1m_experiment
+    from whetstone.envs.code_comp.modes.mutant import build_mutant_experiment
 
-    artifact_dir = signature(build_ed1m_experiment).parameters["artifact_dir"]
+    artifact_dir = signature(build_mutant_experiment).parameters[
+        "artifact_dir"
+    ]
 
     assert artifact_dir.default is Parameter.empty
     assert artifact_dir.kind is Parameter.KEYWORD_ONLY
@@ -149,10 +151,10 @@ def test_build_requires_explicit_path() -> None:
 def test_build_rejects_non_path_boundary(
     mutant_dataset_dir: Path,
 ) -> None:
-    from whetstone.envs.ed1m import build_ed1m_experiment
+    from whetstone.envs.code_comp.modes.mutant import build_mutant_experiment
 
     with pytest.raises(TypeError, match=r"pathlib\.Path"):
-        build_ed1m_experiment(
+        build_mutant_experiment(
             artifact_dir=cast(Path, str(mutant_dataset_dir)),
         )
 
@@ -160,7 +162,7 @@ def test_build_rejects_non_path_boundary(
 def test_build_rejects_unauthenticated_records(
     mutant_dataset_dir: Path,
 ) -> None:
-    from whetstone.envs.ed1m import build_ed1m_experiment
+    from whetstone.envs.code_comp.modes.mutant import build_mutant_experiment
 
     records_path = mutant_dataset_dir / "mutants.jsonl"
     records_path.write_text(
@@ -168,13 +170,15 @@ def test_build_rejects_unauthenticated_records(
     )
 
     with pytest.raises(DatasetValidationError, match="SHA-256"):
-        build_ed1m_experiment(artifact_dir=mutant_dataset_dir)
+        build_mutant_experiment(artifact_dir=mutant_dataset_dir)
 
 
 def test_oracle_faithful_reconstruction_has_zero_attractor() -> None:
-    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+    from whetstone.envs.code_comp.mutant.oracle import (
+        score_mutant_reconstruction,
+    )
 
-    score = score_ed1m_reconstruction(
+    score = score_mutant_reconstruction(
         reconstruction=_MUTATED_SOURCE,
         mutant=_mutant_record(),
         executor=local_python_executor(),
@@ -186,9 +190,11 @@ def test_oracle_faithful_reconstruction_has_zero_attractor() -> None:
 
 
 def test_oracle_canonical_reconstruction_has_full_attractor() -> None:
-    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+    from whetstone.envs.code_comp.mutant.oracle import (
+        score_mutant_reconstruction,
+    )
 
-    score = score_ed1m_reconstruction(
+    score = score_mutant_reconstruction(
         reconstruction=_CANONICAL_SOURCE,
         mutant=_mutant_record(),
         executor=local_python_executor(),
@@ -199,9 +205,11 @@ def test_oracle_canonical_reconstruction_has_full_attractor() -> None:
 
 
 def test_oracle_definitive_mismatch_scores_zero() -> None:
-    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+    from whetstone.envs.code_comp.mutant.oracle import (
+        score_mutant_reconstruction,
+    )
 
-    score = score_ed1m_reconstruction(
+    score = score_mutant_reconstruction(
         reconstruction="def f(x):\n    return None\n",
         mutant=_mutant_record(),
         executor=local_python_executor(),
@@ -212,9 +220,11 @@ def test_oracle_definitive_mismatch_scores_zero() -> None:
 
 
 def test_oracle_candidate_cannot_forge_outer_result_envelope() -> None:
-    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+    from whetstone.envs.code_comp.mutant.oracle import (
+        score_mutant_reconstruction,
+    )
 
-    score = score_ed1m_reconstruction(
+    score = score_mutant_reconstruction(
         reconstruction="""
 def f(x):
     import inspect
@@ -255,12 +265,14 @@ def f(x):
 
 
 def test_oracle_failure_is_infrastructure_unknown() -> None:
-    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
+    from whetstone.envs.code_comp.mutant.oracle import (
+        score_mutant_reconstruction,
+    )
 
     def unavailable(_job, _cancellation):
         raise ExecutorFailure("executor unavailable")
 
-    score = score_ed1m_reconstruction(
+    score = score_mutant_reconstruction(
         reconstruction=_MUTATED_SOURCE,
         mutant=_mutant_record(),
         executor=FakeExecutor(responder=unavailable),
@@ -274,27 +286,27 @@ def test_oracle_failure_is_infrastructure_unknown() -> None:
 def test_build_uses_content_and_dataset_identities(
     mutant_dataset_dir: Path,
 ) -> None:
-    from whetstone.envs.ed1 import (
+    from whetstone.envs.code_comp.modes.encdec import (
         BoundedCompressionMetricConfig,
-        build_ed1_procedure_config,
+        build_encdec_procedure_config,
     )
-    from whetstone.envs.ed1m import (
-        Ed1mExperiment,
-        build_ed1m_experiment,
-        build_ed1m_procedure_config,
+    from whetstone.envs.code_comp.modes.mutant import (
+        MutantExperiment,
+        build_mutant_experiment,
+        build_mutant_procedure_config,
     )
 
     loaded = load_dataset(mutant_dataset_dir)
     record = loaded.records[0]
-    experiment = build_ed1m_experiment(
+    experiment = build_mutant_experiment(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
         blend_config=BoundedCompressionMetricConfig(weight=0.1),
     )
 
-    assert isinstance(experiment, Ed1mExperiment)
-    assert experiment.env_name == "ed1m"
+    assert isinstance(experiment, MutantExperiment)
+    assert experiment.env_name == "code_comp"
     assert experiment.budget_ratio is None
     rollout = experiment.encdec_rollout
     assert rollout is not None and rollout.budget_rule is None
@@ -310,30 +322,37 @@ def test_build_uses_content_and_dataset_identities(
         loaded.manifest.dataset_identity
     )
     assert experiment.blend_config is not None
-    from whetstone.envs.ed1 import build_ed1_blended_reward_policy
-    from whetstone.envs.ed1m import ED1M_ENV_NAME, build_ed1m_reward_policy
-
-    assert experiment.reward_policy == build_ed1_blended_reward_policy(
-        experiment.blend_config, env_name=ED1M_ENV_NAME
+    from whetstone.envs.code_comp.modes.encdec import (
+        build_code_comp_blended_reward_policy,
     )
-    assert experiment.reward_policy != build_ed1m_reward_policy()
+    from whetstone.envs.code_comp.modes.mutant import (
+        CODE_COMP_ENV_NAME,
+        build_mutant_reward_policy,
+    )
 
-    unblended = build_ed1m_experiment(
+    assert experiment.reward_policy == build_code_comp_blended_reward_policy(
+        experiment.blend_config, env_name=CODE_COMP_ENV_NAME
+    )
+    assert experiment.reward_policy != build_mutant_reward_policy()
+
+    unblended = build_mutant_experiment(
         artifact_dir=mutant_dataset_dir, internal_n=1, official_n=1
     )
-    assert unblended.reward_policy == build_ed1m_reward_policy()
+    assert unblended.reward_policy == build_mutant_reward_policy()
 
-    ed1m_procedure = build_ed1m_procedure_config()
-    assert rollout.procedure_config_hash == ed1m_procedure.config_identity_hash
-    assert ed1m_procedure.definition_ref.definition_id == (
-        "whetstone.ed1m.procedure"
+    mutant_procedure = build_mutant_procedure_config()
+    assert (
+        rollout.procedure_config_hash == mutant_procedure.config_identity_hash
     )
-    assert ed1m_procedure.config_identity_hash != (
-        build_ed1_procedure_config().config_identity_hash
+    assert mutant_procedure.definition_ref.definition_id == (
+        "whetstone.code_comp.procedure"
+    )
+    assert mutant_procedure.config_identity_hash != (
+        build_encdec_procedure_config().config_identity_hash
     )
 
 
-def test_ed1m_eval_rewards_fidelity_reports_attractor(
+def test_mutant_eval_rewards_fidelity_reports_attractor(
     mutant_dataset_dir: Path,
 ) -> None:
     from tests.envs.support import (
@@ -341,25 +360,25 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
         execution_policy,
         process_row_job_factory,
     )
-    from whetstone.envs.ed1 import ed1_initial_candidate
-    from whetstone.envs.ed1m import (
-        ED1M_FIDELITY_NAME,
-        build_ed1m_experiment,
+    from whetstone.envs.code_comp.modes.encdec import encdec_initial_candidate
+    from whetstone.envs.code_comp.modes.mutant import (
+        CODE_COMP_MUTANT_FIDELITY_NAME,
+        build_mutant_experiment,
     )
-    from whetstone.evaluation.drivers.ed1 import run_ed1_eval
+    from whetstone.evaluation.drivers.code_comp.encdec import run_encdec_eval
     from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
-    experiment = build_ed1m_experiment(
+    experiment = build_mutant_experiment(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
         repeats=1,
     )
 
-    evaluation = run_ed1_eval(
+    evaluation = run_encdec_eval(
         experiment,
         candidate_template=str(
-            ed1_initial_candidate().payload[MUTATION_FIELD]
+            encdec_initial_candidate().payload[MUTATION_FIELD]
         ),
         candidate_id="ed1m-naive",
         sampling=experiment.eval_configs.internal,
@@ -374,16 +393,19 @@ def test_ed1m_eval_rewards_fidelity_reports_attractor(
 
     assert evaluation.per_task_scores[0] >= 0.9
     assert evaluation.per_task_attractor == pytest.approx((0.0,))
-    assert evaluation.primary_aggregate.name == ED1M_FIDELITY_NAME
+    assert evaluation.primary_aggregate.name == CODE_COMP_MUTANT_FIDELITY_NAME
     assert (
         evaluation.primary_aggregate.aggregation_output.value
         == pytest.approx(1.0)
     )
     assert evaluation.reward is not None
-    assert evaluation.reward.input_citations[0].name == ED1M_FIDELITY_NAME
+    assert (
+        evaluation.reward.input_citations[0].name
+        == CODE_COMP_MUTANT_FIDELITY_NAME
+    )
 
 
-def test_ed1m_evaluation_engine_evaluate_succeeds(
+def test_mutant_evaluation_engine_evaluate_succeeds(
     mutant_dataset_dir: Path,
     tmp_path: Path,
 ) -> None:
@@ -392,11 +414,11 @@ def test_ed1m_evaluation_engine_evaluate_succeeds(
         process_row_job_factory,
     )
     from tests.evaluation.support import _binding
-    from whetstone.envs.ed1 import ed1_initial_candidate
-    from whetstone.envs.ed1m import build_ed1m_experiment
+    from whetstone.envs.code_comp.modes.encdec import encdec_initial_candidate
+    from whetstone.envs.code_comp.modes.mutant import build_mutant_experiment
     from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 
-    experiment = build_ed1m_experiment(
+    experiment = build_mutant_experiment(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
@@ -414,7 +436,7 @@ def test_ed1m_evaluation_engine_evaluate_succeeds(
     )
     result = engine.evaluate(
         EvaluationRequest(
-            candidate=ed1_initial_candidate(),
+            candidate=encdec_initial_candidate(),
             evaluation_binding=_binding(engine),
             purpose="ed1m-engine",
         )

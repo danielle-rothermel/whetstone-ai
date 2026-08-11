@@ -7,18 +7,20 @@ from pathlib import Path
 from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
+from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
 from whetstone.envs.code_comp.modes.encdec import (
     EncDecExperiment,
-    _ed1_split,
-    ed1_ceiling_candidate,
-    ed1_initial_candidate,
+    _code_comp_split,
+    encdec_ceiling_candidate,
+    encdec_initial_candidate,
 )
 from whetstone.envs.code_comp.mutant.dataset import MutantRecord, load_dataset
 from whetstone.envs.code_comp.mutant.oracle import MutantScore
 from whetstone.envs.code_comp.procedure import build_code_eval_procedure_config
+from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.reward.blended import (
     BoundedCompressionMetricConfig,
-    build_ed1_blended_reward_policy,
+    build_code_comp_blended_reward_policy,
 )
 from whetstone.envs.code_comp.rollout.encdec import (
     build_encdec_rollout_definition,
@@ -33,43 +35,44 @@ from whetstone.experiment.reward import (
     RewardTerm,
 )
 
-MUTANT_ENV_NAME = "ed1m"
-ED1M_ENV_NAME = MUTANT_ENV_NAME
+CODE_COMP_MUTANT_MODE = CodeCompMode.ENCDEC_MUTANT
+
 #: ed1m uses the same task model as ed1 (deepseek), a distinct provider Config.
-ED1M_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
-_ED1M_CANONICAL_PROVIDER_CALL_CONFIG = build_encoder_provider_call_config(
-    ED1M_CANONICAL_MODEL
+CODE_COMP_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
+_MUTANT_CANONICAL_PROVIDER_CALL_CONFIG = build_encoder_provider_call_config(
+    CODE_COMP_CANONICAL_MODEL
 )
 #: The per-row metric, aggregate, and Reward-term identity for ED1M fidelity.
-ED1M_FIDELITY_NAME = "fidelity_to_mutant"
+CODE_COMP_MUTANT_FIDELITY_NAME = "fidelity_to_mutant"
 
-#: The ed1m stratum tag; mutant families are recorded but not stratified.
-_ED1M_STRATUM = "ed1m"
+#: The encdec_mutant stratum tag; mutant families are recorded but not
+#: stratified.
+_MUTANT_STRATUM = "encdec_mutant"
 
 
-def build_ed1m_procedure_config():
+def build_mutant_procedure_config():
     """The canonical ED1M fidelity-to-mutant evaluation procedure."""
     return build_code_eval_procedure_config(
-        env_name=ED1M_ENV_NAME,
-        primary_metric_name=ED1M_FIDELITY_NAME,
+        env_name=CODE_COMP_ENV_NAME,
+        primary_metric_name=CODE_COMP_MUTANT_FIDELITY_NAME,
         primary_metric_settings=(
             (
                 "scorer",
-                "whetstone.envs.ed1m_oracle.score_ed1m_reconstruction",
+                "whetstone.envs.code_comp.mutant.oracle.score_mutant_reconstruction",
             ),
             ("reference", "authenticated_mutant_record"),
         ),
     )
 
 
-def build_ed1m_reward_policy() -> RewardPolicy:
+def build_mutant_reward_policy() -> RewardPolicy:
     """The ED1M Reward Policy: maximize fidelity to the mutant."""
     return RewardPolicy(
-        policy_name=f"whetstone.env.{ED1M_ENV_NAME}.reward",
+        policy_name=f"whetstone.env.{CODE_COMP_ENV_NAME}.reward",
         reward_name="reward",
         terms=(
             RewardTerm(
-                name=ED1M_FIDELITY_NAME,
+                name=CODE_COMP_MUTANT_FIDELITY_NAME,
                 weight=1.0,
                 maximize=True,
             ),
@@ -89,7 +92,7 @@ def _mutant_to_instance(mutant: MutantRecord) -> Instance:
     return Instance(
         id=mutant.content_identity,
         seed=mutant.seed,
-        strata=(_ED1M_STRATUM,),
+        strata=(_MUTANT_STRATUM,),
         prompt_inputs={
             "input_code": mutant.mutated_full_source,
             "task_id": mutant.task_id,
@@ -105,7 +108,7 @@ class MutantExperiment(EncDecExperiment):
     """An ``EncDecExperiment`` whose correctness scorer is the mutant oracle.
 
     Carries the per-instance mutant map (``mutants`` keyed by Instance id) so
-    :func:`score_ed1m_row` scores a reconstruction against the right mutant's
+    :func:`score_mutant_row` scores a reconstruction against the right mutant's
     dual oracle. Everything else (enc-dec rollout, blend config, budget frame,
     reward policy, completeness) is inherited from
     :class:`EncDecExperiment`, so the ed1 eval / cell / telemetry pipeline
@@ -116,7 +119,7 @@ class MutantExperiment(EncDecExperiment):
     mutants: dict[str, MutantRecord] = field(default_factory=dict)
 
 
-def score_ed1m_row(
+def score_mutant_row(
     experiment: MutantExperiment,
     instance: Instance,
     reconstruction: str,
@@ -143,12 +146,12 @@ def score_ed1m_row(
         return CodeScore(
             passed=False,
             infrastructure_unknown=True,
-            outcome="ed1m_oracle_infrastructure_unknown",
+            outcome="mutant_oracle_infrastructure_unknown",
         )
     return CodeScore(
         passed=score.fidelity_to_mutant >= 1.0,
         infrastructure_unknown=False,
-        outcome="ed1m_scored",
+        outcome="mutant_scored",
         fidelity_to_mutant=score.fidelity_to_mutant,
         attractor_pull=score.attractor_pull,
     )
@@ -158,7 +161,7 @@ def build_mutant_experiment(
     *,
     artifact_dir: Path,
     provider_call_config: ProviderCallConfig = (
-        _ED1M_CANONICAL_PROVIDER_CALL_CONFIG
+        _MUTANT_CANONICAL_PROVIDER_CALL_CONFIG
     ),
     budget_ratio: float | None = None,
     limit: int | None = None,
@@ -195,9 +198,9 @@ def build_mutant_experiment(
     if not pool:
         raise ValueError("ed1m mutant pool is empty")
 
-    procedure = build_ed1m_procedure_config()
+    procedure = build_mutant_procedure_config()
     rollout = build_encdec_rollout_definition(
-        ED1M_ENV_NAME,
+        CODE_COMP_ENV_NAME,
         provider_call_config=provider_call_config,
         procedure_config_hash=procedure.config_identity_hash,
         budget_ratio=budget_ratio,
@@ -213,8 +216,8 @@ def build_mutant_experiment(
     if not official_instances:
         official_instances = internal_instances
 
-    internal_split = _ed1_split(
-        env_name=ED1M_ENV_NAME,
+    internal_split = _code_comp_split(
+        env_name=CODE_COMP_ENV_NAME,
         dataset_revision=loaded.manifest.dataset_identity,
         split_role="internal_eval",
         instances=internal_instances,
@@ -223,8 +226,8 @@ def build_mutant_experiment(
         max_skip_fraction=max_skip_fraction,
         repeats=repeats,
     )
-    official_split = _ed1_split(
-        env_name=ED1M_ENV_NAME,
+    official_split = _code_comp_split(
+        env_name=CODE_COMP_ENV_NAME,
         dataset_revision=loaded.manifest.dataset_identity,
         split_role="official",
         instances=official_instances,
@@ -234,23 +237,23 @@ def build_mutant_experiment(
         repeats=repeats,
     )
     eval_configs = EnvEvalConfigs(
-        env_name=ED1M_ENV_NAME,
+        env_name=CODE_COMP_ENV_NAME,
         procedure_config_hash=procedure.config_identity_hash,
         internal=internal_split,
         official=official_split,
         held_out_task_identities=(),
     )
     experiment = MutantExperiment(
-        env_name=ED1M_ENV_NAME,
+        env_name=CODE_COMP_ENV_NAME,
         rollout_definition=rollout,  # type: ignore[arg-type]
-        initial_candidate=ed1_initial_candidate(),
-        ceiling_candidate=ed1_ceiling_candidate(),
+        initial_candidate=encdec_initial_candidate(),
+        ceiling_candidate=encdec_ceiling_candidate(),
         eval_configs=eval_configs,
         reward_policy=(
-            build_ed1m_reward_policy()
+            build_mutant_reward_policy()
             if blend_config is None
-            else build_ed1_blended_reward_policy(
-                blend_config, env_name=ED1M_ENV_NAME
+            else build_code_comp_blended_reward_policy(
+                blend_config, env_name=CODE_COMP_ENV_NAME
             )
         ),
         completeness_policy=completeness.to_policy(
@@ -267,12 +270,12 @@ def build_mutant_experiment(
 
 
 __all__ = [
-    "ED1M_CANONICAL_MODEL",
-    "ED1M_ENV_NAME",
-    "ED1M_FIDELITY_NAME",
+    "CODE_COMP_CANONICAL_MODEL",
+    "CODE_COMP_ENV_NAME",
+    "CODE_COMP_MUTANT_FIDELITY_NAME",
     "MutantExperiment",
-    "build_ed1m_procedure_config",
-    "build_ed1m_reward_policy",
     "build_mutant_experiment",
-    "score_ed1m_row",
+    "build_mutant_procedure_config",
+    "build_mutant_reward_policy",
+    "score_mutant_row",
 ]

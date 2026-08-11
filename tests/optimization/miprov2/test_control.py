@@ -51,10 +51,10 @@ def test_default_layout_admits_one_generate_component() -> None:
     assert control.reference().identity_hash == control.identity_hash()
 
 
-def test_ed1_layout_admits_exact_encoder_component() -> None:
+def test_encdec_layout_admits_exact_encoder_component() -> None:
     adapter_hash = prompt_adapter_identity_hash(PlainPromptAdapter())
     layout = Miprov2ProgramLayout(
-        layout_id="ed1",
+        layout_id="encdec",
         component_specs=(
             Miprov2ComponentSpec(
                 component_id="encode",

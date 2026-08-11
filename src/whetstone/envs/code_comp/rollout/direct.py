@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from dr_graph import GraphConfig, GraphDefinition, graph_hash
 from dr_providers import ProviderCallConfig, openrouter_chat_config
 
+from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
 from whetstone.envs.rollout_definition import (
     EVAL_NODE_ID,
     LLM_NODE_ID,
@@ -18,27 +19,24 @@ from whetstone.experiment.graph.nodes import (
     llm_call_variable_assignment,
 )
 
-DIRECT_ENV_NAME = "d1"
-D1_ENV_NAME = DIRECT_ENV_NAME
+DIRECT_PROCEDURE_CONFIG_SCHEMA = "whetstone.code_comp.direct_procedure"
 
-D1_PROCEDURE_CONFIG_SCHEMA = "whetstone.d1_code_eval_procedure"
+DIRECT_RENAMED_ARM = "renamed"
 
-D1_RENAMED_ARM = "renamed"
-
-D1_INPUT_ARMS: tuple[str, ...] = (
+DIRECT_INPUT_ARMS: tuple[str, ...] = (
     "original",
     "docstring",
     "signature",
     "name",
-    D1_RENAMED_ARM,
+    DIRECT_RENAMED_ARM,
 )
 
-D1_DEFAULT_RENAME_TOKEN = "target_fxn"
+DIRECT_DEFAULT_RENAME_TOKEN = "target_fxn"
 
-D1_WRAPPER_FRAME = "{body}\n{input_arm}"
+DIRECT_WRAPPER_FRAME = "{body}\n{input_arm}"
 
 
-def render_d1_frame(body: str, *, input_arm: str) -> str:
+def render_direct_frame(body: str, *, input_arm: str) -> str:
     """Compose the immutable d1 wrapper frame around a mutable strategy body.
 
     ``body`` is the Mutation-Surface payload (the strategy sentence ONLY);
@@ -46,11 +44,11 @@ def render_d1_frame(body: str, *, input_arm: str) -> str:
     ``{placeholder}`` would raise here -- but intake validation rejects such
     bodies first (the frame owns every placeholder).
     """
-    return D1_WRAPPER_FRAME.format(body=body, input_arm=input_arm)
+    return DIRECT_WRAPPER_FRAME.format(body=body, input_arm=input_arm)
 
 
 @dataclass(frozen=True, slots=True)
-class D1RolloutDefinition:
+class DirectRolloutDefinition:
     """The d1 direct Rollout Definition graph + the config references it binds.
 
     A single LLM Call Node -> terminal Eval Node (the SAME two-node shape the
@@ -73,7 +71,7 @@ class D1RolloutDefinition:
         return graph_hash(self.graph_config)
 
 
-def d1_graph_definition() -> GraphDefinition:
+def direct_graph_definition() -> GraphDefinition:
     """The d1 direct LLM Call -> terminal Eval Graph Definition.
 
     The SAME two-node shape as the QA graph, but the LLM Call Node DECLARES the
@@ -94,7 +92,7 @@ def d1_graph_definition() -> GraphDefinition:
     return GraphDefinition(nodes=(llm, ev), terminal_node_id=EVAL_NODE_ID)
 
 
-def d1_arm_token(input_arm: str, rename_token: str) -> str:
+def direct_arm_token(input_arm: str, rename_token: str) -> str:
     """The identity-bearing control token for one (arm, rename token) pair.
 
     ``rename_token`` folds in ONLY for the ``renamed`` arm -- it is the text
@@ -103,17 +101,17 @@ def d1_arm_token(input_arm: str, rename_token: str) -> str:
     the token, so folding it there would churn their identities for a value
     they ignore.
     """
-    if input_arm == D1_RENAMED_ARM:
-        return f"d1_input_arm:{input_arm}|rename={rename_token}"
-    return f"d1_input_arm:{input_arm}"
+    if input_arm == DIRECT_RENAMED_ARM:
+        return f"code_comp.direct.input_arm:{input_arm}|rename={rename_token}"
+    return f"code_comp.direct.input_arm:{input_arm}"
 
 
-def build_d1_graph_config(
+def build_direct_graph_config(
     *,
     provider_call_config_hash: str,
     evaluation_procedure_config_hash: str,
     input_arm: str,
-    rename_token: str = D1_DEFAULT_RENAME_TOKEN,
+    rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN,
 ) -> GraphConfig:
     """Materialize the d1 Graph Config binding the route, procedure, and arm.
 
@@ -123,15 +121,15 @@ def build_d1_graph_config(
     the ``renamed`` arm, a distinct ``rename_token`` -- yields a distinct
     ``graph_hash`` (identity-folded by construction).
     """
-    definition = d1_graph_definition()
+    definition = direct_graph_definition()
     assignments = {
         LLM_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
             provider_call_config_hash=provider_call_config_hash,
-            character_budget_rule=d1_arm_token(input_arm, rename_token),
+            character_budget_rule=direct_arm_token(input_arm, rename_token),
         ),
         EVAL_NODE_ID: eval_variable_assignment(
-            evaluation_procedure_config_schema=D1_PROCEDURE_CONFIG_SCHEMA,
+            evaluation_procedure_config_schema=DIRECT_PROCEDURE_CONFIG_SCHEMA,
             evaluation_procedure_config_hash=(
                 evaluation_procedure_config_hash
             ),
@@ -140,24 +138,24 @@ def build_d1_graph_config(
     return definition.materialize(assignments)
 
 
-def build_d1_rollout_definition(
+def build_direct_rollout_definition(
     *,
     model: str,
     procedure_config_hash: str,
     input_arm: str,
-    rename_token: str = D1_DEFAULT_RENAME_TOKEN,
-) -> D1RolloutDefinition:
+    rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN,
+) -> DirectRolloutDefinition:
     """Build the d1 direct Rollout Definition for one (model, input arm)."""
     provider_call_config = openrouter_chat_config(model=model)
-    graph_config = build_d1_graph_config(
+    graph_config = build_direct_graph_config(
         provider_call_config_hash=provider_call_config.identity_hash,
         evaluation_procedure_config_hash=procedure_config_hash,
         input_arm=input_arm,
         rename_token=rename_token,
     )
-    return D1RolloutDefinition(
-        env_name=D1_ENV_NAME,
-        definition=d1_graph_definition(),
+    return DirectRolloutDefinition(
+        env_name=CODE_COMP_ENV_NAME,
+        definition=direct_graph_definition(),
         provider_call_config=provider_call_config,
         procedure_config_hash=procedure_config_hash,
         input_arm=input_arm,
@@ -166,16 +164,16 @@ def build_d1_rollout_definition(
 
 
 __all__ = [
-    "D1_DEFAULT_RENAME_TOKEN",
-    "D1_ENV_NAME",
-    "D1_INPUT_ARMS",
-    "D1_PROCEDURE_CONFIG_SCHEMA",
-    "D1_RENAMED_ARM",
-    "D1_WRAPPER_FRAME",
-    "D1RolloutDefinition",
-    "build_d1_graph_config",
-    "build_d1_rollout_definition",
-    "d1_arm_token",
-    "d1_graph_definition",
-    "render_d1_frame",
+    "CODE_COMP_ENV_NAME",
+    "DIRECT_DEFAULT_RENAME_TOKEN",
+    "DIRECT_INPUT_ARMS",
+    "DIRECT_PROCEDURE_CONFIG_SCHEMA",
+    "DIRECT_RENAMED_ARM",
+    "DIRECT_WRAPPER_FRAME",
+    "DirectRolloutDefinition",
+    "build_direct_graph_config",
+    "build_direct_rollout_definition",
+    "direct_arm_token",
+    "direct_graph_definition",
+    "render_direct_frame",
 ]

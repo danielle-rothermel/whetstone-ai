@@ -44,24 +44,24 @@ date = "2026-08-05"
 check = "uv run pytest -q tests/evaluation/code/test_aggregate.py tests/evaluation/test_engine.py"
 
 [[contracts]]
-title = "ED1 code scoring batches execution-cache persistence"
+title = "code_comp scoring batches execution-cache persistence"
 statement = """
-D1 and ED1 provider workers may return generated submissions without executing
-candidate code. The coordinator preserves task-and-repeat order, submits all
-such rows to one batch scorer, and accepts exactly one result per input before
-aggregation or terminal partial persistence. One caller-owned checkpointed
-execution cache remains open across coordinator batches; persistent prefetch
-and checkpoint operations are bulk boundaries, while per-request reads and
-writes stay in memory. Coordinator scoring shares the evaluation phase wall:
-an exhausted wall starts no batch work, each execution is clamped to the
-remaining wall, and rows left unscored at expiry are missing. ED1M retains its
-mutant-specific scoring path."""
+Direct and encdec code_comp provider workers may return generated submissions \
+without executing candidate code. The coordinator preserves task-and-repeat \
+order, submits all such rows to one batch scorer, and accepts exactly one \
+result per input before aggregation or terminal partial persistence. One \
+caller-owned checkpointed execution cache remains open across coordinator \
+batches; persistent prefetch and checkpoint operations are bulk boundaries, \
+while per-request reads and writes stay in memory. Coordinator scoring shares \
+the evaluation phase wall: an exhausted wall starts no batch work, each \
+execution is clamped to the remaining wall, and rows left unscored at expiry \
+are missing. encdec_mutant retains its mutant-specific scoring path."""
 rationale = """
-Keeping persistent storage outside per-row workers prevents SQLite reads,
-canonicalization, and trace validation from dominating preprocessing and test
-execution while preserving exact row accounting and the distinct ED1M oracle."""
+Keeping persistent storage outside per-row workers prevents SQLite reads, \
+canonicalization, and trace validation from dominating preprocessing and test \
+execution while preserving exact row accounting and the distinct mutant oracle."""
 date = "2026-08-06"
-check = "uv run pytest -q tests/envs/test_d1.py tests/envs/test_ed1.py tests/envs/test_ed1m.py"
+check = "uv run pytest -q tests/envs/code_comp/test_direct.py tests/envs/code_comp/test_encdec.py tests/envs/code_comp/test_mutant.py"
 
 [[contracts]]
 title = "Persisted evaluation references address exact records"

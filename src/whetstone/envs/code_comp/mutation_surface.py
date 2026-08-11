@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from whetstone.envs.code_comp.constants import (
-    ED1_INVALID_BODY,
+    CODE_COMP_INVALID_BODY,
     ENCODER_FRAME,
     ENCODER_FRAME_NO_BUDGET,
 )
@@ -19,7 +19,7 @@ _ED1_BODY_RENDER_CONTRACT = TemplateRenderContract(
 class InstructionBodyError(ValueError):
     """A mutable ED1/D1 body violated the environment-owned frame contract."""
 
-    code = ED1_INVALID_BODY
+    code = CODE_COMP_INVALID_BODY
 
     def __init__(self, offending: tuple[str, ...]) -> None:
         self.offending = offending

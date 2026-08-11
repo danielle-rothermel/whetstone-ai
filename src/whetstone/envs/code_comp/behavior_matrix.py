@@ -24,19 +24,22 @@ from pydantic import (
 
 from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1TaskModelKind,
     EncDecTaskModelConfig,
-    ed1_runtime_from_metadata,
-    ed1_task_model_from_metadata,
+    EncDecTaskModelKind,
+    encdec_runtime_from_metadata,
+    encdec_task_model_from_metadata,
 )
-from whetstone.envs.code_comp.preview import run_ed1_anchor_baseline_preview
-from whetstone.envs.code_comp.procedure import build_ed1_procedure_config
+from whetstone.envs.code_comp.preview import (
+    run_code_comp_anchor_baseline_preview,
+)
+from whetstone.envs.code_comp.procedure import build_encdec_procedure_config
+from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.runtime import (
-    Ed1ScoringRuntimeSummary,
-    build_ed1_scoring_runtime,
+    EncDecScoringRuntimeSummary,
+    build_code_comp_scoring_runtime,
 )
 from whetstone.envs.code_comp.scoring import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
+    CODE_COMP_SCORING_PREFLIGHT_TASK_ID,
     CheckpointedCodeBatchScorer,
 )
 from whetstone.envs.task_pools import (
@@ -97,7 +100,7 @@ DEFAULT_TASK_MANIFEST = (
 )
 
 
-class Ed1BehaviorMatrixTreatmentPlan(MatrixTreatmentBase):
+class CodeCompBehaviorMatrixTreatmentPlan(MatrixTreatmentBase):
     """One exact model-by-budget treatment and its durable location."""
 
     lane: StrictStr
@@ -110,7 +113,7 @@ class Ed1BehaviorMatrixTreatmentPlan(MatrixTreatmentBase):
     planned_provider_calls: StrictInt
 
     @model_validator(mode="after")
-    def _validate_treatment(self) -> Ed1BehaviorMatrixTreatmentPlan:
+    def _validate_treatment(self) -> CodeCompBehaviorMatrixTreatmentPlan:
         if not self.treatment_id or not self.directory:
             raise ValueError("treatment ID and directory must be non-empty")
         if self.planned_rows < 1 or self.planned_provider_calls < 1:
@@ -157,8 +160,8 @@ class BehaviorMatrixPlan(BaseModel):
     concurrency: StrictInt
     pool_ceiling: StrictInt
     procedure_config_hash: StrictStr
-    runtime: Ed1ScoringRuntimeSummary
-    treatments: tuple[Ed1BehaviorMatrixTreatmentPlan, ...]
+    runtime: EncDecScoringRuntimeSummary
+    treatments: tuple[CodeCompBehaviorMatrixTreatmentPlan, ...]
 
     @model_validator(mode="after")
     def _validate_plan(self) -> BehaviorMatrixPlan:
@@ -184,7 +187,7 @@ class BehaviorMatrixPlan(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _Ed1MatrixShared:
+class _CodeCompMatrixShared:
     tasks: tuple[CodeCompTaskInstance, ...]
     preflight_task: CodeCompTaskInstance
     scorer: CheckpointedCodeBatchScorer
@@ -192,7 +195,7 @@ class _Ed1MatrixShared:
 
 def _task_model(route: MatrixProviderRoute) -> EncDecTaskModelConfig:
     return EncDecTaskModelConfig(
-        kind=Ed1TaskModelKind.PROVIDER,
+        kind=EncDecTaskModelKind.PROVIDER,
         provider_call_config=route.call_config,
         execution_policy=route.execution_policy,
     )
@@ -218,7 +221,7 @@ def build_matrix_plan(
     output_dir: Path,
     task_selection: TaskRoleSelection,
     concurrency: int,
-    runtime: Ed1ScoringRuntimeSummary,
+    runtime: EncDecScoringRuntimeSummary,
 ) -> BehaviorMatrixPlan:
     """Build the exact immutable plan for a full matrix or four-model smoke."""
 
@@ -226,7 +229,7 @@ def build_matrix_plan(
     budget_ratios = (None,) if mode == "smoke" else FULL_BUDGET_RATIOS
     repeats = 1 if mode == "smoke" else 3
     rows = len(task_ids) * repeats * 2
-    treatments: list[Ed1BehaviorMatrixTreatmentPlan] = []
+    treatments: list[CodeCompBehaviorMatrixTreatmentPlan] = []
     ordinal = 0
     for route in provider_routes:
         for budget_ratio in budget_ratios:
@@ -236,7 +239,7 @@ def build_matrix_plan(
                 f"budget-{_budget_label(budget_ratio)}"
             )
             treatments.append(
-                Ed1BehaviorMatrixTreatmentPlan(
+                CodeCompBehaviorMatrixTreatmentPlan(
                     treatment_id=treatment_id,
                     directory=treatment_id,
                     lane=route.lane,
@@ -272,7 +275,7 @@ def build_matrix_plan(
         concurrency=concurrency,
         pool_ceiling=pool_ceiling,
         procedure_config_hash=(
-            build_ed1_procedure_config().config_identity_hash
+            build_encdec_procedure_config().config_identity_hash
         ),
         runtime=runtime,
         treatments=tuple(treatments),
@@ -305,7 +308,8 @@ def _select_tasks(
     manifest = load_task_split_manifest(manifest_path)
     selected = select_lowest_historical_pass_rate_for_env(
         manifest,
-        env="ed1",
+        env="code_comp",
+        mode=CodeCompMode.ENCDEC,
         role=TaskSplitRole.TRAIN,
         count=10,
         excluded_task_ids=EXCLUDED_TASK_IDS,
@@ -322,7 +326,7 @@ def _select_tasks(
     return (
         _tasks_by_id(pool, selected.task_ids),
         selected,
-        _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
+        _tasks_by_id(pool, (CODE_COMP_SCORING_PREFLIGHT_TASK_ID,))[0],
     )
 
 
@@ -330,7 +334,7 @@ def _validate_result(
     transcript: BaselinePreviewTranscript,
     *,
     plan: BehaviorMatrixPlan,
-    treatment: Ed1BehaviorMatrixTreatmentPlan,
+    treatment: CodeCompBehaviorMatrixTreatmentPlan,
 ) -> None:
     baseline_binding = transcript.baseline.evidence.evaluation_binding
     comparison_binding = transcript.ceiling.evidence.evaluation_binding
@@ -341,10 +345,10 @@ def _validate_result(
         "budget ratio": transcript.budget_ratio == treatment.budget_ratio,
         "concurrency": transcript.concurrency == plan.concurrency,
         "task model": (
-            ed1_task_model_from_metadata(transcript.metadata)
+            encdec_task_model_from_metadata(transcript.metadata)
             == treatment.task_model
         ),
-        "runtime": ed1_runtime_from_metadata(transcript.metadata)
+        "runtime": encdec_runtime_from_metadata(transcript.metadata)
         == plan.runtime,
         "baseline procedure": (
             baseline_binding.eval_config.record.evaluation_procedure_config_hash
@@ -383,7 +387,7 @@ def _load_valid_result(
     path: Path,
     *,
     plan: BehaviorMatrixPlan,
-    treatment: Ed1BehaviorMatrixTreatmentPlan,
+    treatment: CodeCompBehaviorMatrixTreatmentPlan,
 ) -> BaselinePreviewTranscript | None:
     if not path.exists():
         return None
@@ -424,27 +428,27 @@ def _status_row_accounts(
 
 def _build_hooks(
     *,
-    shared: _Ed1MatrixShared,
+    shared: _CodeCompMatrixShared,
 ) -> BehaviorMatrixHooks[
     BehaviorMatrixPlan,
-    Ed1BehaviorMatrixTreatmentPlan,
+    CodeCompBehaviorMatrixTreatmentPlan,
     BaselinePreviewTranscript,
-    _Ed1MatrixShared,
+    _CodeCompMatrixShared,
 ]:
     @contextmanager
     def shared_context(
         _output_dir: Path, _plan: BehaviorMatrixPlan
-    ) -> Iterator[_Ed1MatrixShared]:
+    ) -> Iterator[_CodeCompMatrixShared]:
         yield shared
 
     def execute_treatment(
-        treatment: Ed1BehaviorMatrixTreatmentPlan,
+        treatment: CodeCompBehaviorMatrixTreatmentPlan,
         plan: BehaviorMatrixPlan,
-        matrix_shared: _Ed1MatrixShared,
+        matrix_shared: _CodeCompMatrixShared,
         log: Callable[[str], None],
     ) -> BaselinePreviewTranscript:
         treatment_dir = Path(plan.output_dir) / treatment.directory
-        return run_ed1_anchor_baseline_preview(
+        return run_code_comp_anchor_baseline_preview(
             store=ObjectStore(
                 SqliteBackend(treatment_dir / "objects.sqlite3")
             ),
@@ -483,7 +487,7 @@ def _build_hooks(
     )
 
 
-def run_ed1_baseline_behavior_matrix(
+def run_code_comp_baseline_behavior_matrix(
     *,
     provider_routes: tuple[MatrixProviderRoute, ...],
     evaluation_python: Path,
@@ -529,7 +533,7 @@ def run_ed1_baseline_behavior_matrix(
         snapshot_path=snapshot_path,
         smoke=smoke,
     )
-    runtime = build_ed1_scoring_runtime(
+    runtime = build_code_comp_scoring_runtime(
         runtime_executable=evaluation_python,
         record_root=output_dir / "code-execution-records",
     )
@@ -542,7 +546,7 @@ def run_ed1_baseline_behavior_matrix(
         output_dir=output_dir,
         task_selection=selection,
         concurrency=concurrency,
-        runtime=Ed1ScoringRuntimeSummary(
+        runtime=EncDecScoringRuntimeSummary(
             evaluation_python=runtime.probe.python_executable,
             dr_code_version=version("dr-code"),
             runtime_identity_hash=runtime.runtime_identity_hash,
@@ -554,7 +558,7 @@ def run_ed1_baseline_behavior_matrix(
         runtime_identity=runtime.runtime_identity,
         executor=runtime.executor,
     ) as scorer:
-        matrix_shared = _Ed1MatrixShared(
+        matrix_shared = _CodeCompMatrixShared(
             tasks=tasks,
             preflight_task=preflight_task,
             scorer=scorer,
@@ -574,7 +578,7 @@ __all__ = [
     "EXCLUDED_TASK_IDS",
     "FULL_BUDGET_RATIOS",
     "BehaviorMatrixPlan",
-    "Ed1BehaviorMatrixTreatmentPlan",
+    "CodeCompBehaviorMatrixTreatmentPlan",
     "build_matrix_plan",
-    "run_ed1_baseline_behavior_matrix",
+    "run_code_comp_baseline_behavior_matrix",
 ]

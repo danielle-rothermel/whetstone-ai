@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1TaskModelKind,
     EncDecTaskModelConfig,
+    EncDecTaskModelKind,
 )
 from whetstone.evaluation.drivers.code_comp.encdec import (
-    Ed1RowJobFactory,
-    Ed1RowRequest,
+    EncDecRowJobFactory,
+    EncDecRowRequest,
 )
 from whetstone.execution.fanout import ProcessJob
 
 _DUMMY_ROW_ENTRYPOINT = (
-    "whetstone.evaluation.drivers.code_comp.workers:drive_dummy_ed1_generation"
+    "whetstone.evaluation.drivers.code_comp.workers:"
+    "drive_dummy_encdec_generation"
 )
 _PROVIDER_ROW_ENTRYPOINT = (
     "whetstone.evaluation.drivers.code_comp.workers:"
-    "drive_provider_ed1_generation"
+    "drive_provider_encdec_generation"
 )
 
 
-def dummy_ed1_row_job(request: Ed1RowRequest) -> ProcessJob:
+def dummy_encdec_row_job(request: EncDecRowRequest) -> ProcessJob:
     """Build a process job with deterministic encoder/decoder generations."""
 
     return ProcessJob(
@@ -28,7 +29,7 @@ def dummy_ed1_row_job(request: Ed1RowRequest) -> ProcessJob:
     )
 
 
-def provider_ed1_row_job(request: Ed1RowRequest) -> ProcessJob:
+def provider_encdec_row_job(request: EncDecRowRequest) -> ProcessJob:
     """Build a process job with real dr-providers encoder/decoder calls."""
 
     return ProcessJob(
@@ -37,16 +38,18 @@ def provider_ed1_row_job(request: Ed1RowRequest) -> ProcessJob:
     )
 
 
-def ed1_task_model_row_job(config: EncDecTaskModelConfig) -> Ed1RowJobFactory:
+def encdec_task_model_row_job(
+    config: EncDecTaskModelConfig,
+) -> EncDecRowJobFactory:
     """Select the row-job boundary for one validated task-model mode."""
 
-    if config.kind is Ed1TaskModelKind.DUMMY:
-        return dummy_ed1_row_job
-    return provider_ed1_row_job
+    if config.kind is EncDecTaskModelKind.DUMMY:
+        return dummy_encdec_row_job
+    return provider_encdec_row_job
 
 
 __all__ = [
-    "dummy_ed1_row_job",
-    "ed1_task_model_row_job",
-    "provider_ed1_row_job",
+    "dummy_encdec_row_job",
+    "encdec_task_model_row_job",
+    "provider_encdec_row_job",
 ]

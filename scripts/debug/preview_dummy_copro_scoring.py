@@ -21,26 +21,29 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from whetstone.envs.code_comp.constants import ED1_CANONICAL_MODEL
+from whetstone.envs.code_comp.constants import CODE_COMP_CANONICAL_MODEL
 from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1TaskModelKind,
     EncDecTaskModelConfig,
-    ed1_blend_config_from_metadata,
-    ed1_runtime_from_metadata,
-    ed1_task_model_from_metadata,
+    EncDecTaskModelKind,
+    encdec_blend_config_from_metadata,
+    encdec_runtime_from_metadata,
+    encdec_task_model_from_metadata,
 )
-from whetstone.envs.code_comp.preview import run_ed1_copro_scoring_preview
+from whetstone.envs.code_comp.preview import (
+    run_code_comp_copro_scoring_preview,
+)
+from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.runtime import (
-    Ed1ScoringRuntimeSummary,
-    build_ed1_scoring_runtime,
+    EncDecScoringRuntimeSummary,
+    build_code_comp_scoring_runtime,
 )
 from whetstone.envs.code_comp.scoring import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
+    CODE_COMP_SCORING_PREFLIGHT_TASK_ID,
     CheckpointedCodeBatchScorer,
 )
 from whetstone.envs.task_pools import select_role_for_env
-from whetstone.evaluation.drivers.ed1_workers import (
+from whetstone.evaluation.drivers.code_comp.workers import (
     DUMMY_ALTERNATE_PASSING_BODY,
     DUMMY_FAILING_BODY,
     DUMMY_PASSING_BODY,
@@ -58,12 +61,12 @@ from whetstone.optimization.codex.proposer import (
     CodexCliProposerConfig,
     CodexCliProposerTransport,
 )
-from whetstone.optimization.copro.ed1_dry_run import (
+from whetstone.optimization.copro.code_comp.dry_run import (
+    CodeCompCoproProposalCall,
+    CodeCompCoproRoundAttempt,
+    CodeCompCoproSweepRanges,
     DummyCoproProposerConfig,
     DummyCoproProposerTransport,
-    Ed1CoproProposalCall,
-    Ed1CoproRoundAttempt,
-    Ed1CoproSweepRanges,
 )
 from whetstone.optimization.copro.scoring_preview import (
     CandidateProgress,
@@ -160,7 +163,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--provider-model",
-        default=ED1_CANONICAL_MODEL,
+        default=CODE_COMP_CANONICAL_MODEL,
         help="OpenRouter model used when --task-model=provider",
     )
     parser.add_argument(
@@ -274,7 +277,8 @@ def _select_tasks(
             manifest = load_task_split_manifest(args.task_manifest)
             selection = select_role_for_env(
                 manifest,
-                env="ed1",
+                env="code_comp",
+                mode=CodeCompMode.ENCDEC,
                 role=TaskSplitRole(args.task_role),
             )
         except TaskSplitManifestError as exc:
@@ -283,14 +287,14 @@ def _select_tasks(
         return (
             _tasks_by_id(pool, selection.task_ids),
             selection,
-            _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
+            _tasks_by_id(pool, (CODE_COMP_SCORING_PREFLIGHT_TASK_ID,))[0],
         )
     if args.task_ids:
         pool = load_tasks(snapshot_path=args.snapshot_path)
         return (
             _tasks_by_id(pool, tuple(args.task_ids)),
             None,
-            _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
+            _tasks_by_id(pool, (CODE_COMP_SCORING_PREFLIGHT_TASK_ID,))[0],
         )
     selected = load_tasks(
         snapshot_path=args.snapshot_path,
@@ -300,7 +304,7 @@ def _select_tasks(
 
 
 def _write_proposal_attempt(
-    attempt: Ed1CoproRoundAttempt,
+    attempt: CodeCompCoproRoundAttempt,
     directory: Path,
 ) -> None:
     directory.mkdir(parents=True, exist_ok=True)
@@ -326,8 +330,8 @@ def render_runtime(
     *,
     output_dir: Path,
 ) -> None:
-    runtime = ed1_runtime_from_metadata(transcript.metadata)
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    runtime = encdec_runtime_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column("field", style="bold cyan")
     table.add_column("value", style="bright_white")
@@ -356,7 +360,9 @@ def render_runtime(
     console.print(Panel(table, title="Runtime and ground-truth preflight"))
 
 
-def render_proposal_call(console: Console, call: Ed1CoproProposalCall) -> None:
+def render_proposal_call(
+    console: Console, call: CodeCompCoproProposalCall
+) -> None:
     metadata = Table(show_header=False, box=None, pad_edge=False)
     metadata.add_column("field", style="bold cyan")
     metadata.add_column("value", style="bright_white")
@@ -414,7 +420,7 @@ def render_proposal_call(console: Console, call: Ed1CoproProposalCall) -> None:
 
 def render_proposal_attempt(
     console: Console,
-    attempt: Ed1CoproRoundAttempt,
+    attempt: CodeCompCoproRoundAttempt,
 ) -> None:
     render_proposal_call(console, attempt.proposal_call)
     accepted = {
@@ -468,8 +474,8 @@ def render_candidate(
     candidate: ScoredCandidate,
     transcript: ScoringTranscript,
 ) -> None:
-    blend_config = ed1_blend_config_from_metadata(transcript.metadata)
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    blend_config = encdec_blend_config_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     body = candidate.candidate.record.payload[MUTATION_FIELD]
     assert isinstance(body, str)
     console.rule(
@@ -546,7 +552,7 @@ def render_round(
     )
     render_proposal_attempt(
         console,
-        Ed1CoproRoundAttempt(
+        CodeCompCoproRoundAttempt(
             starting_state=round_record.preview.starting_state,
             round_plan=round_record.preview.round_plan,
             proposal_call=round_record.preview.proposal_call,
@@ -607,7 +613,7 @@ def render_transcript(
     output_dir: Path,
     codex_records: Path | None,
 ) -> None:
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     proposer_kind = (
         transcript.points[0].rounds[0].preview.proposal_call.proposer_kind
     )
@@ -625,7 +631,7 @@ def render_transcript(
         "Encoder and decoder outputs are deterministic fixtures. This run "
         "validates proposer transport, candidate intake, execution, and "
         "lifecycle wiring; its ranking is not model-quality evidence."
-        if task_model.kind is Ed1TaskModelKind.DUMMY
+        if task_model.kind is EncDecTaskModelKind.DUMMY
         else (
             "Encoder and decoder outputs came from the configured provider "
             "model. This is a tiny wiring preview, not a powered experiment."
@@ -680,7 +686,7 @@ def _render_launch_plan(
     proposer_kind: str,
     task_model: EncDecTaskModelConfig,
     tasks: tuple[CodeCompTaskInstance, ...],
-    sweep: Ed1CoproSweepRanges,
+    sweep: CodeCompCoproSweepRanges,
     repeats: int,
     concurrency: int,
     open_file_limit: int,
@@ -714,7 +720,7 @@ def _render_launch_plan(
 
 
 def _observe_proposal(
-    attempt: Ed1CoproRoundAttempt,
+    attempt: CodeCompCoproRoundAttempt,
     *,
     console: Console,
     output_dir: Path,
@@ -800,13 +806,13 @@ def _build_proposer(
 def _build_task_model(
     args: argparse.Namespace,
 ) -> EncDecTaskModelConfig:
-    kind = Ed1TaskModelKind(args.task_model)
+    kind = EncDecTaskModelKind(args.task_model)
     route = canonical_task_route(
         model=args.provider_model,
         temperature=None,
         max_attempts=1,
     )
-    if kind is Ed1TaskModelKind.PROVIDER:
+    if kind is EncDecTaskModelKind.PROVIDER:
         return EncDecTaskModelConfig(
             kind=kind,
             provider_call_config=route.call_config,
@@ -845,18 +851,18 @@ def main() -> None:
         codex_records,
     ) = _build_proposer(args, output_dir=output_dir)
     task_model = _build_task_model(args)
-    runtime = build_ed1_scoring_runtime(
+    runtime = build_code_comp_scoring_runtime(
         runtime_executable=args.evaluation_python,
         record_root=output_dir / "execution-records",
     )
-    runtime_summary = Ed1ScoringRuntimeSummary(
+    runtime_summary = EncDecScoringRuntimeSummary(
         evaluation_python=runtime.probe.python_executable,
         dr_code_version=version("dr-code"),
         runtime_identity_hash=runtime.runtime_identity_hash,
         probe=runtime.probe,
     )
     tasks, task_selection, preflight_task = _select_tasks(args)
-    sweep = Ed1CoproSweepRanges(
+    sweep = CodeCompCoproSweepRanges(
         budget_ratios=_budget_ratios(args.budget_mode),
         breadths=(args.breadth,),
         depths=(args.depth,),
@@ -879,7 +885,7 @@ def main() -> None:
             runtime_identity=runtime.runtime_identity,
             executor=runtime.executor,
         ) as scorer:
-            transcript = run_ed1_copro_scoring_preview(
+            transcript = run_code_comp_copro_scoring_preview(
                 store=store,
                 tasks=tasks,
                 sweep=sweep,

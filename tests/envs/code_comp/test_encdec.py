@@ -17,39 +17,37 @@ from tests.envs.support import (
     execution_policy,
     process_row_job_factory,
     row_job_factory,
-    synthetic_ed1_tasks,
+    synthetic_code_comp_tasks,
 )
 from tests.execution.fake_python import local_python_executor
 from tests.provider.support import build_evidence, failure_outcome
-from whetstone.envs.ed1 import (
+from whetstone.envs.code_comp.constants import (
     BLENDED_METRIC_ID,
+    CODE_COMP_BLENDED_REWARD_NAME,
+    CODE_COMP_CANONICAL_MODEL,
+    CODE_COMP_DATASET_REVISION,
+    CODE_COMP_ENV_NAME,
+    CODE_COMP_INVALID_BODY,
+    CODE_COMP_SUBMISSION_SCORE_NAME,
     DECODER_TEMPLATE,
-    ED1_BLENDED_REWARD_NAME,
-    ED1_CANONICAL_MODEL,
-    ED1_DATASET_REVISION,
-    ED1_DEFAULT_BLEND_CONFIG,
-    ED1_ENV_NAME,
-    ED1_INVALID_BODY,
-    ED1_SUBMISSION_SCORE_NAME,
     ENCODER_BODY_A,
-    BoundedCompressionMetricConfig,
-    Ed1BodyError,
-    build_ed1_blended_reward_policy,
-    build_ed1_experiment,
-    ed1_body_rejection,
-    ed1_initial_candidate,
+)
+from whetstone.envs.code_comp.modes.encdec import (
+    build_encdec_experiment,
+    encdec_initial_candidate,
+)
+from whetstone.envs.code_comp.mutation_surface import (
+    InstructionBodyError,
+    instruction_body_rejection,
     render_encoder_frame,
-    validate_ed1_body,
+    validate_instruction_body,
 )
-from whetstone.envs.ed1_scoring import (
-    BatchScoringDeadlineExceeded,
-    CheckpointedCodeBatchScorer,
-    CodeScore,
-    CodeScoringInput,
-    _project_submission_score,
-    score_ed1_submission,
+from whetstone.envs.code_comp.reward.blended import (
+    CODE_COMP_DEFAULT_BLEND_CONFIG,
+    BoundedCompressionMetricConfig,
+    build_code_comp_blended_reward_policy,
 )
-from whetstone.envs.encdec_rollout import (
+from whetstone.envs.code_comp.rollout.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
     EVAL_NODE_ID,
@@ -57,15 +55,23 @@ from whetstone.envs.encdec_rollout import (
     build_encoder_provider_call_config,
     encdec_graph_definition,
 )
+from whetstone.envs.code_comp.scoring import (
+    BatchScoringDeadlineExceeded,
+    CheckpointedCodeBatchScorer,
+    CodeScore,
+    CodeScoringInput,
+    _project_submission_score,
+    score_code_comp_submission,
+)
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness
-from whetstone.evaluation.drivers.ed1 import (
-    Ed1GeneratedRowOutcome,
-    Ed1PartialPayload,
-    Ed1RowOutcome,
-    Ed1RowRequest,
-    drive_ed1_row,
-    run_ed1_eval,
+from whetstone.evaluation.drivers.code_comp.encdec import (
+    EncDecGeneratedRowOutcome,
+    EncDecPartialPayload,
+    EncDecRowOutcome,
+    EncDecRowRequest,
+    drive_encdec_row,
+    run_encdec_eval,
 )
 from whetstone.evaluation.drivers.internal import _llm_component_step
 from whetstone.evaluation.traces import ExecutedRowState
@@ -80,7 +86,7 @@ from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
 def _tasks(limit: int = 3):
-    return synthetic_ed1_tasks(limit)
+    return synthetic_code_comp_tasks(limit)
 
 
 def _successful_outcome(instance, *, encoder_text: str = "REBUILD:ok"):
@@ -92,7 +98,7 @@ def _successful_outcome(instance, *, encoder_text: str = "REBUILD:ok"):
         max_budget=max_budget,
     )
     decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
-    return Ed1RowOutcome(
+    return EncDecRowOutcome(
         primary_value=1.0,
         compression_value=0.5,
         encoder_text=encoder_text,
@@ -126,7 +132,7 @@ def _generated_outcome(instance, *, decoder_text: str):
         max_budget=max_budget,
     )
     decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
-    return Ed1GeneratedRowOutcome(
+    return EncDecGeneratedRowOutcome(
         compression_value=0.5,
         encoder_text=encoder_text,
         decoder_text=decoder_text,
@@ -151,13 +157,13 @@ def _generated_outcome(instance, *, decoder_text: str):
 
 def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
     tasks = _tasks(2)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks,
         repeats=2,
         internal_n=2,
         official_n=2,
     )
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     batch_sizes: list[int] = []
 
     def generated(instance, repeat: int, _drive_ordinal: int):
@@ -178,7 +184,7 @@ def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
             for _item in inputs
         )
 
-    result = run_ed1_eval(
+    result = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-batch",
@@ -349,10 +355,12 @@ def _evaluate(
     outcome_for=None,
     partial_log: PartialLog | None = None,
     apply_reward: bool = False,
-    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
+    blend_config: BoundedCompressionMetricConfig = (
+        CODE_COMP_DEFAULT_BLEND_CONFIG
+    ),
 ):
     selected = tasks or _tasks()
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=selected,
         internal_n=len(selected),
         official_n=len(selected),
@@ -361,7 +369,7 @@ def _evaluate(
         max_skip_fraction=max_skip_fraction,
         blend_config=blend_config,
     )
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     active_outcome = outcome_for or (
         lambda instance, _repeat, _drive: _successful_outcome(instance)
     )
@@ -370,7 +378,7 @@ def _evaluate(
         if apply_reward
         else experiment.eval_configs.official
     )
-    result = run_ed1_eval(
+    result = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
@@ -394,23 +402,23 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
     ]
     assert definition.terminal_node_id == EVAL_NODE_ID
     base = build_encdec_rollout_definition(
-        ED1_ENV_NAME,
+        CODE_COMP_ENV_NAME,
         provider_call_config=build_encoder_provider_call_config(
-            ED1_CANONICAL_MODEL
+            CODE_COMP_CANONICAL_MODEL
         ),
         procedure_config_hash="a" * 64,
         budget_ratio=0.5,
     )
     ratio = build_encdec_rollout_definition(
-        ED1_ENV_NAME,
+        CODE_COMP_ENV_NAME,
         provider_call_config=build_encoder_provider_call_config(
-            ED1_CANONICAL_MODEL
+            CODE_COMP_CANONICAL_MODEL
         ),
         procedure_config_hash="a" * 64,
         budget_ratio=0.75,
     )
     model = build_encdec_rollout_definition(
-        ED1_ENV_NAME,
+        CODE_COMP_ENV_NAME,
         provider_call_config=build_encoder_provider_call_config(
             "openai/gpt-5-nano"
         ),
@@ -419,7 +427,7 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
     )
     assert base.graph_hash != ratio.graph_hash != model.graph_hash
     assert base.provider_call_config.definition.route.model == (
-        ED1_CANONICAL_MODEL
+        CODE_COMP_CANONICAL_MODEL
     )
 
 
@@ -429,7 +437,7 @@ def test_ed1_experiment_preserves_the_exact_provider_call_config() -> None:
         controls=GenerationControls(token_limit=2048),
     )
 
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         provider_call_config=provider_call_config,
         tasks=_tasks(1),
         internal_n=1,
@@ -451,12 +459,12 @@ def test_humaneval_scoring_canonical_passes_wrong_fails(
     code_executor: Executor,
 ) -> None:
     task = _tasks(1)[0].humaneval_task
-    good = score_ed1_submission(
+    good = score_code_comp_submission(
         raw_submission=task.ground_truth_code,
         task=task,
         executor=code_executor,
     )
-    bad = score_ed1_submission(
+    bad = score_code_comp_submission(
         raw_submission=(
             f"def {task.entry_point}(*args, **kwargs):\n    return None\n"
         ),
@@ -481,7 +489,7 @@ def test_humaneval_scoring_completed_rejections_are_definitive(
     code_executor: Executor,
 ) -> None:
     task = _tasks(1)[0].humaneval_task
-    score = score_ed1_submission(
+    score = score_code_comp_submission(
         raw_submission=raw_submission,
         task=task,
         executor=code_executor,
@@ -497,7 +505,7 @@ def test_humaneval_scoring_projects_harness_failure() -> None:
     def unavailable(_job, _cancellation):
         raise ExecutorFailure("executor unavailable")
 
-    harness_failure = score_ed1_submission(
+    harness_failure = score_code_comp_submission(
         raw_submission=task.ground_truth_code,
         task=task,
         executor=FakeExecutor(responder=unavailable),
@@ -530,19 +538,21 @@ def test_humaneval_scoring_projects_completed_failure_as_zero(
 
 
 def test_body_validation_rejects_before_transport() -> None:
-    assert ed1_body_rejection("Solve {input_code}") == ("{input_code}",)
-    assert ed1_body_rejection("```python\npass\n```") == ("```",)
-    assert ed1_body_rejection("Solve carefully.") == ()
+    assert instruction_body_rejection("Solve {input_code}") == (
+        "{input_code}",
+    )
+    assert instruction_body_rejection("```python\npass\n```") == ("```",)
+    assert instruction_body_rejection("Solve carefully.") == ()
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(tasks=tasks)
+    experiment = build_encdec_experiment(tasks=tasks)
     served: list[str] = []
 
     def outcome(instance, _repeat: int, _drive_ordinal: int):
         served.append(str(instance.id))
         return _successful_outcome(instance)
 
-    with pytest.raises(Ed1BodyError) as error:
-        run_ed1_eval(
+    with pytest.raises(InstructionBodyError) as error:
+        run_encdec_eval(
             experiment,
             candidate_template="Solve {input_code}",
             candidate_id="invalid-body",
@@ -554,7 +564,7 @@ def test_body_validation_rejects_before_transport() -> None:
             ),
         )
 
-    assert error.value.code == ED1_INVALID_BODY
+    assert error.value.code == CODE_COMP_INVALID_BODY
     assert error.value.offending == ("{input_code}",)
     assert served == []
 
@@ -592,7 +602,7 @@ def test_decoder_prompt_matches_fixed_prompt_contract() -> None:
 
 def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
     experiment, result = _evaluate(repeats=2, apply_reward=True)
-    assert result.primary_aggregate.name == ED1_SUBMISSION_SCORE_NAME
+    assert result.primary_aggregate.name == CODE_COMP_SUBMISSION_SCORE_NAME
     assert result.primary_aggregate.aggregation_output.value == pytest.approx(
         1
     )
@@ -603,25 +613,27 @@ def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
     )
     assert result.primary_aggregate.repeat_count == 2
     assert {row.metric_name for row in result.row_diags} == {
-        ED1_SUBMISSION_SCORE_NAME
+        CODE_COMP_SUBMISSION_SCORE_NAME
     }
     assert result.reward is not None
-    assert result.reward.input_citations[0].name == ED1_BLENDED_REWARD_NAME
+    assert (
+        result.reward.input_citations[0].name == CODE_COMP_BLENDED_REWARD_NAME
+    )
     assert len(result.outputs) == len(_tasks()) * 2
     assert all("ENCODER:" in (row.output_text or "") for row in result.outputs)
-    assert experiment.dataset_revision == ED1_DATASET_REVISION
+    assert experiment.dataset_revision == CODE_COMP_DATASET_REVISION
 
 
 def test_ed1_process_job_runs_real_row_driver() -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks,
         repeats=1,
         internal_n=1,
         official_n=1,
     )
-    candidate = ed1_initial_candidate()
-    result = run_ed1_eval(
+    candidate = encdec_initial_candidate()
+    result = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-process-job",
@@ -659,11 +671,11 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
 
 def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks, repeats=1, internal_n=1, official_n=1
     )
     instance = tasks[0].instance
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     policy = execution_policy(max_attempts=1)
     encoder_text = "encoder output that is not decoder code"
     encoder_transport = FakeTransport(constant_reply(encoder_text))
@@ -688,7 +700,7 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
 
     rollout = experiment.encdec_rollout
     assert rollout is not None
-    outcome = drive_ed1_row(
+    outcome = drive_encdec_row(
         experiment=experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         instance=instance,
@@ -704,7 +716,7 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
         cache_unit="decoder-failure",
     )
 
-    assert isinstance(outcome, Ed1RowOutcome)
+    assert isinstance(outcome, EncDecRowOutcome)
     assert outcome.row_state is ExecutedRowState.FAILED
     assert outcome.decoder_text is None
     assert outcome.encoder_text == encoder_text
@@ -721,11 +733,11 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
 
 def test_encoder_failure_still_reports_what_was_measured() -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks, repeats=1, internal_n=1, official_n=1
     )
     instance = tasks[0].instance
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     policy = execution_policy(max_attempts=1)
 
     def transport(request):
@@ -743,7 +755,7 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
 
     rollout = experiment.encdec_rollout
     assert rollout is not None
-    outcome = drive_ed1_row(
+    outcome = drive_encdec_row(
         experiment=experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         instance=instance,
@@ -759,7 +771,7 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
         cache_unit="encoder-failure",
     )
 
-    assert isinstance(outcome, Ed1RowOutcome)
+    assert isinstance(outcome, EncDecRowOutcome)
     assert outcome.row_state is ExecutedRowState.FAILED
     assert outcome.encoder_text is None
     assert outcome.latency_s is not None
@@ -771,20 +783,20 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
 
 def test_ed1_v2_request_hash_is_pinned() -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks, repeats=1, internal_n=1, official_n=1
     )
-    candidate = ed1_initial_candidate()
-    requests: list[Ed1RowRequest] = []
+    candidate = encdec_initial_candidate()
+    requests: list[EncDecRowRequest] = []
     base = row_job_factory(
         lambda instance, _repeat, _drive: _successful_outcome(instance)
     )
 
-    def capture(request: Ed1RowRequest):
+    def capture(request: EncDecRowRequest):
         requests.append(request)
         return base(request)
 
-    run_ed1_eval(
+    run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
@@ -797,7 +809,7 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "3c2dc471b97f48bfb16f2f0364c98c0cd8c5f4dfac6e3d0738ccc0d28c6e99cb"
+        "899b7370b857b363d8ed0936e6078f26879e6a0e4d37258d13ce25d2acb39981"
     )
 
 
@@ -808,9 +820,9 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
 def test_ed1_rejects_binding_role_mismatch_before_restore(
     monkeypatch, split_name: str, official_binding: bool
 ) -> None:
-    experiment = build_ed1_experiment(tasks=_tasks(), repeats=1)
+    experiment = build_encdec_experiment(tasks=_tasks(), repeats=1)
     sampling = getattr(experiment.eval_configs, split_name)
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
 
     def should_not_restore(*_args, **_kwargs):
         raise AssertionError("role mismatch must fail before partial restore")
@@ -819,11 +831,11 @@ def test_ed1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.ed1.index_partial_records",
+        "whetstone.evaluation.drivers.code_comp.encdec.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
-        run_ed1_eval(
+        run_encdec_eval(
             experiment,
             candidate_template=str(candidate.payload[MUTATION_FIELD]),
             candidate_id="ed1-role-mismatch",
@@ -859,7 +871,7 @@ def test_budget_and_healthy_diagnostics_are_explicit() -> None:
 def test_all_failed_diagnostics_name_dominant_failure() -> None:
     def failed(instance, _repeat: int, _drive_ordinal: int):
         completed = _successful_outcome(instance)
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text="REBUILD:ok",
@@ -883,7 +895,7 @@ def test_all_failed_diagnostics_name_dominant_failure() -> None:
 
 def _one_failed_row(instance, _repeat: int, _drive_ordinal: int):
     if str(instance.id).endswith("/0"):
-        return Ed1RowOutcome(
+        return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=None,
@@ -931,12 +943,12 @@ def test_complete_evaluation_produces_exact_blended_reward() -> None:
     assert reward.value == pytest.approx(expected_value)
     assert reward.reward_name == "reward"
     assert reward.reward_policy.policy_name == (
-        "whetstone.env.ed1.blended_reward|"
+        "whetstone.env.code_comp.blended_reward|"
         "primary_score_with_bounded_compression_penalty|"
         "w=0.1|min=0.01|max=4"
     )
     assert [citation.name for citation in reward.input_citations] == [
-        ED1_BLENDED_REWARD_NAME
+        CODE_COMP_BLENDED_REWARD_NAME
     ]
     assert reward.evidence_refs == (
         result.primary_aggregate.record_ref(),
@@ -945,11 +957,11 @@ def test_complete_evaluation_produces_exact_blended_reward() -> None:
 
 
 def test_default_reward_policy_is_the_advertised_blend() -> None:
-    experiment = build_ed1_experiment(tasks=_tasks(1))
-    expected = build_ed1_blended_reward_policy(
-        ED1_DEFAULT_BLEND_CONFIG, env_name=ED1_ENV_NAME
+    experiment = build_encdec_experiment(tasks=_tasks(1))
+    expected = build_code_comp_blended_reward_policy(
+        CODE_COMP_DEFAULT_BLEND_CONFIG, env_name=CODE_COMP_ENV_NAME
     )
-    assert experiment.blend_config == ED1_DEFAULT_BLEND_CONFIG
+    assert experiment.blend_config == CODE_COMP_DEFAULT_BLEND_CONFIG
     assert experiment.reward_policy == expected
 
 
@@ -957,7 +969,7 @@ def test_ed1_rejects_disabling_the_blended_reward() -> None:
     with pytest.raises(
         TypeError, match="ED1 requires a bounded compression blend config"
     ):
-        build_ed1_experiment(
+        build_encdec_experiment(
             tasks=_tasks(1),
             blend_config=None,  # ty: ignore[invalid-argument-type]
         )
@@ -965,7 +977,7 @@ def test_ed1_rejects_disabling_the_blended_reward() -> None:
 
 def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
     names = {
-        build_ed1_experiment(
+        build_encdec_experiment(
             tasks=_tasks(1),
             blend_config=BoundedCompressionMetricConfig(weight=w),
         ).reward_policy.policy_name
@@ -976,10 +988,10 @@ def test_blend_config_identity_reaches_the_advertised_policy_name() -> None:
 
 def test_malformed_brace_is_a_typed_body_rejection() -> None:
     for body in ("Explain {code", "Explain code}", "Explain {a{b} thing"):
-        assert ed1_body_rejection(body)
-        with pytest.raises(Ed1BodyError) as excinfo:
-            validate_ed1_body(body)
-        assert ED1_INVALID_BODY in str(excinfo.value)
+        assert instruction_body_rejection(body)
+        with pytest.raises(InstructionBodyError) as excinfo:
+            validate_instruction_body(body)
+        assert CODE_COMP_INVALID_BODY in str(excinfo.value)
         assert excinfo.value.offending
 
 
@@ -991,7 +1003,7 @@ def test_bounded_skip_certifies_retained_scores_and_accounting() -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
-            return Ed1RowOutcome(
+            return EncDecRowOutcome(
                 primary_value=None,
                 compression_value=None,
                 encoder_text=None,
@@ -1028,13 +1040,13 @@ def test_streaming_resume_restores_rows_without_transport(
     assert len(records) == 2
     assert {record.raw_response for record in records} == {""}
     for record in records:
-        Ed1PartialPayload.from_json_value(record.observation_payload)
+        EncDecPartialPayload.from_json_value(record.observation_payload)
 
     def boom(_instance, _repeat: int, _drive_ordinal: int):
         raise AssertionError("recorded rows must not be called again")
 
-    candidate = ed1_initial_candidate()
-    resumed = run_ed1_eval(
+    candidate = encdec_initial_candidate()
+    resumed = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
@@ -1051,7 +1063,7 @@ def test_streaming_resume_restores_rows_without_transport(
     assert resumed.outputs == first.outputs
 
 
-def test_ed1_partial_payload_rejects_shape_and_type_drift() -> None:
+def test_encdec_partial_payload_rejects_shape_and_type_drift() -> None:
     completed = _successful_outcome(_tasks(1)[0].instance)
     valid = {
         "compression_value": 0.5,
@@ -1063,24 +1075,26 @@ def test_ed1_partial_payload_rejects_shape_and_type_drift() -> None:
         "row_state": ExecutedRowState.SUCCESS,
         "executed_component_steps": completed.executed_component_steps,
     }
-    Ed1PartialPayload.model_validate(valid)
+    EncDecPartialPayload.model_validate(valid)
 
     with pytest.raises(ValueError, match="Extra inputs are not permitted"):
-        Ed1PartialPayload.model_validate({**valid, "unexpected": True})
+        EncDecPartialPayload.model_validate({**valid, "unexpected": True})
     with pytest.raises(ValueError, match="valid number"):
-        Ed1PartialPayload.model_validate({**valid, "compression_value": "0.5"})
+        EncDecPartialPayload.model_validate(
+            {**valid, "compression_value": "0.5"}
+        )
 
 
 def test_ed1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
     tasks = _tasks(2)
-    experiment = build_ed1_experiment(tasks=tasks, repeats=1)
+    experiment = build_encdec_experiment(tasks=tasks, repeats=1)
     sampling = experiment.eval_configs.internal
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     binding_a = evaluation_binding(sampling)
     binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
     log = PartialLog(path=tmp_path / "ed1-binding.partial")
 
-    run_ed1_eval(
+    run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
@@ -1100,7 +1114,7 @@ def test_ed1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
         served_b.append(str(instance.id))
         return _successful_outcome(instance)
 
-    run_ed1_eval(
+    run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
@@ -1124,13 +1138,13 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
     tmp_path: Path, monkeypatch
 ) -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks, repeats=1, internal_n=1, official_n=1
     )
     sampling = experiment.eval_configs.internal
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     log = PartialLog(path=tmp_path / "ed1-redrive.partial")
-    pending = Ed1RowOutcome(
+    pending = EncDecRowOutcome(
         primary_value=None,
         compression_value=None,
         encoder_text=None,
@@ -1168,11 +1182,11 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.ed1.run_call_pool",
+        "whetstone.evaluation.drivers.code_comp.encdec.run_call_pool",
         crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
-        run_ed1_eval(
+        run_encdec_eval(
             experiment,
             candidate_template=str(candidate.payload[MUTATION_FIELD]),
             candidate_id=candidate.candidate_id,
@@ -1191,7 +1205,7 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
         resumed_ordinals.append(drive_ordinal)
         return _successful_outcome(instance)
 
-    run_ed1_eval(
+    run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,
@@ -1209,13 +1223,13 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
     tmp_path: Path, monkeypatch
 ) -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks,
         repeats=1,
         internal_n=1,
         official_n=1,
     )
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     log = PartialLog(path=tmp_path / "ed1-timeout.partial.jsonl")
 
     def timeout_pool(specs, *, concurrency, is_rate_limited, max_wall_seconds):
@@ -1235,9 +1249,10 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
         )
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.ed1.run_call_pool", timeout_pool
+        "whetstone.evaluation.drivers.code_comp.encdec.run_call_pool",
+        timeout_pool,
     )
-    run_ed1_eval(
+    run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-timeout",
@@ -1264,7 +1279,7 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
     def boom(_request):
         raise AssertionError("terminal timeout must restore without repayment")
 
-    resumed = run_ed1_eval(
+    resumed = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-timeout",
@@ -1298,9 +1313,10 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
 
     fresh_log = PartialLog(path=tmp_path / "ed1-deadline.partial.jsonl")
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.ed1.run_call_pool", deadline_pool
+        "whetstone.evaluation.drivers.code_comp.encdec.run_call_pool",
+        deadline_pool,
     )
-    missing = run_ed1_eval(
+    missing = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id="ed1-deadline",
@@ -1323,13 +1339,13 @@ def test_process_job_cache_hit_and_provenance_are_persisted(
     tmp_path: Path,
 ) -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks,
         repeats=1,
         internal_n=1,
         official_n=1,
     )
-    candidate = ed1_initial_candidate()
+    candidate = encdec_initial_candidate()
     cache = PromptResultCache(tmp_path / "prompt-cache")
     job_factory = process_row_job_factory(
         "tests.envs.process_workers:drive_ed1_success"
@@ -1338,7 +1354,7 @@ def test_process_job_cache_hit_and_provenance_are_persisted(
     second_log = PartialLog(path=tmp_path / "second.partial.jsonl")
 
     for log in (first_log, second_log):
-        run_ed1_eval(
+        run_encdec_eval(
             experiment,
             candidate_template=str(candidate.payload[MUTATION_FIELD]),
             candidate_id=candidate.candidate_id,
@@ -1366,14 +1382,14 @@ def test_process_job_cache_hit_and_provenance_are_persisted(
 
 def test_transient_encoder_failure_is_redriven_to_success() -> None:
     tasks = _tasks(1)
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
         tasks=tasks,
         repeats=1,
         internal_n=1,
         official_n=1,
     )
-    candidate = ed1_initial_candidate()
-    result = run_ed1_eval(
+    candidate = encdec_initial_candidate()
+    result = run_encdec_eval(
         experiment,
         candidate_template=str(candidate.payload[MUTATION_FIELD]),
         candidate_id=candidate.candidate_id,

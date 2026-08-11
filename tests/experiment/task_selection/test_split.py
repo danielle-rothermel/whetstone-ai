@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.envs.support import synthetic_ed1_tasks
+from tests.envs.support import synthetic_code_comp_tasks
 from tests.experiment.task_selection.support import manifest_payload
 from whetstone.experiment.task_selection import (
     TaskSplitManifestError,
@@ -14,8 +14,8 @@ from whetstone.experiment.task_selection import (
 def test_resolution_preserves_manifest_order_and_caps_test_membership() -> (
     None
 ):
-    tasks = synthetic_ed1_tasks(5)
-    roles = parse_task_split_manifest(manifest_payload()).pool_roles("ed1")
+    tasks = synthetic_code_comp_tasks(5)
+    roles = parse_task_split_manifest(manifest_payload()).pool_roles("encdec")
     resolved = resolve_manifest_split(
         roles=roles,
         items=tasks,
@@ -36,11 +36,11 @@ def test_resolution_preserves_manifest_order_and_caps_test_membership() -> (
 
 def test_resolution_refuses_unknown_ids() -> None:
     roles = parse_task_split_manifest(
-        manifest_payload(ed1_test=("Synthetic/999",))
-    ).pool_roles("ed1")
+        manifest_payload(encdec_test=("Synthetic/999",))
+    ).pool_roles("encdec")
     with pytest.raises(TaskSplitManifestError, match="Synthetic/999"):
         resolve_manifest_split(
             roles=roles,
-            items=synthetic_ed1_tasks(4),
+            items=synthetic_code_comp_tasks(4),
             id_of=lambda task: str(task.instance.id),
         )

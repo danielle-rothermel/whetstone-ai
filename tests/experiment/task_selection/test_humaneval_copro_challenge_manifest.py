@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.task_pools import (
     roles_for_env,
     select_lowest_historical_pass_rate_for_env,
@@ -23,7 +24,7 @@ _COPRO_MANIFEST = Path(__file__).resolve().parents[3] / (
 def test_frozen_copro_challenge_manifest_matches_reference_metadata() -> None:
     payload = json.loads(_COPRO_MANIFEST.read_text())
     manifest = parse_task_split_manifest(payload)
-    roles = roles_for_env(manifest, "ed1")
+    roles = roles_for_env(manifest, "code_comp", CodeCompMode.ENCDEC)
     rates = payload["selection"]["historical_pass_rates"]
 
     assert tuple(
@@ -53,7 +54,8 @@ def test_copro_probe_selects_five_worst_eligible_train_tasks() -> None:
 
     selection = select_lowest_historical_pass_rate_for_env(
         manifest,
-        env="ed1",
+        env="code_comp",
+        mode=CodeCompMode.ENCDEC,
         role=TaskSplitRole.TRAIN,
         count=5,
         excluded_task_ids=excluded,

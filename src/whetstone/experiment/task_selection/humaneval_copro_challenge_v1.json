@@ -4,9 +4,8 @@
   "scope": "Difficulty-enriched HumanEval subset selected for prompt-optimization signal; results do not estimate performance over all HumanEval tasks.",
   "selection": {
     "source": {
-      "path": "docs/refs/copro/task_pass_rates.parquet",
-      "sha256": "51b90011c2166ccbc7282677e2fb9bf25d7def9f8d8bd8c6c38c805b142f37e8",
-      "row_count": 164
+      "kind": "embedded_historical_pass_rates",
+      "note": "Rates embedded in manifest; no external parquet dependency."
     },
     "predicate": "0 < pass_rate < 1",
     "selected_task_count": 76,
@@ -111,7 +110,11 @@
         "upper": 0.5,
         "upper_inclusive": false,
         "task_count": 4,
-        "allocation": {"train": 2, "validation": 1, "test": 1}
+        "allocation": {
+          "train": 2,
+          "validation": 1,
+          "test": 1
+        }
       },
       {
         "name": "0_50_to_lt_0_75",
@@ -120,7 +123,11 @@
         "upper": 0.75,
         "upper_inclusive": false,
         "task_count": 20,
-        "allocation": {"train": 12, "validation": 4, "test": 4}
+        "allocation": {
+          "train": 12,
+          "validation": 4,
+          "test": 4
+        }
       },
       {
         "name": "0_75_to_lt_0_90",
@@ -129,7 +136,11 @@
         "upper": 0.9,
         "upper_inclusive": false,
         "task_count": 31,
-        "allocation": {"train": 19, "validation": 6, "test": 6}
+        "allocation": {
+          "train": 19,
+          "validation": 6,
+          "test": 6
+        }
       },
       {
         "name": "0_90_to_lt_1_00",
@@ -138,37 +149,181 @@
         "upper": 1.0,
         "upper_inclusive": false,
         "task_count": 21,
-        "allocation": {"train": 13, "validation": 4, "test": 4}
+        "allocation": {
+          "train": 13,
+          "validation": 4,
+          "test": 4
+        }
       }
     ]
   },
   "pools": {
-    "ed1": {
+    "encdec": {
       "train": [
-        "HumanEval/130", "HumanEval/120", "HumanEval/84", "HumanEval/119",
-        "HumanEval/124", "HumanEval/80", "HumanEval/101", "HumanEval/127",
-        "HumanEval/151", "HumanEval/132", "HumanEval/163", "HumanEval/1",
-        "HumanEval/122", "HumanEval/62", "HumanEval/147", "HumanEval/48",
-        "HumanEval/25", "HumanEval/22", "HumanEval/77", "HumanEval/136",
-        "HumanEval/125", "HumanEval/158", "HumanEval/65", "HumanEval/149",
-        "HumanEval/76", "HumanEval/55", "HumanEval/134", "HumanEval/154",
-        "HumanEval/105", "HumanEval/109", "HumanEval/146", "HumanEval/39",
-        "HumanEval/160", "HumanEval/103", "HumanEval/30", "HumanEval/156",
-        "HumanEval/87", "HumanEval/86", "HumanEval/92", "HumanEval/19",
-        "HumanEval/85", "HumanEval/135", "HumanEval/32", "HumanEval/118",
-        "HumanEval/43", "HumanEval/162"
+        "HumanEval/130",
+        "HumanEval/120",
+        "HumanEval/84",
+        "HumanEval/119",
+        "HumanEval/124",
+        "HumanEval/80",
+        "HumanEval/101",
+        "HumanEval/127",
+        "HumanEval/151",
+        "HumanEval/132",
+        "HumanEval/163",
+        "HumanEval/1",
+        "HumanEval/122",
+        "HumanEval/62",
+        "HumanEval/147",
+        "HumanEval/48",
+        "HumanEval/25",
+        "HumanEval/22",
+        "HumanEval/77",
+        "HumanEval/136",
+        "HumanEval/125",
+        "HumanEval/158",
+        "HumanEval/65",
+        "HumanEval/149",
+        "HumanEval/76",
+        "HumanEval/55",
+        "HumanEval/134",
+        "HumanEval/154",
+        "HumanEval/105",
+        "HumanEval/109",
+        "HumanEval/146",
+        "HumanEval/39",
+        "HumanEval/160",
+        "HumanEval/103",
+        "HumanEval/30",
+        "HumanEval/156",
+        "HumanEval/87",
+        "HumanEval/86",
+        "HumanEval/92",
+        "HumanEval/19",
+        "HumanEval/85",
+        "HumanEval/135",
+        "HumanEval/32",
+        "HumanEval/118",
+        "HumanEval/43",
+        "HumanEval/162"
       ],
       "val": [
-        "HumanEval/116", "HumanEval/4", "HumanEval/95", "HumanEval/106",
-        "HumanEval/145", "HumanEval/63", "HumanEval/67", "HumanEval/150",
-        "HumanEval/115", "HumanEval/91", "HumanEval/49", "HumanEval/59",
-        "HumanEval/90", "HumanEval/88", "HumanEval/50"
+        "HumanEval/116",
+        "HumanEval/4",
+        "HumanEval/95",
+        "HumanEval/106",
+        "HumanEval/145",
+        "HumanEval/63",
+        "HumanEval/67",
+        "HumanEval/150",
+        "HumanEval/115",
+        "HumanEval/91",
+        "HumanEval/49",
+        "HumanEval/59",
+        "HumanEval/90",
+        "HumanEval/88",
+        "HumanEval/50"
       ],
       "test": [
-        "HumanEval/18", "HumanEval/144", "HumanEval/69", "HumanEval/129",
-        "HumanEval/113", "HumanEval/10", "HumanEval/54", "HumanEval/137",
-        "HumanEval/141", "HumanEval/31", "HumanEval/81", "HumanEval/78",
-        "HumanEval/99", "HumanEval/24", "HumanEval/11"
+        "HumanEval/18",
+        "HumanEval/144",
+        "HumanEval/69",
+        "HumanEval/129",
+        "HumanEval/113",
+        "HumanEval/10",
+        "HumanEval/54",
+        "HumanEval/137",
+        "HumanEval/141",
+        "HumanEval/31",
+        "HumanEval/81",
+        "HumanEval/78",
+        "HumanEval/99",
+        "HumanEval/24",
+        "HumanEval/11"
+      ]
+    },
+    "direct": {
+      "train": [
+        "HumanEval/130",
+        "HumanEval/120",
+        "HumanEval/84",
+        "HumanEval/119",
+        "HumanEval/124",
+        "HumanEval/80",
+        "HumanEval/101",
+        "HumanEval/127",
+        "HumanEval/151",
+        "HumanEval/132",
+        "HumanEval/163",
+        "HumanEval/1",
+        "HumanEval/122",
+        "HumanEval/62",
+        "HumanEval/147",
+        "HumanEval/48",
+        "HumanEval/25",
+        "HumanEval/22",
+        "HumanEval/77",
+        "HumanEval/136",
+        "HumanEval/125",
+        "HumanEval/158",
+        "HumanEval/65",
+        "HumanEval/149",
+        "HumanEval/76",
+        "HumanEval/55",
+        "HumanEval/134",
+        "HumanEval/154",
+        "HumanEval/105",
+        "HumanEval/109",
+        "HumanEval/146",
+        "HumanEval/39",
+        "HumanEval/160",
+        "HumanEval/103",
+        "HumanEval/30",
+        "HumanEval/156",
+        "HumanEval/87",
+        "HumanEval/86",
+        "HumanEval/92",
+        "HumanEval/19",
+        "HumanEval/85",
+        "HumanEval/135",
+        "HumanEval/32",
+        "HumanEval/118",
+        "HumanEval/43",
+        "HumanEval/162"
+      ],
+      "val": [
+        "HumanEval/116",
+        "HumanEval/4",
+        "HumanEval/95",
+        "HumanEval/106",
+        "HumanEval/145",
+        "HumanEval/63",
+        "HumanEval/67",
+        "HumanEval/150",
+        "HumanEval/115",
+        "HumanEval/91",
+        "HumanEval/49",
+        "HumanEval/59",
+        "HumanEval/90",
+        "HumanEval/88",
+        "HumanEval/50"
+      ],
+      "test": [
+        "HumanEval/18",
+        "HumanEval/144",
+        "HumanEval/69",
+        "HumanEval/129",
+        "HumanEval/113",
+        "HumanEval/10",
+        "HumanEval/54",
+        "HumanEval/137",
+        "HumanEval/141",
+        "HumanEval/31",
+        "HumanEval/81",
+        "HumanEval/78",
+        "HumanEval/99",
+        "HumanEval/24",
+        "HumanEval/11"
       ]
     }
   }

@@ -17,7 +17,7 @@ from whetstone.envs.code_comp.mutation_surface import (
     validate_instruction_body,
 )
 from whetstone.envs.code_comp.registry import CodeCompMode, code_comp_mode_for
-from whetstone.envs.code_comp.rollout.direct import render_d1_frame
+from whetstone.envs.code_comp.rollout.direct import render_direct_frame
 from whetstone.envs.code_comp.scoring import CodeBatchScorer
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.registry import env_spec
@@ -27,9 +27,9 @@ from whetstone.envs.rollout_definition import (
 )
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
 from whetstone.evaluation.aggregate import ROLLOUT_AGGREGATE_SCHEMA
-from whetstone.evaluation.drivers.code_comp.direct import D1RowJobFactory
+from whetstone.evaluation.drivers.code_comp.direct import DirectRowJobFactory
 from whetstone.evaluation.drivers.code_comp.dispatch import run_code_comp_eval
-from whetstone.evaluation.drivers.code_comp.encdec import Ed1RowJobFactory
+from whetstone.evaluation.drivers.code_comp.encdec import EncDecRowJobFactory
 from whetstone.evaluation.drivers.internal import (
     InternalEvalResult,
     InternalRowJobFactory,
@@ -119,7 +119,7 @@ class EvaluationEngine:
         experiment: EnvExperiment,
         sampling: EnvSplitSampling,
         execution_policy: ProviderExecutionPolicy,
-        row_job_factory: InternalRowJobFactory | Ed1RowJobFactory,
+        row_job_factory: InternalRowJobFactory | EncDecRowJobFactory,
         concurrency: int = DEFAULT_CONCURRENCY,
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
@@ -465,7 +465,7 @@ class EvaluationEngine:
                     "code_comp candidate body must be a strict string"
                 )
             assert isinstance(self.experiment, DirectExperiment)
-            return render_d1_frame(
+            return render_direct_frame(
                 body,
                 input_arm=self.experiment.input_arm,
             )
@@ -499,18 +499,18 @@ class EvaluationEngine:
             }
             if mode is CodeCompMode.DIRECT:
                 from whetstone.evaluation.drivers.code_comp.direct import (
-                    D1EvalResult,
+                    DirectEvalResult,
                 )
 
                 result = run_code_comp_eval(
                     self.experiment,
                     candidate_body=body,
                     row_job_factory=cast(
-                        D1RowJobFactory, self._row_job_factory
+                        DirectRowJobFactory, self._row_job_factory
                     ),
                     **common,
                 )
-                assert isinstance(result, D1EvalResult)
+                assert isinstance(result, DirectEvalResult)
                 return InternalEvalResult(
                     aggregate=result.submission_score_aggregate,
                     reward=result.reward,
@@ -520,16 +520,18 @@ class EvaluationEngine:
                     supplemental_aggregates=(),
                 )
             from whetstone.evaluation.drivers.code_comp.encdec import (
-                Ed1EvalResult,
+                EncDecEvalResult,
             )
 
             result = run_code_comp_eval(
                 self.experiment,
                 candidate_template=body,
-                row_job_factory=cast(Ed1RowJobFactory, self._row_job_factory),
+                row_job_factory=cast(
+                    EncDecRowJobFactory, self._row_job_factory
+                ),
                 **common,
             )
-            assert isinstance(result, Ed1EvalResult)
+            assert isinstance(result, EncDecEvalResult)
             return InternalEvalResult(
                 aggregate=result.primary_aggregate,
                 reward=result.reward,

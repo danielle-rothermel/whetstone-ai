@@ -34,9 +34,9 @@ from whetstone.evaluation.preview.preflight import ScoringPreflight
 
 #: The parser contract for decoder submissions. The profile id and version are
 #: also folded into the ed1 evaluation procedure identity.
-ED1_SCORING_PROFILE_ID = HUMANEVAL_SCORING_PROFILE_ID
-ED1_SCORING_PROFILE_VERSION = HUMANEVAL_SCORING_PROFILE_VERSION
-ED1_SCORING_PREFLIGHT_TASK_ID = "HumanEval/0"
+CODE_COMP_SCORING_PROFILE_ID = HUMANEVAL_SCORING_PROFILE_ID
+CODE_COMP_SCORING_PROFILE_VERSION = HUMANEVAL_SCORING_PROFILE_VERSION
+CODE_COMP_SCORING_PREFLIGHT_TASK_ID = "HumanEval/0"
 
 
 class _PreflightTask(Protocol):
@@ -267,8 +267,8 @@ class CheckpointedCodeBatchScorer:
             HumanEvalSubmissionRequest(
                 raw_submission=item.raw_submission,
                 task=item.task,
-                scoring_profile_id=ED1_SCORING_PROFILE_ID,
-                scoring_profile_version=ED1_SCORING_PROFILE_VERSION,
+                scoring_profile_id=CODE_COMP_SCORING_PROFILE_ID,
+                scoring_profile_version=CODE_COMP_SCORING_PROFILE_VERSION,
             )
             for item in inputs
         )
@@ -320,7 +320,7 @@ def _project_submission_score(result: HumanEvalSubmissionScore) -> CodeScore:
     )
 
 
-def score_ed1_submission(
+def score_code_comp_submission(
     *,
     raw_submission: str,
     task: HumanEvalTask,
@@ -339,22 +339,22 @@ def score_ed1_submission(
     result = score_humaneval_submission(
         raw_submission=raw_submission,
         task=task,
-        scoring_profile_id=ED1_SCORING_PROFILE_ID,
-        scoring_profile_version=ED1_SCORING_PROFILE_VERSION,
+        scoring_profile_id=CODE_COMP_SCORING_PROFILE_ID,
+        scoring_profile_version=CODE_COMP_SCORING_PROFILE_VERSION,
         executor=executor,
     )
     return _project_submission_score(result)
 
 
 __all__ = [
-    "ED1_SCORING_PREFLIGHT_TASK_ID",
-    "ED1_SCORING_PROFILE_ID",
-    "ED1_SCORING_PROFILE_VERSION",
+    "CODE_COMP_SCORING_PREFLIGHT_TASK_ID",
+    "CODE_COMP_SCORING_PROFILE_ID",
+    "CODE_COMP_SCORING_PROFILE_VERSION",
     "BatchScoringDeadlineExceeded",
     "CheckpointedCodeBatchScorer",
     "CodeBatchScorer",
     "CodeScore",
     "CodeScoringInput",
     "run_encdec_scoring_preflight",
-    "score_ed1_submission",
+    "score_code_comp_submission",
 ]

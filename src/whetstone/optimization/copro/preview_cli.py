@@ -15,9 +15,9 @@ from whetstone.optimization.codex.proposer import (
     CodexCliProposerTransport,
 )
 from whetstone.optimization.copro.code_comp.dry_run import (
-    Ed1CoproPreviewTask,
-    Ed1CoproSweepRanges,
-    run_ed1_copro_codex_preview,
+    CodeCompCoproPreviewTask,
+    CodeCompCoproSweepRanges,
+    run_code_comp_copro_codex_preview,
 )
 
 
@@ -53,13 +53,13 @@ def main() -> None:
         run_store=DirectoryRunStore(root=records),
     )
     transport = CodexCliProposerTransport(executor=executor)
-    run_ed1_copro_codex_preview(
-        sweep=Ed1CoproSweepRanges(
+    run_code_comp_copro_codex_preview(
+        sweep=CodeCompCoproSweepRanges(
             budget_ratios=(args.budget_ratio,),
             breadths=(args.breadth,),
             depths=(args.depth,),
         ),
-        preview_task=Ed1CoproPreviewTask(
+        preview_task=CodeCompCoproPreviewTask(
             task_id=args.task_id,
             input_code=args.input_code_file.read_text(encoding="utf-8"),
         ),

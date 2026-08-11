@@ -6,7 +6,7 @@ from pathlib import Path
 from dr_code.humaneval import HumanEvalTask, load_humaneval_plus
 from whetstone_envs.core import Instance
 
-from whetstone.envs.code_comp.constants import ED1_STRATUM
+from whetstone.envs.code_comp.constants import CODE_COMP_STRATUM
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +31,7 @@ def ed1_instance_from_task(task: HumanEvalTask) -> CodeCompTaskInstance:
     instance = Instance(
         id=task.task_id,
         seed=0,
-        strata=(ED1_STRATUM,),
+        strata=(CODE_COMP_STRATUM,),
         prompt_inputs={
             "input_code": gt_wo,
             "task_id": task.task_id,

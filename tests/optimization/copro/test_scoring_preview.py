@@ -5,20 +5,24 @@ from collections.abc import Sequence
 import pytest
 from dr_store import MemoryBackend, ObjectStore
 
-from tests.envs.support import execution_policy, synthetic_ed1_tasks
-from whetstone.envs.ed1 import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
-    ed1_task_model_from_metadata,
-    run_ed1_copro_scoring_preview,
+from tests.envs.support import execution_policy, synthetic_code_comp_tasks
+from whetstone.envs.code_comp.modes.encdec import (
+    EncDecTaskModelConfig,
+    EncDecTaskModelKind,
+    encdec_task_model_from_metadata,
 )
-from whetstone.envs.ed1_runtime import (
-    Ed1RuntimeProbe,
-    Ed1ScoringRuntimeSummary,
+from whetstone.envs.code_comp.preview import (
+    run_code_comp_copro_scoring_preview,
 )
-from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
-from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
-from whetstone.evaluation.drivers.ed1_workers import (
+from whetstone.envs.code_comp.rollout.encdec import (
+    build_encoder_provider_call_config,
+)
+from whetstone.envs.code_comp.runtime import (
+    CodeCompRuntimeProbe,
+    EncDecScoringRuntimeSummary,
+)
+from whetstone.envs.code_comp.scoring import CodeScore, CodeScoringInput
+from whetstone.evaluation.drivers.code_comp.workers import (
     DUMMY_ALTERNATE_PASSING_BODY,
     DUMMY_FAILING_BODY,
 )
@@ -27,11 +31,11 @@ from whetstone.experiment.task_selection import (
     TaskSplitRole,
 )
 from whetstone.optimization.copro.adapter import HISTORY_PROPOSAL
-from whetstone.optimization.copro.ed1_dry_run import (
+from whetstone.optimization.copro.code_comp.dry_run import (
+    CodeCompCoproRoundAttempt,
+    CodeCompCoproSweepRanges,
     DummyCoproProposerConfig,
     DummyCoproProposerTransport,
-    Ed1CoproRoundAttempt,
-    Ed1CoproSweepRanges,
 )
 from whetstone.optimization.copro.scoring_preview import (
     CandidateProgress,
@@ -59,9 +63,9 @@ def _score(
     )
 
 
-def _task_model() -> Ed1TaskModelConfig:
-    return Ed1TaskModelConfig(
-        kind=Ed1TaskModelKind.DUMMY,
+def _task_model() -> EncDecTaskModelConfig:
+    return EncDecTaskModelConfig(
+        kind=EncDecTaskModelKind.DUMMY,
         provider_call_config=build_encoder_provider_call_config(
             "test/task-model"
         ),
@@ -70,23 +74,23 @@ def _task_model() -> Ed1TaskModelConfig:
 
 
 def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
-    runtime = Ed1ScoringRuntimeSummary(
+    runtime = EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
         runtime_identity_hash="a" * 64,
-        probe=Ed1RuntimeProbe(
+        probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
             python_executable="/copied/python",
             python_version="3.13.0",
         ),
     )
-    proposal_attempts: list[Ed1CoproRoundAttempt] = []
+    proposal_attempts: list[CodeCompCoproRoundAttempt] = []
     candidate_progress: list[CandidateProgress] = []
-    transcript = run_ed1_copro_scoring_preview(
+    transcript = run_code_comp_copro_scoring_preview(
         store=ObjectStore(MemoryBackend()),
-        tasks=synthetic_ed1_tasks(1),
-        sweep=Ed1CoproSweepRanges(
+        tasks=synthetic_code_comp_tasks(1),
+        sweep=CodeCompCoproSweepRanges(
             budget_ratios=(None,),
             breadths=(3,),
             depths=(2,),
@@ -103,7 +107,7 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
         task_model=_task_model(),
         task_selection=TaskRoleSelection(
             manifest_content_hash="b" * 64,
-            pool_key="ed1",
+            pool_key="encdec",
             role=TaskSplitRole.TRAIN,
             task_ids=("Synthetic/0",),
         ),
@@ -114,9 +118,9 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
         candidate_observer=candidate_progress.append,
     )
 
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     assert transcript.preflight.passed is True
-    assert task_model.kind is Ed1TaskModelKind.DUMMY
+    assert task_model.kind is EncDecTaskModelKind.DUMMY
     assert transcript.concurrency == 4
     assert transcript.task_selection is not None
     assert transcript.task_selection.role is TaskSplitRole.TRAIN
@@ -158,24 +162,24 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
 
 
 def test_scoring_preview_observes_rejected_round_before_failure() -> None:
-    runtime = Ed1ScoringRuntimeSummary(
+    runtime = EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
         runtime_identity_hash="a" * 64,
-        probe=Ed1RuntimeProbe(
+        probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
             python_executable="/copied/python",
             python_version="3.13.0",
         ),
     )
-    observed: list[Ed1CoproRoundAttempt] = []
+    observed: list[CodeCompCoproRoundAttempt] = []
 
     with pytest.raises(RoundFailure) as error:
-        run_ed1_copro_scoring_preview(
+        run_code_comp_copro_scoring_preview(
             store=ObjectStore(MemoryBackend()),
-            tasks=synthetic_ed1_tasks(1),
-            sweep=Ed1CoproSweepRanges(
+            tasks=synthetic_code_comp_tasks(1),
+            sweep=CodeCompCoproSweepRanges(
                 budget_ratios=(None,),
                 breadths=(2,),
                 depths=(1,),

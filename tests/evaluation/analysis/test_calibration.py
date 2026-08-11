@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from dr_store import ObjectStore, SqliteBackend
 
-from tests.envs.support import execution_policy, synthetic_ed1_tasks
+from tests.envs.support import execution_policy, synthetic_code_comp_tasks
 from tests.evaluation.support import _binding, _engine
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.code_comp import (
@@ -16,9 +16,9 @@ from whetstone.evaluation import engine as engine_module
 from whetstone.evaluation.analysis.calibration import run_anchor_calibration
 from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.evaluation.drivers.code_comp.encdec import (
-    Ed1RowOutcome,
-    Ed1RowRequest,
-    Ed1RowResult,
+    EncDecRowOutcome,
+    EncDecRowRequest,
+    EncDecRowResult,
 )
 from whetstone.evaluation.drivers.internal import _llm_component_step
 from whetstone.evaluation.engine import EvaluationEngine
@@ -33,7 +33,7 @@ _CALIBRATION_BASELINE_PURPOSE = "test-calibration-baseline"
 _CALIBRATION_CEILING_PURPOSE = "test-calibration-ceiling"
 
 
-def _calibration_row(request: Ed1RowRequest) -> ProcessJob:
+def _calibration_row(request: EncDecRowRequest) -> ProcessJob:
     instance = request.instance.to_instance()
     encoder_text = "A compact reconstruction description."
     decoder_text = "def reconstructed():\n    return 1\n"
@@ -45,7 +45,7 @@ def _calibration_row(request: Ed1RowRequest) -> ProcessJob:
     task_passed = request.candidate_template == ENCODER_BODY_B or not str(
         instance.id
     ).endswith("/0")
-    outcome = Ed1RowOutcome(
+    outcome = EncDecRowOutcome(
         primary_value=float(task_passed),
         compression_value=0.5,
         encoder_text=encoder_text,
@@ -68,7 +68,7 @@ def _calibration_row(request: Ed1RowRequest) -> ProcessJob:
         max_budget=None,
         encoder_len=len(encoder_text),
     )
-    result = Ed1RowResult(
+    result = EncDecRowResult(
         request_identity=request.request_identity,
         outcome=outcome,
     )
@@ -88,7 +88,7 @@ def _internal_engine_and_binding(tmp_path):
 
 
 def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
-    tasks = synthetic_ed1_tasks(3)
+    tasks = synthetic_code_comp_tasks(3)
     experiment = build_code_comp_experiment(
         CodeCompMode.ENCDEC,
         tasks=tasks,

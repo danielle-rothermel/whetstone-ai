@@ -22,8 +22,8 @@ from rich.panel import Panel
 from rich.table import Table
 
 from whetstone.envs.code_comp.modes.encdec import (
-    ed1_blend_config_from_metadata,
-    ed1_task_model_from_metadata,
+    encdec_blend_config_from_metadata,
+    encdec_task_model_from_metadata,
 )
 from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
 from whetstone.evaluation.metrics.blended import (
@@ -229,9 +229,13 @@ def _validate_plan(
                 f"treatment {treatment_id!r} result changed planned {field}"
             )
     task_model = plan.get("task_model")
-    if task_model is not None and task_model != ed1_task_model_from_metadata(
-        transcript.metadata
-    ).model_dump(mode="json"):
+    if (
+        task_model is not None
+        and task_model
+        != encdec_task_model_from_metadata(transcript.metadata).model_dump(
+            mode="json"
+        )
+    ):
         raise InspectionError(
             f"treatment {treatment_id!r} result changed planned task_model"
         )
@@ -323,8 +327,8 @@ def _arm_rows(
     arm_name: str,
     arm: Any,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    blend_config = ed1_blend_config_from_metadata(transcript.metadata)
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    blend_config = encdec_blend_config_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     outputs = {
         (row.task_identity, row.repeat): row for row in arm.outputs.outputs
     }
@@ -777,7 +781,7 @@ def _treatment_summary(
     rows: Sequence[Mapping[str, Any]],
     per_task: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    task_model = ed1_task_model_from_metadata(transcript.metadata)
+    task_model = encdec_task_model_from_metadata(transcript.metadata)
     accounting: dict[str, dict[str, int]] = {}
     for name, arm in (
         ("BASELINE", transcript.baseline),

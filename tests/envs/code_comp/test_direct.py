@@ -9,26 +9,28 @@ from tests.envs.support import (
     execution_policy,
     process_row_job_factory,
     row_job_factory,
-    synthetic_ed1_tasks,
+    synthetic_code_comp_tasks,
 )
-from whetstone.envs.d1 import (
-    D1_INPUT_ARMS,
-    D1_RENAMED_ARM,
-    D1_SUBMISSION_SCORE_NAME,
-    D1_WRAPPER_BODY_CEILING,
-    D1_WRAPPER_BODY_NAIVE,
-    build_d1_experiment,
-    d1_ceiling_candidate,
-    d1_initial_candidate,
-    render_d1_frame,
+from whetstone.envs.code_comp.constants import (
+    CODE_COMP_DATASET_REVISION,
+    CODE_COMP_INVALID_BODY,
+    CODE_COMP_SUBMISSION_SCORE_NAME,
 )
-from whetstone.envs.ed1 import (
-    ED1_DATASET_REVISION,
-    ED1_INVALID_BODY,
-    Ed1BodyError,
-    ed1_body_rejection,
+from whetstone.envs.code_comp.modes.direct import (
+    DIRECT_INPUT_ARMS,
+    DIRECT_RENAMED_ARM,
+    DIRECT_WRAPPER_BODY_CEILING,
+    DIRECT_WRAPPER_BODY_NAIVE,
+    build_direct_experiment,
+    direct_ceiling_candidate,
+    direct_initial_candidate,
+    render_direct_frame,
 )
-from whetstone.envs.ed1_scoring import (
+from whetstone.envs.code_comp.mutation_surface import (
+    InstructionBodyError,
+    instruction_body_rejection,
+)
+from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeScore,
 )
@@ -38,12 +40,12 @@ from whetstone.envs.input_transform import (
     split_prompt,
 )
 from whetstone.envs.rollout_definition import LLM_NODE_ID
-from whetstone.evaluation.drivers.d1 import (
-    D1GeneratedRowOutcome,
-    D1RowOutcome,
-    D1RowRequest,
+from whetstone.evaluation.drivers.code_comp.direct import (
+    DirectGeneratedRowOutcome,
+    DirectRowOutcome,
+    DirectRowRequest,
     _input_arm_text,
-    run_d1_eval,
+    run_direct_eval,
 )
 from whetstone.evaluation.drivers.internal import _llm_component_step
 from whetstone.evaluation.traces import ExecutedRowState
@@ -57,12 +59,12 @@ from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 
 def _tasks(limit: int = 3):
-    return synthetic_ed1_tasks(limit)
+    return synthetic_code_comp_tasks(limit)
 
 
-def _successful_outcome() -> D1RowOutcome:
+def _successful_outcome() -> DirectRowOutcome:
     output_text = "def rebuilt():\n    return 1\n"
-    return D1RowOutcome(
+    return DirectRowOutcome(
         submission_score=1.0,
         output_text=output_text,
         row_state=ExecutedRowState.SUCCESS,
@@ -77,8 +79,8 @@ def _successful_outcome() -> D1RowOutcome:
     )
 
 
-def _generated_outcome(output_text: str) -> D1GeneratedRowOutcome:
-    return D1GeneratedRowOutcome(
+def _generated_outcome(output_text: str) -> DirectGeneratedRowOutcome:
+    return DirectGeneratedRowOutcome(
         output_text=output_text,
         executed_component_steps=(
             _llm_component_step(
@@ -93,7 +95,7 @@ def _generated_outcome(output_text: str) -> D1GeneratedRowOutcome:
 
 def test_coordinator_scores_generated_d1_rows_in_one_batch() -> None:
     tasks = _tasks(2)
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=tasks,
         repeats=2,
         internal_n=2,
@@ -116,9 +118,9 @@ def test_coordinator_scores_generated_d1_rows_in_one_batch() -> None:
             for _item in inputs
         )
 
-    result = run_d1_eval(
+    result = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-batch",
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(),
@@ -136,7 +138,7 @@ def test_coordinator_scores_generated_d1_rows_in_one_batch() -> None:
 def test_d1_batch_deadline_leaves_generated_rows_missing(
     monkeypatch,
 ) -> None:
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=_tasks(1),
         repeats=1,
         internal_n=1,
@@ -164,10 +166,11 @@ def test_d1_batch_deadline_leaves_generated_rows_missing(
 
     remaining_walls = iter((1.0, 0.0))
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.run_call_pool", completed_pool
+        "whetstone.evaluation.drivers.code_comp.direct.run_call_pool",
+        completed_pool,
     )
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.remaining_phase_wall_seconds",
+        "whetstone.evaluation.drivers.code_comp.direct.remaining_phase_wall_seconds",
         lambda _deadline: next(remaining_walls),
     )
 
@@ -177,9 +180,9 @@ def test_d1_batch_deadline_leaves_generated_rows_missing(
             f"expired phase started scoring with {max_wall_seconds=}"
         )
 
-    result = run_d1_eval(
+    result = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-batch-deadline",
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(),
@@ -199,7 +202,7 @@ def test_d1_batch_deadline_leaves_generated_rows_missing(
 def test_d1_batch_deadline_exception_leaves_generated_rows_missing(
     monkeypatch,
 ) -> None:
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=_tasks(1),
         repeats=1,
         internal_n=1,
@@ -226,7 +229,8 @@ def test_d1_batch_deadline_exception_leaves_generated_rows_missing(
         )
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.run_call_pool", completed_pool
+        "whetstone.evaluation.drivers.code_comp.direct.run_call_pool",
+        completed_pool,
     )
 
     def deadline(inputs, *, max_wall_seconds: float | None = None):
@@ -234,9 +238,9 @@ def test_d1_batch_deadline_exception_leaves_generated_rows_missing(
         assert max_wall_seconds is not None
         raise BatchScoringDeadlineExceeded
 
-    result = run_d1_eval(
+    result = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-mid-batch-deadline",
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(),
@@ -265,18 +269,18 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
     tasks = _tasks()
     graphs: set[str] = set()
     evals: set[str] = set()
-    for arm in D1_INPUT_ARMS:
-        experiment = build_d1_experiment(input_arm=arm, tasks=tasks)
+    for arm in DIRECT_INPUT_ARMS:
+        experiment = build_direct_experiment(input_arm=arm, tasks=tasks)
         graphs.add(experiment.rollout_definition.graph_hash)
         evals.add(
             experiment.eval_configs.official.eval_config.config_identity_hash
         )
-    assert len(graphs) == len(D1_INPUT_ARMS)
-    assert len(evals) == len(D1_INPUT_ARMS)
+    assert len(graphs) == len(DIRECT_INPUT_ARMS)
+    assert len(evals) == len(DIRECT_INPUT_ARMS)
 
     renamed = [
-        build_d1_experiment(
-            input_arm=D1_RENAMED_ARM, tasks=tasks, rename_token=token
+        build_direct_experiment(
+            input_arm=DIRECT_RENAMED_ARM, tasks=tasks, rename_token=token
         )
         for token in ("target_fxn", "other_fxn")
     ]
@@ -292,13 +296,13 @@ def test_each_input_arm_has_distinct_graph_and_eval_identity() -> None:
 
 def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
     tasks = _tasks()
-    for arm in D1_INPUT_ARMS:
-        if arm == D1_RENAMED_ARM:
+    for arm in DIRECT_INPUT_ARMS:
+        if arm == DIRECT_RENAMED_ARM:
             continue
-        a = build_d1_experiment(
+        a = build_direct_experiment(
             input_arm=arm, tasks=tasks, rename_token="target_fxn"
         )
-        b = build_d1_experiment(
+        b = build_direct_experiment(
             input_arm=arm, tasks=tasks, rename_token="other_fxn"
         )
         assert (
@@ -315,25 +319,25 @@ def test_rename_token_does_not_churn_identity_on_arms_that_ignore_it() -> None:
 )
 def test_invalid_rename_token_is_rejected_at_build_time(bad: str) -> None:
     with pytest.raises(ValueError, match="rename_token"):
-        build_d1_experiment(
-            input_arm=D1_RENAMED_ARM, tasks=_tasks(1), rename_token=bad
+        build_direct_experiment(
+            input_arm=DIRECT_RENAMED_ARM, tasks=_tasks(1), rename_token=bad
         )
 
 
 def test_valid_rename_token_is_accepted() -> None:
-    experiment = build_d1_experiment(
-        input_arm=D1_RENAMED_ARM, tasks=_tasks(1), rename_token="solve_it"
+    experiment = build_direct_experiment(
+        input_arm=DIRECT_RENAMED_ARM, tasks=_tasks(1), rename_token="solve_it"
     )
     assert experiment.rename_token == "solve_it"
 
 
 def test_naive_prompt_matches_canonical_direct_prompt() -> None:
     tasks = _tasks(1)
-    for arm in D1_INPUT_ARMS:
-        experiment = build_d1_experiment(input_arm=arm, tasks=tasks)
+    for arm in DIRECT_INPUT_ARMS:
+        experiment = build_direct_experiment(input_arm=arm, tasks=tasks)
         instance = experiment.eval_configs.internal.instances[0]
         body, _ = _input_arm_text(experiment, instance)
-        actual = render_d1_frame(D1_WRAPPER_BODY_NAIVE, input_arm=body)
+        actual = render_direct_frame(DIRECT_WRAPPER_BODY_NAIVE, input_arm=body)
         task = experiment.humaneval_for(instance)
         expected = direct_prompt(
             f"direct_{arm}",
@@ -344,7 +348,7 @@ def test_naive_prompt_matches_canonical_direct_prompt() -> None:
 
 
 def test_renamed_arm_scrubs_and_scores_renamed_entry_point() -> None:
-    experiment = build_d1_experiment(input_arm="renamed", tasks=_tasks(1))
+    experiment = build_direct_experiment(input_arm="renamed", tasks=_tasks(1))
     instance = experiment.eval_configs.internal.instances[0]
     body, score_task = _input_arm_text(experiment, instance)
     original = experiment.humaneval_for(instance)
@@ -355,29 +359,29 @@ def test_renamed_arm_scrubs_and_scores_renamed_entry_point() -> None:
 
 
 def test_candidates_and_pass_only_reward_are_explicit() -> None:
-    naive = d1_initial_candidate()
-    ceiling = d1_ceiling_candidate()
-    assert naive.payload[MUTATION_FIELD] == D1_WRAPPER_BODY_NAIVE
-    assert ceiling.payload[MUTATION_FIELD] == D1_WRAPPER_BODY_CEILING
+    naive = direct_initial_candidate()
+    ceiling = direct_ceiling_candidate()
+    assert naive.payload[MUTATION_FIELD] == DIRECT_WRAPPER_BODY_NAIVE
+    assert ceiling.payload[MUTATION_FIELD] == DIRECT_WRAPPER_BODY_CEILING
     assert naive.payload != ceiling.payload
-    experiment = build_d1_experiment(tasks=_tasks())
+    experiment = build_direct_experiment(tasks=_tasks())
     assert [term.name for term in experiment.reward_policy.terms] == [
-        D1_SUBMISSION_SCORE_NAME
+        CODE_COMP_SUBMISSION_SCORE_NAME
     ]
-    assert experiment.dataset_revision == ED1_DATASET_REVISION
+    assert experiment.dataset_revision == CODE_COMP_DATASET_REVISION
 
 
 def test_body_restrictions_are_preflight_safe() -> None:
-    rejection = ed1_body_rejection("Solve {input_arm} now.")
+    rejection = instruction_body_rejection("Solve {input_arm} now.")
     assert rejection == ("{input_arm}",)
-    assert ED1_INVALID_BODY
-    assert ed1_body_rejection("Solve it carefully.") == ()
+    assert CODE_COMP_INVALID_BODY
+    assert instruction_body_rejection("Solve it carefully.") == ()
     tasks = _tasks(1)
-    experiment = build_d1_experiment(tasks=tasks)
+    experiment = build_direct_experiment(tasks=tasks)
     served: list[str] = []
 
-    with pytest.raises(Ed1BodyError) as error:
-        run_d1_eval(
+    with pytest.raises(InstructionBodyError) as error:
+        run_direct_eval(
             experiment,
             candidate_body="Solve {input_arm} now.",
             candidate_id="invalid-body",
@@ -389,23 +393,23 @@ def test_body_restrictions_are_preflight_safe() -> None:
             ),
         )
 
-    assert error.value.code == ED1_INVALID_BODY
+    assert error.value.code == CODE_COMP_INVALID_BODY
     assert served == []
 
 
 @pytest.mark.parametrize("arm", ["original", "docstring", "renamed"])
 def test_direct_evaluator_records_exact_pass_rate(arm: str) -> None:
     tasks = _tasks(2)
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         input_arm=arm,
         tasks=tasks,
         repeats=2,
         internal_n=2,
         official_n=2,
     )
-    result = run_d1_eval(
+    result = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-naive",
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
@@ -414,7 +418,10 @@ def test_direct_evaluator_records_exact_pass_rate(arm: str) -> None:
             experiment.eval_configs.internal
         ),
     )
-    assert result.submission_score_aggregate.name == D1_SUBMISSION_SCORE_NAME
+    assert (
+        result.submission_score_aggregate.name
+        == CODE_COMP_SUBMISSION_SCORE_NAME
+    )
     assert (
         result.submission_score_aggregate.aggregation_output.value
         == pytest.approx(1)
@@ -426,20 +433,23 @@ def test_direct_evaluator_records_exact_pass_rate(arm: str) -> None:
     assert result.per_task_counts == (2, 2)
     assert len(result.outputs) == 4
     assert result.reward is not None
-    assert result.reward.input_citations[0].name == D1_SUBMISSION_SCORE_NAME
+    assert (
+        result.reward.input_citations[0].name
+        == CODE_COMP_SUBMISSION_SCORE_NAME
+    )
 
 
 def test_d1_process_job_runs_real_row_driver() -> None:
     tasks = _tasks(1)
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=tasks,
         repeats=1,
         internal_n=1,
         official_n=1,
     )
-    result = run_d1_eval(
+    result = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-process-job",
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
@@ -464,8 +474,8 @@ def test_d1_process_job_runs_real_row_driver() -> None:
         "input_field_names": ["prompt"],
         "output_field_names": ["generation"],
         "inputs": {
-            "prompt": render_d1_frame(
-                D1_WRAPPER_BODY_NAIVE, input_arm=input_arm
+            "prompt": render_direct_frame(
+                DIRECT_WRAPPER_BODY_NAIVE, input_arm=input_arm
             )
         },
         "outputs": {"generation": output.output_text},
@@ -473,20 +483,20 @@ def test_d1_process_job_runs_real_row_driver() -> None:
 
 
 def test_d1_v2_request_hash_is_pinned() -> None:
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=_tasks(1), repeats=1, internal_n=1, official_n=1
     )
-    requests: list[D1RowRequest] = []
+    requests: list[DirectRowRequest] = []
     base = _passing_jobs()
 
-    def capture(request: D1RowRequest):
+    def capture(request: DirectRowRequest):
         requests.append(request)
         return base(request)
 
-    run_d1_eval(
+    run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
-        candidate_id="d1-golden",
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
+        candidate_id="code_comp-direct-golden",
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
         row_job_factory=capture,
@@ -496,7 +506,7 @@ def test_d1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "188c76081cd030d0099f718383873aa340fa013dd458d87550e4b0fe06bd79fc"
+        "ffba109be6b4429d3061959cc1aaf2c9a7fee6a24e6f852f80a7316c8fe19741"
     )
 
 
@@ -507,7 +517,7 @@ def test_d1_v2_request_hash_is_pinned() -> None:
 def test_d1_rejects_binding_role_mismatch_before_restore(
     monkeypatch, split_name: str, official_binding: bool
 ) -> None:
-    experiment = build_d1_experiment(tasks=_tasks(), repeats=1)
+    experiment = build_direct_experiment(tasks=_tasks(), repeats=1)
     sampling = getattr(experiment.eval_configs, split_name)
 
     def should_not_restore(*_args, **_kwargs):
@@ -517,13 +527,13 @@ def test_d1_rejects_binding_role_mismatch_before_restore(
         raise AssertionError("role mismatch must fail before job construction")
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.index_partial_records",
+        "whetstone.evaluation.drivers.code_comp.direct.index_partial_records",
         should_not_restore,
     )
     with pytest.raises(ValueError, match="does not match split role"):
-        run_d1_eval(
+        run_direct_eval(
             experiment,
-            candidate_body=D1_WRAPPER_BODY_NAIVE,
+            candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
             candidate_id="d1-role-mismatch",
             sampling=sampling,
             execution_policy=execution_policy(max_attempts=1),
@@ -536,11 +546,11 @@ def test_d1_rejects_binding_role_mismatch_before_restore(
 
 def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
     tasks = _tasks(2)
-    experiment = build_d1_experiment(tasks=tasks, repeats=1)
+    experiment = build_direct_experiment(tasks=tasks, repeats=1)
     log = PartialLog(path=tmp_path / "d1.partial.jsonl")
-    first = run_d1_eval(
+    first = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-naive",
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
@@ -554,9 +564,9 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
     def boom(_instance, _repeat: int, _drive_ordinal: int):
         raise AssertionError("recorded rows must not be called again")
 
-    resumed = run_d1_eval(
+    resumed = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-naive",
         sampling=experiment.eval_configs.internal,
         execution_policy=execution_policy(max_attempts=1),
@@ -573,15 +583,15 @@ def test_direct_evaluator_resume_skips_recorded_rows(tmp_path: Path) -> None:
 
 
 def test_d1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
-    experiment = build_d1_experiment(tasks=_tasks(2), repeats=1)
+    experiment = build_direct_experiment(tasks=_tasks(2), repeats=1)
     sampling = experiment.eval_configs.internal
     binding_a = evaluation_binding(sampling)
     binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
     log = PartialLog(path=tmp_path / "d1-binding.partial")
 
-    run_d1_eval(
+    run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-binding",
         sampling=sampling,
         execution_policy=execution_policy(max_attempts=1),
@@ -592,9 +602,9 @@ def test_d1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
     identities_a = {record.request_identity for record in log.load()}
 
     served_b: list[str] = []
-    run_d1_eval(
+    run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-binding",
         sampling=sampling,
         execution_policy=execution_policy(max_attempts=1),
@@ -615,12 +625,12 @@ def test_d1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
 def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
     tmp_path: Path, monkeypatch
 ) -> None:
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=_tasks(1), repeats=1, internal_n=1, official_n=1
     )
     sampling = experiment.eval_configs.internal
     log = PartialLog(path=tmp_path / "d1-redrive.partial")
-    pending = D1RowOutcome(
+    pending = DirectRowOutcome(
         submission_score=None,
         output_text=None,
         row_state=ExecutedRowState.FAILED,
@@ -656,13 +666,13 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
         )
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.run_call_pool",
+        "whetstone.evaluation.drivers.code_comp.direct.run_call_pool",
         crash_after_ordinal_zero,
     )
     with pytest.raises(RuntimeError, match="simulated crash"):
-        run_d1_eval(
+        run_direct_eval(
             experiment,
-            candidate_body=D1_WRAPPER_BODY_NAIVE,
+            candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
             candidate_id="d1-redrive",
             sampling=sampling,
             execution_policy=execution_policy(max_attempts=1),
@@ -679,9 +689,9 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
         resumed_ordinals.append(drive_ordinal)
         return _successful_outcome()
 
-    run_d1_eval(
+    run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-redrive",
         sampling=sampling,
         execution_policy=execution_policy(max_attempts=1),
@@ -696,7 +706,7 @@ def test_d1_pending_ordinal_zero_resumes_at_ordinal_one(
 def test_d1_terminal_timeout_is_persisted_and_not_repaid(
     tmp_path: Path, monkeypatch
 ) -> None:
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=_tasks(1),
         repeats=1,
         internal_n=1,
@@ -725,11 +735,12 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
         )
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.run_call_pool", timed_out_pool
+        "whetstone.evaluation.drivers.code_comp.direct.run_call_pool",
+        timed_out_pool,
     )
-    run_d1_eval(
+    run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-timeout",
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
@@ -757,9 +768,9 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
         raise AssertionError("terminal timeout must restore without repayment")
 
     monkeypatch.undo()
-    resumed = run_d1_eval(
+    resumed = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-timeout",
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),
@@ -773,7 +784,7 @@ def test_d1_terminal_timeout_is_persisted_and_not_repaid(
 
 
 def test_d1_phase_deadline_is_missing_and_not_redriven(monkeypatch) -> None:
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         tasks=_tasks(1),
         repeats=1,
         internal_n=1,
@@ -802,11 +813,12 @@ def test_d1_phase_deadline_is_missing_and_not_redriven(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.d1.run_call_pool", deadline_pool
+        "whetstone.evaluation.drivers.code_comp.direct.run_call_pool",
+        deadline_pool,
     )
-    result = run_d1_eval(
+    result = run_direct_eval(
         experiment,
-        candidate_body=D1_WRAPPER_BODY_NAIVE,
+        candidate_body=DIRECT_WRAPPER_BODY_NAIVE,
         candidate_id="d1-deadline",
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(max_attempts=1),

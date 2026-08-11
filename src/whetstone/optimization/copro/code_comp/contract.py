@@ -11,38 +11,38 @@ from whetstone.envs.code_comp.constants import (
 )
 from whetstone.envs.code_comp.mutation_surface import validate_instruction_body
 
-ED1_COPRO_PROPOSAL_CONTRACT_VERSION = "ed1_encoder_instruction/v1"
+CODE_COMP_COPRO_PROPOSAL_CONTRACT_VERSION = "code_comp_encdec_instruction/v2"
 
-ED1_COPRO_TASK_CONTEXT = (
+CODE_COMP_COPRO_TASK_CONTEXT = (
     "HumanEval encode-decode reconstruction: the encoder describes reference "
     "Python code and the fixed decoder reconstructs functional Python code "
     "from that description."
 )
 
-ED1_COPRO_OUTPUT_RULE = (
+CODE_COMP_COPRO_OUTPUT_RULE = (
     "Return only a replacement encoder instruction body. Do not include input "
     "code, placeholders, the budget clause, prompt headings, terminal "
     "punctuation, Markdown code fences, or a complete prompt."
 )
 
 
-class Ed1CoproProposalContract(BaseModel):
+class EncDecCoproProposalContract(BaseModel):
     """Identity-bearing mutation and output contract for ED1 COPRO."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    contract_version: Literal["ed1_encoder_instruction/v1"] = (
-        ED1_COPRO_PROPOSAL_CONTRACT_VERSION
+    contract_version: Literal["code_comp_encdec_instruction/v2"] = (
+        CODE_COMP_COPRO_PROPOSAL_CONTRACT_VERSION
     )
     target_name: Literal["encoder_instruction"] = "encoder_instruction"
     budget_mode: Literal["budgeted", "unbudgeted"]
-    task_context: StrictStr = ED1_COPRO_TASK_CONTEXT
+    task_context: StrictStr = CODE_COMP_COPRO_TASK_CONTEXT
     encoder_frame: StrictStr
     decoder_template: StrictStr = DECODER_TEMPLATE
-    output_rule: StrictStr = ED1_COPRO_OUTPUT_RULE
+    output_rule: StrictStr = CODE_COMP_COPRO_OUTPUT_RULE
 
     @model_validator(mode="after")
-    def _validate(self) -> Ed1CoproProposalContract:
+    def _validate(self) -> EncDecCoproProposalContract:
         expected_frame = (
             ENCODER_FRAME
             if self.budget_mode == "budgeted"
@@ -77,26 +77,26 @@ class Ed1CoproProposalContract(BaseModel):
             )
 
 
-def ed1_copro_proposal_contract(
+def encdec_copro_proposal_contract(
     *, budget_ratio: float | None
-) -> Ed1CoproProposalContract:
+) -> EncDecCoproProposalContract:
     """Bind the exact ED1 frame selected by one experiment configuration."""
 
     if budget_ratio is None:
-        return Ed1CoproProposalContract(
+        return EncDecCoproProposalContract(
             budget_mode="unbudgeted",
             encoder_frame=ENCODER_FRAME_NO_BUDGET,
         )
-    return Ed1CoproProposalContract(
+    return EncDecCoproProposalContract(
         budget_mode="budgeted",
         encoder_frame=ENCODER_FRAME,
     )
 
 
 __all__ = [
-    "ED1_COPRO_OUTPUT_RULE",
-    "ED1_COPRO_PROPOSAL_CONTRACT_VERSION",
-    "ED1_COPRO_TASK_CONTEXT",
-    "Ed1CoproProposalContract",
-    "ed1_copro_proposal_contract",
+    "CODE_COMP_COPRO_OUTPUT_RULE",
+    "CODE_COMP_COPRO_PROPOSAL_CONTRACT_VERSION",
+    "CODE_COMP_COPRO_TASK_CONTEXT",
+    "EncDecCoproProposalContract",
+    "encdec_copro_proposal_contract",
 ]

@@ -27,12 +27,12 @@ from whetstone.optimization.contracts import (
     optimization_run_reference,
 )
 from whetstone.optimization.copro.adapter import CoproAdapter
+from whetstone.optimization.copro.code_comp.contract import (
+    encdec_copro_proposal_contract,
+)
 from whetstone.optimization.copro.control import (
     CoproInjectedDefaults,
     configure_copro,
-)
-from whetstone.optimization.copro.ed1_contract import (
-    ed1_copro_proposal_contract,
 )
 from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
@@ -87,7 +87,9 @@ def configure_test_copro(
         track_stats=track_stats,
         defaults=CoproInjectedDefaults(
             prompt_model=copro_prompt_model(),
-            proposal_contract=ed1_copro_proposal_contract(budget_ratio=None),
+            proposal_contract=encdec_copro_proposal_contract(
+                budget_ratio=None
+            ),
             evaluation_binding=evaluation_binding(),
             expected_reward_policy_hash=policy.identity_hash(),
             provider_execution_policy_hash=FULL_A,

@@ -19,15 +19,15 @@ from whetstone.core.identity import (
 )
 from whetstone.experiment.binding import eval_config_reference
 from whetstone.optimization.codex.proposer import CodexCliProposerConfig
+from whetstone.optimization.copro.code_comp.contract import (
+    encdec_copro_proposal_contract,
+)
 from whetstone.optimization.copro.control import (
     COPRO_ALGORITHM_VERSION,
     COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
     COPRO_REFERENCE_COMMIT,
     CoproInjectedDefaults,
     configure_copro,
-)
-from whetstone.optimization.copro.ed1_contract import (
-    ed1_copro_proposal_contract,
 )
 from whetstone.optimization.proposal.proposer import (
     ProposerConfig,
@@ -58,7 +58,7 @@ def _defaults(
 ) -> CoproInjectedDefaults:
     return CoproInjectedDefaults(
         prompt_model=prompt_model or _prompt_model(),
-        proposal_contract=ed1_copro_proposal_contract(budget_ratio=None),
+        proposal_contract=encdec_copro_proposal_contract(budget_ratio=None),
         evaluation_binding=evaluation_binding(),
         expected_reward_policy_hash=(
             expected_reward_policy_hash
@@ -175,7 +175,9 @@ def test_policy_and_prompt_adapter_change_optimizer_identity() -> None:
     )
     budgeted_defaults = _defaults().model_copy(
         update={
-            "proposal_contract": ed1_copro_proposal_contract(budget_ratio=0.5)
+            "proposal_contract": encdec_copro_proposal_contract(
+                budget_ratio=0.5
+            )
         }
     )
     other_contract = configure_copro(defaults=budgeted_defaults)

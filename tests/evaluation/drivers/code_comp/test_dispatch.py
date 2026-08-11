@@ -6,14 +6,14 @@ from typing import Any
 import pytest
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 
-from tests.envs.support import synthetic_ed1_tasks
-from tests.envs.test_ed1m import _mutant_record
+from tests.envs.code_comp.test_mutant import _mutant_record
+from tests.envs.support import synthetic_code_comp_tasks
 from whetstone.envs.code_comp import (
     CodeCompMode,
     MutantExperiment,
     build_code_comp_experiment,
 )
-from whetstone.envs.ed1m_dataset import (
+from whetstone.envs.code_comp.mutant.dataset import (
     FamilyCount,
     GenerationConfig,
     OperatorFamily,
@@ -63,20 +63,20 @@ def test_run_code_comp_eval_routes_direct(
 ) -> None:
     experiment = build_code_comp_experiment(
         CodeCompMode.DIRECT,
-        tasks=synthetic_ed1_tasks(1),
+        tasks=synthetic_code_comp_tasks(1),
         internal_n=1,
         official_n=1,
     )
     sentinel: dict[str, Any] = {"called": False}
 
-    def fake_run_d1_eval(*args: Any, **kwargs: Any) -> str:
+    def fake_run_direct_eval(*args: Any, **kwargs: Any) -> str:
         sentinel["called"] = True
         assert args[0] is experiment
         return "d1-result"
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.code_comp.direct.run_d1_eval",
-        fake_run_d1_eval,
+        "whetstone.evaluation.drivers.code_comp.direct.run_direct_eval",
+        fake_run_direct_eval,
     )
     assert run_code_comp_eval(experiment, candidate_body="x") == "d1-result"
     assert sentinel["called"]
@@ -87,20 +87,20 @@ def test_run_code_comp_eval_routes_encdec(
 ) -> None:
     experiment = build_code_comp_experiment(
         CodeCompMode.ENCDEC,
-        tasks=synthetic_ed1_tasks(1),
+        tasks=synthetic_code_comp_tasks(1),
         internal_n=1,
         official_n=1,
     )
     sentinel: dict[str, Any] = {"called": False}
 
-    def fake_run_ed1_eval(*args: Any, **kwargs: Any) -> str:
+    def fake_run_encdec_eval(*args: Any, **kwargs: Any) -> str:
         sentinel["called"] = True
         assert args[0] is experiment
         return "ed1-result"
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.code_comp.encdec.run_ed1_eval",
-        fake_run_ed1_eval,
+        "whetstone.evaluation.drivers.code_comp.encdec.run_encdec_eval",
+        fake_run_encdec_eval,
     )
     assert (
         run_code_comp_eval(experiment, candidate_template="x") == "ed1-result"
@@ -121,14 +121,14 @@ def test_run_code_comp_eval_routes_mutant_via_encdec(
     assert isinstance(experiment, MutantExperiment)
     sentinel: dict[str, Any] = {"called": False}
 
-    def fake_run_ed1_eval(*args: Any, **kwargs: Any) -> str:
+    def fake_run_encdec_eval(*args: Any, **kwargs: Any) -> str:
         sentinel["called"] = True
         assert args[0] is experiment
         return "ed1m-result"
 
     monkeypatch.setattr(
-        "whetstone.evaluation.drivers.code_comp.encdec.run_ed1_eval",
-        fake_run_ed1_eval,
+        "whetstone.evaluation.drivers.code_comp.encdec.run_encdec_eval",
+        fake_run_encdec_eval,
     )
     assert (
         run_code_comp_eval(experiment, candidate_template="x") == "ed1m-result"

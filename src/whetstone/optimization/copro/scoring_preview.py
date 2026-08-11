@@ -29,11 +29,11 @@ from whetstone.optimization.copro.adapter import (
     CoproState,
 )
 from whetstone.optimization.copro.code_comp.dry_run import (
-    Ed1CoproPreviewTask,
-    Ed1CoproRoundAttempt,
-    Ed1CoproRoundPreview,
-    Ed1CoproSweepPoint,
-    Ed1CoproSweepRanges,
+    CodeCompCoproPreviewTask,
+    CodeCompCoproRoundAttempt,
+    CodeCompCoproRoundPreview,
+    CodeCompCoproSweepPoint,
+    CodeCompCoproSweepRanges,
     attempt_ed1_copro_round,
 )
 from whetstone.optimization.proposal.proposer import (
@@ -56,7 +56,7 @@ class ScoredRound(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    preview: Ed1CoproRoundPreview
+    preview: CodeCompCoproRoundPreview
     evaluations: tuple[ScoredCandidate, ...]
     state_after: CoproState
 
@@ -66,7 +66,7 @@ class ScoringPoint(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    settings: Ed1CoproSweepPoint
+    settings: CodeCompCoproSweepPoint
     evaluation_binding: EvaluationBinding
     rounds: tuple[ScoredRound, ...]
     finalization: CoproFinalization
@@ -77,7 +77,7 @@ class ScoringTranscript(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sweep: Ed1CoproSweepRanges
+    sweep: CodeCompCoproSweepRanges
     task_ids: tuple[StrictStr, ...]
     task_selection: TaskRoleSelection | None
     concurrency: int
@@ -90,7 +90,7 @@ class ScoringTranscript(BaseModel):
 class CandidateProgress:
     """One candidate evaluation starting or completing within a round."""
 
-    settings: Ed1CoproSweepPoint
+    settings: CodeCompCoproSweepPoint
     round_index: int
     candidate_index: int
     candidate_count: int
@@ -101,13 +101,13 @@ class CandidateProgress:
 class RoundFailure(RuntimeError):
     """A proposal round failed after preserving its complete attempt."""
 
-    def __init__(self, attempt: Ed1CoproRoundAttempt) -> None:
+    def __init__(self, attempt: CodeCompCoproRoundAttempt) -> None:
         self.attempt = attempt
         super().__init__(attempt.terminal_failure or "COPRO proposal failed")
 
 
 def _candidate_sequence(
-    preview: Ed1CoproRoundPreview,
+    preview: CodeCompCoproRoundPreview,
 ) -> tuple[Candidate, ...]:
     candidates = tuple(
         mutation.candidate.record for mutation in preview.candidate_mutations
@@ -120,16 +120,16 @@ def _candidate_sequence(
 def run_copro_scoring_preview(
     *,
     store: ObjectStore,
-    sweep: Ed1CoproSweepRanges,
-    preview_task: Ed1CoproPreviewTask,
+    sweep: CodeCompCoproSweepRanges,
+    preview_task: CodeCompCoproPreviewTask,
     proposer_kind: str,
     proposer_config: ProposerRouteConfig,
     proposer_transport: ProposerTransport,
-    engine_factory: Callable[[Ed1CoproSweepPoint], EvaluationEngine],
+    engine_factory: Callable[[CodeCompCoproSweepPoint], EvaluationEngine],
     binding_factory: Callable[
-        [EvaluationEngine, Ed1CoproSweepPoint], EvaluationBinding
+        [EvaluationEngine, CodeCompCoproSweepPoint], EvaluationBinding
     ],
-    initial_candidate_factory: Callable[[Ed1CoproSweepPoint], Candidate],
+    initial_candidate_factory: Callable[[CodeCompCoproSweepPoint], Candidate],
     aggregate_values_fn: Callable[
         [ObjectStore, RewardRef], tuple[float | None, ...]
     ],
@@ -139,7 +139,8 @@ def run_copro_scoring_preview(
     task_selection: TaskRoleSelection | None = None,
     concurrency: int = 1,
     resolution_message: str = "measured by the COPRO scoring preview",
-    proposal_observer: Callable[[Ed1CoproRoundAttempt], None] | None = None,
+    proposal_observer: Callable[[CodeCompCoproRoundAttempt], None]
+    | None = None,
     candidate_observer: Callable[[CandidateProgress], None] | None = None,
 ) -> ScoringTranscript:
     """Run proposal drafts through real generation and scoring."""

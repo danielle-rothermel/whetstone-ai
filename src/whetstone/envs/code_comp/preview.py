@@ -9,20 +9,20 @@ from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
 from whetstone.envs.code_comp.modes.encdec import (
     EncDecExperiment,
     EncDecTaskModelConfig,
-    ed1_preview_metadata,
+    encdec_preview_metadata,
 )
 from whetstone.envs.code_comp.registry import (
     CodeCompMode,
     build_code_comp_experiment,
 )
 from whetstone.envs.code_comp.reward.blended import (
-    ED1_DEFAULT_BLEND_CONFIG,
+    CODE_COMP_DEFAULT_BLEND_CONFIG,
     BoundedCompressionMetricConfig,
-    ed1_blended_aggregate_values,
+    code_comp_blended_aggregate_values,
 )
 from whetstone.envs.code_comp.runtime import (
-    Ed1ScoringRuntimeSummary,
-    ed1_environment_fingerprint,
+    EncDecScoringRuntimeSummary,
+    code_comp_environment_fingerprint,
 )
 from whetstone.envs.code_comp.scoring import (
     CodeBatchScorer,
@@ -41,10 +41,10 @@ if TYPE_CHECKING:
         BaselineSweepTranscript,
     )
     from whetstone.experiment.binding import EvaluationBinding
-    from whetstone.optimization.copro.ed1_dry_run import (
-        Ed1CoproRoundAttempt,
-        Ed1CoproSweepPoint,
-        Ed1CoproSweepRanges,
+    from whetstone.optimization.copro.code_comp.dry_run import (
+        CodeCompCoproRoundAttempt,
+        CodeCompCoproSweepPoint,
+        CodeCompCoproSweepRanges,
     )
     from whetstone.optimization.copro.scoring_preview import (
         CandidateProgress,
@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     )
 
 
-def build_ed1_preview_engine(
+def build_code_comp_preview_engine(
     *,
     store: ObjectStore,
     experiment: EncDecExperiment,
@@ -69,7 +69,7 @@ def build_ed1_preview_engine(
     """Build one ED1 preview evaluation engine for matrix and debug scripts."""
 
     from whetstone.evaluation.drivers.code_comp.row_jobs import (
-        ed1_task_model_row_job,
+        encdec_task_model_row_job,
     )
     from whetstone.evaluation.engine import EvaluationEngine
 
@@ -78,7 +78,7 @@ def build_ed1_preview_engine(
         experiment=experiment,
         sampling=experiment.eval_configs.internal,
         execution_policy=task_model.execution_policy,
-        row_job_factory=ed1_task_model_row_job(task_model),
+        row_job_factory=encdec_task_model_row_job(task_model),
         concurrency=concurrency,
         partial_log=partial_log,
         prompt_cache=prompt_cache,
@@ -86,7 +86,7 @@ def build_ed1_preview_engine(
     )
 
 
-def _selected_ed1_tasks(
+def _selected_code_comp_tasks(
     tasks: tuple[CodeCompTaskInstance, ...],
     task_ids: tuple[str, ...],
 ) -> tuple[CodeCompTaskInstance, ...]:
@@ -101,7 +101,7 @@ def _selected_ed1_tasks(
     return tuple(by_id[task_id] for task_id in task_ids)
 
 
-def run_ed1_anchor_baseline_preview(
+def run_code_comp_anchor_baseline_preview(
     *,
     store: ObjectStore,
     tasks: tuple[CodeCompTaskInstance, ...],
@@ -109,7 +109,7 @@ def run_ed1_anchor_baseline_preview(
     pool_ceiling: int,
     task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
-    runtime: Ed1ScoringRuntimeSummary,
+    runtime: EncDecScoringRuntimeSummary,
     task_selection: TaskRoleSelection | None = None,
     preflight_task: CodeCompTaskInstance | None = None,
     budget_ratio: float | None = None,
@@ -117,7 +117,9 @@ def run_ed1_anchor_baseline_preview(
     partial_log: PartialLog | None = None,
     prompt_cache: PromptResultCache | None = None,
     repeats: int = 1,
-    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
+    blend_config: BoundedCompressionMetricConfig = (
+        CODE_COMP_DEFAULT_BLEND_CONFIG
+    ),
     power_config: PowerConfig | None = None,
     bootstrap_level: float = 0.95,
     bootstrap_resamples: int = 10_000,
@@ -129,7 +131,7 @@ def run_ed1_anchor_baseline_preview(
     from whetstone.evaluation.preview.anchor import run_baseline_preview
     from whetstone.evaluation.preview.binding import preview_evaluation_binding
 
-    selected = _selected_ed1_tasks(tasks, task_ids)
+    selected = _selected_code_comp_tasks(tasks, task_ids)
     budget_label = (
         "unbudgeted"
         if budget_ratio is None
@@ -158,7 +160,7 @@ def run_ed1_anchor_baseline_preview(
             blend_config=blend_config,
         ),
     )
-    engine = build_ed1_preview_engine(
+    engine = build_code_comp_preview_engine(
         store=store,
         experiment=experiment,
         task_model=task_model,
@@ -173,7 +175,7 @@ def run_ed1_anchor_baseline_preview(
         provenance_note=(
             f"{task_model.kind.value}-generation-real-humaneval-scoring"
         ),
-        environment_fingerprint=ed1_environment_fingerprint(runtime),
+        environment_fingerprint=code_comp_environment_fingerprint(runtime),
     )
     return run_baseline_preview(
         store=store,
@@ -184,7 +186,7 @@ def run_ed1_anchor_baseline_preview(
         task_ids=task_ids,
         pool_ceiling=pool_ceiling,
         preflight=preflight,
-        metadata=ed1_preview_metadata(
+        metadata=encdec_preview_metadata(
             task_model=task_model,
             runtime=runtime,
             blend_config=blend_config,
@@ -202,7 +204,7 @@ def run_ed1_anchor_baseline_preview(
     )
 
 
-def run_ed1_anchor_baseline_sweep(
+def run_code_comp_anchor_baseline_sweep(
     *,
     store: ObjectStore,
     tasks: tuple[CodeCompTaskInstance, ...],
@@ -210,7 +212,7 @@ def run_ed1_anchor_baseline_sweep(
     pool_ceiling: int,
     task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
-    runtime: Ed1ScoringRuntimeSummary,
+    runtime: EncDecScoringRuntimeSummary,
     budget_ratios: tuple[float | None, ...],
     task_selection: TaskRoleSelection | None = None,
     preflight_task: CodeCompTaskInstance | None = None,
@@ -218,7 +220,9 @@ def run_ed1_anchor_baseline_sweep(
     partial_log: PartialLog | None = None,
     prompt_cache: PromptResultCache | None = None,
     repeats: int = 1,
-    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
+    blend_config: BoundedCompressionMetricConfig = (
+        CODE_COMP_DEFAULT_BLEND_CONFIG
+    ),
     power_config: PowerConfig | None = None,
     bootstrap_level: float = 0.95,
     bootstrap_resamples: int = 10_000,
@@ -230,27 +234,29 @@ def run_ed1_anchor_baseline_sweep(
     from whetstone.evaluation.preview.anchor import run_baseline_sweep
 
     return run_baseline_sweep(
-        preview_factory=lambda budget_ratio: run_ed1_anchor_baseline_preview(
-            store=store,
-            tasks=tasks,
-            task_ids=task_ids,
-            task_selection=task_selection,
-            preflight_task=preflight_task,
-            pool_ceiling=pool_ceiling,
-            task_model=task_model,
-            batch_scorer=batch_scorer,
-            runtime=runtime,
-            budget_ratio=budget_ratio,
-            concurrency=concurrency,
-            partial_log=partial_log,
-            prompt_cache=prompt_cache,
-            repeats=repeats,
-            blend_config=blend_config,
-            power_config=power_config,
-            bootstrap_level=bootstrap_level,
-            bootstrap_resamples=bootstrap_resamples,
-            bootstrap_seed=bootstrap_seed,
-            log=log,
+        preview_factory=lambda budget_ratio: (
+            run_code_comp_anchor_baseline_preview(
+                store=store,
+                tasks=tasks,
+                task_ids=task_ids,
+                task_selection=task_selection,
+                preflight_task=preflight_task,
+                pool_ceiling=pool_ceiling,
+                task_model=task_model,
+                batch_scorer=batch_scorer,
+                runtime=runtime,
+                budget_ratio=budget_ratio,
+                concurrency=concurrency,
+                partial_log=partial_log,
+                prompt_cache=prompt_cache,
+                repeats=repeats,
+                blend_config=blend_config,
+                power_config=power_config,
+                bootstrap_level=bootstrap_level,
+                bootstrap_resamples=bootstrap_resamples,
+                bootstrap_seed=bootstrap_seed,
+                log=log,
+            )
         ),
         task_ids=task_ids,
         budget_ratios=budget_ratios,
@@ -258,29 +264,34 @@ def run_ed1_anchor_baseline_sweep(
     )
 
 
-def run_ed1_copro_scoring_preview(
+def run_code_comp_copro_scoring_preview(
     *,
     store: ObjectStore,
     tasks: tuple[CodeCompTaskInstance, ...],
-    sweep: Ed1CoproSweepRanges,
+    sweep: CodeCompCoproSweepRanges,
     proposer_kind: str,
     proposer_config: ProposerRouteConfig,
     proposer_transport: ProposerTransport,
     task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
-    runtime: Ed1ScoringRuntimeSummary,
+    runtime: EncDecScoringRuntimeSummary,
     task_selection: TaskRoleSelection | None = None,
     preflight_task: CodeCompTaskInstance | None = None,
     concurrency: int = 1,
     repeats: int = 1,
-    blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
-    proposal_observer: Callable[[Ed1CoproRoundAttempt], None] | None = None,
+    blend_config: BoundedCompressionMetricConfig = (
+        CODE_COMP_DEFAULT_BLEND_CONFIG
+    ),
+    proposal_observer: Callable[[CodeCompCoproRoundAttempt], None]
+    | None = None,
     candidate_observer: Callable[[CandidateProgress], None] | None = None,
 ) -> ScoringTranscript:
     """Wire ED1 execution and run the generic COPRO scoring preview."""
 
     from whetstone.evaluation.preview.binding import preview_evaluation_binding
-    from whetstone.optimization.copro.ed1_dry_run import Ed1CoproPreviewTask
+    from whetstone.optimization.copro.code_comp.dry_run import (
+        CodeCompCoproPreviewTask,
+    )
     from whetstone.optimization.copro.scoring_preview import (
         run_copro_scoring_preview,
     )
@@ -294,12 +305,12 @@ def run_ed1_copro_scoring_preview(
         (preflight_task or tasks[0],), batch_scorer
     )
     first = tasks[0]
-    preview_task = Ed1CoproPreviewTask(
+    preview_task = CodeCompCoproPreviewTask(
         task_id=first.humaneval_task.task_id,
         input_code=first.input_code,
     )
 
-    def _experiment_for(settings: Ed1CoproSweepPoint) -> EncDecExperiment:
+    def _experiment_for(settings: CodeCompCoproSweepPoint) -> EncDecExperiment:
         return cast(
             EncDecExperiment,
             build_code_comp_experiment(
@@ -314,8 +325,8 @@ def run_ed1_copro_scoring_preview(
             ),
         )
 
-    def engine_factory(settings: Ed1CoproSweepPoint) -> EvaluationEngine:
-        return build_ed1_preview_engine(
+    def engine_factory(settings: CodeCompCoproSweepPoint) -> EvaluationEngine:
+        return build_code_comp_preview_engine(
             store=store,
             experiment=_experiment_for(settings),
             task_model=task_model,
@@ -325,7 +336,7 @@ def run_ed1_copro_scoring_preview(
 
     def binding_factory(
         engine: EvaluationEngine,
-        settings: Ed1CoproSweepPoint,
+        settings: CodeCompCoproSweepPoint,
     ) -> EvaluationBinding:
         del settings
         return preview_evaluation_binding(
@@ -334,10 +345,12 @@ def run_ed1_copro_scoring_preview(
             provenance_note=(
                 f"{task_model.kind.value}-generation-real-humaneval-scoring"
             ),
-            environment_fingerprint=ed1_environment_fingerprint(runtime),
+            environment_fingerprint=code_comp_environment_fingerprint(runtime),
         )
 
-    def initial_candidate_factory(settings: Ed1CoproSweepPoint) -> Candidate:
+    def initial_candidate_factory(
+        settings: CodeCompCoproSweepPoint,
+    ) -> Candidate:
         return _experiment_for(settings).initial_candidate
 
     return run_copro_scoring_preview(
@@ -350,9 +363,9 @@ def run_ed1_copro_scoring_preview(
         engine_factory=engine_factory,
         binding_factory=binding_factory,
         initial_candidate_factory=initial_candidate_factory,
-        aggregate_values_fn=ed1_blended_aggregate_values,
+        aggregate_values_fn=code_comp_blended_aggregate_values,
         preflight=preflight,
-        metadata=ed1_preview_metadata(
+        metadata=encdec_preview_metadata(
             task_model=task_model,
             runtime=runtime,
             blend_config=blend_config,
@@ -366,8 +379,8 @@ def run_ed1_copro_scoring_preview(
 
 
 __all__ = [
-    "build_ed1_preview_engine",
-    "run_ed1_anchor_baseline_preview",
-    "run_ed1_anchor_baseline_sweep",
-    "run_ed1_copro_scoring_preview",
+    "build_code_comp_preview_engine",
+    "run_code_comp_anchor_baseline_preview",
+    "run_code_comp_anchor_baseline_sweep",
+    "run_code_comp_copro_scoring_preview",
 ]

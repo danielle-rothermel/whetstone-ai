@@ -17,8 +17,8 @@ from pydantic import BaseModel, ConfigDict, StrictStr
 from whetstone.core.identity import compute_identity_hash
 from whetstone.experiment.binding import ExecutionEnvironmentFingerprint
 
-ED1_SCORING_RUNTIME_SCHEMA = "whetstone.ed1_scoring_runtime"
-ED1_SCORING_RUNTIME_SCHEMA_VERSION = 1
+CODE_COMP_SCORING_RUNTIME_SCHEMA = "whetstone.code_comp_scoring_runtime"
+CODE_COMP_SCORING_RUNTIME_SCHEMA_VERSION = 1
 
 _RUNTIME_PROBE_SOURCE = """\
 import json
@@ -36,7 +36,7 @@ def dr_exec_main(request, emit):
 """
 
 
-class Ed1RuntimeProbe(BaseModel):
+class CodeCompRuntimeProbe(BaseModel):
     """Validated dependency probe returned by the code-evaluation runtime."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -47,7 +47,7 @@ class Ed1RuntimeProbe(BaseModel):
     python_version: StrictStr
 
 
-class Ed1ScoringRuntimeSummary(BaseModel):
+class EncDecScoringRuntimeSummary(BaseModel):
     """Runtime identity displayed and persisted with a scoring preview."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -55,11 +55,11 @@ class Ed1ScoringRuntimeSummary(BaseModel):
     evaluation_python: StrictStr
     dr_code_version: StrictStr
     runtime_identity_hash: StrictStr
-    probe: Ed1RuntimeProbe
+    probe: CodeCompRuntimeProbe
 
 
-def ed1_environment_fingerprint(
-    runtime: Ed1ScoringRuntimeSummary,
+def code_comp_environment_fingerprint(
+    runtime: EncDecScoringRuntimeSummary,
 ) -> ExecutionEnvironmentFingerprint:
     return ExecutionEnvironmentFingerprint(
         dependency_versions=(
@@ -71,13 +71,13 @@ def ed1_environment_fingerprint(
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1ScoringRuntime:
+class CodeCompScoringRuntime:
     """One explicit code executor and its cache-scope identity."""
 
     executor: ProcessExecutor
     runtime_identity: IdentityDocument
     runtime_identity_hash: str
-    probe: Ed1RuntimeProbe
+    probe: CodeCompRuntimeProbe
 
 
 def _require_copied_python(path: Path) -> Path:
@@ -92,11 +92,11 @@ def _require_copied_python(path: Path) -> Path:
     return executable
 
 
-def build_ed1_scoring_runtime(
+def build_code_comp_scoring_runtime(
     *,
     runtime_executable: Path,
     record_root: Path,
-) -> Ed1ScoringRuntime:
+) -> CodeCompScoringRuntime:
     """Construct and validate the explicit HumanEval execution runtime."""
 
     executable = _require_copied_python(runtime_executable)
@@ -127,7 +127,7 @@ def build_ed1_scoring_runtime(
         raise RuntimeError(
             "evaluation runtime dependency probe returned invalid JSON"
         ) from exc
-    probe = Ed1RuntimeProbe.model_validate(raw_probe)
+    probe = CodeCompRuntimeProbe.model_validate(raw_probe)
     if Path(probe.python_executable).resolve() != executable.resolve():
         raise RuntimeError(
             "evaluation runtime probe used a different Python executable"
@@ -138,16 +138,16 @@ def build_ed1_scoring_runtime(
         "packages": probe.model_dump(mode="json"),
     }
     identity = IdentityDocument(
-        schema=ED1_SCORING_RUNTIME_SCHEMA,
-        schema_version=ED1_SCORING_RUNTIME_SCHEMA_VERSION,
+        schema=CODE_COMP_SCORING_RUNTIME_SCHEMA,
+        schema_version=CODE_COMP_SCORING_RUNTIME_SCHEMA_VERSION,
         payload=payload,
     )
-    return Ed1ScoringRuntime(
+    return CodeCompScoringRuntime(
         executor=executor,
         runtime_identity=identity,
         runtime_identity_hash=compute_identity_hash(
-            schema=ED1_SCORING_RUNTIME_SCHEMA,
-            schema_version=ED1_SCORING_RUNTIME_SCHEMA_VERSION,
+            schema=CODE_COMP_SCORING_RUNTIME_SCHEMA,
+            schema_version=CODE_COMP_SCORING_RUNTIME_SCHEMA_VERSION,
             payload=payload,
         ),
         probe=probe,
@@ -155,11 +155,11 @@ def build_ed1_scoring_runtime(
 
 
 __all__ = [
-    "ED1_SCORING_RUNTIME_SCHEMA",
-    "ED1_SCORING_RUNTIME_SCHEMA_VERSION",
-    "Ed1RuntimeProbe",
-    "Ed1ScoringRuntime",
-    "Ed1ScoringRuntimeSummary",
-    "build_ed1_scoring_runtime",
-    "ed1_environment_fingerprint",
+    "CODE_COMP_SCORING_RUNTIME_SCHEMA",
+    "CODE_COMP_SCORING_RUNTIME_SCHEMA_VERSION",
+    "CodeCompRuntimeProbe",
+    "CodeCompScoringRuntime",
+    "EncDecScoringRuntimeSummary",
+    "build_code_comp_scoring_runtime",
+    "code_comp_environment_fingerprint",
 ]

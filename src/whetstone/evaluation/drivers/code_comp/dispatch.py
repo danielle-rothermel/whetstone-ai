@@ -15,15 +15,19 @@ def run_code_comp_eval(experiment: EnvExperiment, /, **kwargs: Any) -> object:
 
     mode = code_comp_mode_for(experiment)
     if mode is CodeCompMode.DIRECT:
-        from whetstone.evaluation.drivers.code_comp.direct import run_d1_eval
+        from whetstone.evaluation.drivers.code_comp.direct import (
+            run_direct_eval,
+        )
 
         assert isinstance(experiment, DirectExperiment)
-        return run_d1_eval(experiment, **kwargs)
+        return run_direct_eval(experiment, **kwargs)
     if mode in {CodeCompMode.ENCDEC, CodeCompMode.ENCDEC_MUTANT}:
-        from whetstone.evaluation.drivers.code_comp.encdec import run_ed1_eval
+        from whetstone.evaluation.drivers.code_comp.encdec import (
+            run_encdec_eval,
+        )
 
         assert isinstance(experiment, EncDecExperiment)
-        return run_ed1_eval(experiment, **kwargs)
+        return run_encdec_eval(experiment, **kwargs)
     raise TypeError(
         "experiment is not a code_comp direct or encdec/mutant experiment"
     )

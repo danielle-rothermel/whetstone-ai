@@ -12,15 +12,15 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from whetstone.optimization.copro.ed1_dry_run import (
+from whetstone.optimization.copro.code_comp.dry_run import (
+    CodeCompCoproDryRunTranscript,
+    CodeCompCoproPreviewTask,
+    CodeCompCoproProposalCall,
+    CodeCompCoproSweepRanges,
+    CodeCompCoproSweepTranscript,
     DummyCoproProposerConfig,
-    Ed1CoproDryRunTranscript,
-    Ed1CoproPreviewTask,
-    Ed1CoproProposalCall,
-    Ed1CoproSweepRanges,
-    Ed1CoproSweepTranscript,
     Ed1PromptPreview,
-    run_ed1_copro_dry_run,
+    run_code_comp_copro_dry_run,
 )
 
 
@@ -33,8 +33,8 @@ def _axis(values: tuple[object, ...]) -> str:
 def render_inputs(
     console: Console,
     *,
-    sweep: Ed1CoproSweepRanges,
-    preview_task: Ed1CoproPreviewTask,
+    sweep: CodeCompCoproSweepRanges,
+    preview_task: CodeCompCoproPreviewTask,
     dummy_proposer: DummyCoproProposerConfig,
 ) -> None:
     """Render the inputs that determine this deterministic preview."""
@@ -98,7 +98,7 @@ def render_prompt(
 def render_flow(console: Console) -> None:
     """Explain the dry-run control flow and its deliberate stopping point."""
 
-    flow = Tree("[bold]run_ed1_copro_dry_run(...)")
+    flow = Tree("[bold]run_code_comp_copro_dry_run(...)")
     flow.add("Create the hand-engineered baseline candidate once")
     sweep_loop = flow.add("For each independent sweep point")
     sweep_loop.add("Construct CoproDriver from that point's breadth and depth")
@@ -130,7 +130,7 @@ def render_flow(console: Console) -> None:
 
 def render_point_calls(
     console: Console,
-    point: Ed1CoproSweepTranscript,
+    point: CodeCompCoproSweepTranscript,
 ) -> None:
     """Show the significant calls and returns for one independent point."""
 
@@ -192,7 +192,9 @@ def render_point_calls(
     )
 
 
-def render_proposal_call(console: Console, call: Ed1CoproProposalCall) -> None:
+def render_proposal_call(
+    console: Console, call: CodeCompCoproProposalCall
+) -> None:
     """Render the exact shared proposer contract, request, and response."""
 
     contract = call.instruction_contract
@@ -276,7 +278,7 @@ def render_proposal_call(console: Console, call: Ed1CoproProposalCall) -> None:
 
 def render_sweep_point(
     console: Console,
-    point: Ed1CoproSweepTranscript,
+    point: CodeCompCoproSweepTranscript,
     *,
     point_count: int,
 ) -> None:
@@ -318,7 +320,7 @@ def render_sweep_point(
 
 
 def render_transcript(
-    console: Console, transcript: Ed1CoproDryRunTranscript
+    console: Console, transcript: CodeCompCoproDryRunTranscript
 ) -> None:
     """Render every initialized sweep point in a COPRO dry-run transcript."""
 
@@ -344,12 +346,12 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    sweep = Ed1CoproSweepRanges(
+    sweep = CodeCompCoproSweepRanges(
         budget_ratios=(None, 0.5),
         breadths=(3,),
         depths=(1,),
     )
-    preview_task = Ed1CoproPreviewTask(
+    preview_task = CodeCompCoproPreviewTask(
         task_id="HumanEval/0",
         input_code="def add(a, b):\n    return a + b",
     )
@@ -359,7 +361,7 @@ def main() -> None:
             "Explain how to reconstruct an equivalent Python function",
         )
     )
-    transcript = run_ed1_copro_dry_run(
+    transcript = run_code_comp_copro_dry_run(
         sweep=sweep,
         preview_task=preview_task,
         dummy_proposer=dummy_proposer,

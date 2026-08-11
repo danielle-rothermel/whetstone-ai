@@ -7,7 +7,7 @@ from pathlib import Path
 
 from whetstone.envs.code_comp.behavior_matrix import (
     DEFAULT_CONCURRENCY,
-    run_ed1_baseline_behavior_matrix,
+    run_code_comp_baseline_behavior_matrix,
 )
 
 
@@ -56,7 +56,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    run_ed1_baseline_behavior_matrix(
+    run_code_comp_baseline_behavior_matrix(
         provider_routes=_baseline_provider_routes()(),
         evaluation_python=args.evaluation_python,
         snapshot_path=args.snapshot_path,

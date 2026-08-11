@@ -21,7 +21,7 @@ def test_parse_accepts_json_bytes_and_hashes_canonical_content() -> None:
     encoded = parse_task_split_manifest(json.dumps(payload).encode())
     assert direct.content_hash == encoded.content_hash
     changed = parse_task_split_manifest(
-        manifest_payload(ed1_test=("Synthetic/3",))
+        manifest_payload(encdec_test=("Synthetic/3",))
     )
     assert changed.content_hash != direct.content_hash
 
@@ -57,16 +57,16 @@ def test_parse_rejects_invalid_boundaries(
 
 def test_pool_roles_are_train_then_val_and_test_exactly() -> None:
     manifest = parse_task_split_manifest(manifest_payload())
-    ed1 = manifest.pool_roles("ed1")
-    d1 = manifest.pool_roles("d1")
-    assert ed1.internal_ids == (
+    encdec = manifest.pool_roles("encdec")
+    direct = manifest.pool_roles("direct")
+    assert encdec.internal_ids == (
         "Synthetic/0",
         "Synthetic/1",
         "Synthetic/2",
     )
-    assert ed1.official_ids == ("Synthetic/3", "Synthetic/4")
-    assert d1.internal_ids == ("Synthetic/0", "Synthetic/1")
-    assert d1.official_ids == ("Synthetic/2", "Synthetic/3")
+    assert encdec.official_ids == ("Synthetic/3", "Synthetic/4")
+    assert direct.internal_ids == ("Synthetic/0", "Synthetic/1")
+    assert direct.official_ids == ("Synthetic/2", "Synthetic/3")
 
 
 @pytest.mark.parametrize(
@@ -82,10 +82,10 @@ def test_select_role_preserves_role_and_manifest_order(
 ) -> None:
     manifest = parse_task_split_manifest(manifest_payload())
 
-    selected = manifest.select_role(pool_key="ed1", role=role)
+    selected = manifest.select_role(pool_key="encdec", role=role)
 
     assert selected.manifest_content_hash == manifest.content_hash
-    assert selected.pool_key == "ed1"
+    assert selected.pool_key == "encdec"
     assert selected.role is role
     assert selected.task_ids == expected
     assert selected.selection_method is TaskRoleSelectionMethod.FULL_ROLE
@@ -101,7 +101,7 @@ def test_pool_roles_rejects_unknown_pool_key() -> None:
 def test_duplicate_role_ids_are_rejected() -> None:
     payload = manifest_payload()
     pools = cast(dict[str, object], payload["pools"])
-    ed1 = cast(dict[str, object], pools["ed1"])
+    ed1 = cast(dict[str, object], pools["encdec"])
     ed1["train"] = ["Synthetic/0", "Synthetic/0"]
     with pytest.raises(TaskSplitManifestError, match="duplicate"):
         parse_task_split_manifest(payload)
@@ -116,7 +116,7 @@ def test_cross_role_duplicate_ids_are_rejected(
 ) -> None:
     payload = manifest_payload()
     pools = cast(dict[str, object], payload["pools"])
-    ed1 = cast(dict[str, object], pools["ed1"])
+    ed1 = cast(dict[str, object], pools["encdec"])
     shared = cast(list[str], ed1[role_a])[0]
     ed1[role_b] = [*cast(list[str], ed1[role_b]), shared]
     with pytest.raises(TaskSplitManifestError, match="disjoint"):
@@ -139,7 +139,7 @@ def test_select_lowest_historical_pass_rate_uses_manifest_metadata() -> None:
     manifest = parse_task_split_manifest(payload)
 
     selected = manifest.select_lowest_historical_pass_rate(
-        pool_key="ed1",
+        pool_key="encdec",
         role=TaskSplitRole.TRAIN,
         count=1,
     )

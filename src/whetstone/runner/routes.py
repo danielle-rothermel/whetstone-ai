@@ -110,11 +110,9 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
     "c22": DEEPSEEK_TASK_MODEL,
     # c22h follows the c22 column convention; overridable via --task-model.
     "c22h": DEEPSEEK_TASK_MODEL,
-    # The enc-dec family (ed1 / ed1m) and the direct-generation precursor (d1)
-    # share one enc/dec model family so their anchors pair on the same model.
-    "ed1": ENCDEC_DEFAULT_TASK_MODEL,
-    "ed1m": ENCDEC_DEFAULT_TASK_MODEL,
-    "d1": ENCDEC_DEFAULT_TASK_MODEL,
+    # The code_comp env (direct, encdec, encdec_mutant) shares one task-model
+    # family so anchor cells pair on the same model.
+    "code_comp": ENCDEC_DEFAULT_TASK_MODEL,
 }
 
 
@@ -130,17 +128,8 @@ COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
     # aggregate and the cell line, never silently dropped.
     "c18": ("skip", 0.02),
     "c18h": ("skip", 0.02),
-    # The enc-dec family declares a higher tolerance: its per-row failures are
-    # genuine stochastic model behavior at tight budgets. At a tight ratio the
-    # model sometimes emits an empty completion (a permanent parse error), and
-    # a tight budget can drop the entry-point name so the decoder writes valid
-    # code under a wrong function name. 15% covers the observed rate with
-    # margin; override per-cell with --missing-data / --max-skip-fraction.
-    "ed1": ("skip", 0.15),
-    "ed1m": ("skip", 0.15),
-    # d1 issues a single direct generation, so its stochastic tail is somewhat
-    # smaller than the enc-dec two-call rows; 15% covers it with margin.
-    "d1": ("skip", 0.15),
+    # code_comp rows declare a higher tolerance for stochastic model behavior.
+    "code_comp": ("skip", 0.15),
 }
 
 

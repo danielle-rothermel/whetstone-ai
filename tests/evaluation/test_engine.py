@@ -31,8 +31,11 @@ from whetstone.core.identity import (
     TypedRef,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.ed1 import DECODER_TEMPLATE
-from whetstone.envs.encdec_rollout import (
+from whetstone.envs.code_comp.constants import (
+    CODE_COMP_ENV_NAME,
+    DECODER_TEMPLATE,
+)
+from whetstone.envs.code_comp.rollout.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
     build_encdec_rollout_definition,
@@ -89,7 +92,7 @@ def _ed1_graph_engine(*, store: ObjectStore) -> EvaluationEngine:
     experiment = replace(
         base_experiment,
         rollout_definition=build_encdec_rollout_definition(
-            "ed1",
+            CODE_COMP_ENV_NAME,
             provider_call_config=build_encoder_provider_call_config(
                 "openai/test"
             ),
@@ -120,7 +123,7 @@ def test_engine_run_delegates_encdec_to_code_comp_dispatch(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from tests.envs.support import synthetic_ed1_tasks
+    from tests.envs.support import synthetic_code_comp_tasks
     from whetstone.envs.code_comp import (
         CodeCompMode,
         build_code_comp_experiment,
@@ -131,7 +134,7 @@ def test_engine_run_delegates_encdec_to_code_comp_dispatch(
 
     experiment = build_code_comp_experiment(
         CodeCompMode.ENCDEC,
-        tasks=synthetic_ed1_tasks(1),
+        tasks=synthetic_code_comp_tasks(1),
         internal_n=1,
         official_n=1,
     )

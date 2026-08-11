@@ -3,11 +3,14 @@ from __future__ import annotations
 from enum import UNIQUE, StrEnum, verify
 from typing import Any
 
+from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
 from whetstone.envs.factory import EnvExperiment
 
 __all__ = [
+    "CODE_COMP_ENV_NAME",
     "CodeCompMode",
     "build_code_comp_experiment",
+    "code_comp_identity_prefix",
     "code_comp_mode_for",
 ]
 
@@ -19,6 +22,11 @@ class CodeCompMode(StrEnum):
     DIRECT = "direct"
     ENCDEC = "encdec"
     ENCDEC_MUTANT = "encdec_mutant"
+
+
+def code_comp_identity_prefix(mode: CodeCompMode) -> str:
+    """Return the identity namespace prefix for one code_comp mode."""
+    return f"whetstone.code_comp.{mode.value}"
 
 
 def build_code_comp_experiment(

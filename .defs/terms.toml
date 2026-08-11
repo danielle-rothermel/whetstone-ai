@@ -104,3 +104,48 @@ evidence it scalarizes. It is not an objective and is never an \
 official-selection criterion."""
 exported_symbols = ["whetstone.experiment.reward.RewardRef"]
 categories = ["optimization", "evaluation"]
+
+[[terms]]
+name = "code_comp env"
+definition = """
+The unified HumanEval code-compression environment identity. Direct generation, \
+encoder-decoder, and behavioral-mutant experiment modes share env=code_comp and \
+differ by CodeCompMode subset."""
+exported_symbols = [
+    "whetstone.envs.code_comp.CODE_COMP_ENV_NAME",
+    "whetstone.envs.code_comp.CodeCompMode",
+    "whetstone.envs.code_comp.code_comp_identity_prefix",
+]
+categories = ["experiment identity", "evaluation"]
+
+[[terms]]
+name = "code_comp mode"
+definition = """
+One HumanEval compression experiment subset under the code_comp env: direct \
+(single-shot generation), encdec (encoder-decoder), or encdec_mutant \
+(mutant oracle scoring)."""
+exported_symbols = ["whetstone.envs.code_comp.CodeCompMode"]
+categories = ["experiment identity"]
+
+[[terms]]
+name = "code_comp row request schema"
+definition = """
+The persisted row-request schema for one code_comp evaluation mode: \
+code_comp_direct_row_request for direct generation and \
+code_comp_encdec_row_request for encoder-decoder rollouts."""
+exported_symbols = [
+    "whetstone.evaluation.drivers.code_comp.DirectRowRequest",
+    "whetstone.evaluation.drivers.code_comp.EncDecRowRequest",
+]
+categories = ["evaluation", "experiment identity"]
+
+[[terms]]
+name = "encdec copro proposal contract"
+definition = """
+The instruction mutation contract for code_comp encdec COPRO proposals, \
+including the canonical encoder body and budget ratio."""
+exported_symbols = [
+    "whetstone.optimization.copro.code_comp.EncDecCoproProposalContract",
+    "whetstone.optimization.copro.code_comp.encdec_copro_proposal_contract",
+]
+categories = ["optimization", "experiment identity"]

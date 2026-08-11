@@ -26,7 +26,7 @@ from whetstone.experiment.reward import RewardPolicy
 class RolloutDefinitionLike(Protocol):
     """The structural Rollout Definition contract evaluation reads.
 
-    Both the QA ``EnvRolloutDefinition`` (2-node) and the ed1
+    Both the QA ``EnvRolloutDefinition`` (2-node) and the code_comp
     ``EncDecRolloutDefinition`` (3-node) satisfy it, so evaluation reads
     ``graph_hash`` / ``provider_call_config`` / ``procedure_config_hash``
     uniformly across env kinds without a concrete-type coupling.

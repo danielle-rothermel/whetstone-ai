@@ -44,7 +44,7 @@ def test_task_selection_has_no_duplicate_eval_contract_types() -> None:
 
 def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     roles = TaskSplitRoles(
-        pool_key="ed1",
+        pool_key="encdec",
         train_ids=("Synthetic/0",),
         val_ids=("Synthetic/1",),
         test_ids=("Synthetic/2",),
@@ -52,7 +52,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     )
     selection = TaskRoleSelection(
         manifest_content_hash="b" * 64,
-        pool_key="ed1",
+        pool_key="encdec",
         role=TaskSplitRole.TRAIN,
         task_ids=("Synthetic/0",),
     )

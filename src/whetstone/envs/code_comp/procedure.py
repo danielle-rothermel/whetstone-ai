@@ -3,15 +3,15 @@ from __future__ import annotations
 from dr_code.humaneval.plus_dataset import HF_REVISION
 
 from whetstone.envs.code_comp.constants import (
+    CODE_COMP_DATASET_ID,
+    CODE_COMP_DATASET_REVISION,
+    CODE_COMP_ENV_NAME,
+    CODE_COMP_SUBMISSION_SCORE_NAME,
     DEFINITION_VERSION,
-    ED1_DATASET_ID,
-    ED1_DATASET_REVISION,
-    ED1_ENV_NAME,
-    ED1_SUBMISSION_SCORE_NAME,
 )
 from whetstone.envs.code_comp.scoring import (
-    ED1_SCORING_PROFILE_ID,
-    ED1_SCORING_PROFILE_VERSION,
+    CODE_COMP_SCORING_PROFILE_ID,
+    CODE_COMP_SCORING_PROFILE_VERSION,
 )
 from whetstone.evaluation import (
     EvaluationProcedureConfig,
@@ -41,7 +41,7 @@ def build_code_eval_procedure_config(
                 settings=primary_metric_settings,
             ),
             MetricQuestionBinding(
-                metric="whetstone.ed1.compression_ratio",
+                metric="whetstone.code_comp.compression_ratio",
                 on="description",
                 settings=(
                     ("zstd_level", "19"),
@@ -72,20 +72,20 @@ def build_code_eval_procedure_config(
     )
 
 
-def build_ed1_procedure_config(
+def build_encdec_procedure_config(
     *, zero_denominator: str = "not_applicable"
 ) -> EvaluationProcedureConfig:
     """The canonical ED1 HumanEval-submission evaluation procedure."""
     return build_code_eval_procedure_config(
-        env_name=ED1_ENV_NAME,
-        primary_metric_name=ED1_SUBMISSION_SCORE_NAME,
+        env_name=CODE_COMP_ENV_NAME,
+        primary_metric_name=CODE_COMP_SUBMISSION_SCORE_NAME,
         primary_metric_settings=(
-            ("dataset", ED1_DATASET_ID),
-            ("dataset_coordinate", ED1_DATASET_REVISION),
+            ("dataset", CODE_COMP_DATASET_ID),
+            ("dataset_coordinate", CODE_COMP_DATASET_REVISION),
             ("upstream_revision", HF_REVISION),
             ("scorer", "dr_code.humaneval.score_humaneval_submission"),
-            ("scoring_profile_id", ED1_SCORING_PROFILE_ID),
-            ("scoring_profile_version", ED1_SCORING_PROFILE_VERSION),
+            ("scoring_profile_id", CODE_COMP_SCORING_PROFILE_ID),
+            ("scoring_profile_version", CODE_COMP_SCORING_PROFILE_VERSION),
             ("completed_outcome_projection", "definitive_score"),
         ),
         zero_denominator=zero_denominator,
@@ -94,5 +94,5 @@ def build_ed1_procedure_config(
 
 __all__ = [
     "build_code_eval_procedure_config",
-    "build_ed1_procedure_config",
+    "build_encdec_procedure_config",
 ]

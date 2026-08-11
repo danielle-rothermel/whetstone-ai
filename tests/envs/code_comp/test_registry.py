@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 
-from tests.envs.support import synthetic_ed1_tasks
-from tests.envs.test_ed1m import _mutant_record
+from tests.envs.code_comp.test_mutant import _mutant_record
+from tests.envs.support import synthetic_code_comp_tasks
 from whetstone.envs.code_comp import (
     CodeCompMode,
     DirectExperiment,
@@ -17,10 +17,7 @@ from whetstone.envs.code_comp import (
     build_mutant_experiment,
     code_comp_mode_for,
 )
-from whetstone.envs.d1 import build_d1_experiment
-from whetstone.envs.ed1 import build_ed1_experiment
-from whetstone.envs.ed1m import build_ed1m_experiment
-from whetstone.envs.ed1m_dataset import (
+from whetstone.envs.code_comp.mutant.dataset import (
     FamilyCount,
     GenerationConfig,
     OperatorFamily,
@@ -64,8 +61,8 @@ def mutant_dataset_dir(tmp_path: Path) -> Path:
 
 
 def test_registry_direct_matches_legacy_builder() -> None:
-    tasks = synthetic_ed1_tasks(2)
-    legacy = build_d1_experiment(tasks=tasks, internal_n=1, official_n=1)
+    tasks = synthetic_code_comp_tasks(2)
+    legacy = build_direct_experiment(tasks=tasks, internal_n=1, official_n=1)
     unified = build_code_comp_experiment(
         CodeCompMode.DIRECT,
         tasks=tasks,
@@ -78,8 +75,8 @@ def test_registry_direct_matches_legacy_builder() -> None:
 
 
 def test_registry_encdec_matches_legacy_builder() -> None:
-    tasks = synthetic_ed1_tasks(2)
-    legacy = build_ed1_experiment(tasks=tasks, internal_n=1, official_n=1)
+    tasks = synthetic_code_comp_tasks(2)
+    legacy = build_encdec_experiment(tasks=tasks, internal_n=1, official_n=1)
     unified = build_code_comp_experiment(
         CodeCompMode.ENCDEC,
         tasks=tasks,
@@ -94,7 +91,7 @@ def test_registry_encdec_matches_legacy_builder() -> None:
 def test_registry_mutant_matches_legacy_builder(
     mutant_dataset_dir: Path,
 ) -> None:
-    legacy = build_ed1m_experiment(
+    legacy = build_mutant_experiment(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
@@ -114,7 +111,7 @@ def test_registry_mutant_matches_legacy_builder(
     [
         (
             build_direct_experiment(
-                tasks=synthetic_ed1_tasks(1),
+                tasks=synthetic_code_comp_tasks(1),
                 internal_n=1,
                 official_n=1,
             ),
@@ -122,7 +119,7 @@ def test_registry_mutant_matches_legacy_builder(
         ),
         (
             build_encdec_experiment(
-                tasks=synthetic_ed1_tasks(1),
+                tasks=synthetic_code_comp_tasks(1),
                 internal_n=1,
                 official_n=1,
             ),
@@ -163,6 +160,6 @@ def test_registry_rejects_unknown_direct_kwargs() -> None:
     with pytest.raises(TypeError):
         build_code_comp_experiment(
             CodeCompMode.DIRECT,
-            tasks=synthetic_ed1_tasks(1),
+            tasks=synthetic_code_comp_tasks(1),
             artifact_dir=Path("."),
         )
