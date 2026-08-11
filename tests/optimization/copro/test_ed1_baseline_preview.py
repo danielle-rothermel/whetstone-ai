@@ -146,10 +146,15 @@ def test_baseline_preview_labels_progress_with_budget_mode() -> None:
         "(1 rows)",
         "budget ratio 0.5: Completed hand-engineered baseline evaluation "
         "(present=1/1, missing=0, failed=0, invalid=0)",
-        "budget ratio 0.5: Starting hand-engineered comparison evaluation "
-        "(1 rows)",
-        "budget ratio 0.5: Completed hand-engineered comparison evaluation "
-        "(present=1/1, missing=0, failed=0, invalid=0)",
+        (
+            "budget ratio 0.5: Starting hand-engineered comparison "
+            "anchor evaluation (1 rows)"
+        ),
+        (
+            "budget ratio 0.5: Completed hand-engineered comparison "
+            "anchor evaluation "
+            "(present=1/1, missing=0, failed=0, invalid=0)"
+        ),
     ]
 
 

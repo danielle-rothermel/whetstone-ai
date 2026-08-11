@@ -7,6 +7,7 @@ from dataclasses import is_dataclass
 import whetstone.evaluation as local_evaluation
 import whetstone.evaluation.analysis as analysis_package
 from whetstone.evaluation.analysis import (
+    AnchorCalibrationResult,
     BootstrapCI,
     PowerConfig,
     PowerRecommendation,
@@ -95,3 +96,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     assert is_dataclass(result)
     assert hasattr(type(result), "__slots__")
     assert type(result).__dataclass_params__.frozen
+
+    assert is_dataclass(AnchorCalibrationResult)
+    assert hasattr(AnchorCalibrationResult, "__slots__")
+    assert AnchorCalibrationResult.__dataclass_params__.frozen

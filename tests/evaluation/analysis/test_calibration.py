@@ -4,6 +4,7 @@ import pytest
 from dr_store import ObjectStore, SqliteBackend
 
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
+from tests.evaluation.support import _binding, _engine
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import (
     DECODER_TEMPLATE,
@@ -11,12 +12,8 @@ from whetstone.envs.ed1 import (
     build_ed1_experiment,
     render_encoder_frame,
 )
-from whetstone.envs.ed1_calibration import (
-    ED1_CALIBRATION_BASELINE_PURPOSE,
-    ED1_CALIBRATION_CEILING_PURPOSE,
-    run_ed1_calibration,
-)
 from whetstone.evaluation import engine as engine_module
+from whetstone.evaluation.analysis.calibration import run_anchor_calibration
 from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.evaluation.drivers.ed1 import (
     Ed1RowOutcome,
@@ -31,6 +28,9 @@ from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
     EvaluationBinding,
 )
+
+_CALIBRATION_BASELINE_PURPOSE = "test-calibration-baseline"
+_CALIBRATION_CEILING_PURPOSE = "test-calibration-ceiling"
 
 
 def _calibration_row(request: Ed1RowRequest) -> ProcessJob:
@@ -78,7 +78,16 @@ def _calibration_row(request: Ed1RowRequest) -> ProcessJob:
     )
 
 
-def _engine_and_binding(tmp_path, *, concurrency: int = 2):
+def _internal_engine_and_binding(tmp_path):
+    store = ObjectStore(
+        SqliteBackend(tmp_path / "internal-calibration.sqlite")
+    )
+    engine = _engine(tmp_path, store=store, repeats=2)
+    binding = _binding(engine, campaign="internal-calibration-test")
+    return engine, binding, store, engine.experiment
+
+
+def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
     tasks = synthetic_ed1_tasks(3)
     experiment = build_ed1_experiment(
         tasks=tasks,
@@ -101,17 +110,51 @@ def _engine_and_binding(tmp_path, *, concurrency: int = 2):
         schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
         eval_config=engine.eval_config_ref,
         role=EvaluationRole.INTERNAL,
-        campaign="ed1-calibration-test",
+        campaign="calibration-test",
         provider_execution_policy_ref=engine.provider_execution_policy_ref,
     )
-    return engine, binding, store
+    return engine, binding, store, experiment
+
+
+@pytest.mark.process_integration
+def test_internal_calibration_evaluates_aligned_anchors(tmp_path) -> None:
+    engine, binding, _store, experiment = _internal_engine_and_binding(
+        tmp_path
+    )
+    task_ids = experiment.eval_configs.internal.task_set.task_identities[:2]
+
+    result = run_anchor_calibration(
+        engine=engine,
+        evaluation_binding=binding,
+        baseline_candidate=experiment.initial_candidate,
+        ceiling_candidate=experiment.ceiling_candidate,
+        baseline_purpose="internal-calibration-baseline",
+        ceiling_purpose="internal-calibration-ceiling",
+        task_ids=task_ids,
+        pool_ceiling=len(
+            experiment.eval_configs.internal.task_set.task_identities
+        ),
+        power_config=PowerConfig(trials=10, repeat_cap=2, seed=3),
+        bootstrap_resamples=50,
+        bootstrap_seed=5,
+    )
+
+    baseline = result.baseline.evidence
+    ceiling = result.ceiling.evidence
+    assert baseline.task_identities == ceiling.task_identities == task_ids
+    assert baseline.purpose == "internal-calibration-baseline"
+    assert ceiling.purpose == "internal-calibration-ceiling"
+    assert len(baseline.per_task_values) == len(task_ids)
+    assert baseline.per_task_values == ceiling.per_task_values
 
 
 @pytest.mark.process_integration
 def test_calibration_evaluates_aligned_anchors_and_plans_power(
     tmp_path, monkeypatch
 ) -> None:
-    engine, binding, store = _engine_and_binding(tmp_path, concurrency=7)
+    engine, binding, store, experiment = _ed1_engine_and_binding(
+        tmp_path, concurrency=7
+    )
     observed_concurrency: list[int] = []
     canonical_run = engine_module.run_ed1_eval
 
@@ -121,9 +164,15 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
 
     monkeypatch.setattr(engine_module, "run_ed1_eval", recording_run)
     task_ids = ("Synthetic/2", "Synthetic/0")
-    result = run_ed1_calibration(
+    result = run_anchor_calibration(
         engine=engine,
         evaluation_binding=binding,
+        baseline_candidate=experiment.initial_candidate,
+        ceiling_candidate=experiment.ceiling_candidate,
+        baseline_purpose=_CALIBRATION_BASELINE_PURPOSE,
+        ceiling_purpose=_CALIBRATION_CEILING_PURPOSE,
+        baseline_log_label="hand-engineered baseline",
+        ceiling_log_label="hand-engineered comparison anchor",
         task_ids=task_ids,
         pool_ceiling=3,
         power_config=PowerConfig(repeat_cap=3, trials=100, seed=17),
@@ -146,8 +195,8 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
     assert (
         baseline.row_accounting.planned == ceiling.row_accounting.planned == 4
     )
-    assert baseline.purpose == ED1_CALIBRATION_BASELINE_PURPOSE
-    assert ceiling.purpose == ED1_CALIBRATION_CEILING_PURPOSE
+    assert baseline.purpose == _CALIBRATION_BASELINE_PURPOSE
+    assert ceiling.purpose == _CALIBRATION_CEILING_PURPOSE
     assert baseline.reward_ref is not None
     assert ceiling.reward_ref is not None
 
@@ -170,12 +219,16 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
 def test_calibration_rejects_an_impossible_pool_before_evaluation(
     tmp_path,
 ) -> None:
-    engine, binding, _store = _engine_and_binding(tmp_path)
+    engine, binding, _store, experiment = _ed1_engine_and_binding(tmp_path)
 
     with pytest.raises(ValueError, match="pool_ceiling cannot be smaller"):
-        run_ed1_calibration(
+        run_anchor_calibration(
             engine=engine,
             evaluation_binding=binding,
+            baseline_candidate=experiment.initial_candidate,
+            ceiling_candidate=experiment.ceiling_candidate,
+            baseline_purpose=_CALIBRATION_BASELINE_PURPOSE,
+            ceiling_purpose=_CALIBRATION_CEILING_PURPOSE,
             task_ids=("Synthetic/0", "Synthetic/1"),
             pool_ceiling=1,
             power_config=PowerConfig(trials=1),
@@ -184,12 +237,18 @@ def test_calibration_rejects_an_impossible_pool_before_evaluation(
 
 
 def test_calibration_reports_each_paid_evaluation_boundary(tmp_path) -> None:
-    engine, binding, _store = _engine_and_binding(tmp_path)
+    engine, binding, _store, experiment = _ed1_engine_and_binding(tmp_path)
     messages: list[str] = []
 
-    run_ed1_calibration(
+    run_anchor_calibration(
         engine=engine,
         evaluation_binding=binding,
+        baseline_candidate=experiment.initial_candidate,
+        ceiling_candidate=experiment.ceiling_candidate,
+        baseline_purpose=_CALIBRATION_BASELINE_PURPOSE,
+        ceiling_purpose=_CALIBRATION_CEILING_PURPOSE,
+        baseline_log_label="hand-engineered baseline",
+        ceiling_log_label="hand-engineered comparison anchor",
         task_ids=("Synthetic/0",),
         pool_ceiling=1,
         power_config=PowerConfig(trials=1),
@@ -201,7 +260,7 @@ def test_calibration_reports_each_paid_evaluation_boundary(tmp_path) -> None:
         "Starting hand-engineered baseline evaluation (2 rows)",
         "Completed hand-engineered baseline evaluation "
         "(present=2/2, missing=0, failed=0, invalid=0)",
-        "Starting hand-engineered comparison evaluation (2 rows)",
-        "Completed hand-engineered comparison evaluation "
+        "Starting hand-engineered comparison anchor evaluation (2 rows)",
+        "Completed hand-engineered comparison anchor evaluation "
         "(present=2/2, missing=0, failed=0, invalid=0)",
     ]

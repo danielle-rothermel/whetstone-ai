@@ -1,3 +1,7 @@
+from whetstone.evaluation.analysis.calibration import (
+    AnchorCalibrationResult,
+    run_anchor_calibration,
+)
 from whetstone.evaluation.analysis.power import (
     DEFAULT_ALPHA,
     DEFAULT_MDD_PLATEAU_EPSILON,
@@ -26,6 +30,7 @@ __all__ = [
     "DEFAULT_REPEAT_CAP",
     "DEFAULT_RESAMPLES",
     "DEFAULT_TARGET_PROB",
+    "AnchorCalibrationResult",
     "BootstrapCI",
     "PowerConfig",
     "PowerRecommendation",
@@ -38,4 +43,5 @@ __all__ = [
     "bootstrap_paired_delta_ci",
     "mean",
     "resample_indices",
+    "run_anchor_calibration",
 ]

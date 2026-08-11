@@ -12,8 +12,8 @@ from whetstone.envs.ed1 import (
     build_ed1_experiment,
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
-from whetstone.envs.ed1_calibration import run_ed1_calibration
 from whetstone.envs.ed1_scoring import CodeBatchScorer
+from whetstone.evaluation.analysis.calibration import run_anchor_calibration
 from whetstone.evaluation.analysis.power import PowerConfig, PowerResult
 from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
@@ -40,6 +40,9 @@ from whetstone.optimization.copro.ed1_task_model import (
     ed1_task_model_row_job,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
+
+_ED1_CALIBRATION_BASELINE_PURPOSE = "ed1-calibration-baseline"
+_ED1_CALIBRATION_CEILING_PURPOSE = "ed1-calibration-ceiling"
 
 
 class Ed1BaselineArmPreview(BaseModel):
@@ -212,9 +215,15 @@ def run_ed1_baseline_preview(
         campaign="ed1-baseline-preview",
         task_model_kind=task_model.kind.value,
     )
-    calibration = run_ed1_calibration(
+    calibration = run_anchor_calibration(
         engine=engine,
         evaluation_binding=binding,
+        baseline_candidate=experiment.initial_candidate,
+        ceiling_candidate=experiment.ceiling_candidate,
+        baseline_purpose=_ED1_CALIBRATION_BASELINE_PURPOSE,
+        ceiling_purpose=_ED1_CALIBRATION_CEILING_PURPOSE,
+        baseline_log_label="hand-engineered baseline",
+        ceiling_log_label="hand-engineered comparison anchor",
         task_ids=task_ids,
         pool_ceiling=pool_ceiling,
         power_config=power_config,

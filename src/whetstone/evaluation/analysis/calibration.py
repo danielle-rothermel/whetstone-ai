@@ -4,7 +4,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.ed1 import ED1_ENV_NAME, Ed1Experiment
 from whetstone.evaluation.analysis.power import (
     PowerConfig,
     PowerResult,
@@ -21,13 +20,16 @@ from whetstone.evaluation.engine import (
     EvaluationRequest,
 )
 from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.candidate import Candidate
 
-ED1_CALIBRATION_BASELINE_PURPOSE = "ed1-calibration-baseline"
-ED1_CALIBRATION_CEILING_PURPOSE = "ed1-calibration-ceiling"
+__all__ = [
+    "AnchorCalibrationResult",
+    "run_anchor_calibration",
+]
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1CalibrationResult:
+class AnchorCalibrationResult:
     """Persisted anchor evaluations and their paired planning result."""
 
     evaluation_binding: EvaluationBinding
@@ -83,32 +85,33 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed its Reward Policy")
 
 
-def run_ed1_calibration(
+def run_anchor_calibration(
     *,
     engine: EvaluationEngine,
     evaluation_binding: EvaluationBinding,
+    baseline_candidate: Candidate,
+    ceiling_candidate: Candidate,
+    baseline_purpose: str,
+    ceiling_purpose: str,
     task_ids: tuple[str, ...],
     pool_ceiling: int,
     power_config: PowerConfig | None = None,
     bootstrap_level: float = 0.95,
     bootstrap_resamples: int = DEFAULT_RESAMPLES,
     bootstrap_seed: int = 0,
+    baseline_log_label: str = "baseline anchor",
+    ceiling_log_label: str = "comparison anchor",
     log: Callable[[str], None] | None = None,
-) -> Ed1CalibrationResult:
-    """Evaluate both ED1 anchors on one exact task/repeat binding.
+) -> AnchorCalibrationResult:
+    """Evaluate both anchors on one exact task/repeat binding.
 
-    The returned paired bootstrap is empirical over the aligned per-task
-    blended rewards. The current power model treats those bounded rewards as
-    pass-rate-like observations, so its recommendation is an approximate
-    planning estimate rather than a certification result.
+    Callers must supply per-task values suitable for :func:`analyze_power`
+    (typically bounded observations in ``[0, 1]``). The returned paired
+    bootstrap is empirical over the aligned per-task vectors from both arms.
     """
     experiment = engine.experiment
-    if not isinstance(experiment, Ed1Experiment) or (
-        experiment.env_name != ED1_ENV_NAME
-    ):
-        raise ValueError("ED1 calibration requires an ED1 EvaluationEngine")
     if evaluation_binding.role is not EvaluationRole.INTERNAL:
-        raise ValueError("ED1 calibration requires an internal binding")
+        raise ValueError("anchor calibration requires an internal binding")
     if evaluation_binding.eval_config != engine.eval_config_ref:
         raise ValueError(
             "calibration binding must name the engine's exact Eval Config"
@@ -126,7 +129,7 @@ def run_ed1_calibration(
         != experiment.eval_configs.internal.split_role
     ):
         raise ValueError(
-            "ED1 calibration requires the internal sampling split"
+            "anchor calibration requires the internal sampling split"
         )
     if pool_ceiling < len(task_ids):
         raise ValueError(
@@ -140,14 +143,14 @@ def run_ed1_calibration(
     subset_engine = engine.for_task_ids(task_ids)
     subset_binding = _subset_binding(evaluation_binding, subset_engine)
     baseline_request = EvaluationRequest(
-        candidate=experiment.initial_candidate,
+        candidate=baseline_candidate,
         evaluation_binding=subset_binding,
-        purpose=ED1_CALIBRATION_BASELINE_PURPOSE,
+        purpose=baseline_purpose,
     )
     ceiling_request = EvaluationRequest(
-        candidate=experiment.ceiling_candidate,
+        candidate=ceiling_candidate,
         evaluation_binding=subset_binding,
-        purpose=ED1_CALIBRATION_CEILING_PURPOSE,
+        purpose=ceiling_purpose,
     )
 
     # Validate both anchors before the first paid evaluation starts.
@@ -158,28 +161,22 @@ def run_ed1_calibration(
         len(task_ids) * subset_engine.sampling.repeat_plan.repeat_count
     )
     if log is not None:
-        log(
-            "Starting hand-engineered baseline evaluation "
-            f"({planned_rows} rows)"
-        )
+        log(f"Starting {baseline_log_label} evaluation ({planned_rows} rows)")
     baseline = subset_engine.evaluate(baseline_request)
     if log is not None:
         accounting = baseline.evidence.row_accounting
         log(
-            "Completed hand-engineered baseline evaluation "
+            f"Completed {baseline_log_label} evaluation "
             f"(present={accounting.present}/{accounting.planned}, "
             f"missing={accounting.missing}, failed={accounting.failed}, "
             f"invalid={accounting.invalid})"
         )
-        log(
-            "Starting hand-engineered comparison evaluation "
-            f"({planned_rows} rows)"
-        )
+        log(f"Starting {ceiling_log_label} evaluation ({planned_rows} rows)")
     ceiling = subset_engine.evaluate(ceiling_request)
     if log is not None:
         accounting = ceiling.evidence.row_accounting
         log(
-            "Completed hand-engineered comparison evaluation "
+            f"Completed {ceiling_log_label} evaluation "
             f"(present={accounting.present}/{accounting.planned}, "
             f"missing={accounting.missing}, failed={accounting.failed}, "
             f"invalid={accounting.invalid})"
@@ -211,18 +208,10 @@ def run_ed1_calibration(
         anchor_repeats=repeats,
         config=power_config,
     )
-    return Ed1CalibrationResult(
+    return AnchorCalibrationResult(
         evaluation_binding=subset_binding,
         baseline=baseline,
         ceiling=ceiling,
         paired_delta_ci=paired_delta_ci,
         power=power,
     )
-
-
-__all__ = [
-    "ED1_CALIBRATION_BASELINE_PURPOSE",
-    "ED1_CALIBRATION_CEILING_PURPOSE",
-    "Ed1CalibrationResult",
-    "run_ed1_calibration",
-]
