@@ -96,20 +96,21 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         ),
     )
     traces = EvaluationComponentTraces(
-        schema_version=1,
+        schema_version=2,
         candidate=intent.candidate,
         evaluation_binding=intent.evaluation_binding,
         evaluation_role=EvaluationRole.INTERNAL,
         graph_hash=FULL_B,
         purpose=intent.purpose,
         split_role="internal",
-        task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
-        repeat_count=1,
+        task_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        num_samples=1,
         rows=(
             EvaluationComponentTraceRow(
-                instance_id="instance-1",
-                task_identity=MIPROV2_EVIDENCE_TASK_IDENTITY,
-                repeat=0,
+                task_id="instance-1",
+                task_hash=MIPROV2_EVIDENCE_TASK_IDENTITY,
+                task_index=0,
+                sample_index=0,
                 executed_component_trace=ExecutedComponentTracePayload(
                     row_state=ExecutedRowState.SUCCESS,
                     executed_component_steps=steps,
@@ -143,15 +144,15 @@ def _resolution(store: ObjectStore, *, final_text: str = "decoded-final"):
         reward.record_content(),
     )
     evidence = EvaluationEvidence(
-        schema_version=2,
+        schema_version=3,
         candidate=intent.candidate,
         evaluation_binding=intent.evaluation_binding,
         graph_hash=FULL_B,
         graph_config_ref="graph://miprov2-evidence",
         purpose=intent.purpose,
-        dataset_identity="dataset-revision",
-        task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
-        repeat_count=1,
+        dataset_hash="dataset-revision",
+        task_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        num_samples=1,
         per_task_values=(0.8,),
         per_task_counts=(1,),
         row_accounting=RowAccounting(

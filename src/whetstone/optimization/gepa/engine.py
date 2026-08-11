@@ -43,7 +43,7 @@ class _EffectContext(Protocol):
 
 class _EvaluationAuthorityBinding(Protocol):
     @property
-    def evaluation_config_identity_hash(self) -> str: ...
+    def evaluation_config_hash(self) -> str: ...
 
     @property
     def reward_policy_identity_hash(self) -> str: ...
@@ -174,9 +174,9 @@ def _val_identity(control: GepaControl, upstream_id: object) -> str:
             "canonical GEPA requires list-backed integer validation ids"
         )
     index = upstream_id
-    if index < 0 or index >= len(control.valset_task_identities):
+    if index < 0 or index >= len(control.valset_task_hashes):
         raise ValueError(f"unknown upstream validation id {index}")
-    return control.valset_task_identities[index]
+    return control.valset_task_hashes[index]
 
 
 def _project_result(
@@ -263,7 +263,7 @@ def _validate_adapter_authorities(
 
     evaluation = adapter.evaluation_authority
     expected_evaluation = {
-        "evaluation_config_identity_hash": control.metric.identity_hash,
+        "evaluation_config_hash": control.metric.config_hash,
         "reward_policy_identity_hash": control.reward_policy_hash,
         "provider_route_identity_hash": control.task_model_identity_hash,
         "execution_policy_identity_hash": (
@@ -348,16 +348,16 @@ def run_gepa_engine[DataInst](
             "seed_candidate component order conflicts with GepaControl"
         )
     observed_train_ids = tuple(cast(Any, item).data_id for item in trainset)
-    if observed_train_ids != control.trainset_task_identities:
+    if observed_train_ids != control.trainset_task_hashes:
         raise ValueError("trainset order/identity conflicts with GepaControl")
     if valset is None:
-        if control.source_valset_task_identities is not None:
+        if control.source_valset_task_hashes is not None:
             raise ValueError("GepaControl binds an explicit valset")
-    elif control.source_valset_task_identities is None:
+    elif control.source_valset_task_hashes is None:
         raise ValueError("GepaControl binds valset omission to the trainset")
     else:
         observed_val_ids = tuple(cast(Any, item).data_id for item in valset)
-        if observed_val_ids != control.valset_task_identities:
+        if observed_val_ids != control.valset_task_hashes:
             raise ValueError(
                 "valset order/identity conflicts with GepaControl"
             )

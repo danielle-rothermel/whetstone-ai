@@ -44,7 +44,7 @@ class _ScriptedAdapter:
             adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
         )
         self.evaluation_authority = _EvaluationAuthority(
-            evaluation_config_identity_hash=control.metric.identity_hash,
+            evaluation_config_hash=control.metric.config_hash,
             reward_policy_identity_hash=control.reward_policy_hash,
             provider_route_identity_hash=control.task_model_identity_hash,
             execution_policy_identity_hash=(
@@ -167,7 +167,7 @@ class _EffectContext:
 
 @dataclass(frozen=True)
 class _EvaluationAuthority:
-    evaluation_config_identity_hash: str
+    evaluation_config_hash: str
     reward_policy_identity_hash: str
     provider_route_identity_hash: str
     execution_policy_identity_hash: str
@@ -200,7 +200,7 @@ def _control(**overrides):
                     "dr_providers.provider_call_config",
                     {"provider_call_config_ref": "provider://reflection"},
                 ),
-                identity_hash=FULL_A,
+                record_hash=FULL_A,
             ),
         ),
         "metric": eval_config_reference(eval_config()),
@@ -212,8 +212,8 @@ def _control(**overrides):
         "task_model_identity_hash": FULL_D,
         "prompt_format_identity_hash": FULL_A,
         "prompt_binding_identity_hash": FULL_B,
-        "trainset_task_identities": tuple(_identity(i) for i in range(1, 9)),
-        "valset_task_identities": tuple(_identity(i) for i in range(101, 109)),
+        "trainset_task_hashes": tuple(_identity(i) for i in range(1, 9)),
+        "valset_task_hashes": tuple(_identity(i) for i in range(101, 109)),
         "component_names": ("component_a", "component_b"),
         "num_predictors": 2,
         "max_metric_calls": 160,
@@ -241,7 +241,7 @@ def test_upstream_merge_is_accepted_without_a_merge_proposal_call() -> None:
             _Data(id=index, data_id=identity)
             for index, identity in zip(
                 range(8),
-                control.trainset_task_identities,
+                control.trainset_task_hashes,
                 strict=True,
             )
         ],
@@ -249,7 +249,7 @@ def test_upstream_merge_is_accepted_without_a_merge_proposal_call() -> None:
             _Data(id=index, data_id=identity)
             for index, identity in zip(
                 range(100, 108),
-                control.valset_task_identities,
+                control.valset_task_hashes,
                 strict=True,
             )
         ],
@@ -264,7 +264,7 @@ def test_upstream_merge_is_accepted_without_a_merge_proposal_call() -> None:
     }
     assert result.best_idx == 3
     assert set(result.per_val_instance_best_candidates) == set(
-        control.valset_task_identities
+        control.valset_task_hashes
     )
     assert result.control_identity_hash == control.identity_hash()
     assert result.source_manifest_hash == GEPA_SOURCE_MANIFEST_HASH
@@ -277,7 +277,7 @@ def test_engine_rejects_adapter_and_order_identity_drift() -> None:
         _Data(id=index, data_id=identity)
         for index, identity in zip(
             range(8),
-            control.trainset_task_identities,
+            control.trainset_task_hashes,
             strict=True,
         )
     ]
@@ -285,7 +285,7 @@ def test_engine_rejects_adapter_and_order_identity_drift() -> None:
         _Data(id=index, data_id=identity)
         for index, identity in zip(
             range(100, 108),
-            control.valset_task_identities,
+            control.valset_task_hashes,
             strict=True,
         )
     ]
@@ -336,7 +336,7 @@ def test_engine_rejects_adapter_and_order_identity_drift() -> None:
         ("context", "adapter_identity_hash", _identity(900)),
         (
             "evaluation",
-            "evaluation_config_identity_hash",
+            "evaluation_config_hash",
             _identity(901),
         ),
         ("evaluation", "reward_policy_identity_hash", _identity(902)),
@@ -355,7 +355,7 @@ def test_engine_rejects_adapter_and_order_identity_drift() -> None:
                         "dr_providers.provider_call_config",
                         {"provider_call_config_ref": "provider://drifted"},
                     ),
-                    identity_hash=FULL_D,
+                    record_hash=FULL_D,
                 ),
             ),
         ),
@@ -392,7 +392,7 @@ def test_engine_rejects_each_control_owned_adapter_authority_drift(
         _Data(id=index, data_id=identity)
         for index, identity in zip(
             range(8),
-            control.trainset_task_identities,
+            control.trainset_task_hashes,
             strict=True,
         )
     ]
@@ -400,7 +400,7 @@ def test_engine_rejects_each_control_owned_adapter_authority_drift(
         _Data(id=index, data_id=identity)
         for index, identity in zip(
             range(100, 108),
-            control.valset_task_identities,
+            control.valset_task_hashes,
             strict=True,
         )
     ]
@@ -434,7 +434,7 @@ def test_track_stats_does_not_change_engine_execution_or_best_choice() -> None:
                 _Data(id=index, data_id=identity)
                 for index, identity in zip(
                     range(8),
-                    control.trainset_task_identities,
+                    control.trainset_task_hashes,
                     strict=True,
                 )
             ],
@@ -442,7 +442,7 @@ def test_track_stats_does_not_change_engine_execution_or_best_choice() -> None:
                 _Data(id=index, data_id=identity)
                 for index, identity in zip(
                     range(100, 108),
-                    control.valset_task_identities,
+                    control.valset_task_hashes,
                     strict=True,
                 )
             ],

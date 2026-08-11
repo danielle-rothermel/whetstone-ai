@@ -143,9 +143,9 @@ class ViewerEvaluationSummary(BaseModel):
     evaluation_role: EvaluationRole
     purpose: StrictStr
     graph_hash: StrictStr
-    eval_config_identity_hash: StrictStr
-    task_identities: tuple[StrictStr, ...]
-    repeat_count: StrictInt
+    eval_config_hash: StrictStr
+    task_hashes: tuple[StrictStr, ...]
+    num_samples: StrictInt
     per_task_values: tuple[StrictFloat, ...]
     per_task_counts: tuple[StrictInt, ...]
     rows_planned: StrictInt
@@ -166,7 +166,7 @@ class ViewerEvaluationSummary(BaseModel):
         )
         if self.evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA:
             raise ValueError("evidence_ref must cite evaluation evidence")
-        aligned = len(self.task_identities)
+        aligned = len(self.task_hashes)
         if len(self.per_task_values) != aligned:
             raise ValueError("per_task_values must align with task identities")
         if len(self.per_task_counts) != aligned:
@@ -195,9 +195,9 @@ class ViewerRolloutRow(BaseModel):
     candidate_identity_hash: StrictStr
     evaluation_role: EvaluationRole
     purpose: StrictStr
-    instance_id: StrictStr
-    task_identity: StrictStr
-    repeat: StrictInt
+    task_id: StrictStr
+    task_hash: StrictStr
+    sample_index: StrictInt
     rendered_prompt: StrictStr
     output_text: StrictStr | None
     score: StrictFloat | None
@@ -213,7 +213,7 @@ class ViewerRolloutRow(BaseModel):
         )
         if self.evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA:
             raise ValueError("rollout row must cite evaluation evidence")
-        if self.repeat < 0:
+        if self.sample_index < 0:
             raise ValueError("rollout repeat cannot be negative")
         return self
 
@@ -296,9 +296,9 @@ def _evaluation_summary(
         evaluation_role=binding.role,
         purpose=evidence.purpose,
         graph_hash=evidence.graph_hash,
-        eval_config_identity_hash=binding.eval_config.identity_hash,
-        task_identities=evidence.task_identities,
-        repeat_count=evidence.repeat_count,
+        eval_config_hash=binding.eval_config.config_hash,
+        task_hashes=evidence.task_hashes,
+        num_samples=evidence.num_samples,
         per_task_values=evidence.per_task_values,
         per_task_counts=evidence.per_task_counts,
         rows_planned=accounting.planned,
@@ -338,9 +338,9 @@ def _rollout_rows(
                 candidate_identity_hash=candidate.identity_hash,
                 evaluation_role=record.evaluation_role,
                 purpose=evidence.purpose,
-                instance_id=row.instance_id,
-                task_identity=row.task_identity,
-                repeat=row.repeat,
+                task_id=row.task_id,
+                task_hash=row.task_hash,
+                sample_index=row.sample_index,
                 rendered_prompt=row.rendered_prompt,
                 output_text=row.output_text,
                 score=row.score,

@@ -66,7 +66,7 @@ def env_procedure_config(
 
     Composes an empty Preprocessing Config (the oracle owns normalization)
     with the env-specific Metric Extraction Config. The returned Config's
-    ``config_identity_hash`` is the Evaluation Procedure Config identity the
+    ``config_hash`` is the Evaluation Procedure Config identity the
     Eval Node references and the composite Eval Config folds in.
     """
     preprocessing = PreprocessingDefinition(

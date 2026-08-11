@@ -61,7 +61,7 @@ def experiment() -> EnvExperiment:
         model=MODEL_ROUTE,
         pool_n_per_stratum=2,
         split_sizes=(1, 1, 1),
-        repeats=1,
+        num_samples=1,
     )
 
 
@@ -363,8 +363,8 @@ def runtime_config(
         model=MODEL_ROUTE,
         pool_n_per_stratum=2,
         split_sizes=(1, 1, 1),
-        repeats=1,
-        expected_eval_config_hash=engine.eval_config_ref.identity_hash,
+        num_samples=1,
+        expected_eval_config_hash=engine.eval_config_ref.config_hash,
         execution_policy=execution_policy(),
         row_job_entrypoint=ROW_JOB_ENTRYPOINT,
         partial_log_path=partial_log_path,

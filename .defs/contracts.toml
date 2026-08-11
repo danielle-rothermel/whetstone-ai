@@ -32,7 +32,7 @@ check = "uv run pytest -q tests/provider/test_attempt_result.py"
 [[contracts]]
 title = "Evaluation matrices have complete row accounting"
 statement = """
-Every planned task-and-repeat cell appears exactly once in evaluation outputs \
+Every planned task-and-sample cell appears exactly once in evaluation outputs \
 and is accounted for exactly once in aggregate row counts: scored rows are \
 present, while unscored rows are exactly one of missing, failed, or invalid; \
 numeric zero remains a scored value."""
@@ -41,13 +41,13 @@ Silently dropping absent or failed work changes denominators and can turn \
 incomplete execution into apparently better measurements. Explicit states \
 keep reductions and provenance faithful to the full plan."""
 date = "2026-08-05"
-check = "uv run pytest -q tests/evaluation/code/test_aggregate.py tests/evaluation/test_engine.py"
+check = "uv run pytest -q tests/evaluation/test_aggregate.py tests/evaluation/test_engine.py"
 
 [[contracts]]
 title = "code_comp scoring batches execution-cache persistence"
 statement = """
 Direct and encdec code_comp provider workers may return generated submissions \
-without executing candidate code. The coordinator preserves task-and-repeat \
+without executing candidate code. The coordinator preserves task-and-sample \
 order, submits all such rows to one batch scorer, and accepts exactly one \
 result per input before aggregation or terminal partial persistence. One \
 caller-owned checkpointed execution cache remains open across coordinator \

@@ -26,7 +26,7 @@ from whetstone.envs.sampling import (
     EnvEvalConfigs,
     build_eval_configs,
 )
-from whetstone.envs.task import EnvTask
+from whetstone.envs.task import Task
 from whetstone.evaluation.drivers.internal import (
     InternalEvalResult,
     run_internal_eval,
@@ -41,8 +41,8 @@ __all__ = [
     "EnvExperiment",
     "EnvRolloutDefinition",
     "EnvSpec",
-    "EnvTask",
     "InternalEvalResult",
+    "Task",
     "UnknownEnvError",
     "build_env_experiment",
     "build_eval_configs",

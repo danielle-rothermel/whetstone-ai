@@ -58,7 +58,7 @@ def _runtime() -> EncDecScoringRuntimeSummary:
     return EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
-        runtime_identity_hash="a" * 64,
+        runtime_hash="a" * 64,
         probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
@@ -90,7 +90,7 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
         task_model=_task_model(),
         batch_scorer=_score,
         runtime=_runtime(),
-        repeats=2,
+        num_samples=2,
         power_config=PowerConfig(repeat_cap=3, trials=100, seed=17),
         bootstrap_resamples=200,
         bootstrap_seed=19,
@@ -105,10 +105,10 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
     assert transcript.ceiling.evidence.evaluation_binding == (
         transcript.evaluation_binding
     )
-    assert transcript.baseline.evidence.task_identities == task_ids
-    assert transcript.ceiling.evidence.task_identities == task_ids
-    assert transcript.baseline.evidence.repeat_count == 2
-    assert transcript.ceiling.evidence.repeat_count == 2
+    assert transcript.baseline.evidence.task_hashes == task_ids
+    assert transcript.ceiling.evidence.task_hashes == task_ids
+    assert transcript.baseline.evidence.num_samples == 2
+    assert transcript.ceiling.evidence.num_samples == 2
     assert len(transcript.baseline.component_traces.rows) == 4
     assert len(transcript.ceiling.component_traces.rows) == 4
     assert transcript.paired_delta_ci.resamples == 200

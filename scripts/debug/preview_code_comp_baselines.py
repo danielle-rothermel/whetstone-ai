@@ -118,7 +118,7 @@ def _parse_args() -> argparse.Namespace:
         "--concurrency",
         type=_positive_int,
         default=8,
-        help="maximum task/repeat rows evaluated concurrently",
+        help="maximum task/sample rows evaluated concurrently",
     )
     parser.add_argument(
         "--budget-mode",
@@ -296,7 +296,7 @@ def _render_arm(console: Console, arm: AnchorArmPreview) -> None:
     console.print(summary)
     per_task = Table("task", "repeats", "blended reward", box=None)
     for task_id, count, value in zip(
-        arm.evidence.task_identities,
+        arm.evidence.task_hashes,
         arm.evidence.per_task_counts,
         arm.evidence.per_task_values,
         strict=True,
@@ -467,19 +467,19 @@ def _render_launch_plan(
     task_selection: TaskRoleSelection | None,
     task_model: EncDecTaskModelConfig,
     budget_ratios: tuple[float | None, ...],
-    repeats: int,
+    num_samples: int,
     concurrency: int,
     pool_ceiling: int,
     output_dir: Path,
 ) -> None:
-    task_model_calls = len(tasks) * repeats * 2 * len(budget_ratios) * 2
+    task_model_calls = len(tasks) * num_samples * 2 * len(budget_ratios) * 2
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column("field", style="bold cyan")
     table.add_column("value")
     table.add_row("task-model route", task_model.kind.value)
     table.add_row("task model", task_model.model)
     table.add_row("selected tasks", str(len(tasks)))
-    table.add_row("repeats", str(repeats))
+    table.add_row("num samples", str(num_samples))
     table.add_row("row concurrency", str(concurrency))
     table.add_row("budget modes", str(len(budget_ratios)))
     table.add_row("baseline prompts", "2")
@@ -536,7 +536,7 @@ def main() -> None:
         task_selection=task_selection,
         task_model=task_model,
         budget_ratios=budget_ratios,
-        repeats=args.repeats,
+        num_samples=args.repeats,
         concurrency=args.concurrency,
         pool_ceiling=pool_ceiling,
         output_dir=output_dir,
@@ -548,13 +548,13 @@ def main() -> None:
     runtime_summary = EncDecScoringRuntimeSummary(
         evaluation_python=runtime.probe.python_executable,
         dr_code_version=version("dr-code"),
-        runtime_identity_hash=runtime.runtime_identity_hash,
+        runtime_hash=runtime.runtime_hash,
         probe=runtime.probe,
     )
     store = ObjectStore(SqliteBackend(output_dir / "objects.sqlite3"))
     with CheckpointedCodeBatchScorer(
         output_dir / "execution-cache.sqlite3",
-        runtime_identity=runtime.runtime_identity,
+        runtime_document=runtime.runtime_document,
         executor=runtime.executor,
     ) as scorer:
         transcript = run_code_comp_anchor_baseline_sweep(
@@ -569,7 +569,7 @@ def main() -> None:
             runtime=runtime_summary,
             budget_ratios=budget_ratios,
             concurrency=args.concurrency,
-            repeats=args.repeats,
+            num_samples=args.repeats,
             power_config=PowerConfig(
                 repeat_cap=args.power_repeat_cap,
                 trials=args.power_trials,

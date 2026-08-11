@@ -57,7 +57,7 @@ class ExpectedOutcome(_StrictPersistedModel):
 
 
 class MutantRecord(_StrictPersistedModel):
-    content_identity: str
+    content_hash: str
     task_id: str
     entry_point: str
     prompt: str
@@ -91,8 +91,8 @@ class GenerationConfig(_StrictPersistedModel):
     timeout_seconds: float
     task_ids: tuple[str, ...]
     canonical_suite_digest: str
-    runner_identity: str
-    runtime_identity: str
+    runner_label: str
+    runtime_label: str
 
     @field_validator("timeout_seconds", mode="before")
     @classmethod
@@ -125,8 +125,8 @@ class DatasetManifest(_StrictPersistedModel):
     dataset_schema_version: Literal[1] = DATASET_SCHEMA_VERSION
     generator_version: Literal["mutants@v1"] = GENERATOR_VERSION
     config: GenerationConfig
-    config_identity: str
-    dataset_identity: str
+    config_hash: str
+    dataset_hash: str
     records_filename: Literal["mutants.jsonl"] = RECORDS_FILENAME
     records_sha256: str
     accepted_count: int
@@ -166,7 +166,7 @@ def build_record(
     """Build an in-memory record with the persisted wire identity."""
 
     provisional = MutantRecord(
-        content_identity="",
+        content_hash="",
         task_id=task_id,
         entry_point=entry_point,
         prompt=prompt,
@@ -186,10 +186,10 @@ def build_record(
     )
     return provisional.model_copy(
         update={
-            "content_identity": identity_hash_for(
+            "content_hash": identity_hash_for(
                 schema=_RECORD_SCHEMA,
                 payload=provisional.model_dump(
-                    mode="json", exclude={"content_identity"}
+                    mode="json", exclude={"content_hash"}
                 ),
             )
         }
@@ -207,12 +207,12 @@ def build_manifest(
 
     records_bytes = encode_records(records)
     records_sha256 = _sha256(records_bytes)
-    config_identity = config.identity_hash()
+    config_hash = config.identity_hash()
     return DatasetManifest(
         config=config,
-        config_identity=config_identity,
-        dataset_identity=_dataset_identity(
-            config_identity=config_identity,
+        config_hash=config_hash,
+        dataset_hash=_dataset_hash(
+            config_hash=config_hash,
             records_sha256=records_sha256,
             accepted_count=len(records),
             accepted_by_family=accepted_by_family,
@@ -240,7 +240,7 @@ def encode_records(records: tuple[MutantRecord, ...]) -> bytes:
 def load_dataset(
     output_dir: Path,
     *,
-    expected_config_identity: str | None = None,
+    expected_config_hash: str | None = None,
 ) -> LoadedDataset:
     """Load one retained ED1M dataset and verify its internal artifacts."""
 
@@ -271,7 +271,7 @@ def load_dataset(
         records=records,
         manifest=manifest,
         records_bytes=records_bytes,
-        expected_config_identity=expected_config_identity,
+        expected_config_hash=expected_config_hash,
     )
     return LoadedDataset(records=records, manifest=manifest)
 
@@ -306,15 +306,15 @@ def _validate_components(
     records: tuple[MutantRecord, ...],
     manifest: DatasetManifest,
     records_bytes: bytes,
-    expected_config_identity: str | None,
+    expected_config_hash: str | None,
 ) -> None:
     _validate_config(manifest.config)
-    config_identity = manifest.config.identity_hash()
-    if manifest.config_identity != config_identity:
+    config_hash = manifest.config.identity_hash()
+    if manifest.config_hash != config_hash:
         raise DatasetValidationError("manifest config identity mismatch")
     if (
-        expected_config_identity is not None
-        and config_identity != expected_config_identity
+        expected_config_hash is not None
+        and config_hash != expected_config_hash
     ):
         raise DatasetValidationError("unexpected generation config identity")
     records_sha256 = _sha256(records_bytes)
@@ -346,17 +346,15 @@ def _validate_components(
     for record in records:
         expected_identity = identity_hash_for(
             schema=_RECORD_SCHEMA,
-            payload=record.model_dump(
-                mode="json", exclude={"content_identity"}
-            ),
+            payload=record.model_dump(mode="json", exclude={"content_hash"}),
         )
-        if record.content_identity != expected_identity:
+        if record.content_hash != expected_identity:
             raise DatasetValidationError(
                 f"record content identity mismatch: {record.task_id}"
             )
-        if record.content_identity in identities:
+        if record.content_hash in identities:
             raise DatasetValidationError("duplicate record content identity")
-        identities.add(record.content_identity)
+        identities.add(record.content_hash)
         _validate_record(record, manifest.config)
         canonical_shape = (
             record.entry_point,
@@ -387,14 +385,14 @@ def _validate_components(
     )
     if manifest.accepted_by_family != actual_counts:
         raise DatasetValidationError("manifest family counts mismatch")
-    expected_dataset_identity = _dataset_identity(
-        config_identity=config_identity,
+    expected_dataset_hash = _dataset_hash(
+        config_hash=config_hash,
         records_sha256=records_sha256,
         accepted_count=len(records),
         accepted_by_family=manifest.accepted_by_family,
         skipped=manifest.skipped,
     )
-    if manifest.dataset_identity != expected_dataset_identity:
+    if manifest.dataset_hash != expected_dataset_hash:
         raise DatasetValidationError("manifest dataset identity mismatch")
 
 
@@ -505,7 +503,7 @@ def _validate_config(config: GenerationConfig) -> None:
         raise DatasetValidationError(
             "generation config canonical suite provenance is empty"
         )
-    if not config.runner_identity or not config.runtime_identity:
+    if not config.runner_label or not config.runtime_label:
         raise DatasetValidationError(
             "generation runner provenance is incomplete"
         )
@@ -623,9 +621,9 @@ def _decode_records(content: bytes) -> tuple[MutantRecord, ...]:
     return tuple(records)
 
 
-def _dataset_identity(
+def _dataset_hash(
     *,
-    config_identity: str,
+    config_hash: str,
     records_sha256: str,
     accepted_count: int,
     accepted_by_family: tuple[FamilyCount, ...],
@@ -638,7 +636,7 @@ def _dataset_identity(
             "accepted_by_family": [
                 item.model_dump(mode="json") for item in accepted_by_family
             ],
-            "config_identity": config_identity,
+            "config_hash": config_hash,
             "records_sha256": records_sha256,
             "skipped": [item.model_dump(mode="json") for item in skipped],
         },

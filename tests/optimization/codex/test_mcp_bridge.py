@@ -151,9 +151,7 @@ def test_sdk_forwards_declared_task_ids_to_the_evaluator(
         codex.tool_store,
         binding(step_request),
     )
-    task_id = codex_experiment.eval_configs.internal.task_set.task_identities[
-        0
-    ]
+    task_id = codex_experiment.eval_configs.internal.task_set.task_hashes[0]
 
     _, result = _call(
         EvaluateCandidateServer(handle=handle),

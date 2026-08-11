@@ -104,7 +104,7 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
 
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
-    assert projected.eval_config_hash == engine.eval_config_ref.identity_hash
+    assert projected.eval_config_hash == engine.eval_config_ref.config_hash
     assert len(projected.rollout_refs) == 1
     assert projected.output["evaluation_evidence_ref"] == (
         projected.rollout_refs[0].model_dump(mode="json")
@@ -141,8 +141,8 @@ def test_tool_projection_rejects_malformed_task_subsets(tmp_path) -> None:
         config,
         call_id="duplicate-task",
         task_ids=[
-            engine.sampling.task_set.task_identities[0],
-            engine.sampling.task_set.task_identities[0],
+            engine.sampling.task_set.task_hashes[0],
+            engine.sampling.task_set.task_hashes[0],
         ],
     )
     with pytest.raises(ToolValidationError, match="must be unique"):
@@ -157,7 +157,7 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "tool-subset.sqlite"))
     engine = _engine(tmp_path, store=store)
     config = _subset_tool_config(engine, store_namespace_key="tool-subset")
-    bound_task = engine.sampling.task_set.task_identities[0]
+    bound_task = engine.sampling.task_set.task_hashes[0]
     call = _tool_call(
         engine,
         config,
@@ -169,7 +169,7 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
 
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
-    assert projected.eval_config_hash == engine.eval_config_ref.identity_hash
+    assert projected.eval_config_hash == engine.eval_config_ref.config_hash
     assert len(projected.rollout_refs) == 1
 
 

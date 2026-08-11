@@ -75,7 +75,7 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
                 "dr_providers.provider_call_config",
                 {"fixture": "stable"},
             ),
-            identity_hash=FULL_A,
+            record_hash=FULL_A,
         )
     )
     workflow_payload = module._proposal_workflow_identity_payload(
@@ -88,8 +88,8 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
     assert workflow_payload == {
         "count": 1,
         "policy_identity_hash": policy_identity,
-        "proposal_request_identity_hash": _request().identity_hash(),
-        "proposer_config_identity_hash": stable_config.identity_hash(),
+        "proposal_request_hash": _request().identity_hash(),
+        "proposer_config_hash": stable_config.identity_hash(),
         "transport_durability_identity_hash": FULL_C,
     }
     assert (
@@ -100,7 +100,7 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
             request=_request(),
             count=1,
         )
-        == "706f78f1e149bc9360b377bbfee6da594d54c3693fc52f91c68a488fca740b48"
+        == "b7892f7c2012cf8eb6980f34d5a118b79f45858cf02977cca50ea84d9cefe7fe"
     )
 
 

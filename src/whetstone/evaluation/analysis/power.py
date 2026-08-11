@@ -111,7 +111,7 @@ class PowerRecommendation:
 @dataclass(frozen=True, slots=True)
 class PowerSurfacePoint:
     n_tasks: int
-    repeats: int
+    num_samples: int
     calls: int
     mdd_at_target: float
     simulated_rank_probability: float
@@ -162,7 +162,7 @@ def _decompose_variance(
 
 
 def _paired_diff_se(
-    decomp: VarianceDecomposition, *, n_tasks: int, repeats: int
+    decomp: VarianceDecomposition, *, n_tasks: int, num_samples: int
 ) -> float:
     """SE of the mean paired A-vs-B difference at ``(n_tasks, repeats)``.
 
@@ -173,7 +173,7 @@ def _paired_diff_se(
     """
     per_task_diff_var = (
         decomp.interaction_var
-        + 2.0 * decomp.within_repeat_var / max(1, repeats)
+        + 2.0 * decomp.within_repeat_var / max(1, num_samples)
     )
     return math.sqrt(max(per_task_diff_var, 0.0) / max(1, n_tasks))
 
@@ -182,7 +182,7 @@ def _mdd_at_target(
     decomp: VarianceDecomposition,
     *,
     n_tasks: int,
-    repeats: int,
+    num_samples: int,
     target_prob: float,
 ) -> float:
     """The minimum detectable difference (MDD) at the target ranking prob.
@@ -193,7 +193,7 @@ def _mdd_at_target(
     The seeded simulation in :func:`analyze_power` validates the closed-form
     grid MDD while keeping the surface smooth.
     """
-    se = _paired_diff_se(decomp, n_tasks=n_tasks, repeats=repeats)
+    se = _paired_diff_se(decomp, n_tasks=n_tasks, num_samples=num_samples)
     z = _normal_ppf(target_prob)
     return z * se
 
@@ -215,7 +215,7 @@ def _simulate_ranking_prob(
     decomp: VarianceDecomposition,
     *,
     n_tasks: int,
-    repeats: int,
+    num_samples: int,
     delta: float,
     trials: int,
     rng: np.random.Generator,
@@ -231,7 +231,7 @@ def _simulate_ranking_prob(
     deterministic given the passed ``rng``.
     """
     diff_var = decomp.interaction_var + 2.0 * decomp.within_repeat_var / max(
-        1, repeats
+        1, num_samples
     )
     sd = math.sqrt(max(diff_var, 0.0))
     if sd == 0.0:
@@ -304,27 +304,27 @@ def analyze_power(
     best_mdd = math.inf
     best_nr: tuple[int, int] = (n_grid[-1], r_grid[-1])
     for n_tasks in n_grid:
-        for repeats in r_grid:
+        for num_samples in r_grid:
             mdd = _mdd_at_target(
                 decomp,
                 n_tasks=n_tasks,
-                repeats=repeats,
+                num_samples=num_samples,
                 target_prob=cfg.target_prob,
             )
             # A seeded simulation validation at the operating target gap.
             sim_prob = _simulate_ranking_prob(
                 decomp,
                 n_tasks=n_tasks,
-                repeats=repeats,
+                num_samples=num_samples,
                 delta=target_gap if target_gap > 0 else mdd,
                 trials=cfg.trials,
                 rng=rng,
             )
-            calls = n_tasks * repeats
+            calls = n_tasks * num_samples
             surface.append(
                 PowerSurfacePoint(
                     n_tasks=n_tasks,
-                    repeats=repeats,
+                    num_samples=num_samples,
                     calls=calls,
                     mdd_at_target=mdd,
                     simulated_rank_probability=sim_prob,
@@ -332,11 +332,11 @@ def analyze_power(
             )
             if mdd < best_mdd:
                 best_mdd = mdd
-                best_nr = (n_tasks, repeats)
+                best_nr = (n_tasks, num_samples)
             # Achievable iff the detectable gap (MDD) is <= the target gap.
             if target_gap > 0 and mdd <= target_gap and calls < best_cost:
                 best_cost = calls
-                rec = (n_tasks, repeats, mdd)
+                rec = (n_tasks, num_samples, mdd)
 
     achievable = rec is not None
     if rec is not None:
@@ -394,17 +394,17 @@ def _repeat_plateau(
 ) -> int | None:
     """The first ``r`` beyond which the marginal MDD gain is below ``epsilon``.
 
-    Repeats hit diminishing returns because only the within-task repeat noise
+    Samples hit diminishing returns because only the within-task repeat noise
     shrinks with ``r`` (the interaction floor does not). Returns the smallest
     ``r`` such that MDD(r) - MDD(r+1) < epsilon (at the fixed ``n_tasks``), or
     ``None`` if every step within the grid still gains >= epsilon.
     """
     prev = _mdd_at_target(
-        decomp, n_tasks=n_tasks, repeats=r_grid[0], target_prob=target_prob
+        decomp, n_tasks=n_tasks, num_samples=r_grid[0], target_prob=target_prob
     )
     for r in r_grid[1:]:
         cur = _mdd_at_target(
-            decomp, n_tasks=n_tasks, repeats=r, target_prob=target_prob
+            decomp, n_tasks=n_tasks, num_samples=r, target_prob=target_prob
         )
         if (prev - cur) < epsilon:
             return r - 1

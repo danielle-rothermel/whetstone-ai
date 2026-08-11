@@ -15,7 +15,7 @@ from whetstone.evaluation import (
     AggregationOutput,
     AggregationStatus,
     EvalConfig,
-    RepeatPlan,
+    SamplePlan,
     SamplingConfig,
     TaskSet,
     VariableSpec,
@@ -107,7 +107,7 @@ class EvaluationMatrixPlan:
     eval_config: EvalConfig
     sampling_config: SamplingConfig
     task_set: TaskSet
-    repeat_plan: RepeatPlan
+    sample_plan: SamplePlan
     aggregation_config: AggregationConfig
 
     def __post_init__(self) -> None:
@@ -115,7 +115,7 @@ class EvaluationMatrixPlan:
             ("eval_config", self.eval_config, EvalConfig),
             ("sampling_config", self.sampling_config, SamplingConfig),
             ("task_set", self.task_set, TaskSet),
-            ("repeat_plan", self.repeat_plan, RepeatPlan),
+            ("sample_plan", self.sample_plan, SamplePlan),
             (
                 "aggregation_config",
                 self.aggregation_config,
@@ -130,7 +130,7 @@ class EvaluationMatrixPlan:
 
         if (
             self.eval_config.sampling_config_hash
-            != self.sampling_config.config_identity_hash
+            != self.sampling_config.config_hash
         ):
             raise ValueError(
                 "eval_config sampling_config_hash does not match "
@@ -138,7 +138,7 @@ class EvaluationMatrixPlan:
             )
         if (
             self.eval_config.aggregation_config_hash
-            != self.aggregation_config.config_identity_hash
+            != self.aggregation_config.config_hash
         ):
             raise ValueError(
                 "eval_config aggregation_config_hash does not match "
@@ -151,19 +151,19 @@ class EvaluationMatrixPlan:
                 "sampling_config task_set_hash does not match task_set"
             )
         if (
-            sampling.get("repeat_plan_hash")
-            != self.repeat_plan.identity_hash()
+            sampling.get("sample_plan_hash")
+            != self.sample_plan.identity_hash()
         ):
             raise ValueError(
-                "sampling_config repeat_plan_hash does not match repeat_plan"
+                "sampling_config sample_plan_hash does not match sample_plan"
             )
         if self.task_set.selection_rule is not None:
             raise ValueError(
                 "task_set must be an explicit task identity manifest"
             )
-        if self.task_set.task_identities != self.repeat_plan.task_identities:
+        if self.task_set.task_hashes != self.sample_plan.task_hashes:
             raise ValueError(
-                "task_set and repeat_plan task identities do not match"
+                "task_set and sample_plan task identities do not match"
             )
 
         _policy_from_aggregation_config(self.aggregation_config)
@@ -235,25 +235,25 @@ class RowValue:
 
 @dataclass(frozen=True, slots=True)
 class TaskRows:
-    """All planned Repeat-ID rows for one Task.
+    """All planned Sample-ID rows for one Task.
 
     The :class:`EvaluationMatrixPlan` owns the repeat count. A row list shorter
     than that count declares the shortfall as ``missing`` rows so the per-task
     mean sees the full planned denominator.
     """
 
-    task_identity: str
+    task_hash: str
     rows: tuple[RowValue, ...]
 
-    def completed_rows(self, repeat_count: int) -> tuple[RowValue, ...]:
+    def completed_rows(self, num_samples: int) -> tuple[RowValue, ...]:
         """Rows padded to the plan repeat count with explicit missing rows."""
 
-        if len(self.rows) > repeat_count:
+        if len(self.rows) > num_samples:
             raise ValueError(
-                f"task {self.task_identity} has {len(self.rows)} rows, "
-                f"more than plan repeat_count {repeat_count}"
+                f"task {self.task_hash} has {len(self.rows)} rows, "
+                f"more than plan num_samples {num_samples}"
             )
-        shortfall = repeat_count - len(self.rows)
+        shortfall = num_samples - len(self.rows)
         return self.rows + tuple(
             RowValue(missing=True) for _ in range(shortfall)
         )
@@ -265,7 +265,7 @@ class RolloutAggregate:
 
     Binds a pure :class:`AggregationOutput` to the aggregate identity
     ``(graph_hash, eval_config_hash)``, the complete planned matrix
-    (``task_count`` by ``repeat_count``), and the stated Evaluation Binding
+    (``task_count`` by ``num_samples``), and the stated Evaluation Binding
     hash. The numeric reduction stays in the pure ``aggregation_output``;
     provenance is Whetstone's.
     """
@@ -276,7 +276,7 @@ class RolloutAggregate:
     evaluation_binding_hash: str
     #: Complete planned matrix shape.
     task_count: int
-    repeat_count: int
+    num_samples: int
     #: The pure aggregation output (provenance-free).
     aggregation_output: AggregationOutput
     #: Explicit accounting so no row is silently dropped.
@@ -293,9 +293,9 @@ class RolloutAggregate:
         )
         if self.task_count < 0:
             raise ValueError("task_count cannot be negative")
-        if self.repeat_count < 1:
-            raise ValueError("repeat_count must be at least 1")
-        planned = self.task_count * self.repeat_count
+        if self.num_samples < 1:
+            raise ValueError("num_samples must be at least 1")
+        planned = self.task_count * self.num_samples
         counts = (
             self.rows_present,
             self.rows_missing,
@@ -323,7 +323,7 @@ class RolloutAggregate:
             "eval_config_hash": self.eval_config_hash,
             "evaluation_binding_hash": self.evaluation_binding_hash,
             "task_count": self.task_count,
-            "repeat_count": self.repeat_count,
+            "num_samples": self.num_samples,
             "aggregation_output": self.aggregation_output.model_dump(
                 mode="json"
             ),
@@ -458,8 +458,8 @@ def unweighted_task_mean(
 
     Two staged reductions:
 
-    1. **Per Task**: the mean scalar across the task's Repeat IDs. Each task's
-       planned rows are padded to ``repeat_count`` with explicit missing rows,
+    1. **Per Task**: the mean scalar across the task's Sample IDs. Each task's
+       planned rows are padded to ``num_samples`` with explicit missing rows,
        so the per-task denominator is the full plan.
     2. **Across the complete Task Set**: the configured unweighted mean of the
        per-task means.
@@ -481,33 +481,33 @@ def unweighted_task_mean(
         raise TypeError("plan must be an EvaluationMatrixPlan")
 
     policy = plan.policy
-    repeat_count = plan.repeat_plan.repeat_count
-    planned_task_identities = plan.repeat_plan.task_identities
+    num_samples = plan.sample_plan.num_samples
+    planned_task_hashes = plan.sample_plan.task_hashes
 
     observed_by_identity: dict[str, TaskRows] = {}
     for task in task_rows:
-        if task.task_identity in observed_by_identity:
+        if task.task_hash in observed_by_identity:
             raise ValueError(
-                f"duplicate observed task identity: {task.task_identity}"
+                f"duplicate observed task identity: {task.task_hash}"
             )
-        observed_by_identity[task.task_identity] = task
-    extra_identities = set(observed_by_identity) - set(planned_task_identities)
+        observed_by_identity[task.task_hash] = task
+    extra_identities = set(observed_by_identity) - set(planned_task_hashes)
     if extra_identities:
         extras = ", ".join(sorted(extra_identities))
         raise ValueError(f"observed unplanned task identities: {extras}")
 
     reconciled = tuple(
         observed_by_identity.get(
-            task_identity,
-            TaskRows(task_identity=task_identity, rows=()),
+            task_hash,
+            TaskRows(task_hash=task_hash, rows=()),
         )
-        for task_identity in planned_task_identities
+        for task_hash in planned_task_hashes
     )
 
     all_rows: list[RowValue] = []
     per_task_inputs: list[AggregationInput] = []
     for task in reconciled:
-        completed = task.completed_rows(repeat_count)
+        completed = task.completed_rows(num_samples)
         all_rows.extend(completed)
         task_output = aggregate(
             plan.aggregation_config,
@@ -544,10 +544,10 @@ def unweighted_task_mean(
     return RolloutAggregate(
         name=aggregate_name,
         graph_hash=graph_hash,
-        eval_config_hash=plan.eval_config.config_identity_hash,
+        eval_config_hash=plan.eval_config.config_hash,
         evaluation_binding_hash=evaluation_binding_hash,
-        task_count=len(planned_task_identities),
-        repeat_count=repeat_count,
+        task_count=len(planned_task_hashes),
+        num_samples=num_samples,
         aggregation_output=output,
         rows_present=present,
         rows_missing=missing,

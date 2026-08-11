@@ -132,7 +132,7 @@ def _proposal_result(
         {"request": request.identity_hash()},
     )
     return GepaProposalEffectResult(
-        request_identity_hash=request.identity_hash(),
+        request_hash=request.identity_hash(),
         raw_response="```\nalpha-improved\n```",
         parsed_components=(
             GepaCandidateComponent(name="alpha", text="alpha-improved"),
@@ -173,12 +173,12 @@ def test_completed_object_store_result_does_not_skip_stable_child(
     )
     if effect_kind == "evaluate":
         module.register_gepa_evaluation_authority(
-            authority.runtime_identity_hash,
+            authority.runtime_hash,
             authority,
         )
     else:
         module.register_gepa_proposal_authority(
-            authority.runtime_identity_hash,
+            authority.runtime_hash,
             authority,
         )
 
@@ -192,7 +192,7 @@ def test_completed_object_store_result_does_not_skip_stable_child(
 
 class _DurableAuthority:
     def __init__(self, identity_hash: str, result) -> None:
-        self.runtime_identity_hash = identity_hash
+        self.runtime_hash = identity_hash
         self.result = result
         self.calls = 0
 
@@ -209,7 +209,7 @@ class _DurableAuthority:
 
 class _ProviderBackedProposalAuthority:
     def __init__(self, *, store, request, transport, executor, config) -> None:
-        self.runtime_identity_hash = request.authority.authority_identity_hash
+        self.runtime_hash = request.authority.authority_identity_hash
         self._store = store
         self._transport = transport
         self._executor = executor
@@ -243,7 +243,7 @@ class _ProviderBackedProposalAuthority:
             {"request": request.identity_hash()},
         )
         return GepaProposalEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             raw_response=draft.template,
             parsed_components=(
                 GepaCandidateComponent(
@@ -373,7 +373,7 @@ def test_child_completion_then_outer_result_bind_replays_without_authority(
             result,
         )
         module.register_gepa_evaluation_authority(
-            authority.runtime_identity_hash,
+            authority.runtime_hash,
             authority,
         )
         invoke = module.DbosGepaEffectBroker(store).evaluate
@@ -385,7 +385,7 @@ def test_child_completion_then_outer_result_bind_replays_without_authority(
             result,
         )
         module.register_gepa_proposal_authority(
-            authority.runtime_identity_hash,
+            authority.runtime_hash,
             authority,
         )
         invoke = module.DbosGepaEffectBroker(store).propose
@@ -442,7 +442,7 @@ def _nested_proposal_broker(tmp_path, name: str):
         config=proposer_config,
     )
     effect_module.register_gepa_proposal_authority(
-        authority.runtime_identity_hash,
+        authority.runtime_hash,
         authority,
     )
     return effect_module.DbosGepaEffectBroker(store), request, recording

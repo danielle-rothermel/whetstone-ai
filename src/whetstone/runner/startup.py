@@ -102,7 +102,7 @@ def register_runtime(
     factory_identities: list[str] = []
     for factory in gepa_factories:
         register_gepa_adapter_factory(factory)
-        factory_identities.append(factory.runtime_identity_hash)
+        factory_identities.append(factory.runtime_hash)
     return RegisteredRuntime(
         transport_registry_key=registry_key,
         proposal_executor=executor,

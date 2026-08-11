@@ -114,7 +114,7 @@ def tool_effect_request(call: ToolCall) -> EffectRequest:
         semantic_key=OpaqueKey(
             f"{_TOOL_EFFECT_KEY_PREFIX}{semantic_key_hash}"
         ),
-        request_identity_hash=compute_identity_hash(
+        request_hash=compute_identity_hash(
             schema=_TOOL_EFFECT_SCHEMA,
             schema_version=_TOOL_EFFECT_SCHEMA_VERSION,
             payload=payload,
@@ -246,7 +246,7 @@ class ToolCallStoreEntry(BaseModel):
 
     @property
     def tool_config_hash(self) -> IdentityHash:
-        return self.tool_config.identity_hash
+        return self.tool_config.config_hash
 
     @property
     def call_id(self) -> NonEmptyId:

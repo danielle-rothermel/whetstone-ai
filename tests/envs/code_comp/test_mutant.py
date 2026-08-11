@@ -74,8 +74,8 @@ def mutant_dataset_dir(
         timeout_seconds=5.0,
         task_ids=("HumanEval/0",),
         canonical_suite_digest="opaque-schema-v1-suite-provenance",
-        runner_identity="whetstone-test-fixture@v1",
-        runtime_identity="whetstone-test-fixture-runtime@v1",
+        runner_label="whetstone-test-fixture@v1",
+        runtime_label="whetstone-test-fixture-runtime@v1",
     )
     manifest = build_manifest(
         config=config,
@@ -103,7 +103,7 @@ def test_canonical_loader_authenticates_fixture(
 
     assert loaded.records == (_mutant_record(),)
     assert isinstance(loaded.records[0], MutantRecord)
-    assert len(loaded.manifest.dataset_identity) == 64
+    assert len(loaded.manifest.dataset_hash) == 64
 
 
 def test_loader_rejects_duplicate_manifest_key(
@@ -126,8 +126,8 @@ def test_loader_rejects_duplicate_record_key(
 ) -> None:
     records_path = mutant_dataset_dir / "mutants.jsonl"
     records = records_path.read_bytes()
-    identity = _mutant_record().content_identity.encode()
-    field = b'"content_identity":"' + identity + b'",'
+    identity = _mutant_record().content_hash.encode()
+    field = b'"content_hash":"' + identity + b'",'
     assert field in records
     records_path.write_bytes(records.replace(field, field + field, 1))
 
@@ -310,16 +310,16 @@ def test_build_uses_content_and_dataset_identities(
     assert experiment.budget_ratio is None
     rollout = experiment.encdec_rollout
     assert rollout is not None and rollout.budget_rule is None
-    assert tuple(experiment.mutants) == (record.content_identity,)
-    assert experiment.eval_configs.internal.instances[0].id == (
-        record.content_identity
+    assert tuple(experiment.mutants) == (record.content_hash,)
+    assert experiment.eval_configs.internal.tasks[0].id == (
+        record.content_hash
     )
-    assert experiment.dataset_revision == loaded.manifest.dataset_identity
+    assert experiment.dataset_revision == loaded.manifest.dataset_hash
     assert experiment.eval_configs.internal.task_set.dataset_revision == (
-        loaded.manifest.dataset_identity
+        loaded.manifest.dataset_hash
     )
     assert experiment.eval_configs.official.task_set.dataset_revision == (
-        loaded.manifest.dataset_identity
+        loaded.manifest.dataset_hash
     )
     assert experiment.blend_config is not None
     from whetstone.envs.code_comp.modes.encdec import (
@@ -341,14 +341,12 @@ def test_build_uses_content_and_dataset_identities(
     assert unblended.reward_policy == build_mutant_reward_policy()
 
     mutant_procedure = build_mutant_procedure_config()
-    assert (
-        rollout.procedure_config_hash == mutant_procedure.config_identity_hash
-    )
+    assert rollout.procedure_config_hash == mutant_procedure.config_hash
     assert mutant_procedure.definition_ref.definition_id == (
         "whetstone.code_comp.procedure"
     )
-    assert mutant_procedure.config_identity_hash != (
-        build_encdec_procedure_config().config_identity_hash
+    assert mutant_procedure.config_hash != (
+        build_encdec_procedure_config().config_hash
     )
 
 
@@ -372,7 +370,7 @@ def test_mutant_eval_rewards_fidelity_reports_attractor(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
-        repeats=1,
+        num_samples=1,
     )
 
     evaluation = run_encdec_eval(
@@ -422,7 +420,7 @@ def test_mutant_evaluation_engine_evaluate_succeeds(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
-        repeats=1,
+        num_samples=1,
     )
     store = ObjectStore(SqliteBackend(tmp_path / "ed1m-engine.sqlite"))
     engine = EvaluationEngine(

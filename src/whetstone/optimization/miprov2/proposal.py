@@ -132,14 +132,14 @@ class Miprov2DatasetExample(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    task_identity: StrictStr
+    task_hash: StrictStr
     rendered_record: StrictStr
 
     @model_validator(mode="after")
     def _validate(self) -> Miprov2DatasetExample:
         require_full_hash(
-            self.task_identity,
-            field="dataset task_identity",
+            self.task_hash,
+            field="dataset task_hash",
         )
         return self
 
@@ -412,7 +412,7 @@ class Miprov2ProposalResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    request_identity_hash: StrictStr
+    request_hash: StrictStr
     text: StrictStr = ""
     failed: StrictBool = False
     failure_detail: StrictStr | None = None
@@ -441,8 +441,8 @@ class Miprov2ProposalResponse(BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> Miprov2ProposalResponse:
         require_full_hash(
-            self.request_identity_hash,
-            field="proposal request_identity_hash",
+            self.request_hash,
+            field="proposal request_hash",
         )
         if self.failed and not self.failure_detail:
             raise ValueError("failed proposal response requires detail")
@@ -475,7 +475,7 @@ def _validate_proposal_evidence(item: Miprov2ProposalEvidence) -> None:
     Miprov2ProposalResponse.model_validate(
         item.response.model_dump(mode="json")
     )
-    if item.response.request_identity_hash != item.request.identity_hash:
+    if item.response.request_hash != item.request.identity_hash:
         raise ValueError(
             "proposal evidence response belongs to another request"
         )
@@ -855,7 +855,7 @@ def fold_proposal_response(
     request = state.pending_request
     if request is None:
         raise ValueError("proposal state has no pending request")
-    if response.request_identity_hash != request.identity_hash:
+    if response.request_hash != request.identity_hash:
         raise ValueError("proposal response belongs to another request")
     _require_exact_pending_request(state)
 
@@ -1092,7 +1092,7 @@ def _dataset_batch(
 ) -> str:
     stop = min(len(state.trainset), start + state.view_data_batch_size)
     return "\n\n".join(
-        f"Task {example.task_identity}:\n{example.rendered_record}"
+        f"Task {example.task_hash}:\n{example.rendered_record}"
         for example in state.trainset[start:stop]
     )
 

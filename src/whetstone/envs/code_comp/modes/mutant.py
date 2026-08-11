@@ -90,7 +90,7 @@ def _mutant_to_instance(mutant: MutantRecord) -> Instance:
     so the Instance stays a light string carrier.
     """
     return Instance(
-        id=mutant.content_identity,
+        id=mutant.content_hash,
         seed=mutant.seed,
         strata=(_MUTANT_STRATUM,),
         prompt_inputs={
@@ -169,7 +169,7 @@ def build_mutant_experiment(
     official_n: int | None = None,
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
-    repeats: int = 3,
+    num_samples: int = 3,
     exclude_mutant_ids: frozenset[str] | None = None,
     blend_config: BoundedCompressionMetricConfig | None = None,
     scorer: Callable[..., CodeScore] | None = None,
@@ -193,7 +193,7 @@ def build_mutant_experiment(
         pool = tuple(
             mutant
             for mutant in pool
-            if mutant.content_identity not in exclude_mutant_ids
+            if mutant.content_hash not in exclude_mutant_ids
         )
     if not pool:
         raise ValueError("ed1m mutant pool is empty")
@@ -202,46 +202,46 @@ def build_mutant_experiment(
     rollout = build_encdec_rollout_definition(
         CODE_COMP_ENV_NAME,
         provider_call_config=provider_call_config,
-        procedure_config_hash=procedure.config_identity_hash,
+        procedure_config_hash=procedure.config_hash,
         budget_ratio=budget_ratio,
     )
     all_instances = tuple(_mutant_to_instance(m) for m in pool)
-    mutant_map = {m.content_identity: m for m in pool}
+    mutant_map = {m.content_hash: m for m in pool}
     n = len(all_instances)
     i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
     internal_instances = all_instances[:i_n]
     rest = all_instances[i_n:]
     o_n = official_n if official_n is not None else len(rest)
-    official_instances = rest[:o_n] if rest else internal_instances[: o_n or n]
-    if not official_instances:
-        official_instances = internal_instances
+    official_tasks = rest[:o_n] if rest else internal_instances[: o_n or n]
+    if not official_tasks:
+        official_tasks = internal_instances
 
     internal_split = _code_comp_split(
         env_name=CODE_COMP_ENV_NAME,
-        dataset_revision=loaded.manifest.dataset_identity,
+        dataset_revision=loaded.manifest.dataset_hash,
         split_role="internal_eval",
-        instances=internal_instances,
+        tasks=internal_instances,
         procedure=procedure,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
-        repeats=repeats,
+        num_samples=num_samples,
     )
     official_split = _code_comp_split(
         env_name=CODE_COMP_ENV_NAME,
-        dataset_revision=loaded.manifest.dataset_identity,
+        dataset_revision=loaded.manifest.dataset_hash,
         split_role="official",
-        instances=official_instances,
+        tasks=official_tasks,
         procedure=procedure,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
-        repeats=repeats,
+        num_samples=num_samples,
     )
     eval_configs = EnvEvalConfigs(
         env_name=CODE_COMP_ENV_NAME,
-        procedure_config_hash=procedure.config_identity_hash,
+        procedure_config_hash=procedure.config_hash,
         internal=internal_split,
         official=official_split,
-        held_out_task_identities=(),
+        held_out_task_hashes=(),
     )
     experiment = MutantExperiment(
         env_name=CODE_COMP_ENV_NAME,
@@ -261,7 +261,7 @@ def build_mutant_experiment(
         ),
         encdec_rollout=rollout,
         budget_ratio=budget_ratio,
-        dataset_revision=loaded.manifest.dataset_identity,
+        dataset_revision=loaded.manifest.dataset_hash,
         scorer=scorer,
         blend_config=blend_config,
         mutants=mutant_map,

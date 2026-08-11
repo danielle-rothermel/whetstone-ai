@@ -47,10 +47,10 @@ def sole_eval_node_procedure_hash(graph: GraphConfig) -> str:
 def eval_config_hash(eval_config: EvalConfig) -> str:
     """The composite Eval Config Identity Hash (``eval_config_hash``).
 
-    This is the Eval Config's native ``config_identity_hash``; Whetstone adds
+    This is the Eval Config's native ``config_hash``; Whetstone adds
     no second identity for it.
     """
-    return eval_config.config_identity_hash
+    return eval_config.config_hash
 
 
 def validate_eval_identity_partition(

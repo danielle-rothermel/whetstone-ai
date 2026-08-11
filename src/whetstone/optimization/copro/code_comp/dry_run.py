@@ -274,8 +274,8 @@ class DummyCoproProposerTransport:
         drafts: list[ProposalDraft] = []
         for index in range(count):
             request_evidence = {
-                "proposal_request_identity_hash": request.identity_hash(),
-                "proposer_config_identity_hash": config.identity_hash(),
+                "proposal_request_hash": request.identity_hash(),
+                "proposer_config_hash": config.identity_hash(),
                 "proposer": "dummy",
                 "draft_index": index,
             }
@@ -355,7 +355,7 @@ class CodeCompCoproProposalCall(BaseModel):
 
     proposer_kind: StrictStr
     proposer_config: ImmutableJsonObject
-    proposer_config_identity_hash: StrictStr
+    proposer_config_hash: StrictStr
     transport_execution_policy_hash: StrictStr
     transport_prompt_adapter_identity_hash: StrictStr
     transport_durability_identity_hash: StrictStr
@@ -368,7 +368,7 @@ class CodeCompCoproProposalCall(BaseModel):
         if not self.proposer_kind:
             raise ValueError("proposer_kind must be non-empty")
         for field_name in (
-            "proposer_config_identity_hash",
+            "proposer_config_hash",
             "transport_execution_policy_hash",
             "transport_prompt_adapter_identity_hash",
             "transport_durability_identity_hash",
@@ -630,7 +630,7 @@ def attempt_ed1_copro_round(
     proposal_call = CodeCompCoproProposalCall(
         proposer_kind=proposer_kind,
         proposer_config=proposer_config.identity_payload(),
-        proposer_config_identity_hash=proposer_config.identity_hash(),
+        proposer_config_hash=proposer_config.identity_hash(),
         transport_execution_policy_hash=transport.execution_policy_hash,
         transport_prompt_adapter_identity_hash=(
             transport.prompt_adapter_identity_hash
@@ -823,7 +823,7 @@ def _run_code_comp_copro_preview(
             {
                 "kind": proposer_kind,
                 "config": proposer_config.identity_payload(),
-                "config_identity_hash": proposer_config.identity_hash(),
+                "config_hash": proposer_config.identity_hash(),
             }
         ),
         points=tuple(points),

@@ -30,8 +30,8 @@ from whetstone.evaluation.drivers.internal import (
     InternalRowOutcome,
     InternalRowRequest,
     InternalRowResult,
-    ProcessInstance,
-    process_request_identity,
+    ProcessTask,
+    process_request_hash,
     run_internal_eval,
     start_phase_deadline,
 )
@@ -106,7 +106,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "procedure_config_hash",
         "evaluation_binding_hash",
         "logical_call_id",
-        "repeat_index",
+        "sample_index",
         "drive_ordinal",
         "cache_phase",
         "cache_unit",
@@ -126,7 +126,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "procedure_config_hash",
         "evaluation_binding_hash",
         "logical_call_id",
-        "repeat_index",
+        "sample_index",
         "drive_ordinal",
         "cache_phase",
         "cache_unit",
@@ -147,7 +147,7 @@ def test_process_row_wire_schemas_are_pinned() -> None:
         "evaluation_binding_hash",
         "budget_ratio",
         "logical_call_id",
-        "repeat_index",
+        "sample_index",
         "drive_ordinal",
         "cache_phase",
         "cache_unit",
@@ -156,27 +156,27 @@ def test_process_row_wire_schemas_are_pinned() -> None:
     )
     assert tuple(InternalRowResult.model_fields) == (
         "schema_name",
-        "request_identity",
+        "request_hash",
         "outcome",
     )
     assert tuple(DirectRowResult.model_fields) == (
         "schema_name",
-        "request_identity",
+        "request_hash",
         "outcome",
     )
     assert tuple(EncDecRowResult.model_fields) == (
         "schema_name",
-        "request_identity",
+        "request_hash",
         "outcome",
     )
-    identity_fixture = ProcessInstance(
+    identity_fixture = ProcessTask(
         id="row-1",
         seed=7,
         strata=("a", "b"),
         prompt_inputs={"z": "last", "a": "first"},
         gold="answer",
     )
-    assert process_request_identity(identity_fixture) == (
+    assert process_request_hash(identity_fixture) == (
         "7b01df9bfff5d96a10f35c4e1c5d473f6b3bb7dd72b2e5d49062f788a640c619"
     )
 
@@ -195,7 +195,7 @@ def test_phase_wall_uses_strict_fanout_duration_contract(value) -> None:
 @pytest.mark.process_integration
 def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
     exp = tiny_experiment(env_name)
-    internal_insts = exp.eval_configs.internal.instances
+    internal_insts = exp.eval_configs.internal.tasks
     result = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,
@@ -210,7 +210,7 @@ def test_internal_eval_naive_candidate_clean_pass(env_name: str) -> None:
     assert agg.name == "env_exact_match"
     assert agg.aggregation_output.status is AggregationStatus.OK
     assert agg.aggregation_output.value == pytest.approx(1.0)
-    planned = agg.task_count * agg.repeat_count
+    planned = agg.task_count * agg.num_samples
     assert agg.rows_present == planned
     assert agg.rows_missing == agg.rows_failed == agg.rows_invalid == 0
     assert isinstance(result.reward, Reward)
@@ -235,7 +235,7 @@ def test_c22_internal_eval_produces_valid_aggregate_and_reward() -> None:
     assert agg.name == "env_exact_match"
     assert agg.aggregation_output.status is AggregationStatus.OK
     assert agg.aggregation_output.value == pytest.approx(0.0)
-    planned = agg.task_count * agg.repeat_count
+    planned = agg.task_count * agg.num_samples
     assert agg.rows_present == planned
     assert isinstance(result.reward, Reward)
     assert result.reward.evidence_role is EvaluationRole.INTERNAL
@@ -290,7 +290,7 @@ def test_internal_result_for_different_request_is_rejected() -> None:
 
     def mismatched(request: InternalRowRequest) -> ProcessJob:
         result = InternalRowResult(
-            request_identity="0" * 64,
+            request_hash="0" * 64,
             outcome=_successful_internal_outcome(),
         )
         return ProcessJob(
@@ -313,7 +313,7 @@ def test_internal_result_for_different_request_is_rejected() -> None:
 def test_internal_v2_request_hash_is_pinned() -> None:
     exp = tiny_experiment("c18")
     sampling = exp.eval_configs.internal
-    base = _internal_jobs(exp, _correct_reply("c18", sampling.instances))
+    base = _internal_jobs(exp, _correct_reply("c18", sampling.tasks))
     requests: list[InternalRowRequest] = []
 
     def capture(request: InternalRowRequest) -> ProcessJob:
@@ -329,7 +329,7 @@ def test_internal_v2_request_hash_is_pinned() -> None:
         evaluation_binding=_binding(exp),
     )
 
-    assert requests[0].request_identity == (
+    assert requests[0].request_hash == (
         "b4268cbfd102d07bf950d93000bac93aa5c3e6c0da11f836d97158a99240bb23"
     )
 
@@ -352,7 +352,7 @@ sys.stdout.write(
     )
 )
 sys.stdout.write("\\n")
-sys.stdout.write(request.request_identity)
+sys.stdout.write(request.request_hash)
 """
 
 
@@ -500,7 +500,7 @@ def test_internal_resume_requires_exact_evaluation_binding(
     binding_a = _binding(exp)
     binding_b = binding_a.model_copy(update={"campaign": "other-campaign"})
     log = PartialLog(path=tmp_path / "internal-binding.partial")
-    reply = _correct_reply("c18", sampling.instances)
+    reply = _correct_reply("c18", sampling.tasks)
 
     run_internal_eval(
         exp,
@@ -511,7 +511,7 @@ def test_internal_resume_requires_exact_evaluation_binding(
         evaluation_binding=binding_a,
         partial_log=log,
     )
-    identities_a = {record.request_identity for record in log.load()}
+    identities_a = {record.request_hash for record in log.load()}
 
     served_b: list[str] = []
     run_internal_eval(
@@ -525,12 +525,12 @@ def test_internal_resume_requires_exact_evaluation_binding(
     )
 
     assert len(served_b) == (
-        len(sampling.instances) * sampling.repeat_plan.repeat_count
+        len(sampling.tasks) * sampling.sample_plan.num_samples
     )
     identities_b = {
-        record.request_identity
+        record.request_hash
         for record in log.load()
-        if record.request_identity not in identities_a
+        if record.request_hash not in identities_a
     }
     assert len(identities_b) == len(identities_a)
 
@@ -542,7 +542,7 @@ def test_internal_partial_resume_restores_exact_trace(tmp_path: Path) -> None:
     exp = tiny_experiment("c18")
     sampling = exp.eval_configs.internal
     log = PartialLog(path=tmp_path / "internal-trace.partial")
-    reply = _correct_reply("c18", sampling.instances)
+    reply = _correct_reply("c18", sampling.tasks)
     first = run_internal_eval(
         exp,
         candidate=exp.initial_candidate,
@@ -687,11 +687,11 @@ def test_internal_terminal_timeout_persists_both_exact_requests(
     )
 
     records = log.load()
-    expected_rows = len(sampling.instances) * sampling.repeat_plan.repeat_count
+    expected_rows = len(sampling.tasks) * sampling.sample_plan.num_samples
     assert len(records) == expected_rows * 2
     assert {record.failure_code for record in records} == {"runner_timeout"}
     assert {record.redrive_pending for record in records} == {False, True}
-    assert len({record.request_identity for record in records}) == len(records)
+    assert len({record.request_hash for record in records}) == len(records)
 
     monkeypatch.undo()
 
@@ -743,7 +743,7 @@ def test_invalid_prompt_is_rejected_before_transport() -> None:
 @pytest.mark.process_integration
 def test_internal_eval_is_deterministic() -> None:
     exp = tiny_experiment("c18")
-    internal_insts = exp.eval_configs.internal.instances
+    internal_insts = exp.eval_configs.internal.tasks
     reply = _correct_reply("c18", internal_insts)
     a = run_internal_eval(
         exp,

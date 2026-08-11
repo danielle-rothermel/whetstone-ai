@@ -77,7 +77,7 @@ def _runtime() -> EncDecScoringRuntimeSummary:
     return EncDecScoringRuntimeSummary(
         evaluation_python="/isolated/python",
         dr_code_version="0.1.5",
-        runtime_identity_hash="a" * 64,
+        runtime_hash="a" * 64,
         probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
@@ -108,7 +108,7 @@ def _transcript() -> BaselinePreviewTranscript:
         batch_scorer=_score,
         runtime=_runtime(),
         budget_ratio=0.5,
-        repeats=2,
+        num_samples=2,
         power_config=PowerConfig(trials=1, repeat_cap=2),
         bootstrap_resamples=2,
     )
@@ -161,10 +161,10 @@ def _write_run(tmp_path: Path) -> tuple[Path, BaselinePreviewTranscript]:
     PartialLog(treatment / "partial-log").append(
         PartialCallRecord(
             phase="internal",
-            instance_id="Synthetic/0",
+            task_id="Synthetic/0",
             unit="baseline",
-            repeat_id=0,
-            request_identity="b" * 64,
+            sample_index=0,
+            request_hash="b" * 64,
             redrive_pending=False,
             score=1.0,
             prompt_tokens=3,
@@ -223,7 +223,7 @@ def _write_provider_cache(
         policy=policy,
         transport=transport,
         logical_call_id=logical_call_id,
-        repeat_index=0,
+        sample_index=0,
         drive_ordinal=0,
         cache=cache,
         phase="internal",
@@ -274,7 +274,7 @@ def test_inspection_validates_and_exports_complete_matrix_evidence(
     linked = next(
         row
         for row in report["rows"]
-        if row["arm"] == "BASELINE" and row["repeat"] == 0
+        if row["arm"] == "BASELINE" and row["sample_index"] == 0
     )
     assert linked["encoder_provider_cache_key"] == provider["cache_key"]
     assert len(report["partials"]) == 1

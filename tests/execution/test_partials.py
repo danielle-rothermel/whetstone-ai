@@ -35,16 +35,16 @@ REQUEST_IDENTITY_B = "b" * 64
 def _record(
     *,
     unit: str = "candidate-1",
-    repeat_id: int = 0,
-    request_identity: str = REQUEST_IDENTITY_A,
+    sample_index: int = 0,
+    request_hash: str = REQUEST_IDENTITY_A,
     at: str | None = None,
 ) -> PartialCallRecord:
     return PartialCallRecord(
         phase="internal",
-        instance_id="task-1",
+        task_id="task-1",
         unit=unit,
-        repeat_id=repeat_id,
-        request_identity=request_identity,
+        sample_index=sample_index,
+        request_hash=request_hash,
         redrive_pending=False,
         at=at,
     )
@@ -88,10 +88,10 @@ def test_append_load_and_resume_key_round_trip(tmp_path: Path) -> None:
     log = PartialLog(path=tmp_path / "calls.partial")
     record = PartialCallRecord(
         phase="official",
-        instance_id="task-1",
+        task_id="task-1",
         unit="candidate-1",
-        repeat_id=2,
-        request_identity=REQUEST_IDENTITY_A,
+        sample_index=2,
+        request_hash=REQUEST_IDENTITY_A,
         redrive_pending=False,
         split_role="official",
         score=1.0,
@@ -133,10 +133,10 @@ def test_distinct_requests_at_same_coordinates_both_survive(
     tmp_path: Path,
 ) -> None:
     log = PartialLog(path=tmp_path / "calls.partial")
-    log.append(_record(request_identity=REQUEST_IDENTITY_A))
-    log.append(_record(request_identity=REQUEST_IDENTITY_B))
+    log.append(_record(request_hash=REQUEST_IDENTITY_A))
+    log.append(_record(request_hash=REQUEST_IDENTITY_B))
 
-    assert {record.request_identity for record in log.load()} == {
+    assert {record.request_hash for record in log.load()} == {
         REQUEST_IDENTITY_A,
         REQUEST_IDENTITY_B,
     }
@@ -151,7 +151,7 @@ def test_v3_frame_and_filename_golden_pin_persisted_contract(
     frame = json.loads(entry.read_text())
 
     assert entry.name == (
-        "c982833de29102cb2f7c7e06975853e42c590c4c3b5a4cf1ab63c862430200b7.json"
+        "fadcd1dfaa57bd6b0733059e9c3db1301378c83008135c99c4067c5d82af8dc1.json"
     )
     assert set(frame) == {"schema", "checksum", "record"}
     assert frame["schema"] == "whetstone.execution.partial_frame/v3"
@@ -161,10 +161,10 @@ def test_v3_frame_and_filename_golden_pin_persisted_contract(
     assert set(frame["record"]) == {
         "schema",
         "phase",
-        "instance_id",
+        "task_id",
         "unit",
-        "repeat_id",
-        "request_identity",
+        "sample_index",
+        "request_hash",
         "redrive_pending",
         "split_role",
         "score",
@@ -188,7 +188,7 @@ def test_v3_frame_and_filename_golden_pin_persisted_contract(
         "cache_source_at",
     }
     assert frame["checksum"] == (
-        "39b6c1a7db213e8b5251a9bb63c41f222355b1f305901ef01e3c24c19b4403d5"
+        "7eab32861e7aaced790b202f78d07e8e67951714ae92e0ef9cab789187d92cda"
     )
     assert stat.S_IMODE(log.path.stat().st_mode) == 0o700
     assert stat.S_IMODE(entry.stat().st_mode) == 0o600
@@ -252,7 +252,7 @@ def test_v2_frame_and_record_files_fail_loudly(tmp_path: Path) -> None:
         log.load()
 
 
-@pytest.mark.parametrize("retired_key", ["candidate_id", "repeat"])
+@pytest.mark.parametrize("retired_key", ["candidate_id", "sample_index"])
 def test_retired_wire_keys_are_rejected(
     tmp_path: Path,
     retired_key: str,
@@ -329,7 +329,7 @@ def test_unrelated_append_does_not_bless_corrupt_record(
         refresh_checksum=False,
     )
 
-    log.append(_record(unit="second", repeat_id=1))
+    log.append(_record(unit="second", sample_index=1))
     assert len(_record_files(log.path)) == 2
     with pytest.raises(ValueError, match="checksum mismatch"):
         log.load()
@@ -493,7 +493,7 @@ def test_record_container_open_uses_lock_parent_after_real_substitution(
 
     if operation == "append":
         with pytest.raises(OSError):
-            log.append(_record(unit="new", repeat_id=1))
+            log.append(_record(unit="new", sample_index=1))
     elif operation == "load":
         assert [record.unit for record in log.load()] == ["prior"]
     else:
@@ -547,7 +547,7 @@ def test_strict_orphan_temporary_is_ignored_until_verified_delete(
 ) -> None:
     log = PartialLog(path=tmp_path / "calls.partial")
     log.append(_record(unit="first"))
-    second = _record(unit="second", repeat_id=1)
+    second = _record(unit="second", sample_index=1)
     entry = log._entry_path(second)
     temporary = entry.with_name(f".{entry.stem}.{'1' * 32}.tmp")
     temporary.write_bytes(b'{"torn":')
@@ -569,7 +569,7 @@ def test_append_uses_fresh_exclusive_temp_and_does_not_predelete_collision(
 ) -> None:
     log = PartialLog(path=tmp_path / "calls.partial")
     log.append(_record(unit="first"))
-    second = _record(unit="second", repeat_id=1)
+    second = _record(unit="second", sample_index=1)
     entry = log._entry_path(second)
     collision = entry.with_name(f".{entry.stem}.{'1' * 32}.tmp")
     collision.write_bytes(b"existing orphan")
@@ -604,7 +604,7 @@ def test_legacy_predictable_temp_is_unknown_and_untouched(
 ) -> None:
     log = PartialLog(path=tmp_path / "calls.partial")
     log.append(_record(unit="first"))
-    second = _record(unit="second", repeat_id=1)
+    second = _record(unit="second", sample_index=1)
     legacy_temp = log._entry_path(second).with_name(
         f".{log._entry_path(second).stem}.tmp"
     )
@@ -784,12 +784,12 @@ def test_append_work_is_linear_in_new_records(
 
     monkeypatch.setattr(partials_module, "_read_entry", count_read)
     record_count = 32
-    for repeat_id in range(record_count):
+    for sample_index in range(record_count):
         log.append(
             _record(
-                unit=f"candidate-{repeat_id}",
-                repeat_id=repeat_id,
-                request_identity=f"{repeat_id:064x}",
+                unit=f"candidate-{sample_index}",
+                sample_index=sample_index,
+                request_hash=f"{sample_index:064x}",
             )
         )
 
@@ -817,14 +817,14 @@ def test_repeated_load_then_append_reads_only_new_target_on_append(
         return real_read(fd, directory=directory, name=name)
 
     monkeypatch.setattr(partials_module, "_read_entry", count_read)
-    for repeat_id in range(1, 5):
-        assert len(log.load()) == repeat_id
+    for sample_index in range(1, 5):
+        assert len(log.load()) == sample_index
         after_load = reads
         log.append(
             _record(
-                unit=f"candidate-{repeat_id}",
-                repeat_id=repeat_id,
-                request_identity=f"{repeat_id:064x}",
+                unit=f"candidate-{sample_index}",
+                sample_index=sample_index,
+                request_hash=f"{sample_index:064x}",
             )
         )
         assert reads == after_load + 1
@@ -956,7 +956,7 @@ def test_at_requires_canonical_utc_isoformat(value: str) -> None:
 @pytest.mark.parametrize(
     ("update", "match"),
     [
-        ({"request_identity": "A" * 64}, "request_identity"),
+        ({"request_hash": "A" * 64}, "request_hash"),
         ({"redrive_pending": 0}, "redrive_pending"),
         ({"observation_payload": {"nested": math.nan}}, "finite numbers"),
     ],
@@ -975,15 +975,15 @@ def test_append_revalidates_boundary_before_creating_directory(
 
 
 @pytest.mark.parametrize("value", ["", "a" * 63, "A" * 64, "g" * 64, 1])
-def test_request_identity_must_be_canonical_hex(value: object) -> None:
-    with pytest.raises(ValueError, match="request_identity"):
+def test_request_hash_must_be_canonical_hex(value: object) -> None:
+    with pytest.raises(ValueError, match="request_hash"):
         PartialCallRecord.model_validate(
             {
                 "phase": "internal",
-                "instance_id": "task-1",
+                "task_id": "task-1",
                 "unit": "candidate-1",
-                "repeat_id": 0,
-                "request_identity": value,
+                "sample_index": 0,
+                "request_hash": value,
                 "redrive_pending": False,
             }
         )
@@ -992,10 +992,10 @@ def test_request_identity_must_be_canonical_hex(value: object) -> None:
 def test_redrive_pending_is_required_and_strict() -> None:
     base: dict[str, object] = {
         "phase": "internal",
-        "instance_id": "task-1",
+        "task_id": "task-1",
         "unit": "candidate-1",
-        "repeat_id": 0,
-        "request_identity": REQUEST_IDENTITY_A,
+        "sample_index": 0,
+        "request_hash": REQUEST_IDENTITY_A,
     }
     with pytest.raises(ValueError, match="redrive_pending"):
         PartialCallRecord.model_validate(base)
@@ -1013,10 +1013,10 @@ def test_observation_payload_round_trips_separately_from_raw_response(
     }
     record = PartialCallRecord(
         phase="internal",
-        instance_id="task-1",
+        task_id="task-1",
         unit="candidate-1",
-        repeat_id=0,
-        request_identity=REQUEST_IDENTITY_A,
+        sample_index=0,
+        request_hash=REQUEST_IDENTITY_A,
         redrive_pending=True,
         raw_response='{"provider":"evidence"}',
         observation_payload=observation_payload,
@@ -1043,10 +1043,10 @@ def test_observation_payload_rejects_invalid_json(value: object) -> None:
         PartialCallRecord.model_validate(
             {
                 "phase": "internal",
-                "instance_id": "task-1",
+                "task_id": "task-1",
                 "unit": "candidate-1",
-                "repeat_id": 0,
-                "request_identity": REQUEST_IDENTITY_A,
+                "sample_index": 0,
+                "request_hash": REQUEST_IDENTITY_A,
                 "redrive_pending": False,
                 "observation_payload": value,
             }
@@ -1066,10 +1066,10 @@ def test_non_finite_numbers_are_rejected(field: str, value: object) -> None:
         PartialCallRecord.model_validate(
             {
                 "phase": "internal",
-                "instance_id": "task-1",
+                "task_id": "task-1",
                 "unit": "candidate-1",
-                "repeat_id": 0,
-                "request_identity": REQUEST_IDENTITY_A,
+                "sample_index": 0,
+                "request_hash": REQUEST_IDENTITY_A,
                 "redrive_pending": False,
                 field: value,
             }
@@ -1137,7 +1137,7 @@ def test_record_hardlink_aborts_delete_before_any_record_is_removed(
 ) -> None:
     log = PartialLog(path=tmp_path / "calls.partial")
     log.append(_record(unit="first"))
-    log.append(_record(unit="second", repeat_id=1))
+    log.append(_record(unit="second", sample_index=1))
     entries = _record_files(log.path)
     assert len(entries) == 2
     hardlinked_entry = entries[-1]
@@ -1199,10 +1199,10 @@ def test_cache_hit_requires_complete_provenance_and_null_latency() -> None:
     with pytest.raises(ValueError, match="complete provenance"):
         PartialCallRecord(
             phase="internal",
-            instance_id="task-1",
+            task_id="task-1",
             unit="candidate-1",
-            repeat_id=0,
-            request_identity=REQUEST_IDENTITY_A,
+            sample_index=0,
+            request_hash=REQUEST_IDENTITY_A,
             redrive_pending=False,
             cache_hit=True,
             latency_s=0.0,
@@ -1234,7 +1234,7 @@ def test_atomic_publication_and_delete_are_durable_and_private(
     monkeypatch.setattr(PrivateDirectory, "replace", record_replace)
     log = PartialLog(path=tmp_path / "calls.partial")
     first = _record(unit="first")
-    second = _record(unit="second", repeat_id=1)
+    second = _record(unit="second", sample_index=1)
     log.append(first)
     log.append(second)
     log.delete()
@@ -1256,7 +1256,7 @@ def test_all_masking_umask_preserves_private_retryable_storage(
     previous_umask = os.umask(0o777)
     try:
         log.append(_record(unit="first"))
-        log.append(_record(unit="second", repeat_id=1))
+        log.append(_record(unit="second", sample_index=1))
         observed_umask = os.umask(0o777)
         assert observed_umask == 0o777
     finally:

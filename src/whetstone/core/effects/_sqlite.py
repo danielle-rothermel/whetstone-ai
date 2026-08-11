@@ -29,8 +29,8 @@ _SQLITE_MINIMUM_LEASE_DURATION = timedelta(milliseconds=1)
 _SQLITE_CREATE_TABLE = f"""
 CREATE TABLE {_TABLE_NAME} (
     semantic_key TEXT PRIMARY KEY CHECK (typeof(semantic_key) = 'text'),
-    request_identity_hash TEXT NOT NULL CHECK (
-        typeof(request_identity_hash) = 'text'
+    request_hash TEXT NOT NULL CHECK (
+        typeof(request_hash) = 'text'
     ),
     replay_policy TEXT NOT NULL CHECK (
         typeof(replay_policy) = 'text'
@@ -74,7 +74,7 @@ CREATE TABLE {_METADATA_TABLE_NAME} (
 
 _SQLITE_TABLE_COLUMNS = (
     ("semantic_key", "TEXT", 0, None, 1),
-    ("request_identity_hash", "TEXT", 1, None, 0),
+    ("request_hash", "TEXT", 1, None, 0),
     ("replay_policy", "TEXT", 1, None, 0),
     ("state", "TEXT", 1, None, 0),
     ("owner_id", "TEXT", 1, None, 0),
@@ -89,7 +89,7 @@ _SQLITE_METADATA_COLUMNS = (
 )
 
 _SELECT_ROW_SQLITE = f"""
-SELECT request_identity_hash, replay_policy, state, owner_id, attempt_id,
+SELECT request_hash, replay_policy, state, owner_id, attempt_id,
        fence, expires_at, terminal_json
 FROM {_TABLE_NAME}
 WHERE semantic_key = ?
@@ -97,17 +97,17 @@ WHERE semantic_key = ?
 
 _INSERT_ROW_SQLITE = f"""
 INSERT INTO {_TABLE_NAME} (
-    semantic_key, request_identity_hash, replay_policy, state, owner_id,
+    semantic_key, request_hash, replay_policy, state, owner_id,
     attempt_id, fence, expires_at, terminal_json
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _UPDATE_ROW_SQLITE = f"""
 UPDATE {_TABLE_NAME}
-SET request_identity_hash = ?, replay_policy = ?, state = ?, owner_id = ?,
+SET request_hash = ?, replay_policy = ?, state = ?, owner_id = ?,
     attempt_id = ?, fence = ?, expires_at = ?, terminal_json = ?
 WHERE semantic_key = ?
-  AND request_identity_hash = ?
+  AND request_hash = ?
   AND replay_policy = ?
   AND state = ?
   AND owner_id = ?

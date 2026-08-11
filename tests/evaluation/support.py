@@ -57,23 +57,23 @@ _DEFAULT_ROW_JOB_FACTORY = process_row_job_factory(
 )
 
 
-def _uncached_experiment(*, repeats: int = 1) -> EnvExperiment:
+def _uncached_experiment(*, num_samples: int = 1) -> EnvExperiment:
     return build_env_experiment(
         "c18",
         model="openai/test",
         pool_n_per_stratum=2,
         split_sizes=(1, 1, 1),
-        repeats=repeats,
+        num_samples=num_samples,
     )
 
 
 @cache
-def _cached_experiment(repeats: int) -> EnvExperiment:
-    return _uncached_experiment(repeats=repeats)
+def _cached_experiment(num_samples: int) -> EnvExperiment:
+    return _uncached_experiment(num_samples=num_samples)
 
 
-def _experiment(*, repeats: int = 1) -> EnvExperiment:
-    return _cached_experiment(repeats)
+def _experiment(*, num_samples: int = 1) -> EnvExperiment:
+    return _cached_experiment(num_samples)
 
 
 def _engine(
@@ -81,14 +81,14 @@ def _engine(
     *,
     store: ObjectStore,
     row_job_factory: InternalRowJobFactory = _DEFAULT_ROW_JOB_FACTORY,
-    repeats: int = 1,
+    num_samples: int = 1,
     partial: bool = False,
     cache: bool = False,
     role: EvaluationRole = EvaluationRole.INTERNAL,
     provider_policy: ProviderExecutionPolicy | None = None,
     max_wall_seconds: float | None = None,
 ) -> EvaluationEngine:
-    experiment = _experiment(repeats=repeats)
+    experiment = _experiment(num_samples=num_samples)
     sampling = (
         experiment.eval_configs.internal
         if role is EvaluationRole.INTERNAL

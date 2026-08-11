@@ -84,7 +84,7 @@ class _Controller:
     """A controller recording where it was driven from."""
 
     def __init__(self, result: Any, *, identity: str = _HASH) -> None:
-        self.runtime_identity_hash = identity
+        self.runtime_hash = identity
         self._result = result
         self.drive_calls = 0
         self.observed_workflow_ids: list[str] = []
@@ -122,7 +122,7 @@ def test_the_workflow_id_prefix_is_pinned() -> None:
     assert module.RUN_WORKFLOW_SCHEMA_VERSION == 1
 
 
-def test_the_workflow_id_derives_from_the_request_identity() -> None:
+def test_the_workflow_id_derives_from_the_request_hash() -> None:
     module = _load_module()
     request = _request(module)
 
@@ -238,7 +238,7 @@ def test_a_controller_whose_identity_drifted_is_refused(monkeypatch) -> None:
     monkeypatch.setattr(module, "_CONTROLLERS", {})
     controller = _Controller(None)
     module.register_run_controller(controller)
-    controller.runtime_identity_hash = "c" * 64
+    controller.runtime_hash = "c" * 64
 
     with pytest.raises(module.RunWorkflowError, match="identity drifted"):
         module._parent_run_workflow(_request(module))
@@ -488,7 +488,7 @@ def test_real_dbos_parent_recovers_and_redrives_from_run_start() -> None:
     identity = f"{suffix:>064}".replace(" ", "0")
 
     class CrashingController:
-        runtime_identity_hash = identity
+        runtime_hash = identity
 
         def __init__(self) -> None:
             self.drive_calls = 0

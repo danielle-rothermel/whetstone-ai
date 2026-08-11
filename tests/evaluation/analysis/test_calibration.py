@@ -69,7 +69,7 @@ def _calibration_row(request: EncDecRowRequest) -> ProcessJob:
         encoder_len=len(encoder_text),
     )
     result = EncDecRowResult(
-        request_identity=request.request_identity,
+        request_hash=request.request_hash,
         outcome=outcome,
     )
     return ProcessJob(
@@ -82,7 +82,7 @@ def _internal_engine_and_binding(tmp_path):
     store = ObjectStore(
         SqliteBackend(tmp_path / "internal-calibration.sqlite")
     )
-    engine = _engine(tmp_path, store=store, repeats=2)
+    engine = _engine(tmp_path, store=store, num_samples=2)
     binding = _binding(engine, campaign="internal-calibration-test")
     return engine, binding, store, engine.experiment
 
@@ -94,7 +94,7 @@ def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
         tasks=tasks,
         internal_n=3,
         official_n=3,
-        repeats=2,
+        num_samples=2,
         budget_ratio=None,
     )
     store = ObjectStore(SqliteBackend(tmp_path / "calibration.sqlite"))
@@ -122,7 +122,7 @@ def test_internal_calibration_evaluates_aligned_anchors(tmp_path) -> None:
     engine, binding, _store, experiment = _internal_engine_and_binding(
         tmp_path
     )
-    task_ids = experiment.eval_configs.internal.task_set.task_identities[:2]
+    task_ids = experiment.eval_configs.internal.task_set.task_hashes[:2]
 
     result = run_anchor_calibration(
         engine=engine,
@@ -133,7 +133,7 @@ def test_internal_calibration_evaluates_aligned_anchors(tmp_path) -> None:
         ceiling_purpose="internal-calibration-ceiling",
         task_ids=task_ids,
         pool_ceiling=len(
-            experiment.eval_configs.internal.task_set.task_identities
+            experiment.eval_configs.internal.task_set.task_hashes
         ),
         power_config=PowerConfig(trials=10, repeat_cap=2, seed=3),
         bootstrap_resamples=50,
@@ -142,7 +142,7 @@ def test_internal_calibration_evaluates_aligned_anchors(tmp_path) -> None:
 
     baseline = result.baseline.evidence
     ceiling = result.ceiling.evidence
-    assert baseline.task_identities == ceiling.task_identities == task_ids
+    assert baseline.task_hashes == ceiling.task_hashes == task_ids
     assert baseline.purpose == "internal-calibration-baseline"
     assert ceiling.purpose == "internal-calibration-ceiling"
     assert len(baseline.per_task_values) == len(task_ids)
@@ -190,8 +190,8 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
     )
     assert result.evaluation_binding.eval_config != binding.eval_config
     assert baseline.evaluation_binding == ceiling.evaluation_binding
-    assert baseline.task_identities == ceiling.task_identities == task_ids
-    assert baseline.repeat_count == ceiling.repeat_count == 2
+    assert baseline.task_hashes == ceiling.task_hashes == task_ids
+    assert baseline.num_samples == ceiling.num_samples == 2
     assert baseline.per_task_counts == ceiling.per_task_counts == (2, 2)
     assert (
         baseline.row_accounting.planned == ceiling.row_accounting.planned == 4

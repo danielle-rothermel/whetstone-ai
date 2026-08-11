@@ -88,7 +88,7 @@ def _transport(
                 "dr_providers.provider_call_config",
                 provider_config.model_dump(mode="json"),
             ),
-            identity_hash=provider_config.identity_hash,
+            record_hash=provider_config.identity_hash,
         ),
         temperature=temperature,
     )
@@ -282,7 +282,7 @@ def test_resolved_provider_config_hash_must_match_proposer_identity() -> None:
     mismatched = config.model_copy(
         update={
             "provider_call_config": config.provider_call_config.model_copy(
-                update={"identity_hash": "f" * 64}
+                update={"record_hash": "f" * 64}
             )
         }
     )
@@ -315,7 +315,7 @@ def test_resolved_provider_config_record_ref_must_match_before_call() -> None:
     )
     assert wrong_ref != config.provider_call_config.record_ref
     assert (
-        wrong_record.identity_hash == config.provider_call_config.identity_hash
+        wrong_record.identity_hash == config.provider_call_config.record_hash
     )
 
     with pytest.raises(ValueError, match="record does not match"):
@@ -402,7 +402,7 @@ def test_fake_transport_never_invents_padding_candidates() -> None:
             record_ref=typed_ref_for_record(
                 "dr_providers.provider_call_config", {"route": "proposal"}
             ),
-            identity_hash="a" * 64,
+            record_hash="a" * 64,
         ),
         temperature=1.4,
     )

@@ -32,10 +32,7 @@ def drive_internal_success(payload: JsonValue) -> JsonValue:
     request = InternalRowRequest.from_process_payload(payload)
     instance = request.instance.to_instance()
     env = env_spec(request.env_name)
-    if (
-        env_procedure_config(env).config_identity_hash
-        != request.procedure_config_hash
-    ):
+    if env_procedure_config(env).config_hash != request.procedure_config_hash:
         raise ValueError("internal row procedure identity is not canonical")
     outcome = drive_internal_row(
         env,
@@ -46,7 +43,7 @@ def drive_internal_success(payload: JsonValue) -> JsonValue:
         transport=FakeTransport(constant_reply(instance.gold)),
         procedure_config_hash=request.procedure_config_hash,
         logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
+        sample_index=request.sample_index,
         drive_ordinal=request.drive_ordinal,
         cache=_cache(request.cache_root),
         cache_phase=request.cache_phase,
@@ -54,7 +51,7 @@ def drive_internal_success(payload: JsonValue) -> JsonValue:
         render_guard=request.render_guard,
     )
     return InternalRowResult(
-        request_identity=request.request_identity,
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")
 
@@ -80,7 +77,7 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
         tasks=(CodeCompTaskInstance(instance=instance, humaneval_task=task),),
         internal_n=1,
         official_n=1,
-        repeats=1,
+        num_samples=1,
     )
     if (
         experiment.rollout_definition.procedure_config_hash
@@ -99,14 +96,14 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
             executor=local_python_executor(),
         ),
         logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
+        sample_index=request.sample_index,
         drive_ordinal=request.drive_ordinal,
         cache=_cache(request.cache_root),
         cache_phase=request.cache_phase,
         cache_unit=request.cache_unit,
     )
     return DirectRowResult(
-        request_identity=request.request_identity,
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")
 
@@ -180,7 +177,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         tasks=(task_fixture,),
         internal_n=1,
         official_n=1,
-        repeats=1,
+        num_samples=1,
     )
     if mutant is not None:
         from whetstone.envs.code_comp.modes.mutant import (
@@ -189,7 +186,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         )
 
         if (
-            build_mutant_procedure_config().config_identity_hash
+            build_mutant_procedure_config().config_hash
             != request.procedure_config_hash
         ):
             raise ValueError("ED1M row procedure identity is not canonical")
@@ -202,7 +199,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         experiment_fields["dataset_revision"] = request.dataset_revision
         experiment = MutantExperiment(
             **experiment_fields,
-            mutants={mutant.content_identity: mutant},
+            mutants={mutant.content_hash: mutant},
         )
     elif (
         experiment.rollout_definition.procedure_config_hash
@@ -256,13 +253,13 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         transport=transport,
         scorer=scorer,
         logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
+        sample_index=request.sample_index,
         drive_ordinal=request.drive_ordinal,
         cache=_cache(request.cache_root),
         cache_phase=request.cache_phase,
         cache_unit=request.cache_unit,
     )
     return EncDecRowResult(
-        request_identity=request.request_identity,
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")

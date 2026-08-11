@@ -65,12 +65,12 @@ from whetstone.evaluation.code.compression_selection import (
 )
 from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
 from whetstone.evaluation.drivers.internal import (
-    ProcessInstance,
+    ProcessTask,
     RolloutOutput,
     _llm_component_step,
     _llm_component_values,
-    _process_payload_identity,
-    process_request_identity,
+    _process_payload_hash,
+    process_request_hash,
     remaining_phase_wall_seconds,
     start_phase_deadline,
 )
@@ -118,8 +118,8 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 class EncDecRowDiag:
     """Per-row diagnostics; exceeding the budget never clips or fails a row."""
 
-    instance_id: str
-    repeat: int
+    task_id: str
+    sample_index: int
     metric_name: str
     metric_value: float | None
     compression: float | None
@@ -131,8 +131,8 @@ class EncDecRowDiag:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "instance_id": self.instance_id,
-            "repeat": self.repeat,
+            "task_id": self.task_id,
+            "sample_index": self.sample_index,
             "metric_name": self.metric_name,
             "metric_value": self.metric_value,
             "compression": self.compression,
@@ -251,7 +251,7 @@ def _validate_encdec_component_steps(
 
 
 class EncDecRowOutcome(BaseModel):
-    """One (task, repeat) rollout's dual result + provenance.
+    """One (task, sample_index) rollout's dual result + provenance.
 
     ``primary_value`` is ED1's HumanEval Submission Score or ED1M's fractional
     Fidelity to Mutant. ``attractor_pull`` is the ED1M reported contamination
@@ -457,7 +457,7 @@ class EncDecRowRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    _submitted_request_identity: str | None = PrivateAttr(default=None)
+    _submitted_request_hash: str | None = PrivateAttr(default=None)
 
     schema_name: Literal["whetstone.envs.code_comp_encdec_row_request/v2"] = (
         _ED1_ROW_REQUEST_SCHEMA
@@ -468,14 +468,14 @@ class EncDecRowRequest(BaseModel):
     graph_hash: str
     candidate_template: str
     candidate_id: str
-    instance: ProcessInstance
+    instance: ProcessTask
     provider_call_config: ProviderCallConfig
     execution_policy: ProviderExecutionPolicy
     procedure_config_hash: str
     evaluation_binding_hash: IdentityHash
     budget_ratio: float | None
     logical_call_id: str
-    repeat_index: int
+    sample_index: int
     drive_ordinal: int
     cache_phase: str
     cache_unit: str
@@ -493,7 +493,7 @@ class EncDecRowRequest(BaseModel):
                 raise ValueError(
                     "an encdec_mutant row requires its authenticated mutant"
                 )
-            if self.mutant_record.content_identity != self.instance.id:
+            if self.mutant_record.content_hash != self.instance.id:
                 raise ValueError(
                     "encdec_mutant identity does not match the row instance"
                 )
@@ -502,18 +502,14 @@ class EncDecRowRequest(BaseModel):
         return self
 
     @property
-    def request_identity(self) -> str:
-        return self._submitted_request_identity or process_request_identity(
-            self
-        )
+    def request_hash(self) -> str:
+        return self._submitted_request_hash or process_request_hash(self)
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> EncDecRowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
         request = cls.model_validate_json(json.dumps(payload))
-        request._submitted_request_identity = _process_payload_identity(
-            payload
-        )
+        request._submitted_request_hash = _process_payload_hash(payload)
         return request
 
 
@@ -525,7 +521,7 @@ class EncDecRowResult(BaseModel):
     schema_name: Literal["whetstone.envs.code_comp_encdec_row_result/v3"] = (
         _ED1_ROW_RESULT_SCHEMA
     )
-    request_identity: str
+    request_hash: str
     outcome: EncDecRowOutcome | EncDecGeneratedRowOutcome
 
     @classmethod
@@ -605,7 +601,7 @@ def drive_encdec_row(
     transport: TransportCall,
     scorer: Callable[..., object] | None,
     logical_call_id: str,
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
@@ -643,7 +639,7 @@ def drive_encdec_row(
         policy=execution_policy,
         transport=transport,
         logical_call_id=f"{logical_call_id}:enc",
-        repeat_index=repeat_index,
+        sample_index=sample_index,
         drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
@@ -694,7 +690,7 @@ def drive_encdec_row(
         policy=execution_policy,
         transport=transport,
         logical_call_id=f"{logical_call_id}:dec",
-        repeat_index=repeat_index,
+        sample_index=sample_index,
         drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
@@ -990,7 +986,7 @@ def run_encdec_eval(
 ) -> EncDecEvalResult:
     """Drive ``candidate_template`` over an ed1 split -> dual aggregates.
 
-    Fans out one serializable enc->dec process job per (task, repeat),
+    Fans out one serializable enc->dec process job per (task, sample_index),
     batch-scores generated ED1 submissions in the coordinator when requested,
     reduces to the primary + compression aggregates, derives Reward from the
     primary aggregate when unblended, and collects per-row outputs (encoder +
@@ -1009,8 +1005,8 @@ def run_encdec_eval(
     available no-wire replay path.
     """
     validate_instruction_body(candidate_template)
-    instances = sampling.instances
-    repeats = sampling.repeat_plan.repeat_count
+    instances = sampling.tasks
+    num_samples = sampling.sample_plan.num_samples
     split_role = sampling.split_role
     rd = experiment.encdec_rollout
     assert rd is not None
@@ -1041,7 +1037,7 @@ def run_encdec_eval(
         index: int,
         outcome: EncDecRowOutcome,
         *,
-        request_identity: str,
+        request_hash: str,
         redrive_pending: bool,
     ) -> None:
         if partial_log is None:
@@ -1052,10 +1048,10 @@ def run_encdec_eval(
         partial_log.append(
             PartialCallRecord(
                 phase=split_role,
-                instance_id=str(instance.id),
+                task_id=str(instance.id),
                 unit=candidate_id,
-                repeat_id=index,
-                request_identity=request_identity,
+                sample_index=index,
+                request_hash=request_hash,
                 redrive_pending=redrive_pending,
                 score=outcome.primary_value,
                 failed=outcome.failed,
@@ -1100,14 +1096,14 @@ def run_encdec_eval(
             graph_hash=graph_hash,
             candidate_template=candidate_template,
             candidate_id=candidate_id,
-            instance=ProcessInstance.from_instance(instance),
+            instance=ProcessTask.from_instance(instance),
             provider_call_config=rd.provider_call_config,
             execution_policy=execution_policy,
             procedure_config_hash=rd.procedure_config_hash,
             evaluation_binding_hash=evaluation_binding_id,
             budget_ratio=rd.budget_ratio,
             logical_call_id=f"{candidate_id}:{instance.id}#{index}",
-            repeat_index=index,
+            sample_index=index,
             drive_ordinal=drive_ordinal,
             cache_phase=split_role,
             cache_unit=candidate_id,
@@ -1121,10 +1117,10 @@ def run_encdec_eval(
             _row_request(instance, index, drive_ordinal=1),
         )
         for instance in instances
-        for index in range(repeats)
+        for index in range(num_samples)
     }
     planned_request_identities = frozenset(
-        request.request_identity
+        request.request_hash
         for requests in requests_by_key.values()
         for request in requests
     )
@@ -1142,10 +1138,10 @@ def run_encdec_eval(
     for key, (ordinal_0, ordinal_1) in requests_by_key.items():
         decision = resolve_exact_resume(
             partial_records,
-            instance_id=key[0],
-            repeat_id=key[1],
-            ordinal_0_request_identity=ordinal_0.request_identity,
-            ordinal_1_request_identity=ordinal_1.request_identity,
+            task_id=key[0],
+            sample_index=key[1],
+            ordinal_0_request_hash=ordinal_0.request_hash,
+            ordinal_1_request_hash=ordinal_1.request_hash,
         )
         if decision.record is not None:
             driven[key] = _encdec_outcome_from_record(decision.record)
@@ -1165,23 +1161,23 @@ def run_encdec_eval(
             value: JsonValue,
         ) -> EncDecRowOutcome | EncDecGeneratedRowOutcome:
             result = EncDecRowResult.from_process_payload(value)
-            if result.request_identity != request.request_identity:
+            if result.request_hash != request.request_hash:
                 raise ValueError(
                     "ED1 row result does not match its submitted request"
                 )
             return result.outcome
 
         return CallSpec(
-            key=(request.instance.id, request.repeat_index),
+            key=(request.instance.id, request.sample_index),
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=_deadline(execution_policy),
             commit=lambda outcome: (
                 _persist(
                     instance,
-                    request.repeat_index,
+                    request.sample_index,
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=(
                         request.drive_ordinal == 0 and _should_redrive(outcome)
                     ),
@@ -1205,7 +1201,7 @@ def run_encdec_eval(
         nonlocal effective_concurrency
         specs = [_spec(request) for request in requests]
         request_by_key = {
-            (request.instance.id, request.repeat_index): request
+            (request.instance.id, request.sample_index): request
             for request in requests
         }
         pool = run_call_pool(
@@ -1243,7 +1239,7 @@ def run_encdec_eval(
                     by_instance[res.key[0]],
                     res.key[1],
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=request.drive_ordinal == 0,
                 )
             else:
@@ -1293,7 +1289,7 @@ def run_encdec_eval(
     generated_keys = [
         (str(instance.id), index)
         for instance in instances
-        for index in range(repeats)
+        for index in range(num_samples)
         if isinstance(
             driven[(str(instance.id), index)], EncDecGeneratedRowOutcome
         )
@@ -1310,10 +1306,10 @@ def run_encdec_eval(
         scoring_inputs = tuple(
             CodeScoringInput(
                 raw_submission=generated.decoder_text,
-                task=humaneval_task_from_instance(by_instance[instance_id]),
+                task=humaneval_task_from_instance(by_instance[task_id]),
             )
-            for instance_id, index in generated_keys
-            for generated in (driven[(instance_id, index)],)
+            for task_id, index in generated_keys
+            for generated in (driven[(task_id, index)],)
             if isinstance(generated, EncDecGeneratedRowOutcome)
         )
         remaining_wall_seconds = remaining_phase_wall_seconds(phase_deadline)
@@ -1359,7 +1355,7 @@ def run_encdec_eval(
                     by_instance[key[0]],
                     key[1],
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=False,
                 )
 
@@ -1373,13 +1369,13 @@ def run_encdec_eval(
     per_task_counts: list[int] = []
     per_task_compression: list[float | None] = []
     per_task_attractor: list[float | None] = []
-    for instance in instances:
+    for task_index, instance in enumerate(instances):
         task_id = str(instance.id)
         task_primary_rows: list[RowValue] = []
         c_rows: list[RowValue] = []
         comp_vals: list[float] = []
         attr_vals: list[float] = []
-        for index in range(repeats):
+        for index in range(num_samples):
             outcome = driven[(task_id, index)]
             if not isinstance(outcome, EncDecRowOutcome):
                 raise AssertionError("ED1 row was not scored")
@@ -1387,8 +1383,8 @@ def run_encdec_eval(
                 attr_vals.append(outcome.attractor_pull)
             row_diags.append(
                 EncDecRowDiag(
-                    instance_id=task_id,
-                    repeat=index,
+                    task_id=task_id,
+                    sample_index=index,
                     metric_name=primary_metric_name,
                     metric_value=outcome.primary_value,
                     compression=outcome.compression_value,
@@ -1421,8 +1417,9 @@ def run_encdec_eval(
             outputs.append(
                 RolloutOutput(
                     candidate_id=candidate_id,
-                    instance_id=task_id,
-                    repeat=index,
+                    task_id=task_id,
+                    task_index=task_index,
+                    sample_index=index,
                     row_state=outcome.row_state,
                     executed_component_steps=outcome.executed_component_steps,
                     output_text=_row_output_text(outcome),
@@ -1469,10 +1466,10 @@ def run_encdec_eval(
         evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
             TaskRows(
-                task_identity=task_identity,
+                task_hash=task_hash,
                 rows=tuple(rows),
             )
-            for task_identity, rows in primary_rows
+            for task_hash, rows in primary_rows
         ),
         plan=sampling.evaluation_matrix_plan,
     )
@@ -1482,10 +1479,10 @@ def run_encdec_eval(
         evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
             TaskRows(
-                task_identity=task_identity,
+                task_hash=task_hash,
                 rows=tuple(rows),
             )
-            for task_identity, rows in comp_rows
+            for task_hash, rows in comp_rows
         ),
         plan=sampling.evaluation_matrix_plan,
     )

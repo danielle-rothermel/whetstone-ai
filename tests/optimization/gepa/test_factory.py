@@ -105,7 +105,7 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
                     "dr_providers.provider_call_config",
                     {"provider_call_config_ref": "provider://gepa"},
                 ),
-                identity_hash=_A,
+                record_hash=_A,
             ),
         ),
         metric=metric,
@@ -119,8 +119,8 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
         task_model_identity_hash=_A,
         prompt_format_identity_hash=services.descriptor.identity_hash(),
         prompt_binding_identity_hash=services.binding.identity_hash(),
-        trainset_task_identities=(_A, _B),
-        valset_task_identities=(_C,),
+        trainset_task_hashes=(_A, _B),
+        valset_task_hashes=(_C,),
         component_names=("alpha", "beta"),
         num_predictors=2,
         max_metric_calls=0,
@@ -133,9 +133,9 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
             execution_policy_identity_hash=_C,
             reward_policy_identity_hash=_B,
             sampling=SimpleNamespace(
-                task_set=SimpleNamespace(task_identities=(_A, _B, _C)),
-                repeat_plan=SimpleNamespace(repeat_count=1),
-                instances=(
+                task_set=SimpleNamespace(task_hashes=(_A, _B, _C)),
+                sample_plan=SimpleNamespace(num_samples=1),
+                tasks=(
                     SimpleNamespace(id="a", prompt_inputs={"input": "a"}),
                     SimpleNamespace(id="b", prompt_inputs={"input": "b"}),
                     SimpleNamespace(id="c", prompt_inputs={"input": "c"}),
@@ -163,8 +163,8 @@ def test_concrete_factory_creates_fresh_bound_adapters_and_persists(
             reward_policy_identity_hash=engine.reward_policy_identity_hash,
             sampling=SimpleNamespace(
                 task_set=engine.sampling.task_set,
-                repeat_plan=SimpleNamespace(repeat_count=2),
-                instances=engine.sampling.instances,
+                sample_plan=SimpleNamespace(num_samples=2),
+                tasks=engine.sampling.tasks,
             ),
         ),
     )

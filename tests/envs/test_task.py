@@ -4,7 +4,7 @@ import pytest
 from whetstone_envs.core import make_instance
 
 from whetstone.envs.registry import ENV_NAMES, env_spec
-from whetstone.envs.task import EnvTask
+from whetstone.envs.task import Task
 
 
 def _instance():
@@ -18,9 +18,9 @@ def _instance():
 
 
 def test_env_task_wraps_instance_fields() -> None:
-    task = EnvTask.from_instance("c18", _instance())
+    task = Task.from_instance("c18", _instance())
     assert task.env_name == "c18"
-    assert task.instance_id == "c18-D1-1"
+    assert task.task_id == "c18-D1-1"
     assert task.seed == 42
     assert task.strata == ("D1",)
     assert task.prompt_inputs_dict() == {
@@ -31,15 +31,15 @@ def test_env_task_wraps_instance_fields() -> None:
 
 
 def test_external_input_fields_are_task_namespaced() -> None:
-    task = EnvTask.from_instance("c18", _instance())
+    task = Task.from_instance("c18", _instance())
     assert set(task.external_input_fields()) == {"task.query", "task.question"}
 
 
 def test_identity_is_stable_and_full_hash() -> None:
-    a = EnvTask.from_instance("c18", _instance())
-    b = EnvTask.from_instance("c18", _instance())
-    identity = a.task_identity()
-    assert identity == b.task_identity()
+    a = Task.from_instance("c18", _instance())
+    b = Task.from_instance("c18", _instance())
+    identity = a.task_hash()
+    assert identity == b.task_hash()
     assert len(identity) == 64
     assert all(c in "0123456789abcdef" for c in identity)
 
@@ -54,8 +54,8 @@ def test_identity_changes_with_gold() -> None:
         gold="False",
     )
     assert (
-        EnvTask.from_instance("c18", base).task_identity()
-        != EnvTask.from_instance("c18", other).task_identity()
+        Task.from_instance("c18", base).task_hash()
+        != Task.from_instance("c18", other).task_hash()
     )
 
 
@@ -69,16 +69,16 @@ def test_identity_changes_with_prompt_input() -> None:
         gold=base.gold,
     )
     assert (
-        EnvTask.from_instance("c18", base).task_identity()
-        != EnvTask.from_instance("c18", other).task_identity()
+        Task.from_instance("c18", base).task_hash()
+        != Task.from_instance("c18", other).task_hash()
     )
 
 
 def test_identity_changes_across_env_name() -> None:
     inst = _instance()
     assert (
-        EnvTask.from_instance("c18", inst).task_identity()
-        != EnvTask.from_instance("c19", inst).task_identity()
+        Task.from_instance("c18", inst).task_hash()
+        != Task.from_instance("c19", inst).task_hash()
     )
 
 
@@ -87,7 +87,7 @@ def test_env_task_over_real_instances(env_name: str) -> None:
     env = env_spec(env_name)
     pool = env.generate_pool(n_per_stratum=1)
     inst = pool.instances[0]
-    task = EnvTask.from_instance(env_name, inst)
+    task = Task.from_instance(env_name, inst)
     assert task.gold not in task.prompt_inputs_dict().values()
-    assert len(task.task_identity()) == 64
-    assert task.instance_content_hash
+    assert len(task.task_hash()) == 64
+    assert task.task_content_hash

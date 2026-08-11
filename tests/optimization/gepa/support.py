@@ -90,7 +90,7 @@ def evaluation_authority_binding(
 ) -> GepaEvaluationAuthorityBinding:
     return GepaEvaluationAuthorityBinding(
         authority_identity_hash=FULL_A,
-        evaluation_config_identity_hash=FULL_B,
+        evaluation_config_hash=FULL_B,
         reward_policy_identity_hash=FULL_C,
         provider_route_identity_hash=FULL_D,
         execution_policy_identity_hash=_FULL_E,
@@ -121,7 +121,7 @@ def proposal_authority_binding(
                     "dr_providers.provider_call_config",
                     {"provider_call_config_ref": "provider://gepa-reflection"},
                 ),
-                identity_hash=FULL_D,
+                record_hash=FULL_D,
             ),
         ),
     )
@@ -144,7 +144,7 @@ def evaluation_result(
     request: GepaEvaluationEffectRequest,
 ) -> GepaEvaluationEffectResult:
     return GepaEvaluationEffectResult(
-        request_identity_hash=request.identity_hash(),
+        request_hash=request.identity_hash(),
         rows=tuple(
             GepaEvaluationRow(
                 data=item,
@@ -166,7 +166,7 @@ def gepa_control(**overrides: Any):
                     "dr_providers.provider_call_config",
                     {"provider_call_config_ref": "provider://reflection"},
                 ),
-                identity_hash=FULL_A,
+                record_hash=FULL_A,
             ),
         ),
         "metric": eval_config_reference(eval_config()),
@@ -178,8 +178,8 @@ def gepa_control(**overrides: Any):
         "task_model_identity_hash": FULL_D,
         "prompt_format_identity_hash": FULL_A,
         "prompt_binding_identity_hash": FULL_B,
-        "trainset_task_identities": (FULL_A,),
-        "valset_task_identities": None,
+        "trainset_task_hashes": (FULL_A,),
+        "valset_task_hashes": None,
         "component_names": ("prompt",),
         "num_predictors": 1,
         "max_metric_calls": 1,

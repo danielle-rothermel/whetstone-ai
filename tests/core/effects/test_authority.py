@@ -354,7 +354,7 @@ def test_no_redrive_expiry_becomes_immutable_recovery_required(
         )
 
 
-def test_request_identity_and_policy_are_immutable(
+def test_request_hash_and_policy_are_immutable(
     backend: _Backend,
 ) -> None:
     original = _request()
@@ -367,7 +367,7 @@ def test_request_identity_and_policy_are_immutable(
         attempt="attempt-2",
     )
     assert divergent_identity.outcome is AcquireOutcome.REQUEST_CONFLICT
-    assert divergent_identity.existing_request_identity_hash == _HASH_A
+    assert divergent_identity.existing_request_hash == _HASH_A
     assert divergent_identity.existing_replay_policy is ReplayPolicy.IDEMPOTENT
 
     divergent_policy = _acquire(

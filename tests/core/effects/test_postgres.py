@@ -81,7 +81,7 @@ class _RecordingCursor:
             and params is not None
         ):
             self._recorder.schema_version = int(params[1])
-        elif "SELECT request_identity_hash" in query:
+        elif "SELECT request_hash" in query:
             self._one = self._recorder.row
         elif "clock_timestamp()" in query:
             self._one = (
@@ -144,7 +144,7 @@ class _PostgresRecorder:
             "whetstone_effect_authority": (
                 ("semantic_key", "text", "NO", 1, *text_collation),
                 (
-                    "request_identity_hash",
+                    "request_hash",
                     "text",
                     "NO",
                     2,

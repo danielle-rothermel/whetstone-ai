@@ -57,8 +57,10 @@ target-version = "py313"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers"]
+# Fast iteration during development: ./scripts/test-fast.sh  (pytest -m "not slow")
 markers = [
     "precheck: small deterministic contract and smoke selection for the local commit gate",
+    "slow: spawns processes, uses DBOS, or waits on real time; exclude with -m 'not slow' for fast iteration",
     "process_integration: exercises observed spawned-process and process-group behavior",
     "process_guardian: exercises observed guardian and parent-death behavior",
     "postgres_integration: exercises live PostgreSQL and DBOS behavior",

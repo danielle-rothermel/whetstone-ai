@@ -295,7 +295,7 @@ class OptimizationRun(BaseModel):
             raise ValueError("only tool-using runs may carry Tool Configs")
         if self.mode is StepMode.TOOL_USING and not self.tool_configs:
             raise ValueError("a tool-using run requires a Tool Config")
-        hashes = [config.identity_hash for config in self.tool_configs]
+        hashes = [config.config_hash for config in self.tool_configs]
         if len(set(hashes)) != len(hashes):
             raise ValueError("Optimization Run Tool Configs must be unique")
         return self
@@ -342,7 +342,7 @@ class OptimizationRunRef(BaseModel):
 
     record: OptimizationRun
     record_ref: TypedRef
-    identity_hash: IdentityHash
+    config_hash: IdentityHash
 
     @model_validator(mode="after")
     def _validate(self) -> OptimizationRunRef:
@@ -353,9 +353,9 @@ class OptimizationRunRef(BaseModel):
             raise ValueError(
                 "Optimization Run record_ref must address the exact run"
             )
-        if self.identity_hash != self.record.identity_hash():
+        if self.config_hash != self.record.identity_hash():
             raise ValueError(
-                "Optimization Run identity_hash must match the exact run"
+                "Optimization Run config_hash must match the exact run"
             )
         return self
 
@@ -366,7 +366,7 @@ def optimization_run_reference(run: OptimizationRun) -> OptimizationRunRef:
         record_ref=typed_ref_for_record(
             OPTIMIZATION_RUN_SCHEMA, run.record_content()
         ),
-        identity_hash=run.identity_hash(),
+        config_hash=run.identity_hash(),
     )
 
 

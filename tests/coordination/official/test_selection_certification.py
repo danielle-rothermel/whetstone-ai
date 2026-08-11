@@ -56,11 +56,11 @@ def _quality(graph_hash: str, value: float) -> RolloutAggregate:
         evaluation_binding_hash=BINDING_ID,
         task_rows=(
             TaskRows(
-                task_identity="task-0",
+                task_hash="task-0",
                 rows=(RowValue(value=value),),
             ),
         ),
-        plan=aggregate_plan(tasks=1, repeats=1),
+        plan=aggregate_plan(tasks=1, num_samples=1),
     )
 
 
@@ -71,11 +71,11 @@ def _compression(graph_hash: str, value: float) -> RolloutAggregate:
         evaluation_binding_hash=BINDING_ID,
         task_rows=(
             TaskRows(
-                task_identity="task-0",
+                task_hash="task-0",
                 rows=(RowValue(value=value),),
             ),
         ),
-        plan=aggregate_plan(tasks=1, repeats=1),
+        plan=aggregate_plan(tasks=1, num_samples=1),
     )
 
 

@@ -17,7 +17,7 @@ from whetstone.experiment.task_selection import (
 
 
 def _ids(split) -> tuple[str, ...]:
-    return tuple(str(instance.id) for instance in split.instances)
+    return tuple(str(instance.id) for instance in split.tasks)
 
 
 def test_roles_for_env_maps_encdec_and_direct_pools() -> None:
@@ -74,8 +74,8 @@ def test_family_builders_apply_role_membership_and_manifest_identity(
     assert _ids(selected.eval_configs.internal) == roles.internal_ids
     assert _ids(selected.eval_configs.official) == roles.official_ids
     assert (
-        selected.eval_configs.internal.eval_config.config_identity_hash
-        != plain.eval_configs.internal.eval_config.config_identity_hash
+        selected.eval_configs.internal.eval_config.config_hash
+        != plain.eval_configs.internal.eval_config.config_hash
     )
 
 

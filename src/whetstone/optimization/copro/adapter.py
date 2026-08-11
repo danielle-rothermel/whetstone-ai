@@ -856,7 +856,7 @@ class CoproAdapter:
         proposal_request = ProposalRequest(
             proposal_mode=plan.proposal_mode,
             request_ordinal=iteration,
-            proposal_authority_identity_hash=request.run.identity_hash,
+            proposal_authority_identity_hash=request.run.config_hash,
             base_candidate=candidate_reference(base),
             context=context,
         )

@@ -115,8 +115,8 @@ def test_uncached_experiment_uses_real_production_constructor() -> None:
     experiment = _uncached_experiment()
 
     assert experiment.env_name == "c18"
-    assert len(experiment.eval_configs.internal.instances) == 1
-    assert len(experiment.eval_configs.official.instances) == 1
+    assert len(experiment.eval_configs.internal.tasks) == 1
+    assert len(experiment.eval_configs.official.tasks) == 1
 
 
 def test_engine_run_delegates_encdec_to_code_comp_dispatch(
@@ -206,17 +206,17 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     assert component_traces.graph_hash == evidence.graph_hash
     assert tuple(
         (
-            row.instance_id,
-            row.task_identity,
-            row.repeat,
+            row.task_id,
+            row.task_hash,
+            row.sample_index,
             row.executed_component_trace.row_state.value,
         )
         for row in component_traces.rows
     ) == tuple(
         (
-            row.instance_id,
-            row.task_identity,
-            row.repeat,
+            row.task_id,
+            row.task_hash,
+            row.sample_index,
             "success",
         )
         for row in output_record.outputs
@@ -227,8 +227,8 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
         .outputs["generation"]
         == output_record.outputs[0].output_text
     )
-    assert tuple(row.task_identity for row in output_record.outputs) == (
-        engine.sampling.task_set.task_identities
+    assert tuple(row.task_hash for row in output_record.outputs) == (
+        engine.sampling.task_set.task_hashes
     )
     assert store.get(evidence.aggregate_ref.reference)
     assert evidence.reward_ref is not None
@@ -241,9 +241,7 @@ def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     assert evidence.row_accounting.present == 1
     assert evidence.per_task_counts == (1,)
     assert evidence.evaluation_binding.eval_config == engine.eval_config_ref
-    assert evidence.dataset_identity == (
-        engine.sampling.task_set.dataset_revision
-    )
+    assert evidence.dataset_hash == (engine.sampling.task_set.dataset_revision)
 
 
 def test_engine_persists_missing_row_state_without_fabricated_steps(
@@ -294,7 +292,7 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
         nonlocal run_count
         result = canonical_run(*args, **kwargs)
         original = result.outputs[0]
-        instance = engine.sampling.instances[0]
+        instance = engine.sampling.tasks[0]
         encoder_prompt = render_prompt(
             env_spec(experiment.env_name),
             kwargs["candidate"],
@@ -347,9 +345,7 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
                 ),
                 task_rows=(
                     TaskRows(
-                        task_identity=(
-                            engine.sampling.task_set.task_identities[0]
-                        ),
+                        task_hash=(engine.sampling.task_set.task_hashes[0]),
                         rows=(RowValue(failed=True),),
                     ),
                 ),
@@ -457,7 +453,7 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
     ) == (ENCODER_NODE_ID, DECODER_NODE_ID)
     assert post_score_outputs.outputs[0].failed
     assert post_score_outputs.outputs[0].output_text == (
-        engine.sampling.instances[0].gold
+        engine.sampling.tasks[0].gold
     )
     assert (
         post_score_trace.executed_component_steps[-1].outputs["generation"]
@@ -489,7 +485,7 @@ def test_ed1_trace_relationship_forgery_fails_prebind_and_restart(
     def ed1_success(*args, **kwargs):
         result = canonical_run(*args, **kwargs)
         original = result.outputs[0]
-        instance = engine.sampling.instances[0]
+        instance = engine.sampling.tasks[0]
         encode_step = _llm_component_step(
             trace_index=0,
             component_id=ENCODER_NODE_ID,
@@ -773,7 +769,7 @@ def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
 
     def mismatched(request: InternalRowRequest) -> ProcessJob:
         result = InternalRowResult(
-            request_identity=f"mismatched-{request.request_identity}",
+            request_hash=f"mismatched-{request.request_hash}",
             outcome=_successful_internal_outcome(request),
         )
         return ProcessJob(
@@ -869,15 +865,16 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
         graph_hash=engine.experiment.rollout_definition.graph_hash,
         purpose="wire-contract",
         split_role=engine.sampling.split_role,
-        task_identities=("task-1",),
-        repeat_count=1,
+        task_hashes=("task-1",),
+        num_samples=1,
         component_traces_ref=component_traces_ref,
         outputs=(
             EvaluationOutputRow(
                 candidate_id=candidate.candidate_id,
-                instance_id="instance-1",
-                task_identity="task-1",
-                repeat=0,
+                task_id="instance-1",
+                task_hash="task-1",
+                task_index=0,
+                sample_index=0,
                 rendered_prompt="Question?",
                 output_text="Answer.",
                 score=1.0,
@@ -894,22 +891,23 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
     )
 
     assert record.record_content() == {
-        "schema_version": 2,
+        "schema_version": 3,
         "candidate": candidate_ref.model_dump(mode="json"),
         "evaluation_binding": binding.model_dump(mode="json"),
         "evaluation_role": "internal",
         "graph_hash": engine.experiment.rollout_definition.graph_hash,
         "purpose": "wire-contract",
         "split_role": "internal_eval",
-        "task_identities": ["task-1"],
-        "repeat_count": 1,
+        "task_hashes": ["task-1"],
+        "num_samples": 1,
         "component_traces_ref": component_traces_ref.model_dump(mode="json"),
         "outputs": [
             {
                 "candidate_id": candidate.candidate_id,
-                "instance_id": "instance-1",
-                "task_identity": "task-1",
-                "repeat": 0,
+                "task_id": "instance-1",
+                "task_hash": "task-1",
+                "task_index": 0,
+                "sample_index": 0,
                 "rendered_prompt": "Question?",
                 "output_text": "Answer.",
                 "score": 1.0,
@@ -947,20 +945,20 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
     assert EVALUATION_COMPONENT_TRACES_SCHEMA == (
         "whetstone.evaluation_component_traces"
     )
-    assert EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION == 1
-    assert EVALUATION_OUTPUTS_SCHEMA_VERSION == 2
-    assert EVALUATION_EVIDENCE_SCHEMA_VERSION == 2
-    assert traces.schema_version == 1
-    assert outputs.schema_version == 2
-    assert evidence.schema_version == 2
+    assert EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION == 2
+    assert EVALUATION_OUTPUTS_SCHEMA_VERSION == 3
+    assert EVALUATION_EVIDENCE_SCHEMA_VERSION == 3
+    assert traces.schema_version == 2
+    assert outputs.schema_version == 3
+    assert evidence.schema_version == 3
     assert evidence.component_traces_ref.content_hash == (
-        "67c63b912df720282e367268a621672d8dfb3285fb09f341ba4a6b809108a352"
+        "95f47ccea56a39b1a013287c0f566ceff58c2597c2bc7083aaa24eb8e5f53add"
     )
     assert evidence.outputs_ref.content_hash == (
-        "e8867edd5797c77a70dc26fba96c4288a99cce6dfb68594d3744c067ffaba803"
+        "4329443ea2b69068a42e7b12638527fa9ed35455c4fe497549f0ec18e15aa08b"
     )
     assert evaluated.evidence_ref.content_hash == (
-        "bd5da8a9066beb8e89c6220932e2bb5b353ea97d6222c80dba487f533e4e6619"
+        "ce550f9ecc93593e120f41824ad39658384733874a3a895763e97146b8891e1b"
     )
     with pytest.raises(ValueError, match="address the exact record"):
         EvaluationComponentTracesRef(
@@ -978,14 +976,15 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
         "graph_hash",
         "purpose",
         "split_role",
-        "task_identities",
-        "repeat_count",
+        "task_hashes",
+        "num_samples",
         "rows",
     )
     assert tuple(trace_content["rows"][0]) == (
-        "instance_id",
-        "task_identity",
-        "repeat",
+        "task_id",
+        "task_hash",
+        "task_index",
+        "sample_index",
         "executed_component_trace",
     )
     assert traces.rows[0].executed_component_trace.model_dump(mode="json") == {
@@ -1001,9 +1000,9 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("record_name", "wrong_version"),
     (
-        ("traces", 0),
-        ("outputs", 1),
-        ("evidence", 1),
+        ("traces", 1),
+        ("outputs", 2),
+        ("evidence", 2),
     ),
 )
 @pytest.mark.process_integration
@@ -1045,9 +1044,10 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
     engine = _engine(tmp_path, store=store)
     row = EvaluationOutputRow(
         candidate_id="other",
-        instance_id="instance-1",
-        task_identity="task-1",
-        repeat=0,
+        task_id="instance-1",
+        task_hash="task-1",
+        task_index=0,
+        sample_index=0,
         rendered_prompt="Question?",
         output_text="Answer.",
         score=1.0,
@@ -1070,8 +1070,8 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
             graph_hash=engine.experiment.rollout_definition.graph_hash,
             purpose="mismatch",
             split_role=engine.sampling.split_role,
-            task_identities=("task-1",),
-            repeat_count=1,
+            task_hashes=("task-1",),
+            num_samples=1,
             component_traces_ref=TypedRef(
                 schema_name=EVALUATION_COMPONENT_TRACES_SCHEMA,
                 content_hash="a" * 64,
@@ -1133,7 +1133,7 @@ def test_exact_evaluation_result_refs_reject_forged_hashes(
 @pytest.mark.parametrize(
     ("update", "message"),
     (
-        ({"repeat": True}, "valid integer"),
+        ({"sample_index": True}, "valid integer"),
         ({"score": float("nan")}, "finite number"),
         ({"unexpected": "drift"}, "Extra inputs are not permitted"),
     ),
@@ -1143,9 +1143,9 @@ def test_evaluation_output_row_rejects_wire_schema_drift(
 ) -> None:
     payload = {
         "candidate_id": "candidate-1",
-        "instance_id": "instance-1",
-        "task_identity": "task-1",
-        "repeat": 0,
+        "task_id": "instance-1",
+        "task_hash": "task-1",
+        "sample_index": 0,
         "rendered_prompt": "Question?",
         "output_text": "Answer.",
         "score": 1.0,
@@ -1177,9 +1177,7 @@ def test_engine_rejects_output_outside_sampling_plan(
         assert len(result.outputs) == 1
         return replace(
             result,
-            outputs=(
-                replace(result.outputs[0], instance_id="unknown-instance"),
-            ),
+            outputs=(replace(result.outputs[0], task_id="unknown-instance"),),
         )
 
     monkeypatch.setattr(
@@ -1204,7 +1202,7 @@ def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
     engine = _engine(
         tmp_path,
         store=store,
-        repeats=2,
+        num_samples=2,
     )
     canonical_run = evaluation_engine_module.run_internal_eval
 
@@ -1306,7 +1304,7 @@ def test_cache_evidence_excludes_another_bindings_partial_rows(
 
     rows = partial_log.load()
     assert {row.unit for row in rows} == {candidate.candidate_id}
-    assert len({row.request_identity for row in rows}) == len(rows)
+    assert len({row.request_hash for row in rows}) == len(rows)
     assert len(rows) == first.evidence.cache.partial_row_count + (
         second.evidence.cache.partial_row_count
     )
@@ -1317,9 +1315,7 @@ def test_cache_evidence_excludes_another_bindings_partial_rows(
 
 def test_sampling_repeat_change_changes_exact_eval_identity(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "identity.sqlite"))
-    one = _engine(tmp_path, store=store, repeats=1)
-    two = _engine(tmp_path, store=store, repeats=2)
+    one = _engine(tmp_path, store=store, num_samples=1)
+    two = _engine(tmp_path, store=store, num_samples=2)
 
-    assert (
-        one.eval_config_ref.identity_hash != two.eval_config_ref.identity_hash
-    )
+    assert one.eval_config_ref.config_hash != two.eval_config_ref.config_hash

@@ -28,7 +28,7 @@ def eval_config_ref() -> EvalConfigRef:
             sampling_config_hash="b" * 64,
             evaluation_procedure_config_hash="d" * 64,
             aggregation_config_hash="e" * 64,
-            config_identity_hash=EVAL_HASH,
+            config_hash=EVAL_HASH,
         )
     )
 

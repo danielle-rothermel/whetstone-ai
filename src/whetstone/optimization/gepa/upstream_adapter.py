@@ -95,7 +95,7 @@ class WhetstoneGepaAdapter:
         self._score_mismatch_evidence: list[GepaScoreMismatchEvidence] = []
 
     @property
-    def runtime_identity_hash(self) -> str:
+    def runtime_hash(self) -> str:
         return compute_identity_hash(
             schema=GEPA_UPSTREAM_ADAPTER_SCHEMA,
             schema_version=GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION,
@@ -216,7 +216,7 @@ class WhetstoneGepaAdapter:
             authority=self._evaluation_authority,
         )
         result = self._broker.evaluate(request)
-        if result.request_identity_hash != request.identity_hash():
+        if result.request_hash != request.identity_hash():
             raise ValueError(
                 "GEPA evaluation result belongs to another effect request"
             )
@@ -394,7 +394,7 @@ class WhetstoneGepaAdapter:
                 authority=self._proposal_authority,
             )
             result = self._broker.propose(request)
-            if result.request_identity_hash != request.identity_hash():
+            if result.request_hash != request.identity_hash():
                 raise ValueError(
                     "GEPA proposal result belongs to another effect request"
                 )

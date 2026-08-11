@@ -149,7 +149,7 @@ class FewshotCandidatePlan(BaseModel):
     bindings: Miprov2DurableBindings
     kind: FewshotSeedKind
     component_ids: tuple[StrictStr, ...]
-    trainset_task_identities: tuple[StrictStr, ...]
+    trainset_task_hashes: tuple[StrictStr, ...]
     max_bootstrapped_demos: StrictInt
     max_labeled_demos: StrictInt
     max_rounds: StrictInt
@@ -165,10 +165,10 @@ class FewshotCandidatePlan(BaseModel):
     def _validate_plan(self) -> FewshotCandidatePlan:
         if self.candidate_ordinal < 0:
             raise ValueError("candidate_ordinal cannot be negative")
-        for index, task_identity in enumerate(self.trainset_task_identities):
+        for index, task_hash in enumerate(self.trainset_task_hashes):
             require_full_hash(
-                task_identity,
-                field=f"trainset_task_identities[{index}]",
+                task_hash,
+                field=f"trainset_task_hashes[{index}]",
             )
         if not self.component_ids:
             raise ValueError("at least one component is required")
@@ -217,7 +217,7 @@ class FewshotCandidatePlan(BaseModel):
             "bindings": self.bindings.model_dump(mode="json"),
             "kind": self.kind.value,
             "component_ids": list(self.component_ids),
-            "trainset_task_identities": list(self.trainset_task_identities),
+            "trainset_task_hashes": list(self.trainset_task_hashes),
             "max_bootstrapped_demos": self.max_bootstrapped_demos,
             "max_labeled_demos": self.max_labeled_demos,
             "max_rounds": self.max_rounds,
@@ -253,7 +253,7 @@ class FewshotCandidatePlanningInputs(BaseModel):
 
     bindings: Miprov2DurableBindings
     component_ids: tuple[StrictStr, ...]
-    trainset_task_identities: tuple[StrictStr, ...]
+    trainset_task_hashes: tuple[StrictStr, ...]
     num_candidate_sets: StrictInt
     max_bootstrapped_demos: StrictInt
     max_labeled_demos: StrictInt
@@ -329,7 +329,7 @@ def create_fewshot_candidate_plans(
     *,
     bindings: Miprov2DurableBindings,
     component_ids: tuple[str, ...],
-    trainset_task_identities: tuple[str, ...],
+    trainset_task_hashes: tuple[str, ...],
     num_candidate_sets: int,
     max_bootstrapped_demos: int,
     max_labeled_demos: int,
@@ -353,7 +353,7 @@ def create_fewshot_candidate_plans(
     inputs = FewshotCandidatePlanningInputs(
         bindings=bindings,
         component_ids=component_ids,
-        trainset_task_identities=trainset_task_identities,
+        trainset_task_hashes=trainset_task_hashes,
         num_candidate_sets=num_candidate_sets,
         max_bootstrapped_demos=max_bootstrapped_demos,
         max_labeled_demos=max_labeled_demos,
@@ -396,7 +396,7 @@ def _build_fewshot_candidate_plans(
     int,
 ]:
     component_ids = inputs.component_ids
-    trainset_task_identities = inputs.trainset_task_identities
+    trainset_task_hashes = inputs.trainset_task_hashes
     if not component_ids:
         raise ValueError("at least one component is required")
     if len(set(component_ids)) != len(component_ids):
@@ -417,10 +417,10 @@ def _build_fewshot_candidate_plans(
         inputs.metric_threshold
     ):
         raise ValueError("metric_threshold must be finite")
-    for index, task_identity in enumerate(trainset_task_identities):
+    for index, task_hash in enumerate(trainset_task_hashes):
         require_full_hash(
-            task_identity,
-            field=f"trainset_task_identities[{index}]",
+            task_hash,
+            field=f"trainset_task_hashes[{index}]",
         )
 
     max_bootstrapped_demos = inputs.max_bootstrapped_demos
@@ -460,7 +460,7 @@ def _build_fewshot_candidate_plans(
     rng = checkpoint.state.restore()
     plans: list[FewshotCandidatePlan] = []
     for candidate_seed in range(-3, upper_bound):
-        trainset = list(trainset_task_identities)
+        trainset = list(trainset_task_hashes)
         ordinal = len(plans)
         if candidate_seed == -3 and inputs.include_non_bootstrapped:
             plans.append(
@@ -470,7 +470,7 @@ def _build_fewshot_candidate_plans(
                     bindings=inputs.bindings,
                     kind=FewshotSeedKind.RESET,
                     component_ids=component_ids,
-                    trainset_task_identities=tuple(trainset),
+                    trainset_task_hashes=tuple(trainset),
                     max_bootstrapped_demos=max_bootstrapped_demos,
                     max_labeled_demos=max_labeled_demos,
                     max_rounds=inputs.max_rounds,
@@ -499,7 +499,7 @@ def _build_fewshot_candidate_plans(
                     bindings=inputs.bindings,
                     kind=FewshotSeedKind.LABELS_ONLY,
                     component_ids=component_ids,
-                    trainset_task_identities=tuple(trainset),
+                    trainset_task_hashes=tuple(trainset),
                     max_bootstrapped_demos=max_bootstrapped_demos,
                     max_labeled_demos=max_labeled_demos,
                     max_rounds=inputs.max_rounds,
@@ -553,7 +553,7 @@ def _build_fewshot_candidate_plans(
                 bindings=inputs.bindings,
                 kind=FewshotSeedKind.BOOTSTRAP,
                 component_ids=component_ids,
-                trainset_task_identities=tuple(trainset),
+                trainset_task_hashes=tuple(trainset),
                 max_bootstrapped_demos=candidate_max_bootstrapped,
                 max_labeled_demos=max_labeled_demos,
                 max_rounds=inputs.max_rounds,
@@ -685,7 +685,7 @@ class BootstrapAttemptPlan(BaseModel):
     bindings: Miprov2DurableBindings
     plan_identity_hash: StrictStr
     task_index: StrictInt
-    task_identity: StrictStr
+    task_hash: StrictStr
     round_index: StrictInt
     exclude_equal_task_from_all_teacher_components: StrictBool = True
     restore_teacher_demos_after_effect: StrictBool = True
@@ -698,7 +698,7 @@ class BootstrapAttemptPlan(BaseModel):
         if self.task_index < 0 or self.round_index < 0:
             raise ValueError("attempt indices cannot be negative")
         require_full_hash(self.plan_identity_hash, field="plan_identity_hash")
-        require_full_hash(self.task_identity, field="task_identity")
+        require_full_hash(self.task_hash, field="task_hash")
         if not self.exclude_equal_task_from_all_teacher_components:
             raise ValueError(
                 "the current task must be excluded by equality from every "
@@ -728,7 +728,7 @@ class BootstrapAttemptPlan(BaseModel):
             "bindings": self.bindings.model_dump(mode="json"),
             "plan_identity_hash": self.plan_identity_hash,
             "task_index": self.task_index,
-            "task_identity": self.task_identity,
+            "task_hash": self.task_hash,
             "round_index": self.round_index,
             "exclude_equal_task_from_all_teacher_components": (
                 self.exclude_equal_task_from_all_teacher_components
@@ -774,7 +774,7 @@ def _next_bootstrap_attempt_unchecked(
     if (
         plan.max_rounds <= 0
         or len(state.bootstrapped_task_indices) >= plan.max_bootstrapped_demos
-        or state.task_cursor >= len(plan.trainset_task_identities)
+        or state.task_cursor >= len(plan.trainset_task_hashes)
     ):
         return None
     round_index = state.round_cursor
@@ -782,7 +782,7 @@ def _next_bootstrap_attempt_unchecked(
         bindings=plan.bindings,
         plan_identity_hash=state.plan_identity_hash,
         task_index=state.task_cursor,
-        task_identity=plan.trainset_task_identities[state.task_cursor],
+        task_hash=plan.trainset_task_hashes[state.task_cursor],
         round_index=round_index,
         copy_task_model=round_index > 0,
         rollout_id=round_index if round_index > 0 else None,
@@ -1023,7 +1023,7 @@ def _apply_bootstrap_event_unchecked(
             inputs=chosen.inputs,
             outputs=chosen.outputs,
             augmented=True,
-            source_task_identity=attempt.task_identity,
+            source_task_hash=attempt.task_hash,
             source_rollout_identity=result.source_rollout_identity,
             source_trace_identity=result.source_trace_identity,
             source_output_identity=result.source_output_identity,
@@ -1056,7 +1056,7 @@ def _acceptance_for(
     metric_threshold: float | None,
 ) -> BootstrapAcceptance:
     return BootstrapAcceptance(
-        source_task_identity=attempt.task_identity,
+        source_task_hash=attempt.task_hash,
         source_rollout_identity=result.source_rollout_identity,
         source_trace_identity=result.source_trace_identity,
         source_output_identity=result.source_output_identity,
@@ -1329,8 +1329,8 @@ def _require_plan_ordered_labeled_trainset(
     plan: FewshotCandidatePlan,
     labeled_trainset: tuple[LabeledTaskDemo, ...],
 ) -> None:
-    actual = tuple(task.source_task_identity for task in labeled_trainset)
-    if actual != plan.trainset_task_identities:
+    actual = tuple(task.source_task_hash for task in labeled_trainset)
+    if actual != plan.trainset_task_hashes:
         raise ValueError(
             "labeled_trainset order does not match candidate plan task order"
         )

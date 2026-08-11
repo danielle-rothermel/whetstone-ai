@@ -200,7 +200,7 @@ def eval_config(identity_hash: str = FULL_B) -> EvalConfig:
         sampling_config_hash=FULL_A,
         evaluation_procedure_config_hash=FULL_C,
         aggregation_config_hash=FULL_D,
-        config_identity_hash=identity_hash,
+        config_hash=identity_hash,
     )
 
 
@@ -229,7 +229,7 @@ def optimizer_config_ref(algorithm: str) -> IdentityRef:
     record = {"algorithm": algorithm}
     return IdentityRef(
         record_ref=typed_ref_for_record(OPTIMIZER_CONFIG_SCHEMA, record),
-        identity_hash=compute_identity_hash(
+        record_hash=compute_identity_hash(
             schema=OPTIMIZER_CONFIG_SCHEMA,
             schema_version=OPTIMIZER_CONFIG_SCHEMA_VERSION,
             payload=record,

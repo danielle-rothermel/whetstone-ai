@@ -48,7 +48,7 @@ def test_default_layout_admits_one_generate_component() -> None:
     assert control.base_candidate.record.payload["user_prompt_template"] == (
         "Answer {query}."
     )
-    assert control.reference().identity_hash == control.identity_hash()
+    assert control.reference().record_hash == control.identity_hash()
 
 
 def test_encdec_layout_admits_exact_encoder_component() -> None:
@@ -163,8 +163,8 @@ def test_zeroshot_auto_uses_all_instruction_candidates() -> None:
 def test_default_dataset_split_and_seed_zero_match_reference() -> None:
     control = configure_test_miprov2(valset=None, run_seed=0, seed=9)
 
-    assert control.trainset_task_identities == MIPROV2_TASK_IDENTITIES[:1]
-    assert control.valset_task_identities == MIPROV2_TASK_IDENTITIES[1:4]
+    assert control.trainset_task_hashes == MIPROV2_TASK_IDENTITIES[:1]
+    assert control.valset_task_hashes == MIPROV2_TASK_IDENTITIES[1:4]
     assert control.seed == 9
 
 
@@ -188,7 +188,7 @@ def test_explicit_nonzero_run_seed_controls_auto_sampling() -> None:
     assert first.auto_validation_sample_indices == (
         replay.auto_validation_sample_indices
     )
-    assert first.valset_task_identities == replay.valset_task_identities
+    assert first.valset_task_hashes == replay.valset_task_hashes
 
 
 def test_manual_recommendation_and_auto_conflicts_match_reference() -> None:
@@ -254,8 +254,8 @@ def test_numeric_safety_boundaries_are_preserved(
         configure_test_miprov2(**updates)
 
 
-def test_task_identities_must_be_full_hashes() -> None:
-    with pytest.raises(ValueError, match="trainset_task_identities"):
+def test_task_hashes_must_be_full_hashes() -> None:
+    with pytest.raises(ValueError, match="trainset_task_hashes"):
         configure_test_miprov2(
             trainset=("not-a-hash",),
             valset=MIPROV2_TASK_IDENTITIES[4:],

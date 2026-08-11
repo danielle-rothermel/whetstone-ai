@@ -115,9 +115,7 @@ def race_postgresql_acquire(
             else PostgresOperationGate(
                 schema=schema,
                 backend_pid=backend_pid,
-                before_query=(
-                    "SELECT request_identity_hash, replay_policy, state"
-                ),
+                before_query=("SELECT request_hash, replay_policy, state"),
                 before_query_reached=query_reached,
             )
         )

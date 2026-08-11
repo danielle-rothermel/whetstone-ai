@@ -13,7 +13,7 @@ def test_preview_evaluation_binding_uses_engine_refs(tmp_path) -> None:
     engine = _engine(tmp_path, store=store)
     fingerprint = ExecutionEnvironmentFingerprint(
         dependency_versions=(("dr-code", "0.1.5"), ("numpy", "2.0.0")),
-        runtime_identity="c" * 64,
+        runtime_hash="c" * 64,
     )
 
     binding = preview_evaluation_binding(

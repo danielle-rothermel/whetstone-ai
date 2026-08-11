@@ -67,7 +67,7 @@ def _runtime(evaluation_python: Path) -> EncDecScoringRuntimeSummary:
     return EncDecScoringRuntimeSummary(
         evaluation_python=str(evaluation_python),
         dr_code_version="0.1.5",
-        runtime_identity_hash="a" * 64,
+        runtime_hash="a" * 64,
         probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
@@ -178,7 +178,7 @@ def test_full_plan_has_all_model_budget_treatments_and_exact_counts(
     plan = _plan(tmp_path)
 
     assert plan.budget_ratios == FULL_BUDGET_RATIOS
-    assert plan.repeats == 3
+    assert plan.num_samples == 3
     assert plan.concurrency == 100
     assert len(plan.treatments) == 24
     assert len({item.directory for item in plan.treatments}) == 24
@@ -203,7 +203,7 @@ def test_smoke_plan_keeps_all_routes_but_one_unbudgeted_row_pair(
     assert plan.mode == "smoke"
     assert plan.task_ids == ("HumanEval/32",)
     assert plan.budget_ratios == (None,)
-    assert plan.repeats == 1
+    assert plan.num_samples == 1
     assert plan.pool_ceiling == 1
     assert len(plan.treatments) == 4
     assert all(item.planned_rows == 2 for item in plan.treatments)
@@ -270,8 +270,8 @@ def test_run_code_comp_baseline_behavior_matrix_delegates_to_generic_runner(
     captured: dict[str, dict[str, object]] = {}
 
     class _FakeRuntime:
-        runtime_identity_hash = "a" * 64
-        runtime_identity = object()
+        runtime_hash = "a" * 64
+        runtime_document = object()
         executor = object()
         probe = _runtime(evaluation_python).probe
 

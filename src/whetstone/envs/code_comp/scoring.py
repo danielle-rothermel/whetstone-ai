@@ -211,12 +211,12 @@ class CheckpointedCodeBatchScorer:
         self,
         path: str | Path,
         *,
-        runtime_identity: IdentityDocument,
+        runtime_document: IdentityDocument,
         executor: Executor,
         checkpoint_entry_count: int = 1_000,
     ) -> None:
         self._path = Path(path)
-        self._runtime_identity = runtime_identity
+        self._runtime_document = runtime_document
         self._executor = executor
         self._checkpoint_entry_count = checkpoint_entry_count
         self._store: SqliteRecordCache | None = None
@@ -227,7 +227,7 @@ class CheckpointedCodeBatchScorer:
         try:
             cache = CheckpointedExecutionCache(
                 store,
-                runtime_identity=self._runtime_identity,
+                runtime_identity=self._runtime_document,
                 checkpoint_entry_count=self._checkpoint_entry_count,
             )
         except BaseException:

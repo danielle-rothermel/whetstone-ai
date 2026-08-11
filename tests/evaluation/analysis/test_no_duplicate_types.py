@@ -73,7 +73,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         ),
         PowerSurfacePoint(
             n_tasks=2,
-            repeats=1,
+            num_samples=1,
             calls=2,
             mdd_at_target=0.1,
             simulated_rank_probability=0.8,

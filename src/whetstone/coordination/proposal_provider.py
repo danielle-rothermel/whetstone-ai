@@ -150,8 +150,8 @@ def _proposal_workflow_identity_payload(
     return {
         "count": count,
         "policy_identity_hash": policy_identity_hash,
-        "proposal_request_identity_hash": request.identity_hash(),
-        "proposer_config_identity_hash": config.identity_hash(),
+        "proposal_request_hash": request.identity_hash(),
+        "proposer_config_hash": config.identity_hash(),
         "transport_durability_identity_hash": registry_key,
     }
 

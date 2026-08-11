@@ -22,7 +22,7 @@ from whetstone.evaluation import (
     MetricQuestionBinding,
     PreprocessingDefinition,
     PreprocessingStepBinding,
-    RepeatPlan,
+    SamplePlan,
     SamplingDefinition,
     SelectionRule,
     TaskSet,
@@ -80,22 +80,22 @@ def _aggregation_config(policy: CompletenessPolicy) -> AggregationConfig:
 
 
 def _plan(
-    task_identities: tuple[str, ...] = ("t1",),
+    task_hashes: tuple[str, ...] = ("t1",),
     *,
-    repeat_count: int = 3,
+    num_samples: int = 3,
     policy: CompletenessPolicy = PROPAGATE,
 ) -> EvaluationMatrixPlan:
     task_set = TaskSet(
         manifest_id="test.tasks",
         version="1",
         dataset_revision="revision",
-        task_identities=task_identities,
+        task_hashes=task_hashes,
     )
-    repeat_plan = RepeatPlan(
+    sample_plan = SamplePlan(
         plan_id="test.repeats",
         version="1",
-        task_identities=task_identities,
-        repeat_count=repeat_count,
+        task_hashes=task_hashes,
+        num_samples=num_samples,
     )
     sampling = SamplingDefinition(
         definition_id="test.sampling",
@@ -103,7 +103,7 @@ def _plan(
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
     aggregation = _aggregation_config(policy)
@@ -119,7 +119,7 @@ def _plan(
         eval_config=eval_config,
         sampling_config=sampling,
         task_set=task_set,
-        repeat_plan=repeat_plan,
+        sample_plan=sample_plan,
         aggregation_config=aggregation,
     )
 
@@ -139,22 +139,22 @@ def _task_mean(
     )
 
 
-def _task(task_identity: str, *rows: RowValue) -> TaskRows:
-    return TaskRows(task_identity=task_identity, rows=rows)
+def _task(task_hash: str, *rows: RowValue) -> TaskRows:
+    return TaskRows(task_hash=task_hash, rows=rows)
 
 
 def test_aggregate_derives_identity_binding_and_shape_from_plan() -> None:
-    plan = _plan(("t1",), repeat_count=2)
+    plan = _plan(("t1",), num_samples=2)
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0), RowValue(value=0.0)),),
         plan=plan,
     )
 
     assert aggregate.graph_hash == FULL_HASH
-    assert aggregate.eval_config_hash == plan.eval_config.config_identity_hash
+    assert aggregate.eval_config_hash == plan.eval_config.config_hash
     assert aggregate.evaluation_binding_hash == CTX
     assert aggregate.task_count == 1
-    assert aggregate.repeat_count == 2
+    assert aggregate.num_samples == 2
     assert isinstance(aggregate.aggregation_output, AggregationOutput)
     parameters = tuple(signature(unweighted_task_mean).parameters.values())
     assert tuple(parameter.name for parameter in parameters) == (
@@ -175,7 +175,7 @@ def test_aggregate_derives_identity_binding_and_shape_from_plan() -> None:
 def test_rollout_aggregate_wire_contract_is_pinned() -> None:
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0), RowValue(value=0.0)),),
-        plan=_plan(("t1",), repeat_count=2),
+        plan=_plan(("t1",), num_samples=2),
     )
     content = aggregate.record_content()
 
@@ -186,7 +186,7 @@ def test_rollout_aggregate_wire_contract_is_pinned() -> None:
         "eval_config_hash",
         "evaluation_binding_hash",
         "task_count",
-        "repeat_count",
+        "num_samples",
         "aggregation_output",
         "rows_present",
         "rows_missing",
@@ -229,7 +229,7 @@ def test_unweighted_task_mean_is_two_stage_not_row_weighted() -> None:
 def test_unweighted_task_mean_propagates_caller_owned_name() -> None:
     aggregate = _task_mean(
         (_task("t1", RowValue(value=3.5)),),
-        plan=_plan(repeat_count=1),
+        plan=_plan(num_samples=1),
         aggregate_name="latency_adjusted_quality",
     )
     assert aggregate.name == "latency_adjusted_quality"
@@ -248,10 +248,10 @@ def test_unweighted_task_mean_rejects_non_string_name() -> None:
         _task_mean((), aggregate_name=cast(str, 42))
 
 
-def test_task_rows_are_padded_to_plan_repeat_count() -> None:
+def test_task_rows_are_padded_to_plan_num_samples() -> None:
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0)),),
-        plan=_plan(repeat_count=3),
+        plan=_plan(num_samples=3),
     )
     assert aggregate.rows_present == 1
     assert aggregate.rows_missing == 2
@@ -261,10 +261,10 @@ def test_task_rows_are_padded_to_plan_repeat_count() -> None:
 
 
 def test_task_rows_reject_more_rows_than_plan() -> None:
-    with pytest.raises(ValueError, match="more than plan repeat_count"):
+    with pytest.raises(ValueError, match="more than plan num_samples"):
         _task_mean(
             (_task("t1", RowValue(value=1.0), RowValue(value=2.0)),),
-            plan=_plan(repeat_count=1),
+            plan=_plan(num_samples=1),
         )
 
 
@@ -275,7 +275,7 @@ def test_task_rows_have_no_competing_expected_repeats_field() -> None:
 def test_failed_row_propagates_missing_data() -> None:
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0), RowValue(failed=True)),),
-        plan=_plan(repeat_count=2),
+        plan=_plan(num_samples=2),
     )
     assert aggregate.rows_failed == 1
     assert (
@@ -288,10 +288,10 @@ def test_failed_rows_still_visible_in_provenance() -> None:
     sampling = experiment.eval_configs.internal
     task_rows = tuple(
         TaskRows(
-            task_identity=task_identity,
+            task_hash=task_hash,
             rows=(RowValue(failed=True), RowValue(failed=True)),
         )
-        for task_identity in sampling.task_set.task_identities
+        for task_hash in sampling.task_set.task_hashes
     )
     agg = unweighted_task_mean(
         aggregate_name="env_exact_match",
@@ -321,7 +321,7 @@ def test_skip_within_tolerance_certifies_a_value() -> None:
         _rows_with_skips(100, skipped=1),
         plan=_plan(
             task_ids,
-            repeat_count=1,
+            num_samples=1,
             policy=CompletenessPolicy(
                 row_policy=RowPolicy.SKIP,
                 max_skip_fraction=0.02,
@@ -340,7 +340,7 @@ def test_skip_over_tolerance_forces_missing_data() -> None:
         _rows_with_skips(100, skipped=3),
         plan=_plan(
             task_ids,
-            repeat_count=1,
+            num_samples=1,
             policy=CompletenessPolicy(
                 row_policy=RowPolicy.SKIP,
                 max_skip_fraction=0.02,
@@ -367,8 +367,8 @@ def test_exact_tolerance_tokens_preserve_behavioral_identity() -> None:
     assert not lower.within_tolerance(skipped=2002, planned=100_000)
     assert upper.within_tolerance(skipped=2002, planned=100_000)
     assert (
-        _plan(policy=lower).eval_config.config_identity_hash
-        != _plan(policy=upper).eval_config.config_identity_hash
+        _plan(policy=lower).eval_config.config_hash
+        != _plan(policy=upper).eval_config.config_hash
     )
 
 
@@ -447,36 +447,36 @@ def test_plan_rejects_sampling_to_task_set_mismatch() -> None:
         manifest_id="other.tasks",
         version="1",
         dataset_revision="revision",
-        task_identities=("t1",),
+        task_hashes=("t1",),
     )
     with pytest.raises(ValueError, match="task_set_hash"):
         replace(plan, task_set=other_task_set)
 
 
-def test_plan_rejects_sampling_to_repeat_plan_mismatch() -> None:
-    plan = _plan(("t1",), repeat_count=1)
-    other_repeat_plan = RepeatPlan(
+def test_plan_rejects_sampling_to_sample_plan_mismatch() -> None:
+    plan = _plan(("t1",), num_samples=1)
+    other_sample_plan = SamplePlan(
         plan_id="other.repeats",
         version="1",
-        task_identities=("t1",),
-        repeat_count=1,
+        task_hashes=("t1",),
+        num_samples=1,
     )
-    with pytest.raises(ValueError, match="repeat_plan_hash"):
-        replace(plan, repeat_plan=other_repeat_plan)
+    with pytest.raises(ValueError, match="sample_plan_hash"):
+        replace(plan, sample_plan=other_sample_plan)
 
 
-def test_plan_rejects_task_set_repeat_plan_identity_mismatch() -> None:
+def test_plan_rejects_task_set_sample_plan_identity_mismatch() -> None:
     task_set = TaskSet(
         manifest_id="test.tasks",
         version="1",
         dataset_revision="revision",
-        task_identities=("t1",),
+        task_hashes=("t1",),
     )
-    repeat_plan = RepeatPlan(
+    sample_plan = SamplePlan(
         plan_id="test.repeats",
         version="1",
-        task_identities=("t2",),
-        repeat_count=1,
+        task_hashes=("t2",),
+        num_samples=1,
     )
     sampling = SamplingDefinition(
         definition_id="test.sampling",
@@ -484,7 +484,7 @@ def test_plan_rejects_task_set_repeat_plan_identity_mismatch() -> None:
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
     aggregation = _aggregation_config(CompletenessPolicy())
@@ -501,7 +501,7 @@ def test_plan_rejects_task_set_repeat_plan_identity_mismatch() -> None:
             eval_config=eval_config,
             sampling_config=sampling,
             task_set=task_set,
-            repeat_plan=repeat_plan,
+            sample_plan=sample_plan,
             aggregation_config=aggregation,
         )
 
@@ -520,7 +520,7 @@ def test_plan_rejects_unresolved_task_selection_rule() -> None:
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": base.repeat_plan.identity_hash(),
+            "sample_plan_hash": base.sample_plan.identity_hash(),
         }
     )
     eval_config = EvalDefinition(
@@ -536,7 +536,7 @@ def test_plan_rejects_unresolved_task_selection_rule() -> None:
             eval_config=eval_config,
             sampling_config=sampling,
             task_set=task_set,
-            repeat_plan=base.repeat_plan,
+            sample_plan=base.sample_plan,
             aggregation_config=base.aggregation_config,
         )
 
@@ -591,7 +591,7 @@ def test_plan_rejects_wrong_aggregation_semantics(
 def test_duplicate_observed_task_is_rejected() -> None:
     duplicate = _task("t1", RowValue(value=1.0))
     with pytest.raises(ValueError, match="duplicate observed task identity"):
-        _task_mean((duplicate, duplicate), plan=_plan(repeat_count=1))
+        _task_mean((duplicate, duplicate), plan=_plan(num_samples=1))
 
 
 def test_extra_observed_task_is_rejected() -> None:
@@ -601,17 +601,17 @@ def test_extra_observed_task_is_rejected() -> None:
                 _task("t1", RowValue(value=1.0)),
                 _task("t2", RowValue(value=2.0)),
             ),
-            plan=_plan(("t1",), repeat_count=1),
+            plan=_plan(("t1",), num_samples=1),
         )
 
 
 def test_missing_planned_task_is_synthesized_under_propagate() -> None:
     aggregate = _task_mean(
         (_task("t1", RowValue(value=1.0), RowValue(value=1.0)),),
-        plan=_plan(("t1", "t2"), repeat_count=2),
+        plan=_plan(("t1", "t2"), num_samples=2),
     )
     assert aggregate.task_count == 2
-    assert aggregate.repeat_count == 2
+    assert aggregate.num_samples == 2
     assert aggregate.rows_missing == 2
     assert (
         aggregate.aggregation_output.status is AggregationStatus.MISSING_DATA
@@ -621,14 +621,13 @@ def test_missing_planned_task_is_synthesized_under_propagate() -> None:
 def test_missing_planned_task_can_be_certified_under_tolerant_skip() -> None:
     task_ids = tuple(f"t{index}" for index in range(10))
     observed = tuple(
-        _task(task_identity, RowValue(value=1.0))
-        for task_identity in task_ids[:-1]
+        _task(task_hash, RowValue(value=1.0)) for task_hash in task_ids[:-1]
     )
     aggregate = _task_mean(
         observed,
         plan=_plan(
             task_ids,
-            repeat_count=1,
+            num_samples=1,
             policy=CompletenessPolicy(
                 row_policy=RowPolicy.SKIP,
                 max_skip_fraction=0.1,
@@ -642,7 +641,7 @@ def test_missing_planned_task_can_be_certified_under_tolerant_skip() -> None:
 
 
 def test_input_order_does_not_change_plan_order_reduction() -> None:
-    plan = _plan(("t1", "t2"), repeat_count=1)
+    plan = _plan(("t1", "t2"), num_samples=1)
     first = _task("t1", RowValue(value=2.0))
     second = _task("t2", RowValue(value=8.0))
     forward = _task_mean((first, second), plan=plan)
@@ -654,7 +653,7 @@ def test_input_order_does_not_change_plan_order_reduction() -> None:
 def test_compression_uses_canonical_taskwise_matrix_path() -> None:
     plan = _plan(
         ("t1", "t2"),
-        repeat_count=3,
+        num_samples=3,
         policy=CompletenessPolicy(
             row_policy=RowPolicy.SKIP,
             max_skip_fraction=0.5,
@@ -695,7 +694,7 @@ def test_aggregate_rejects_incomplete_accounting() -> None:
             eval_config_hash=FULL_HASH,
             evaluation_binding_hash=CTX,
             task_count=2,
-            repeat_count=3,
+            num_samples=3,
             aggregation_output=AggregationOutput(
                 status=AggregationStatus.OK,
                 value=0.5,

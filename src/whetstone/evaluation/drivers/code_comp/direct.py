@@ -52,12 +52,12 @@ from whetstone.evaluation.aggregate import (
     unweighted_task_mean,
 )
 from whetstone.evaluation.drivers.internal import (
-    ProcessInstance,
+    ProcessTask,
     RolloutOutput,
     _llm_component_step,
     _llm_component_values,
-    _process_payload_identity,
-    process_request_identity,
+    _process_payload_hash,
+    process_request_hash,
     remaining_phase_wall_seconds,
     start_phase_deadline,
 )
@@ -114,7 +114,7 @@ class DirectEvalResult:
 
 
 class DirectRowOutcome(BaseModel):
-    """One (task, repeat) direct rollout's result + provenance."""
+    """One (task, sample_index) direct rollout's result + provenance."""
 
     model_config = ConfigDict(
         frozen=True,
@@ -272,14 +272,14 @@ class DirectRowRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    _submitted_request_identity: str | None = PrivateAttr(default=None)
+    _submitted_request_hash: str | None = PrivateAttr(default=None)
 
     schema_name: Literal["whetstone.envs.code_comp_direct_row_request/v2"] = (
         _D1_ROW_REQUEST_SCHEMA
     )
     candidate_body: str
     candidate_id: str
-    instance: ProcessInstance
+    instance: ProcessTask
     humaneval_task: HumanEvalTaskPayload
     input_arm: str
     rename_token: str
@@ -288,25 +288,21 @@ class DirectRowRequest(BaseModel):
     procedure_config_hash: str
     evaluation_binding_hash: IdentityHash
     logical_call_id: str
-    repeat_index: int
+    sample_index: int
     drive_ordinal: int
     cache_phase: str
     cache_unit: str
     cache_root: str | None
 
     @property
-    def request_identity(self) -> str:
-        return self._submitted_request_identity or process_request_identity(
-            self
-        )
+    def request_hash(self) -> str:
+        return self._submitted_request_hash or process_request_hash(self)
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> DirectRowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
         request = cls.model_validate_json(json.dumps(payload))
-        request._submitted_request_identity = _process_payload_identity(
-            payload
-        )
+        request._submitted_request_hash = _process_payload_hash(payload)
         return request
 
 
@@ -318,7 +314,7 @@ class DirectRowResult(BaseModel):
     schema_name: Literal["whetstone.envs.code_comp_direct_row_result/v3"] = (
         _D1_ROW_RESULT_SCHEMA
     )
-    request_identity: str
+    request_hash: str
     outcome: DirectRowOutcome | DirectGeneratedRowOutcome
 
     @classmethod
@@ -371,7 +367,7 @@ def drive_direct_row(
     transport: TransportCall,
     scorer: Callable[..., CodeScore] | None,
     logical_call_id: str,
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
@@ -394,7 +390,7 @@ def drive_direct_row(
         policy=execution_policy,
         transport=transport,
         logical_call_id=logical_call_id,
-        repeat_index=repeat_index,
+        sample_index=sample_index,
         drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
@@ -586,7 +582,8 @@ def run_direct_eval(
 ) -> DirectEvalResult:
     """Drive ``candidate_body`` over a D1 split.
 
-    Fans out one serializable direct-generation process job per (task, repeat),
+    Fans out one serializable direct-generation process job per
+    (task, sample_index),
     batch-scores generated submissions in the coordinator when requested,
     reduces to the HumanEval Submission Score aggregate, derives its Reward for
     an internal Evaluation Binding, and collects per-row outputs.
@@ -602,8 +599,8 @@ def run_direct_eval(
     cache remains the available no-wire replay path.
     """
     validate_instruction_body(candidate_body)
-    instances = sampling.instances
-    repeats = sampling.repeat_plan.repeat_count
+    instances = sampling.tasks
+    num_samples = sampling.sample_plan.num_samples
     split_role = sampling.split_role
     rd = experiment.rollout_definition
     graph_hash = rd.graph_hash
@@ -632,7 +629,7 @@ def run_direct_eval(
         index: int,
         outcome: DirectRowOutcome,
         *,
-        request_identity: str,
+        request_hash: str,
         redrive_pending: bool,
     ) -> None:
         if partial_log is None:
@@ -640,10 +637,10 @@ def run_direct_eval(
         partial_log.append(
             PartialCallRecord(
                 phase=split_role,
-                instance_id=str(instance.id),
+                task_id=str(instance.id),
                 unit=candidate_id,
-                repeat_id=index,
-                request_identity=request_identity,
+                sample_index=index,
+                request_hash=request_hash,
                 redrive_pending=redrive_pending,
                 score=outcome.submission_score,
                 failed=outcome.failed,
@@ -678,7 +675,7 @@ def run_direct_eval(
         return DirectRowRequest(
             candidate_body=candidate_body,
             candidate_id=candidate_id,
-            instance=ProcessInstance.from_instance(instance),
+            instance=ProcessTask.from_instance(instance),
             humaneval_task=HumanEvalTaskPayload.from_task(
                 experiment.humaneval_for(instance)
             ),
@@ -689,7 +686,7 @@ def run_direct_eval(
             procedure_config_hash=rd.procedure_config_hash,
             evaluation_binding_hash=evaluation_binding_id,
             logical_call_id=f"{candidate_id}:{instance.id}#{index}",
-            repeat_index=index,
+            sample_index=index,
             drive_ordinal=drive_ordinal,
             cache_phase=split_role,
             cache_unit=candidate_id,
@@ -702,7 +699,7 @@ def run_direct_eval(
             _row_request(instance, index, drive_ordinal=1),
         )
         for instance in instances
-        for index in range(repeats)
+        for index in range(num_samples)
     }
     partial_records = index_partial_records(
         () if partial_log is None else partial_log.load(),
@@ -718,10 +715,10 @@ def run_direct_eval(
     for key, (ordinal_0, ordinal_1) in requests_by_key.items():
         decision = resolve_exact_resume(
             partial_records,
-            instance_id=key[0],
-            repeat_id=key[1],
-            ordinal_0_request_identity=ordinal_0.request_identity,
-            ordinal_1_request_identity=ordinal_1.request_identity,
+            task_id=key[0],
+            sample_index=key[1],
+            ordinal_0_request_hash=ordinal_0.request_hash,
+            ordinal_1_request_hash=ordinal_1.request_hash,
         )
         if decision.record is not None:
             driven[key] = _direct_outcome_from_record(decision.record)
@@ -741,23 +738,23 @@ def run_direct_eval(
             value: JsonValue,
         ) -> DirectRowOutcome | DirectGeneratedRowOutcome:
             result = DirectRowResult.from_process_payload(value)
-            if result.request_identity != request.request_identity:
+            if result.request_hash != request.request_hash:
                 raise ValueError(
                     "D1 row result does not match its submitted request"
                 )
             return result.outcome
 
         return CallSpec(
-            key=(request.instance.id, request.repeat_index),
+            key=(request.instance.id, request.sample_index),
             job=row_job_factory(request),
             decode=_decode,
             deadline_seconds=_deadline(execution_policy),
             commit=lambda outcome: (
                 _persist(
                     instance,
-                    request.repeat_index,
+                    request.sample_index,
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=(
                         request.drive_ordinal == 0 and _should_redrive(outcome)
                     ),
@@ -776,7 +773,7 @@ def run_direct_eval(
         nonlocal effective_concurrency
         specs = [_spec(request) for request in requests]
         request_by_key = {
-            (request.instance.id, request.repeat_index): request
+            (request.instance.id, request.sample_index): request
             for request in requests
         }
         pool = run_call_pool(
@@ -808,7 +805,7 @@ def run_direct_eval(
                     by_instance[res.key[0]],
                     res.key[1],
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=request.drive_ordinal == 0,
                 )
             else:
@@ -841,7 +838,7 @@ def run_direct_eval(
     generated_keys = [
         (str(instance.id), index)
         for instance in instances
-        for index in range(repeats)
+        for index in range(num_samples)
         if isinstance(
             driven[(str(instance.id), index)], DirectGeneratedRowOutcome
         )
@@ -854,10 +851,10 @@ def run_direct_eval(
         scoring_inputs = tuple(
             CodeScoringInput(
                 raw_submission=generated.output_text,
-                task=_input_arm_text(experiment, by_instance[instance_id])[1],
+                task=_input_arm_text(experiment, by_instance[task_id])[1],
             )
-            for instance_id, _index in generated_keys
-            for generated in (driven[(instance_id, _index)],)
+            for task_id, _index in generated_keys
+            for generated in (driven[(task_id, _index)],)
             if isinstance(generated, DirectGeneratedRowOutcome)
         )
         remaining_wall_seconds = remaining_phase_wall_seconds(phase_deadline)
@@ -899,7 +896,7 @@ def run_direct_eval(
                     by_instance[key[0]],
                     key[1],
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=False,
                 )
 
@@ -907,10 +904,10 @@ def run_direct_eval(
     outputs: list[RolloutOutput] = []
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
-    for instance in instances:
+    for task_index, instance in enumerate(instances):
         task_id = str(instance.id)
         task_submission_rows: list[RowValue] = []
-        for index in range(repeats):
+        for index in range(num_samples):
             outcome = driven[(task_id, index)]
             if not isinstance(outcome, DirectRowOutcome):
                 raise AssertionError("D1 row was not scored")
@@ -925,8 +922,9 @@ def run_direct_eval(
             outputs.append(
                 RolloutOutput(
                     candidate_id=candidate_id,
-                    instance_id=task_id,
-                    repeat=index,
+                    task_id=task_id,
+                    task_index=task_index,
+                    sample_index=index,
                     row_state=outcome.row_state,
                     executed_component_steps=outcome.executed_component_steps,
                     output_text=outcome.output_text,
@@ -958,10 +956,10 @@ def run_direct_eval(
         evaluation_binding_hash=evaluation_binding_id,
         task_rows=tuple(
             TaskRows(
-                task_identity=task_identity,
+                task_hash=task_hash,
                 rows=tuple(rows),
             )
-            for task_identity, rows in submission_rows
+            for task_hash, rows in submission_rows
         ),
         plan=sampling.evaluation_matrix_plan,
     )

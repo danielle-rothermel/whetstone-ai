@@ -99,7 +99,7 @@ class EffectRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     semantic_key: OpaqueKey
-    request_identity_hash: IdentityHash
+    request_hash: IdentityHash
     replay_policy: ReplayPolicy
 
     @model_validator(mode="after")
@@ -179,7 +179,7 @@ class AcquireResult(BaseModel):
     lease: EffectLease | None = None
     terminal: EffectTerminal | None = None
     busy_expires_at: datetime | None = None
-    existing_request_identity_hash: IdentityHash | None = None
+    existing_request_hash: IdentityHash | None = None
     existing_replay_policy: ReplayPolicy | None = None
 
     @field_validator("busy_expires_at")
@@ -197,7 +197,7 @@ class AcquireResult(BaseModel):
             self.lease is not None,
             self.terminal is not None,
             self.busy_expires_at is not None,
-            self.existing_request_identity_hash is not None,
+            self.existing_request_hash is not None,
             self.existing_replay_policy is not None,
         )
         if self.outcome is AcquireOutcome.ACQUIRED:

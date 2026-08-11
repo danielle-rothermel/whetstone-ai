@@ -101,29 +101,29 @@ def _validate_publication_id(publication_id: str) -> None:
 def prompt_cache_key(
     request: ProviderCallRequest,
     policy: ProviderExecutionPolicy,
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
 ) -> PromptCacheKey:
     """Hash every semantic identity component of one physical call drive."""
     return _prompt_cache_key_from_components(
-        request_identity=request.identity_payload(),
+        request_hash=request.identity_payload(),
         execution_policy_hash=policy.identity_hash,
-        repeat_index=repeat_index,
+        sample_index=sample_index,
         drive_ordinal=drive_ordinal,
     )
 
 
 def _prompt_cache_key_from_components(
     *,
-    request_identity: dict[str, Any],
+    request_hash: dict[str, Any],
     execution_policy_hash: str,
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
 ) -> PromptCacheKey:
-    if isinstance(repeat_index, bool) or not isinstance(repeat_index, int):
-        raise TypeError("repeat_index must be an integer")
-    if repeat_index < 0:
-        raise ValueError("repeat_index must be non-negative")
+    if isinstance(sample_index, bool) or not isinstance(sample_index, int):
+        raise TypeError("sample_index must be an integer")
+    if sample_index < 0:
+        raise ValueError("sample_index must be non-negative")
     if isinstance(drive_ordinal, bool) or not isinstance(drive_ordinal, int):
         raise TypeError("drive_ordinal must be an integer")
     if drive_ordinal < 0:
@@ -134,9 +134,9 @@ def _prompt_cache_key_from_components(
         payload={
             # Persisted identity keys are a pinned wire contract. Do not
             # derive or enumerate them from model field names.
-            "request_identity": request_identity,
+            "request_hash": request_hash,
             "execution_policy_hash": execution_policy_hash,
-            "repeat_index": repeat_index,
+            "sample_index": sample_index,
             "drive_ordinal": drive_ordinal,
         },
     )
@@ -222,9 +222,9 @@ class _StoredEntry(BaseModel):
         alias="schema",
     )
     key: StrictStr
-    request_identity: dict[str, Any]
+    request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
-    repeat_index: StrictInt
+    sample_index: StrictInt
     drive_ordinal: StrictInt
     result_policy_hash: StrictStr
     publication_id: StrictStr
@@ -235,13 +235,13 @@ class _StoredEntry(BaseModel):
     def _validate_key(self) -> Self:
         _validate_cache_key(self.key)
         _validate_publication_id(self.publication_id)
-        if self.repeat_index < 0:
-            raise ValueError("repeat_index must be non-negative")
+        if self.sample_index < 0:
+            raise ValueError("sample_index must be non-negative")
         if self.drive_ordinal < 0:
             raise ValueError("drive_ordinal must be non-negative")
         if self.provenance.key != self.key:
             raise ValueError("entry and provenance keys must match")
-        if self.result.request_identity != self.request_identity:
+        if self.result.request_hash != self.request_hash:
             raise ValueError("entry and result request identities must match")
         if self.result.execution_policy_hash != self.result_policy_hash:
             raise ValueError(
@@ -252,9 +252,9 @@ class _StoredEntry(BaseModel):
                 "entry and result execution policy hashes must match"
             )
         expected_key = _prompt_cache_key_from_components(
-            request_identity=self.request_identity,
+            request_hash=self.request_hash,
             execution_policy_hash=self.execution_policy_hash,
-            repeat_index=self.repeat_index,
+            sample_index=self.sample_index,
             drive_ordinal=self.drive_ordinal,
         )
         if self.key != expected_key:
@@ -383,9 +383,9 @@ class PromptResultCache:
         self,
         key: str,
         *,
-        request_identity: dict[str, Any],
+        request_hash: dict[str, Any],
         execution_policy_hash: str,
-        repeat_index: int,
+        sample_index: int,
         drive_ordinal: int,
         result: ProviderCallResult,
         phase: str,
@@ -395,9 +395,9 @@ class PromptResultCache:
         """Store once per key and preserve the winning writer's provenance."""
         validated = _validate_cache_key(key)
         expected_key = _prompt_cache_key_from_components(
-            request_identity=request_identity,
+            request_hash=request_hash,
             execution_policy_hash=execution_policy_hash,
-            repeat_index=repeat_index,
+            sample_index=sample_index,
             drive_ordinal=drive_ordinal,
         )
         if validated != expected_key:
@@ -427,9 +427,9 @@ class PromptResultCache:
                 return existing.provenance
             self._publish_entry(
                 key=validated,
-                request_identity=request_identity,
+                request_hash=request_hash,
                 execution_policy_hash=execution_policy_hash,
-                repeat_index=repeat_index,
+                sample_index=sample_index,
                 drive_ordinal=drive_ordinal,
                 provenance=proposed,
                 result=result,
@@ -501,9 +501,9 @@ class PromptResultCache:
         self,
         *,
         key: PromptCacheKey,
-        request_identity: dict[str, Any],
+        request_hash: dict[str, Any],
         execution_policy_hash: str,
-        repeat_index: int,
+        sample_index: int,
         drive_ordinal: int,
         provenance: CacheProvenance,
         result: ProviderCallResult,
@@ -527,9 +527,9 @@ class PromptResultCache:
         )
         self._store_entry(
             key=key,
-            request_identity=request_identity,
+            request_hash=request_hash,
             execution_policy_hash=execution_policy_hash,
-            repeat_index=repeat_index,
+            sample_index=sample_index,
             drive_ordinal=drive_ordinal,
             provenance=provenance,
             result=result,
@@ -541,9 +541,9 @@ class PromptResultCache:
         self,
         *,
         key: PromptCacheKey,
-        request_identity: dict[str, Any],
+        request_hash: dict[str, Any],
         execution_policy_hash: str,
-        repeat_index: int,
+        sample_index: int,
         drive_ordinal: int,
         provenance: CacheProvenance,
         result: ProviderCallResult,
@@ -551,9 +551,9 @@ class PromptResultCache:
     ) -> None:
         entry = _StoredEntry(
             key=key,
-            request_identity=request_identity,
+            request_hash=request_hash,
             execution_policy_hash=execution_policy_hash,
-            repeat_index=repeat_index,
+            sample_index=sample_index,
             drive_ordinal=drive_ordinal,
             result_policy_hash=result.execution_policy_hash,
             publication_id=publication_id,
@@ -843,7 +843,7 @@ def execute_call(
     policy: ProviderExecutionPolicy,
     transport: TransportCall,
     logical_call_id: str,
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
     cache: PromptResultCache | None,
     phase: str,
@@ -864,12 +864,12 @@ def execute_call(
             )
         )
 
-    request_identity = request.identity_payload()
+    request_hash = request.identity_payload()
     execution_policy_hash = policy.identity_hash
     key = prompt_cache_key(
         request,
         policy,
-        repeat_index,
+        sample_index,
         drive_ordinal,
     )
     with FileLock(cache._lock_path_for(key)):
@@ -909,9 +909,9 @@ def execute_call(
         )
         cache._publish_entry(
             key=key,
-            request_identity=request_identity,
+            request_hash=request_hash,
             execution_policy_hash=execution_policy_hash,
-            repeat_index=repeat_index,
+            sample_index=sample_index,
             drive_ordinal=drive_ordinal,
             provenance=provenance,
             result=result,

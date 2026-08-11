@@ -149,7 +149,7 @@ class GepaEvaluationAuthorityBinding(BaseModel):
     )
 
     authority_identity_hash: StrictStr
-    evaluation_config_identity_hash: StrictStr
+    evaluation_config_hash: StrictStr
     reward_policy_identity_hash: StrictStr
     provider_route_identity_hash: StrictStr
     execution_policy_identity_hash: StrictStr
@@ -165,7 +165,7 @@ class GepaEvaluationAuthorityBinding(BaseModel):
     def _validate(self) -> GepaEvaluationAuthorityBinding:
         for field_name in (
             "authority_identity_hash",
-            "evaluation_config_identity_hash",
+            "evaluation_config_hash",
             "reward_policy_identity_hash",
             "provider_route_identity_hash",
             "execution_policy_identity_hash",
@@ -394,15 +394,15 @@ class GepaEvaluationEffectResult(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    request_identity_hash: StrictStr
+    request_hash: StrictStr
     rows: tuple[GepaEvaluationRow, ...]
     logical_metric_calls: StrictInt
 
     @model_validator(mode="after")
     def _validate(self) -> GepaEvaluationEffectResult:
         require_full_hash(
-            self.request_identity_hash,
-            field="request_identity_hash",
+            self.request_hash,
+            field="request_hash",
         )
         if not self.rows:
             raise ValueError("GEPA evaluation result cannot be empty")
@@ -472,7 +472,7 @@ class GepaProposalEffectResult(BaseModel):
         allow_inf_nan=False,
     )
 
-    request_identity_hash: StrictStr
+    request_hash: StrictStr
     raw_response: StrictStr = ""
     parsed_components: tuple[GepaCandidateComponent, ...] = ()
     request_evidence: dict[str, Any] = Field(default_factory=dict)
@@ -486,8 +486,8 @@ class GepaProposalEffectResult(BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> GepaProposalEffectResult:
         require_full_hash(
-            self.request_identity_hash,
-            field="request_identity_hash",
+            self.request_hash,
+            field="request_hash",
         )
         reject_non_json(
             self.request_evidence,
@@ -547,7 +547,7 @@ class GepaEvaluationEffectAuthority(Protocol):
     """Identity-bearing runtime evaluator registered before DBOS launch."""
 
     @property
-    def runtime_identity_hash(self) -> str: ...
+    def runtime_hash(self) -> str: ...
 
     def evaluate(
         self,
@@ -559,7 +559,7 @@ class GepaProposalEffectAuthority(Protocol):
     """Identity-bearing, physically durable reflection authority."""
 
     @property
-    def runtime_identity_hash(self) -> str: ...
+    def runtime_hash(self) -> str: ...
 
     def propose(
         self,
@@ -681,7 +681,7 @@ class GepaEffectRecorder:
         result = GepaEvaluationEffectResult.model_validate(
             self._store.get(bound)
         )
-        if result.request_identity_hash != request.identity_hash():
+        if result.request_hash != request.identity_hash():
             raise GepaEffectConflictError(
                 "GEPA evaluation result belongs to another request"
             )
@@ -701,7 +701,7 @@ class GepaEffectRecorder:
         result = GepaProposalEffectResult.model_validate(
             self._store.get(bound)
         )
-        if result.request_identity_hash != request.identity_hash():
+        if result.request_hash != request.identity_hash():
             raise GepaEffectConflictError(
                 "GEPA proposal result belongs to another request"
             )
@@ -712,7 +712,7 @@ class GepaEffectRecorder:
         request: GepaEvaluationEffectRequest,
         result: GepaEvaluationEffectResult,
     ) -> GepaEvaluationEffectResult:
-        if result.request_identity_hash != request.identity_hash():
+        if result.request_hash != request.identity_hash():
             raise ValueError(
                 "GEPA evaluation authority returned another request's result"
             )
@@ -740,7 +740,7 @@ class GepaEffectRecorder:
         request: GepaProposalEffectRequest,
         result: GepaProposalEffectResult,
     ) -> GepaProposalEffectResult:
-        if result.request_identity_hash != request.identity_hash():
+        if result.request_hash != request.identity_hash():
             raise ValueError(
                 "GEPA proposal authority returned another request's result"
             )

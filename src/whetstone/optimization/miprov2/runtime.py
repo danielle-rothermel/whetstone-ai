@@ -210,7 +210,7 @@ class Miprov2EvaluationEffect(BaseModel):
     ]
     candidate: Candidate
     categorical_combination_identity_hash: StrictStr
-    task_batch_identities: tuple[StrictStr, ...]
+    task_batch_hashes: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     execution_policy: Miprov2EvaluationExecutionPolicy
     reward_policy_hash: StrictStr
@@ -230,10 +230,10 @@ class Miprov2EvaluationEffect(BaseModel):
             self.reward_policy_hash,
             field="reward_policy_hash",
         )
-        if not self.task_batch_identities:
+        if not self.task_batch_hashes:
             raise ValueError("evaluation task batch cannot be empty")
-        for task_identity in self.task_batch_identities:
-            require_full_hash(task_identity, field="task_batch_identity")
+        for task_hash in self.task_batch_hashes:
+            require_full_hash(task_hash, field="task_batch_identity")
         if self.purpose == "miprov2_sample" and self.suggestion is None:
             raise ValueError(
                 "sample evaluation requires its Optuna suggestion"
@@ -265,7 +265,7 @@ class Miprov2EvaluationEffect(BaseModel):
             categorical_combination_identity_hash=(
                 self.categorical_combination_identity_hash
             ),
-            task_batch_identities=self.task_batch_identities,
+            task_batch_hashes=self.task_batch_hashes,
             suggestion=self.suggestion,
             promotion_candidate=self.promotion_candidate,
             candidate_assembly=self.candidate_assembly,
@@ -287,7 +287,7 @@ class Miprov2EvaluationSpec(BaseModel):
     ]
     candidate: Candidate
     categorical_combination_identity_hash: StrictStr
-    task_batch_identities: tuple[StrictStr, ...]
+    task_batch_hashes: tuple[StrictStr, ...]
     execution_policy: Miprov2EvaluationExecutionPolicy
     suggestion: StudySuggestion | None = None
     promotion_candidate: PromotionCandidate | None = None
@@ -301,7 +301,7 @@ class Miprov2EvaluationSpec(BaseModel):
             self.categorical_combination_identity_hash,
             field="categorical_combination_identity_hash",
         )
-        if not self.task_batch_identities:
+        if not self.task_batch_hashes:
             raise ValueError("evaluation spec task batch cannot be empty")
         if self.purpose == "miprov2_sample" and self.suggestion is None:
             raise ValueError("sample evaluation requires its suggestion")
@@ -329,7 +329,7 @@ class Miprov2EvaluationSpec(BaseModel):
             "categorical_combination_identity_hash": (
                 self.categorical_combination_identity_hash
             ),
-            "task_batch_identities": list(self.task_batch_identities),
+            "task_batch_hashes": list(self.task_batch_hashes),
             "execution_policy": self.execution_policy.model_dump(mode="json"),
             "suggestion": (
                 None
@@ -797,16 +797,16 @@ class Miprov2State(BaseModel):
             )
         if set(self.component_field_order) != set(component_ids):
             raise ValueError("component field order conflicts with layout")
-        expected_tasks = self.control.trainset_task_identities
+        expected_tasks = self.control.trainset_task_hashes
         if (
-            tuple(item.source_task_identity for item in self.labeled_trainset)
+            tuple(item.source_task_hash for item in self.labeled_trainset)
             != expected_tasks
         ):
             raise ValueError(
                 "labeled trainset conflicts with resolved control"
             )
         if (
-            tuple(item.task_identity for item in self.proposal_trainset)
+            tuple(item.task_hash for item in self.proposal_trainset)
             != expected_tasks
         ):
             raise ValueError(
@@ -842,7 +842,7 @@ class Miprov2State(BaseModel):
         expected_planning = create_fewshot_candidate_plans(
             bindings=self.bindings,
             component_ids=self.control.component_ids,
-            trainset_task_identities=(self.control.trainset_task_identities),
+            trainset_task_hashes=(self.control.trainset_task_hashes),
             num_candidate_sets=self.control.num_fewshot_candidates,
             max_bootstrapped_demos=self.control.max_bootstrapped_demos,
             max_labeled_demos=self.control.max_labeled_demos,
@@ -921,7 +921,7 @@ class Miprov2State(BaseModel):
         if (
             self.proposal_state is not None
             and self.proposal_state.optimization_run_identity_hash
-            != self.run.identity_hash
+            != self.run.config_hash
         ):
             raise ValueError(
                 "proposal state belongs to another optimization run"
@@ -1355,9 +1355,7 @@ def _terminal_statistics(state: Miprov2State) -> Miprov2TerminalStats:
     transcript = state.study_transcript
     if transcript is None:
         raise ValueError("terminal statistics require a study transcript")
-    evaluation_calls = len(
-        transcript.baseline.evaluation.task_batch_identities
-    )
+    evaluation_calls = len(transcript.baseline.evaluation.task_batch_hashes)
     score_data: list[Miprov2ScoreObservation] = [
         Miprov2ScoreObservation(
             source="baseline",
@@ -1379,7 +1377,7 @@ def _terminal_statistics(state: Miprov2State) -> Miprov2TerminalStats:
         )
     ]
     for sample in transcript.samples:
-        evaluation_calls += len(sample.evaluation.task_batch_identities)
+        evaluation_calls += len(sample.evaluation.task_batch_hashes)
         sample_candidate = sample.candidate_assembly.candidate
         score_data.append(
             Miprov2ScoreObservation(
@@ -1410,7 +1408,7 @@ def _terminal_statistics(state: Miprov2State) -> Miprov2TerminalStats:
         promotion = sample.promotion
         if promotion is None:
             continue
-        evaluation_calls += len(promotion.evaluation.task_batch_identities)
+        evaluation_calls += len(promotion.evaluation.task_batch_hashes)
         promotion_candidate = promotion.candidate_assembly.candidate
         score_data.append(
             Miprov2ScoreObservation(
@@ -1481,11 +1479,11 @@ def _terminal_statistics(state: Miprov2State) -> Miprov2TerminalStats:
 
 def _initial_bootstrap_rng(control: Miprov2Control) -> Miprov2RngCheckpoint:
     pre_auto_valset_size = (
-        len(control.source_valset_task_identities)
-        if control.source_valset_task_identities is not None
+        len(control.source_valset_task_hashes)
+        if control.source_valset_task_hashes is not None
         else (
-            len(control.source_trainset_task_identities)
-            - len(control.trainset_task_identities)
+            len(control.source_trainset_task_hashes)
+            - len(control.trainset_task_hashes)
         )
     )
     return Miprov2RngCheckpoint.after_validation_sampling(
@@ -1500,11 +1498,11 @@ def _ordered_labeled_for_plan(
     plan: FewshotCandidatePlan,
 ) -> tuple[LabeledTaskDemo, ...]:
     by_identity = {
-        item.source_task_identity: item for item in state.labeled_trainset
+        item.source_task_hash: item for item in state.labeled_trainset
     }
     try:
         return tuple(
-            by_identity[identity] for identity in plan.trainset_task_identities
+            by_identity[identity] for identity in plan.trainset_task_hashes
         )
     except KeyError as exc:
         raise ValueError(
@@ -1665,7 +1663,7 @@ def _canonical_completed_effects(
             Miprov2CompletedEffect(
                 kind="evaluations",
                 identity_hash=binding.effect_identity_hash,
-                task_rows=len(binding.task_batch_identities),
+                task_rows=len(binding.task_batch_hashes),
             )
             for binding in bindings
         )
@@ -1675,7 +1673,7 @@ def _canonical_completed_effects(
             Miprov2CompletedEffect(
                 kind="evaluations",
                 identity_hash=binding.effect_identity_hash,
-                task_rows=len(binding.task_batch_identities),
+                task_rows=len(binding.task_batch_hashes),
             )
         )
     return tuple(effects)
@@ -1728,7 +1726,7 @@ def _canonical_runtime_rng(
             )
         proposal_replay = start_miprov2_proposal(
             bindings=state.proposal_state.bindings,
-            optimization_run_identity_hash=state.run.identity_hash,
+            optimization_run_identity_hash=state.run.config_hash,
             components=state.proposal_state.components,
             trainset=state.proposal_state.trainset,
             demo_candidates=state.proposal_state.demo_candidates,
@@ -1753,24 +1751,24 @@ def _canonical_runtime_rng(
             )
         checkpoint = proposal_replay.rng_checkpoint
     if not state.control.minibatch or state.control.minibatch_size >= len(
-        state.control.valset_task_identities
+        state.control.valset_task_hashes
     ):
         return checkpoint
     batches: list[tuple[str, ...]] = []
     if state.study_transcript is not None:
         batches.extend(
-            sample.evaluation.task_batch_identities
+            sample.evaluation.task_batch_hashes
             for sample in state.study_transcript.samples
         )
     if state.pending_sample is not None:
-        batches.append(state.pending_sample.evaluation.task_batch_identities)
+        batches.append(state.pending_sample.evaluation.task_batch_hashes)
     elif (
         include_pending_spec
         and state.pending_evaluation_spec is not None
         and state.pending_evaluation_spec.purpose == "miprov2_sample"
     ):
-        batches.append(state.pending_evaluation_spec.task_batch_identities)
-    population = state.control.valset_task_identities
+        batches.append(state.pending_evaluation_spec.task_batch_hashes)
+    population = state.control.valset_task_hashes
     for batch in batches:
         rng = checkpoint.state.restore()
         actual = tuple(rng.sample(population, state.control.minibatch_size))
@@ -1808,7 +1806,7 @@ def _canonical_pending_evaluation_spec(
             categorical_combination_identity_hash=(
                 space.combination_identity_hash(params)
             ),
-            task_batch_identities=state.control.valset_task_identities,
+            task_batch_hashes=state.control.valset_task_hashes,
             execution_policy=_execution_policy(state.control),
         )
     if state.phase == "sample":
@@ -1829,17 +1827,17 @@ def _canonical_pending_evaluation_spec(
             include_pending_spec=False,
         )
         if state.control.minibatch and state.control.minibatch_size < len(
-            state.control.valset_task_identities
+            state.control.valset_task_hashes
         ):
             rng = checkpoint.state.restore()
             batch = tuple(
                 rng.sample(
-                    state.control.valset_task_identities,
+                    state.control.valset_task_hashes,
                     state.control.minibatch_size,
                 )
             )
         else:
-            batch = state.control.valset_task_identities
+            batch = state.control.valset_task_hashes
         return Miprov2EvaluationSpec(
             run_id=state.run_id,
             ordinal=len(state.completed_effects),
@@ -1848,7 +1846,7 @@ def _canonical_pending_evaluation_spec(
             categorical_combination_identity_hash=(
                 suggestion.candidate_combination_identity_hash
             ),
-            task_batch_identities=batch,
+            task_batch_hashes=batch,
             execution_policy=_execution_policy(state.control),
             suggestion=suggestion,
             candidate_assembly=assembly,
@@ -1877,7 +1875,7 @@ def _canonical_pending_evaluation_spec(
             categorical_combination_identity_hash=(
                 promotion.candidate_combination_identity_hash
             ),
-            task_batch_identities=state.control.valset_task_identities,
+            task_batch_hashes=state.control.valset_task_hashes,
             execution_policy=_execution_policy(state.control),
             promotion_candidate=promotion,
             candidate_assembly=assembly,
@@ -1899,7 +1897,7 @@ def _canonical_eval_binding_request(
                 state.control,
                 bootstrap_attempt=attempt,
             ),
-            task_batch_identities=(attempt.task_identity,),
+            task_batch_hashes=(attempt.task_hash,),
         )
     spec = state.pending_evaluation_spec
     if spec is None:
@@ -1917,7 +1915,7 @@ def _canonical_eval_binding_request(
         purpose=purpose,
         effect_identity_hash=spec.identity_hash(),
         execution_policy=spec.execution_policy,
-        task_batch_identities=spec.task_batch_identities,
+        task_batch_hashes=spec.task_batch_hashes,
     )
 
 
@@ -1959,7 +1957,7 @@ def replay_miprov2_state(
             categorical_combination_identity_hash=(
                 pending_spec.categorical_combination_identity_hash
             ),
-            task_batch_identities=pending_spec.task_batch_identities,
+            task_batch_hashes=pending_spec.task_batch_hashes,
             eval_config=state.resolved_eval_binding.eval_config,
             execution_policy=pending_spec.execution_policy,
             reward_policy_hash=state.control.reward_policy_hash,
@@ -2026,7 +2024,7 @@ def _materialize_bootstrap_teacher(
         if selection is not None:
             for index in selection.per_component_task_indices[component_index]:
                 item = state.labeled_trainset[index]
-                if item.source_task_identity == attempt.task_identity:
+                if item.source_task_hash == attempt.task_hash:
                     continue
                 examples.append(
                     {
@@ -2222,7 +2220,7 @@ class Miprov2Driver:
         planned = create_fewshot_candidate_plans(
             bindings=bindings,
             component_ids=control.component_ids,
-            trainset_task_identities=control.trainset_task_identities,
+            trainset_task_hashes=control.trainset_task_hashes,
             num_candidate_sets=control.num_fewshot_candidates,
             max_bootstrapped_demos=control.max_bootstrapped_demos,
             max_labeled_demos=control.max_labeled_demos,
@@ -2433,7 +2431,7 @@ class Miprov2Driver:
             evaluation.run_id,
             evaluation.purpose,
             evaluation.candidate.identity_hash,
-            evaluation.task_batch_identities,
+            evaluation.task_batch_hashes,
             evaluation.eval_config,
             evaluation.reward_policy_hash,
         ) != (
@@ -2441,7 +2439,7 @@ class Miprov2Driver:
             effect.run_id,
             effect.purpose,
             effect.candidate.identity_hash(),
-            effect.task_batch_identities,
+            effect.task_batch_hashes,
             effect.eval_config,
             effect.reward_policy_hash,
         ):
@@ -2604,7 +2602,7 @@ class Miprov2Driver:
                     state.control,
                     bootstrap_attempt=attempt,
                 ),
-                task_batch_identities=(attempt.task_identity,),
+                task_batch_hashes=(attempt.task_hash,),
             )
             planned = state.model_copy(
                 update={
@@ -2662,7 +2660,7 @@ class Miprov2Driver:
             )
             proposal_state = start_miprov2_proposal(
                 bindings=state.bindings,
-                optimization_run_identity_hash=state.run.identity_hash,
+                optimization_run_identity_hash=state.run.config_hash,
                 components=state.proposal_components,
                 trainset=state.proposal_trainset,
                 demo_candidates=bridged,
@@ -2721,7 +2719,7 @@ class Miprov2Driver:
             purpose="miprov2_baseline",
             candidate=candidate,
             categorical_combination_identity_hash=combination,
-            task_batch_identities=state.control.valset_task_identities,
+            task_batch_hashes=state.control.valset_task_hashes,
             execution_policy=_execution_policy(state.control),
         )
         return self._plan_evaluation_spec(state, spec)
@@ -2779,10 +2777,10 @@ class Miprov2Driver:
         candidate = assembly.candidate.record
         checkpoint = state.rng_checkpoint
         if state.control.minibatch and state.control.minibatch_size < len(
-            state.control.valset_task_identities
+            state.control.valset_task_hashes
         ):
             rng = checkpoint.state.restore()
-            population = state.control.valset_task_identities
+            population = state.control.valset_task_hashes
             batch = tuple(rng.sample(population, state.control.minibatch_size))
             checkpoint = checkpoint.append(
                 rng=rng,
@@ -2792,7 +2790,7 @@ class Miprov2Driver:
                 result=batch,
             )
         else:
-            batch = state.control.valset_task_identities
+            batch = state.control.valset_task_hashes
         spec = Miprov2EvaluationSpec(
             run_id=state.run_id,
             ordinal=len(state.completed_effects),
@@ -2801,7 +2799,7 @@ class Miprov2Driver:
             categorical_combination_identity_hash=(
                 suggestion.candidate_combination_identity_hash
             ),
-            task_batch_identities=batch,
+            task_batch_hashes=batch,
             execution_policy=_execution_policy(state.control),
             suggestion=suggestion,
             candidate_assembly=assembly,
@@ -2839,7 +2837,7 @@ class Miprov2Driver:
             categorical_combination_identity_hash=(
                 promotion.candidate_combination_identity_hash
             ),
-            task_batch_identities=state.control.valset_task_identities,
+            task_batch_hashes=state.control.valset_task_hashes,
             execution_policy=_execution_policy(state.control),
             promotion_candidate=promotion,
             candidate_assembly=assembly,
@@ -2868,7 +2866,7 @@ class Miprov2Driver:
                 purpose=purpose,
                 effect_identity_hash=spec.identity_hash(),
                 execution_policy=spec.execution_policy,
-                task_batch_identities=spec.task_batch_identities,
+                task_batch_hashes=spec.task_batch_hashes,
             )
             updates: dict[str, Any] = {
                 "pending_evaluation_spec": spec,
@@ -2884,8 +2882,7 @@ class Miprov2Driver:
             )
         if (
             binding.request.effect_identity_hash != spec.identity_hash()
-            or binding.request.task_batch_identities
-            != spec.task_batch_identities
+            or binding.request.task_batch_hashes != spec.task_batch_hashes
             or binding.request.execution_policy != spec.execution_policy
         ):
             raise ValueError(
@@ -2899,7 +2896,7 @@ class Miprov2Driver:
             categorical_combination_identity_hash=(
                 spec.categorical_combination_identity_hash
             ),
-            task_batch_identities=spec.task_batch_identities,
+            task_batch_hashes=spec.task_batch_hashes,
             eval_config=binding.eval_config,
             execution_policy=spec.execution_policy,
             reward_policy_hash=state.control.reward_policy_hash,
@@ -2934,7 +2931,7 @@ class Miprov2Driver:
             num_trials=state.control.num_trials,
             minibatch=state.control.minibatch,
             minibatch_size=state.control.minibatch_size,
-            valset_size=len(state.control.valset_task_identities),
+            valset_size=len(state.control.valset_task_hashes),
             minibatch_full_eval_steps=(
                 state.control.minibatch_full_eval_steps
             ),
@@ -2944,7 +2941,7 @@ class Miprov2Driver:
             space=space,
             schedule=schedule,
             run_id=state.run_id,
-            validation_task_identities=state.control.valset_task_identities,
+            validation_task_hashes=state.control.valset_task_hashes,
             validation_eval_source=state.control.validation_eval_source,
             reward_policy_hash=state.control.reward_policy_hash,
             optimizer_config=state.control.reference(),
@@ -3030,12 +3027,11 @@ class Miprov2Driver:
         plan: FewshotCandidatePlan,
     ) -> tuple[LabeledTaskDemo, ...]:
         by_identity = {
-            task.source_task_identity: task for task in state.labeled_trainset
+            task.source_task_hash: task for task in state.labeled_trainset
         }
         try:
             return tuple(
-                by_identity[identity]
-                for identity in plan.trainset_task_identities
+                by_identity[identity] for identity in plan.trainset_task_hashes
             )
         except KeyError as exc:
             raise ValueError(

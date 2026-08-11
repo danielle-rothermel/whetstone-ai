@@ -43,7 +43,7 @@ def _prompt_model(route: str = "provider://default") -> ProposerConfig:
                 "dr_providers.provider_call_config",
                 {"route": route},
             ),
-            identity_hash=FULL_A,
+            record_hash=FULL_A,
         ),
         temperature=None,
     )
@@ -188,7 +188,7 @@ def test_policy_and_prompt_adapter_change_optimizer_identity() -> None:
     assert base.identity_hash() != other_contract.identity_hash()
 
 
-def test_step_controls_repeat_identity_bindings_and_round_index() -> None:
+def test_step_controls_sample_indexentity_bindings_and_round_index() -> None:
     control = configure_copro(defaults=_defaults())
 
     hyperparameters = control.step_hyperparameters(iteration=1)

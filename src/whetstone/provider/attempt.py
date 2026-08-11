@@ -132,7 +132,7 @@ class ProviderCallResult(BaseModel):
     schema_version: Literal[2] = PROVIDER_CALL_RESULT_SCHEMA_VERSION
     logical_call_id: StrictStr
     #: Provider Call Request identity payload (config-ref + transcript).
-    request_identity: dict[str, Any]
+    request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
     #: Ordered completed attempts (attempt 1 .. N).
     attempts: tuple[ProviderCallAttempt, ...]
@@ -190,13 +190,10 @@ class ProviderCallResult(BaseModel):
                 mode="json",
                 include={"request_identity", "policy_identity"},
             )
-            if (
-                evidence_identities["request_identity"]
-                != self.request_identity
-            ):
+            if evidence_identities["request_identity"] != self.request_hash:
                 raise ValueError(
                     "every attempt evidence request identity must equal the "
-                    "Result's request_identity"
+                    "Result's request_hash"
                 )
             if (
                 evidence_identities["policy_identity"]

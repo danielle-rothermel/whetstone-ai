@@ -62,9 +62,9 @@ def _validate_anchor_evidence(
     evidence = evaluated.evidence
     if evidence.evaluation_binding != expected_binding:
         raise ValueError("calibration evidence changed its Evaluation Binding")
-    if evidence.task_identities != expected_task_ids:
+    if evidence.task_hashes != expected_task_ids:
         raise ValueError("calibration evidence changed task identity order")
-    if evidence.repeat_count != expected_repeats:
+    if evidence.num_samples != expected_repeats:
         raise ValueError("calibration evidence changed repeat count")
     if len(evidence.per_task_values) != len(expected_task_ids):
         raise ValueError("calibration evidence has incomplete per-task values")
@@ -103,7 +103,7 @@ def run_anchor_calibration(
     ceiling_log_label: str = "comparison anchor",
     log: Callable[[str], None] | None = None,
 ) -> AnchorCalibrationResult:
-    """Evaluate both anchors on one exact task/repeat binding.
+    """Evaluate both anchors on one exact task/sample binding.
 
     Callers must supply per-task values suitable for :func:`analyze_power`
     (typically bounded observations in ``[0, 1]``). The returned paired
@@ -158,7 +158,7 @@ def run_anchor_calibration(
     subset_engine.validate_request(ceiling_request)
 
     planned_rows = (
-        len(task_ids) * subset_engine.sampling.repeat_plan.repeat_count
+        len(task_ids) * subset_engine.sampling.sample_plan.num_samples
     )
     if log is not None:
         log(f"Starting {baseline_log_label} evaluation ({planned_rows} rows)")
@@ -181,7 +181,7 @@ def run_anchor_calibration(
             f"missing={accounting.missing}, failed={accounting.failed}, "
             f"invalid={accounting.invalid})"
         )
-    repeats = subset_engine.sampling.repeat_plan.repeat_count
+    repeats = subset_engine.sampling.sample_plan.num_samples
     reward_policy_hash = subset_engine.reward_policy_identity_hash
     for evaluated in (baseline, ceiling):
         _validate_anchor_evidence(

@@ -156,7 +156,7 @@ class BehaviorMatrixPlan(BaseModel):
     task_ids: tuple[StrictStr, ...]
     excluded_task_ids: tuple[StrictStr, ...]
     budget_ratios: tuple[StrictFloat | None, ...]
-    repeats: StrictInt
+    num_samples: StrictInt
     concurrency: StrictInt
     pool_ceiling: StrictInt
     procedure_config_hash: StrictStr
@@ -167,8 +167,10 @@ class BehaviorMatrixPlan(BaseModel):
     def _validate_plan(self) -> BehaviorMatrixPlan:
         if not self.task_ids or self.task_selection.task_ids != self.task_ids:
             raise ValueError("matrix task selection must match its task IDs")
-        if self.repeats < 1 or self.concurrency < 1:
-            raise ValueError("matrix repeats and concurrency must be positive")
+        if self.num_samples < 1 or self.concurrency < 1:
+            raise ValueError(
+                "matrix num_samples and concurrency must be positive"
+            )
         if len({item.treatment_id for item in self.treatments}) != len(
             self.treatments
         ):
@@ -227,8 +229,8 @@ def build_matrix_plan(
 
     task_ids = task_selection.task_ids
     budget_ratios = (None,) if mode == "smoke" else FULL_BUDGET_RATIOS
-    repeats = 1 if mode == "smoke" else 3
-    rows = len(task_ids) * repeats * 2
+    num_samples = 1 if mode == "smoke" else 3
+    rows = len(task_ids) * num_samples * 2
     treatments: list[CodeCompBehaviorMatrixTreatmentPlan] = []
     ordinal = 0
     for route in provider_routes:
@@ -271,12 +273,10 @@ def build_matrix_plan(
         task_ids=task_ids,
         excluded_task_ids=EXCLUDED_TASK_IDS,
         budget_ratios=budget_ratios,
-        repeats=repeats,
+        num_samples=num_samples,
         concurrency=concurrency,
         pool_ceiling=pool_ceiling,
-        procedure_config_hash=(
-            build_encdec_procedure_config().config_identity_hash
-        ),
+        procedure_config_hash=(build_encdec_procedure_config().config_hash),
         runtime=runtime,
         treatments=tuple(treatments),
     )
@@ -359,10 +359,10 @@ def _validate_result(
             == plan.procedure_config_hash
         ),
         "baseline repeats": (
-            transcript.baseline.evidence.repeat_count == plan.repeats
+            transcript.baseline.evidence.num_samples == plan.num_samples
         ),
         "comparison repeats": (
-            transcript.ceiling.evidence.repeat_count == plan.repeats
+            transcript.ceiling.evidence.num_samples == plan.num_samples
         ),
         "baseline rows": (
             transcript.baseline.evidence.row_accounting.planned
@@ -462,7 +462,7 @@ def _build_hooks(
             runtime=plan.runtime,
             budget_ratio=treatment.budget_ratio,
             concurrency=plan.concurrency,
-            repeats=plan.repeats,
+            num_samples=plan.num_samples,
             partial_log=PartialLog(treatment_dir / "partial-log"),
             prompt_cache=PromptResultCache(treatment_dir / "prompt-cache"),
             log=log,
@@ -549,13 +549,13 @@ def run_code_comp_baseline_behavior_matrix(
         runtime=EncDecScoringRuntimeSummary(
             evaluation_python=runtime.probe.python_executable,
             dr_code_version=version("dr-code"),
-            runtime_identity_hash=runtime.runtime_identity_hash,
+            runtime_hash=runtime.runtime_hash,
             probe=runtime.probe,
         ),
     )
     with CheckpointedCodeBatchScorer(
         output_dir / "code-scoring-cache.sqlite3",
-        runtime_identity=runtime.runtime_identity,
+        runtime_document=runtime.runtime_document,
         executor=runtime.executor,
     ) as scorer:
         matrix_shared = _CodeCompMatrixShared(

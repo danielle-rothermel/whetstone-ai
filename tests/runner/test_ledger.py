@@ -114,8 +114,8 @@ def _anchor(**overrides: object) -> OfficialAnchorRecord:
         task_model="openai/gpt-5-nano",
         graph_hash=_HASH,
         eval_config_hash=_OTHER_HASH,
-        official_instance_ids=("i0", "i1"),
-        official_task_identities=("c" * 64, "d" * 64),
+        official_task_ids=("i0", "i1"),
+        official_task_hashes=("c" * 64, "d" * 64),
         baseline_evidence_ref=_evidence_ref(),
         ceiling_evidence_ref=_evidence_ref(_OTHER_HASH),
         baseline_official=0.5,
@@ -268,8 +268,8 @@ def test_official_anchor_wire_keys_are_pinned() -> None:
         "task_model",
         "graph_hash",
         "eval_config_hash",
-        "official_instance_ids",
-        "official_task_identities",
+        "official_task_ids",
+        "official_task_hashes",
         "baseline_evidence_ref",
         "ceiling_evidence_ref",
         "baseline_official",
@@ -433,9 +433,9 @@ def test_anchor_requires_evaluation_evidence_refs() -> None:
         )
 
 
-def test_anchor_instance_ids_must_be_unique() -> None:
+def test_anchor_task_ids_must_be_unique() -> None:
     with pytest.raises(ValidationError, match="unique IDs"):
-        _anchor(official_instance_ids=("i0", "i0"))
+        _anchor(official_task_ids=("i0", "i0"))
 
 
 def test_anchor_cell_id_env_must_agree() -> None:

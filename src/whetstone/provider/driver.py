@@ -94,7 +94,7 @@ class _Driver:
                 attempts.append(attempt)
                 return ProviderCallResult(
                     logical_call_id=self.logical_call_id,
-                    request_identity=self.request.identity_payload(),
+                    request_hash=self.request.identity_payload(),
                     execution_policy_hash=policy_hash,
                     attempts=tuple(attempts),
                     generation=classification,
@@ -125,7 +125,7 @@ class _Driver:
         last = attempts[-1]
         return ProviderCallResult(
             logical_call_id=self.logical_call_id,
-            request_identity=self.request.identity_payload(),
+            request_hash=self.request.identity_payload(),
             execution_policy_hash=policy_hash,
             attempts=tuple(attempts),
             semantic_failure=last.semantic_failure,

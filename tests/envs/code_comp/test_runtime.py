@@ -17,7 +17,7 @@ def test_code_comp_environment_fingerprint_copies_runtime_fields() -> None:
     runtime = EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
-        runtime_identity_hash="a" * 64,
+        runtime_hash="a" * 64,
         probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
@@ -31,7 +31,7 @@ def test_code_comp_environment_fingerprint_copies_runtime_fields() -> None:
         ("dr-code", "0.1.5"),
         ("numpy", "2.0.0"),
     )
-    assert fingerprint.runtime_identity == "a" * 64
+    assert fingerprint.runtime_hash == "a" * 64
 
 
 def test_scoring_runtime_requires_an_existing_python(tmp_path: Path) -> None:

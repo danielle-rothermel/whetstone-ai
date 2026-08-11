@@ -42,7 +42,7 @@ from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
 )
-from whetstone.envs.task import EnvTask
+from whetstone.envs.task import Task
 from whetstone.evaluation.aggregate import (
     RolloutAggregate,
     RowValue,
@@ -99,8 +99,9 @@ class RolloutOutput:
     """
 
     candidate_id: str
-    instance_id: str
-    repeat: int
+    task_id: str
+    task_index: int
+    sample_index: int
     row_state: ExecutedRowState
     executed_component_steps: tuple[ExecutedComponentStep, ...]
     output_text: str | None
@@ -162,8 +163,8 @@ class InternalEvalResult:
     guard_timeouts: int = 0
 
 
-def _per_task_score(task: TaskRows, repeat_count: int) -> float:
-    completed = task.completed_rows(repeat_count)
+def _per_task_score(task: TaskRows, num_samples: int) -> float:
+    completed = task.completed_rows(num_samples)
     if not completed:
         return 0.0
     total = sum(
@@ -172,14 +173,14 @@ def _per_task_score(task: TaskRows, repeat_count: int) -> float:
     return total / len(completed)
 
 
-def _per_task_count(task: TaskRows, repeat_count: int) -> int:
+def _per_task_count(task: TaskRows, num_samples: int) -> int:
     """Count of completed (scored) repeats behind this task's mean.
 
     This is the observation weight the paired/pooled bootstrap needs to combine
     a task's mean with additional-repeat means exactly (a weighted mean by
     counts), so escalation pools new observations rather than discarding them.
     """
-    return len(task.completed_rows(repeat_count))
+    return len(task.completed_rows(num_samples))
 
 
 def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
@@ -285,7 +286,7 @@ _INTERNAL_ROW_REQUEST_SCHEMA = "whetstone.envs.internal_row_request/v2"
 _INTERNAL_ROW_RESULT_SCHEMA = "whetstone.envs.internal_row_result/v3"
 
 
-class ProcessInstance(BaseModel):
+class ProcessTask(BaseModel):
     """JSON-safe form of the frozen environment Instance value object."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
@@ -297,7 +298,7 @@ class ProcessInstance(BaseModel):
     gold: str
 
     @classmethod
-    def from_instance(cls, instance: Instance) -> ProcessInstance:
+    def from_instance(cls, instance: Instance) -> ProcessTask:
         return cls(
             id=str(instance.id),
             seed=instance.seed,
@@ -316,7 +317,7 @@ class ProcessInstance(BaseModel):
         )
 
 
-def _process_payload_identity(payload: JsonValue) -> str:
+def _process_payload_hash(payload: JsonValue) -> str:
     """Hash the exact finite JSON payload submitted to a process worker."""
     encoded = json.dumps(
         payload,
@@ -327,9 +328,9 @@ def _process_payload_identity(payload: JsonValue) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def process_request_identity(model: BaseModel) -> str:
+def process_request_hash(model: BaseModel) -> str:
     """Hash one strict row request's submitted JSON representation."""
-    return _process_payload_identity(model.model_dump(mode="json"))
+    return _process_payload_hash(model.model_dump(mode="json"))
 
 
 def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
@@ -366,20 +367,20 @@ class InternalRowRequest(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
-    _submitted_request_identity: str | None = PrivateAttr(default=None)
+    _submitted_request_hash: str | None = PrivateAttr(default=None)
 
     schema_name: Literal["whetstone.envs.internal_row_request/v2"] = (
         _INTERNAL_ROW_REQUEST_SCHEMA
     )
     env_name: str
     candidate: Candidate
-    instance: ProcessInstance
+    instance: ProcessTask
     provider_call_config: ProviderCallConfig
     execution_policy: ProviderExecutionPolicy
     procedure_config_hash: str
     evaluation_binding_hash: IdentityHash
     logical_call_id: str
-    repeat_index: int
+    sample_index: int
     drive_ordinal: int
     cache_phase: str
     cache_unit: str
@@ -387,18 +388,14 @@ class InternalRowRequest(BaseModel):
     render_guard: bool
 
     @property
-    def request_identity(self) -> str:
-        return self._submitted_request_identity or process_request_identity(
-            self
-        )
+    def request_hash(self) -> str:
+        return self._submitted_request_hash or process_request_hash(self)
 
     @classmethod
     def from_process_payload(cls, payload: JsonValue) -> InternalRowRequest:
         """Validate a decoded JSON payload using Pydantic's JSON semantics."""
         request = cls.model_validate_json(json.dumps(payload))
-        request._submitted_request_identity = _process_payload_identity(
-            payload
-        )
+        request._submitted_request_hash = _process_payload_hash(payload)
         return request
 
 
@@ -410,7 +407,7 @@ class InternalRowResult(BaseModel):
     schema_name: Literal["whetstone.envs.internal_row_result/v3"] = (
         _INTERNAL_ROW_RESULT_SCHEMA
     )
-    request_identity: str
+    request_hash: str
     outcome: InternalRowOutcome
 
     @classmethod
@@ -435,7 +432,7 @@ def drive_internal_row(
     transport: TransportCall,
     procedure_config_hash: str,
     logical_call_id: str,
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
     cache: PromptResultCache | None,
     cache_phase: str,
@@ -469,7 +466,7 @@ def drive_internal_row(
         policy=execution_policy,
         transport=transport,
         logical_call_id=logical_call_id,
-        repeat_index=repeat_index,
+        sample_index=sample_index,
         drive_ordinal=drive_ordinal,
         cache=cache,
         phase=cache_phase,
@@ -562,7 +559,7 @@ def run_internal_eval(
     The observations fan out through a bounded worker pool: at
     most ``concurrency`` calls run at once, each under a runner-level
     wall-clock guard, and the RECORDED per-task rows are assembled by their
-    ``(candidate, instance, repeat)`` key in instance/repeat order -- so the
+    ``(candidate, instance, sample_index)`` key in task/sample order -- so the
     aggregate is byte-identical regardless of completion order. When a
     ``partial_log`` is given, each completed call is appended as it finishes
     and only an observation for the exact row-request identity is RESTORED
@@ -572,9 +569,9 @@ def run_internal_eval(
     env = env_spec(experiment.env_name)
     rd = experiment.rollout_definition
     procedure_hash = experiment.eval_configs.procedure_config_hash
-    instances = sampling.instances
-    validate_candidate_prompt(env, candidate, instances)
-    repeats = sampling.repeat_plan.repeat_count
+    env_tasks = sampling.tasks
+    validate_candidate_prompt(env, candidate, env_tasks)
+    num_samples = sampling.sample_plan.num_samples
     partial_phase = sampling.split_role
     if evaluation_binding.eval_config != eval_config_reference(
         sampling.eval_config
@@ -594,8 +591,8 @@ def run_internal_eval(
     unit = str(candidate.candidate_id)
 
     tasks = [
-        (instance, EnvTask.from_instance(env.name, instance))
-        for instance in instances
+        (instance, Task.from_instance(env.name, instance))
+        for instance in env_tasks
     ]
     by_instance = {str(inst.id): (inst, tsk) for inst, tsk in tasks}
 
@@ -604,7 +601,7 @@ def run_internal_eval(
         index: int,
         outcome: InternalRowOutcome,
         *,
-        request_identity: str,
+        request_hash: str,
         redrive_pending: bool,
     ) -> None:
         if partial_log is None:
@@ -612,10 +609,10 @@ def run_internal_eval(
         partial_log.append(
             PartialCallRecord(
                 phase=partial_phase,
-                instance_id=str(instance.id),
+                task_id=str(instance.id),
                 unit=unit,
-                repeat_id=index,
-                request_identity=request_identity,
+                sample_index=index,
+                request_hash=request_hash,
                 redrive_pending=redrive_pending,
                 score=outcome.score,
                 failed=outcome.failed,
@@ -650,16 +647,15 @@ def run_internal_eval(
         return InternalRowRequest(
             env_name=env.name,
             candidate=candidate,
-            instance=ProcessInstance.from_instance(instance),
+            instance=ProcessTask.from_instance(instance),
             provider_call_config=rd.provider_call_config,
             execution_policy=execution_policy,
             procedure_config_hash=procedure_hash,
             evaluation_binding_hash=evaluation_binding_id,
             logical_call_id=(
-                f"{EnvTask.from_instance(env.name, instance).task_identity()}"
-                f"#{index}"
+                f"{Task.from_instance(env.name, instance).task_hash()}#{index}"
             ),
-            repeat_index=index,
+            sample_index=index,
             drive_ordinal=drive_ordinal,
             cache_phase=partial_phase,
             cache_unit=unit,
@@ -673,10 +669,10 @@ def run_internal_eval(
             _row_request(instance, index, drive_ordinal=1),
         )
         for instance, _task in tasks
-        for index in range(repeats)
+        for index in range(num_samples)
     }
     planned_request_identities = frozenset(
-        request.request_identity
+        request.request_hash
         for ordinals in requests_by_key.values()
         for request in ordinals
     )
@@ -692,10 +688,10 @@ def run_internal_eval(
     for key, (ordinal_0, ordinal_1) in requests_by_key.items():
         decision = resolve_exact_resume(
             partial_records,
-            instance_id=key[1],
-            repeat_id=key[2],
-            ordinal_0_request_identity=ordinal_0.request_identity,
-            ordinal_1_request_identity=ordinal_1.request_identity,
+            task_id=key[1],
+            sample_index=key[2],
+            ordinal_0_request_hash=ordinal_0.request_hash,
+            ordinal_1_request_hash=ordinal_1.request_hash,
         )
         if decision.record is not None:
             restored = _internal_outcome_from_record(decision.record)
@@ -711,12 +707,12 @@ def run_internal_eval(
     def _spec(
         request: InternalRowRequest,
     ) -> CallSpec[tuple[str, str, int], InternalRowOutcome]:
-        key = (unit, request.instance.id, request.repeat_index)
+        key = (unit, request.instance.id, request.sample_index)
         instance = by_instance[request.instance.id][0]
 
         def _decode(value: JsonValue) -> InternalRowOutcome:
             result = InternalRowResult.from_process_payload(value)
-            if result.request_identity != request.request_identity:
+            if result.request_hash != request.request_hash:
                 raise ValueError(
                     "internal row result does not match its submitted request"
                 )
@@ -729,9 +725,9 @@ def run_internal_eval(
             deadline_seconds=guard_deadline_seconds(execution_policy),
             commit=lambda outcome: _persist(
                 instance,
-                request.repeat_index,
+                request.sample_index,
                 outcome,
-                request_identity=request.request_identity,
+                request_hash=request.request_hash,
                 redrive_pending=(
                     request.drive_ordinal == 0 and _should_redrive(outcome)
                 ),
@@ -749,7 +745,7 @@ def run_internal_eval(
         nonlocal effective_concurrency
         specs = [_spec(request) for request in requests]
         request_by_key = {
-            (unit, request.instance.id, request.repeat_index): request
+            (unit, request.instance.id, request.sample_index): request
             for request in requests
         }
         pool = run_call_pool(
@@ -775,7 +771,7 @@ def run_internal_eval(
                     by_instance[res.key[1]][0],
                     res.key[2],
                     outcome,
-                    request_identity=request.request_identity,
+                    request_hash=request.request_hash,
                     redrive_pending=request.drive_ordinal == 0,
                 )
             elif res.status in {
@@ -835,9 +831,9 @@ def run_internal_eval(
     # trace; deadline-stopped rows remain explicit missing outcomes.
     task_rows: list[TaskRows] = []
     outputs: list[RolloutOutput] = []
-    for instance, task in tasks:
+    for task_index, (instance, task) in enumerate(tasks):
         rows: list[RowValue] = []
-        for index in range(repeats):
+        for index in range(num_samples):
             key = (unit, str(instance.id), index)
             outcome = recorded.get(key, driven.get(key))
             if outcome is None:
@@ -846,8 +842,9 @@ def run_internal_eval(
             outputs.append(
                 RolloutOutput(
                     candidate_id=unit,
-                    instance_id=str(instance.id),
-                    repeat=index,
+                    task_id=str(instance.id),
+                    task_index=task_index,
+                    sample_index=index,
                     row_state=outcome.row_state,
                     executed_component_steps=outcome.executed_component_steps,
                     output_text=outcome.output_text,
@@ -859,7 +856,7 @@ def run_internal_eval(
             )
         task_rows.append(
             TaskRows(
-                task_identity=task.task_identity(),
+                task_hash=task.task_hash(),
                 rows=tuple(rows),
             )
         )
@@ -883,10 +880,10 @@ def run_internal_eval(
         else None
     )
     per_task_scores = tuple(
-        _per_task_score(task, repeats) for task in task_rows
+        _per_task_score(task, num_samples) for task in task_rows
     )
     per_task_counts = tuple(
-        _per_task_count(task, repeats) for task in task_rows
+        _per_task_count(task, num_samples) for task in task_rows
     )
     return InternalEvalResult(
         aggregate=rollout_aggregate,

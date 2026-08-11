@@ -241,7 +241,7 @@ class TestProviderCallResult:
         )
         result = ProviderCallResult(
             logical_call_id="lc-1",
-            request_identity=s.build_request().identity_payload(),
+            request_hash=s.build_request().identity_payload(),
             execution_policy_hash=policy_hash,
             attempts=(a1, a2),
             generation=a2.generation,
@@ -266,7 +266,7 @@ class TestProviderCallResult:
         )
         result = ProviderCallResult(
             logical_call_id="lc-1",
-            request_identity=s.build_request().identity_payload(),
+            request_hash=s.build_request().identity_payload(),
             execution_policy_hash=policy_hash,
             attempts=(attempt,),
             generation=attempt.generation,
@@ -291,7 +291,7 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="ordered 1"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity={},
+                request_hash={},
                 execution_policy_hash=policy_hash,
                 attempts=(a1, a3),
                 generation=a3.generation,
@@ -307,7 +307,7 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="final attempt"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity={},
+                request_hash={},
                 execution_policy_hash=policy_hash,
                 attempts=(a1,),
                 generation=_accepted_generation(),
@@ -318,13 +318,13 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="at least one attempt"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity={},
+                request_hash={},
                 execution_policy_hash=policy_hash,
                 attempts=(),
                 semantic_failure=_transient_failure(),
             )
 
-    def test_request_identity_must_match_every_attempt_evidence(self) -> None:
+    def test_request_hash_must_match_every_attempt_evidence(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         attempt = _attempt(
             number=1,
@@ -334,7 +334,7 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="request identity"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity=s.build_request(
+                request_hash=s.build_request(
                     content="foreign"
                 ).identity_payload(),
                 execution_policy_hash=policy_hash,
@@ -360,7 +360,7 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="policy identity"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity=s.build_request().identity_payload(),
+                request_hash=s.build_request().identity_payload(),
                 execution_policy_hash=policy_hash,
                 attempts=(a1, a2),
                 generation=a2.generation,

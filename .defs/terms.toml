@@ -55,8 +55,9 @@ categories = ["evaluation", "optimization"]
 name = "evaluation evidence"
 definition = """
 The content-addressed terminal record for one candidate evaluation, binding \
-its graph, dataset, task-and-repeat plan, outputs, component traces, aggregate, \
-and optional reward to the exact evaluation context."""
+its graph, dataset revision (dataset_hash), ordered task_hashes, num_samples, \
+task-and-sample plan, outputs, component traces, aggregate, and optional \
+reward to the exact evaluation context."""
 exported_symbols = ["whetstone.evaluation.schema.EvaluationEvidence"]
 categories = ["evaluation", "experiment identity"]
 
@@ -79,19 +80,114 @@ exported_symbols = ["whetstone.provider.ProviderCallResult"]
 categories = ["provider execution"]
 
 [[terms]]
-name = "rollout aggregate"
+name = "task"
 definition = """
-A provenance-bearing aggregate over an explicit planned task-and-repeat matrix \
-whose present, missing, failed, and invalid rows are completely accounted for."""
-exported_symbols = ["whetstone.evaluation.aggregate.RolloutAggregate"]
-categories = ["evaluation", "aggregation"]
+A single element of the dataset."""
+exported_symbols = ["whetstone.envs.task.Task"]
+categories = ["dataset"]
+
+[[terms]]
+name = "task hash"
+definition = """
+The stable full identity hash of one task's identity payload. Distinct from \
+task_id, the human-readable env identifier."""
+categories = ["dataset", "hashing"]
+
+[[terms]]
+name = "sample"
+definition = """
+One fresh generation for a given task. For the encoder-decoder setup, one full \
+encode-decode run."""
+exported_symbols = ["whetstone.evaluation.plan.Sample"]
+categories = ["dataset", "sampling"]
+
+[[terms]]
+name = "num samples"
+definition = """
+The number of samples per task."""
+exported_symbols = ["whetstone.evaluation.plan.SamplePlan"]
+categories = ["dataset", "sampling"]
+
+[[terms]]
+name = "sample index"
+definition = """
+The position of one sample among a task's num samples, in \
+[0, num_samples - 1]."""
+exported_symbols = ["whetstone.evaluation.plan.SampleId"]
+categories = ["dataset", "sampling"]
+
+[[terms]]
+name = "task index"
+definition = """
+The position of one task among the full dataset, ordered according to the \
+dataset's defined canonical ordering."""
+exported_symbols = ["whetstone.evaluation.schema.EvaluationOutputRow"]
+categories = ["dataset"]
+
+[[terms]]
+name = "generation graph"
+definition = """
+The structure of the steps of the flow used to convert task input into task \
+outputs that will then be scored."""
+exported_symbols = ["whetstone.envs.factory.RolloutDefinitionLike"]
+categories = ["generation"]
+
+[[terms]]
+name = "generation"
+definition = """
+One run of the generation graph."""
+exported_symbols = ["whetstone.provider.classification.Generation"]
+categories = ["generation"]
+
+[[terms]]
+name = "generation index"
+definition = """
+A (task index, sample index) tuple that defines a specific planned generation \
+slot."""
+exported_symbols = ["whetstone.evaluation.schema.EvaluationOutputRow"]
+categories = ["generation", "sampling"]
+
+[[terms]]
+name = "dataset hash"
+definition = """
+The identity hash of a dataset revision or manifest. Distinct from the ordered \
+task-set identity carried by sampling configuration."""
+categories = ["dataset", "hashing"]
 part_of = ["evaluation evidence"]
+
+[[terms]]
+name = "request hash"
+definition = """
+The canonical identity hash of a provider request payload. Whetstone-owned \
+persisted records use request_hash; external dr_providers evidence may retain \
+request_identity under its own schema."""
+categories = ["provider execution", "hashing"]
+
+[[terms]]
+name = "config hash"
+definition = """
+The identity hash of a typed configuration record, paired with its exact typed \
+record reference (for example EvalConfigRef.config_hash or \
+OptimizationRunRef.config_hash)."""
+exported_symbols = [
+    "whetstone.experiment.binding.EvalConfigRef",
+    "whetstone.optimization.contracts.OptimizationRunRef",
+]
+categories = ["hashing"]
+
+[[terms]]
+name = "record hash"
+definition = """
+The identity hash dimension of an IdentityRef, addressing one stored record \
+alongside its typed content reference."""
+exported_symbols = ["whetstone.core.identity.IdentityRef"]
+categories = ["hashing"]
 
 [[terms]]
 name = "objective"
 definition = """
 A named, direction-bearing official-selection criterion derived \
-deterministically from an eligible score or rollout aggregate. Not reward, \
+deterministically from an eligible score or aggregate. Not reward, \
 which is optimizer-facing."""
 exported_symbols = ["whetstone.experiment.Objective"]
 categories = ["optimization", "selection"]

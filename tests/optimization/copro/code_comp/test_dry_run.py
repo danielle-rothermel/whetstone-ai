@@ -122,7 +122,7 @@ def test_dry_run_logs_baseline_fill_and_body_only_seed_mutations() -> None:
         _proposer().bodies[:2]
     )
     assert all(
-        draft.request_evidence["proposal_request_identity_hash"]
+        draft.request_evidence["proposal_request_hash"]
         == no_budget_call.request.identity_hash()
         for draft in no_budget_call.drafts
     )

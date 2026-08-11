@@ -54,7 +54,7 @@ class EncDecScoringRuntimeSummary(BaseModel):
 
     evaluation_python: StrictStr
     dr_code_version: StrictStr
-    runtime_identity_hash: StrictStr
+    runtime_hash: StrictStr
     probe: CodeCompRuntimeProbe
 
 
@@ -66,7 +66,7 @@ def code_comp_environment_fingerprint(
             ("dr-code", runtime.dr_code_version),
             ("numpy", runtime.probe.numpy_version),
         ),
-        runtime_identity=runtime.runtime_identity_hash,
+        runtime_hash=runtime.runtime_hash,
     )
 
 
@@ -75,8 +75,8 @@ class CodeCompScoringRuntime:
     """One explicit code executor and its cache-scope identity."""
 
     executor: ProcessExecutor
-    runtime_identity: IdentityDocument
-    runtime_identity_hash: str
+    runtime_document: IdentityDocument
+    runtime_hash: str
     probe: CodeCompRuntimeProbe
 
 
@@ -144,8 +144,8 @@ def build_code_comp_scoring_runtime(
     )
     return CodeCompScoringRuntime(
         executor=executor,
-        runtime_identity=identity,
-        runtime_identity_hash=compute_identity_hash(
+        runtime_document=identity,
+        runtime_hash=compute_identity_hash(
             schema=CODE_COMP_SCORING_RUNTIME_SCHEMA,
             schema_version=CODE_COMP_SCORING_RUNTIME_SCHEMA_VERSION,
             payload=payload,

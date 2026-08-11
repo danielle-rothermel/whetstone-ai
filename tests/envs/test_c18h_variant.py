@@ -87,9 +87,9 @@ def test_c18h_splits_are_disjoint_and_holdout_untouched(
     c18h_tiny: EnvExperiment,
 ) -> None:
     exp = c18h_tiny
-    internal = set(exp.eval_configs.internal.task_set.task_identities)
-    official = set(exp.eval_configs.official.task_set.task_identities)
-    held_out = set(exp.eval_configs.held_out_task_identities)
+    internal = set(exp.eval_configs.internal.task_set.task_hashes)
+    official = set(exp.eval_configs.official.task_set.task_hashes)
+    held_out = set(exp.eval_configs.held_out_task_hashes)
     assert len(internal) == _TINY_SPLIT[0]
     assert len(official) == _TINY_SPLIT[1]
     assert len(held_out) == _TINY_SPLIT[2]
@@ -103,25 +103,23 @@ def test_c18h_eval_config_hash_differs_from_c18(
     c18h_tiny: EnvExperiment,
 ) -> None:
     for role in ("internal", "official"):
-        c18_hash = getattr(
-            c18_tiny.eval_configs, role
-        ).eval_config.config_identity_hash
+        c18_hash = getattr(c18_tiny.eval_configs, role).eval_config.config_hash
         c18h_hash = getattr(
             c18h_tiny.eval_configs, role
-        ).eval_config.config_identity_hash
+        ).eval_config.config_hash
         assert c18_hash != c18h_hash, f"{role} eval_config_hash collides"
 
 
-def test_c18h_task_identities_are_disjoint_from_c18(
+def test_c18h_task_hashes_are_disjoint_from_c18(
     c18_tiny: EnvExperiment,
     c18h_tiny: EnvExperiment,
 ) -> None:
-    c18_ids = set(
-        c18_tiny.eval_configs.official.task_set.task_identities
-    ) | set(c18_tiny.eval_configs.internal.task_set.task_identities)
-    c18h_ids = set(
-        c18h_tiny.eval_configs.official.task_set.task_identities
-    ) | set(c18h_tiny.eval_configs.internal.task_set.task_identities)
+    c18_ids = set(c18_tiny.eval_configs.official.task_set.task_hashes) | set(
+        c18_tiny.eval_configs.internal.task_set.task_hashes
+    )
+    c18h_ids = set(c18h_tiny.eval_configs.official.task_set.task_hashes) | set(
+        c18h_tiny.eval_configs.internal.task_set.task_hashes
+    )
     assert c18_ids.isdisjoint(c18h_ids)
 
 

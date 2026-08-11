@@ -17,7 +17,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         CompletenessPolicy(),
         RowValue(value=1.0),
         TaskRows(
-            task_identity="task",
+            task_hash="task",
             rows=(RowValue(value=1.0),),
         ),
     )
@@ -43,7 +43,7 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         eval_config_hash="1" * 64,
         evaluation_binding_hash="2" * 64,
         task_count=0,
-        repeat_count=1,
+        num_samples=1,
         aggregation_output=output,
         rows_present=0,
         rows_missing=0,

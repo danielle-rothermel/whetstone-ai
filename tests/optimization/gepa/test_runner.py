@@ -72,7 +72,7 @@ def _load_runner():
 class _Factory:
     def __init__(self, control, *, identity_salt: str = "unit") -> None:
         self.control = control
-        self.runtime_identity_hash = typed_ref_for_record(
+        self.runtime_hash = typed_ref_for_record(
             "test.gepa.factory",
             {
                 "control": control.identity_hash(),
@@ -109,13 +109,13 @@ def test_parent_replay_recreates_adapter_at_ordinal_zero(
     trainset = (
         GepaDataInstance(
             upstream_position=0,
-            data_id=control.trainset_task_identities[0],
+            data_id=control.trainset_task_hashes[0],
             data_ref=data_ref,
             loader_identity_hash="f" * 64,
         ),
     )
     request = module.GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
+        factory_identity_hash=factory.runtime_hash,
         control=control,
         seed_candidate={"prompt": "seed"},
         trainset=trainset,
@@ -153,13 +153,13 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
     factory = _Factory(control)
     module.register_gepa_adapter_factory(factory)
     request = module.GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
+        factory_identity_hash=factory.runtime_hash,
         control=control,
         seed_candidate={"prompt": "seed"},
         trainset=(
             GepaDataInstance(
                 upstream_position=0,
-                data_id=control.trainset_task_identities[0],
+                data_id=control.trainset_task_hashes[0],
                 data_ref=typed_ref_for_record(
                     "test.gepa.data",
                     {"id": "train"},
@@ -168,7 +168,7 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
             ),
         ),
     )
-    factory.runtime_identity_hash = ContentHash("9" * 64)
+    factory.runtime_hash = ContentHash("9" * 64)
 
     with pytest.raises(RuntimeError, match="factory identity drifted"):
         module.DbosGepaRunner().run(request)
@@ -177,7 +177,7 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
 def _train_instance(control):
     return GepaDataInstance(
         upstream_position=0,
-        data_id=control.trainset_task_identities[0],
+        data_id=control.trainset_task_hashes[0],
         data_ref=typed_ref_for_record("test.gepa.data", {"id": "train"}),
         loader_identity_hash="f" * 64,
     )
@@ -187,7 +187,7 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
 
     module = _load_runner()
     control = gepa_control()
-    assert control.source_valset_task_identities is None
+    assert control.source_valset_task_hashes is None
 
     with pytest.raises(ValueError, match="supplied an unbound valset"):
         module.GepaParentRunRequest(
@@ -198,7 +198,7 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
             valset=(
                 GepaDataInstance(
                     upstream_position=0,
-                    data_id=control.trainset_task_identities[0],
+                    data_id=control.trainset_task_hashes[0],
                     data_ref=typed_ref_for_record(
                         "test.gepa.data",
                         {"id": "val"},
@@ -212,8 +212,8 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
 def test_parent_request_rejects_bound_valset_identity_drift() -> None:
 
     module = _load_runner()
-    control = gepa_control(valset_task_identities=("c" * 64,))
-    assert control.source_valset_task_identities is not None
+    control = gepa_control(valset_task_hashes=("c" * 64,))
+    assert control.source_valset_task_hashes is not None
 
     with pytest.raises(ValueError, match="valset identity drift"):
         module.GepaParentRunRequest(
@@ -242,7 +242,7 @@ def test_parent_request_rejects_bound_valset_identity_drift() -> None:
         valset=(
             GepaDataInstance(
                 upstream_position=0,
-                data_id=control.valset_task_identities[0],
+                data_id=control.valset_task_hashes[0],
                 data_ref=typed_ref_for_record(
                     "test.gepa.data",
                     {"id": "val"},
@@ -274,7 +274,7 @@ def test_parent_request_rejects_same_count_seed_reordering() -> None:
             trainset=(
                 GepaDataInstance(
                     upstream_position=0,
-                    data_id=control.trainset_task_identities[0],
+                    data_id=control.trainset_task_hashes[0],
                     data_ref=typed_ref_for_record(
                         "test.gepa.data",
                         {"id": "train"},
@@ -316,13 +316,13 @@ def test_real_dbos_parent_same_id_returns_checkpointed_result(
     factory = _Factory(control, identity_salt=suffix)
     register_gepa_adapter_factory(cast(Any, factory))
     request = GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
+        factory_identity_hash=factory.runtime_hash,
         control=control,
         seed_candidate={"prompt": "seed"},
         trainset=(
             GepaDataInstance(
                 upstream_position=0,
-                data_id=control.trainset_task_identities[0],
+                data_id=control.trainset_task_hashes[0],
                 data_ref=typed_ref_for_record(
                     "test.gepa.data",
                     {"id": "train"},
@@ -432,7 +432,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     )
     data = GepaDataInstance(
         upstream_position=0,
-        data_id=control.trainset_task_identities[0],
+        data_id=control.trainset_task_hashes[0],
         data_ref=typed_ref_for_record(
             "test.gepa.data",
             {"id": "train"},
@@ -442,7 +442,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     evaluation_binding = evaluation_authority_binding()
 
     class EvaluationAuthority:
-        runtime_identity_hash = evaluation_binding.authority_identity_hash
+        runtime_hash = evaluation_binding.authority_identity_hash
         calls = 0
 
         def evaluate(self, request):
@@ -455,7 +455,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     )
 
     class RecoveryFactory:
-        runtime_identity_hash = typed_ref_for_record(
+        runtime_hash = typed_ref_for_record(
             "test.gepa.recovery_factory",
             {"suffix": suffix},
         ).content_hash
@@ -467,7 +467,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
         def create(self, *, control):
             self.create_calls += 1
             register_gepa_evaluation_authority(
-                authority.runtime_identity_hash,
+                authority.runtime_hash,
                 authority,
             )
             return WhetstoneGepaAdapter(
@@ -498,7 +498,7 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
     factory = RecoveryFactory()
     register_gepa_adapter_factory(cast(Any, factory))
     request = GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
+        factory_identity_hash=factory.runtime_hash,
         control=control,
         seed_candidate={"alpha": "unchanged", "beta": "unchanged"},
         trainset=(data,),
@@ -514,9 +514,9 @@ def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
             candidates=({"alpha": "unchanged", "beta": "unchanged"},),
             parents=((),),
             val_aggregate_scores=(0.0,),
-            val_subscores=({control.valset_task_identities[0]: 0.0},),
+            val_subscores=({control.valset_task_hashes[0]: 0.0},),
             per_val_instance_best_candidates={
-                control.valset_task_identities[0]: (0,)
+                control.valset_task_hashes[0]: (0,)
             },
             discovery_eval_counts=(0,),
             seed=control.seed,

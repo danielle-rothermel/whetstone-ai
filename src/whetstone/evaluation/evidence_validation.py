@@ -172,7 +172,7 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "Provider Execution Policy content is not canonical"
             )
-        if policy.identity_hash != policy_ref.identity_hash:
+        if policy.identity_hash != policy_ref.record_hash:
             raise ValueError(
                 "Provider Execution Policy identity hash disagrees with "
                 "its exact record"
@@ -213,17 +213,17 @@ class EvaluationEvidenceValidation:
             split_role=outputs.split_role,
             evaluation_role=outputs.evaluation_role,
         )
-        expected_tasks = self._engine.sampling.task_set.task_identities
-        expected_repeats = self._engine.sampling.repeat_plan.repeat_count
-        if outputs.task_identities != expected_tasks:
+        expected_tasks = self._engine.sampling.task_set.task_hashes
+        expected_repeats = self._engine.sampling.sample_plan.num_samples
+        if outputs.task_hashes != expected_tasks:
             raise ValueError("evaluation outputs use another ordered Task Set")
-        if outputs.repeat_count != expected_repeats:
-            raise ValueError("evaluation outputs use another Repeat Plan")
+        if outputs.num_samples != expected_repeats:
+            raise ValueError("evaluation outputs use another Sample Plan")
 
-        instances = tuple(self._engine.sampling.instances)
+        instances = tuple(self._engine.sampling.tasks)
         expected_instance_by_task = {
-            task_identity: instance
-            for task_identity, instance in zip(
+            task_hash: instance
+            for task_hash, instance in zip(
                 expected_tasks, instances, strict=True
             )
         }
@@ -232,8 +232,8 @@ class EvaluationEvidenceValidation:
             self._engine.experiment.rollout_definition.procedure_config_hash
         )
         for row in outputs.outputs:
-            instance = expected_instance_by_task[row.task_identity]
-            if row.instance_id != str(instance.id):
+            instance = expected_instance_by_task[row.task_hash]
+            if row.task_id != str(instance.id):
                 raise ValueError(
                     "evaluation output task and instance do not align"
                 )
@@ -330,12 +330,12 @@ class EvaluationEvidenceValidation:
             split_role=traces.split_role,
             evaluation_role=traces.evaluation_role,
         )
-        expected_tasks = self._engine.sampling.task_set.task_identities
-        expected_repeats = self._engine.sampling.repeat_plan.repeat_count
-        if traces.task_identities != expected_tasks:
+        expected_tasks = self._engine.sampling.task_set.task_hashes
+        expected_repeats = self._engine.sampling.sample_plan.num_samples
+        if traces.task_hashes != expected_tasks:
             raise ValueError("component traces use another ordered Task Set")
-        if traces.repeat_count != expected_repeats:
-            raise ValueError("component traces use another Repeat Plan")
+        if traces.num_samples != expected_repeats:
+            raise ValueError("component traces use another Sample Plan")
         if len(traces.rows) != len(outputs.outputs):
             raise ValueError(
                 "component traces and outputs must cover the same rows"
@@ -369,10 +369,10 @@ class EvaluationEvidenceValidation:
             )
 
         expected_instance_by_task = {
-            task_identity: str(instance.id)
-            for task_identity, instance in zip(
+            task_hash: str(instance.id)
+            for task_hash, instance in zip(
                 expected_tasks,
-                self._engine.sampling.instances,
+                self._engine.sampling.tasks,
                 strict=True,
             )
         }
@@ -380,16 +380,16 @@ class EvaluationEvidenceValidation:
             traces.rows, outputs.outputs, strict=True
         ):
             if (
-                trace_row.instance_id != output_row.instance_id
-                or trace_row.task_identity != output_row.task_identity
-                or trace_row.repeat != output_row.repeat
+                trace_row.task_id != output_row.task_id
+                or trace_row.task_hash != output_row.task_hash
+                or trace_row.sample_index != output_row.sample_index
             ):
                 raise ValueError(
                     "component trace row identity/order disagrees with outputs"
                 )
             if (
-                trace_row.instance_id
-                != expected_instance_by_task[trace_row.task_identity]
+                trace_row.task_id
+                != expected_instance_by_task[trace_row.task_hash]
             ):
                 raise ValueError(
                     "component trace task and instance do not align"
@@ -511,7 +511,7 @@ class EvaluationEvidenceValidation:
             "eval_config_hash",
             "evaluation_binding_hash",
             "task_count",
-            "repeat_count",
+            "num_samples",
             "aggregation_output",
             "rows_present",
             "rows_missing",
@@ -530,7 +530,7 @@ class EvaluationEvidenceValidation:
                 raise ValueError(f"Rollout Aggregate {field} must be a string")
         for field in (
             "task_count",
-            "repeat_count",
+            "num_samples",
             "rows_present",
             "rows_missing",
             "rows_failed",
@@ -546,7 +546,7 @@ class EvaluationEvidenceValidation:
             eval_config_hash=content["eval_config_hash"],
             evaluation_binding_hash=content["evaluation_binding_hash"],
             task_count=content["task_count"],
-            repeat_count=content["repeat_count"],
+            num_samples=content["num_samples"],
             aggregation_output=AggregationOutput.model_validate(
                 content["aggregation_output"]
             ),
@@ -568,10 +568,7 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "Evaluation Evidence graph config is inconsistent"
             )
-        if (
-            aggregate.eval_config_hash
-            != intent.target_eval_config.identity_hash
-        ):
+        if aggregate.eval_config_hash != intent.target_eval_config.config_hash:
             raise ValueError("Rollout Aggregate uses another Eval Config")
         if (
             aggregate.evaluation_binding_hash
@@ -580,9 +577,9 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "Rollout Aggregate uses another Evaluation Binding"
             )
-        if aggregate.task_count != len(evidence.task_identities):
+        if aggregate.task_count != len(evidence.task_hashes):
             raise ValueError("Rollout Aggregate task count is inconsistent")
-        if aggregate.repeat_count != evidence.repeat_count:
+        if aggregate.num_samples != evidence.num_samples:
             raise ValueError("Rollout Aggregate repeat count is inconsistent")
         if aggregate.name != evidence.aggregate_name:
             raise ValueError("Rollout Aggregate name is inconsistent")
@@ -596,7 +593,7 @@ class EvaluationEvidenceValidation:
         row_accounting = evidence.row_accounting
         if (
             row_accounting.planned
-            != aggregate.task_count * aggregate.repeat_count
+            != aggregate.task_count * aggregate.num_samples
             or row_accounting.present != aggregate.rows_present
             or row_accounting.missing != aggregate.rows_missing
             or row_accounting.failed != aggregate.rows_failed
@@ -616,7 +613,7 @@ class EvaluationEvidenceValidation:
         intent: EvaluationIntent,
     ) -> None:
         rows_by_task: dict[str, list[RowValue]] = {
-            task_identity: [] for task_identity in outputs.task_identities
+            task_hash: [] for task_hash in outputs.task_hashes
         }
         for row in outputs.outputs:
             if row.failed:
@@ -628,24 +625,24 @@ class EvaluationEvidenceValidation:
             else:
                 assert row.score is not None
                 value = RowValue(value=row.score)
-            rows_by_task[row.task_identity].append(value)
+            rows_by_task[row.task_hash].append(value)
         task_rows = tuple(
             TaskRows(
-                task_identity=task_identity,
-                rows=tuple(rows_by_task[task_identity]),
+                task_hash=task_hash,
+                rows=tuple(rows_by_task[task_hash]),
             )
-            for task_identity in outputs.task_identities
+            for task_hash in outputs.task_hashes
         )
         expected_per_task_values = tuple(
             sum(
                 float(row.value or 0.0) if row.is_present else 0.0
                 for row in task.rows
             )
-            / outputs.repeat_count
+            / outputs.num_samples
             for task in task_rows
         )
         expected_per_task_counts = tuple(
-            outputs.repeat_count for _task in task_rows
+            outputs.num_samples for _task in task_rows
         )
         if evidence.per_task_values != expected_per_task_values:
             raise ValueError(
@@ -722,32 +719,29 @@ class EvaluationEvidenceValidation:
         if evidence.purpose != intent.purpose:
             raise ValueError("Evaluation Evidence uses another purpose")
         if (
-            evidence.dataset_identity
+            evidence.dataset_hash
             != self._engine.sampling.task_set.dataset_revision
         ):
             raise ValueError("Evaluation Evidence uses another dataset")
-        if (
-            evidence.task_identities
-            != self._engine.sampling.task_set.task_identities
-        ):
+        if evidence.task_hashes != self._engine.sampling.task_set.task_hashes:
             raise ValueError(
                 "Evaluation Evidence uses another ordered Task Set"
             )
         if (
-            evidence.repeat_count
-            != self._engine.sampling.repeat_plan.repeat_count
+            evidence.num_samples
+            != self._engine.sampling.sample_plan.num_samples
         ):
-            raise ValueError("Evaluation Evidence uses another Repeat Plan")
-        if len(evidence.per_task_values) != len(evidence.task_identities):
+            raise ValueError("Evaluation Evidence uses another Sample Plan")
+        if len(evidence.per_task_values) != len(evidence.task_hashes):
             raise ValueError(
                 "Evaluation Evidence per-task values are incomplete"
             )
-        if len(evidence.per_task_counts) != len(evidence.task_identities):
+        if len(evidence.per_task_counts) != len(evidence.task_hashes):
             raise ValueError(
                 "Evaluation Evidence per-task counts are incomplete"
             )
         if any(
-            count < 0 or count > evidence.repeat_count
+            count < 0 or count > evidence.num_samples
             for count in evidence.per_task_counts
         ):
             raise ValueError("Evaluation Evidence per-task count is invalid")

@@ -6,7 +6,7 @@ from typing import Protocol
 from dr_providers import ProviderCallConfig
 
 from whetstone.envs.procedure import env_procedure_config
-from whetstone.envs.registry import DEFAULT_REPEATS, env_spec
+from whetstone.envs.registry import DEFAULT_NUM_SAMPLES, env_spec
 from whetstone.envs.reward import build_reward_policy
 from whetstone.envs.rollout_definition import (
     build_rollout_definition,
@@ -83,7 +83,7 @@ def build_env_experiment(
     pool_n_per_stratum: int | None = None,
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
-    repeats: int = DEFAULT_REPEATS,
+    num_samples: int = DEFAULT_NUM_SAMPLES,
     split_sizes: tuple[int, int, int] | None = None,
 ) -> EnvExperiment:
     env = env_spec(env_name)
@@ -96,7 +96,7 @@ def build_env_experiment(
         procedure=procedure,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
-        repeats=repeats,
+        num_samples=num_samples,
         split_sizes=split_sizes,
     )
     completeness_policy = completeness.to_policy(
@@ -125,5 +125,6 @@ def build_env_experiment(
 
 __all__ = [
     "EnvExperiment",
+    "RolloutDefinitionLike",
     "build_env_experiment",
 ]

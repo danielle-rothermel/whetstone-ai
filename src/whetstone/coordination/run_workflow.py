@@ -5,7 +5,7 @@ entered. One optimization run executes inside exactly one parent workflow whose
 ID derives from the run request's ``identity_hash()``, so a recovered process
 resumes the same run rather than starting a second one. Everything the parent
 body needs is bound by identity before ``DBOS.launch``: the body resolves its
-controller from a registry keyed by the controller's ``runtime_identity_hash``,
+controller from a registry keyed by the controller's ``runtime_hash``,
 so a registered identity can never detach from the capability a recovered
 workflow invokes.
 
@@ -78,7 +78,7 @@ class RunController(Protocol):
     """
 
     @property
-    def runtime_identity_hash(self) -> str: ...
+    def runtime_hash(self) -> str: ...
 
     def drive(self, request: RunRequest) -> TypedRef: ...
 
@@ -144,7 +144,7 @@ def register_run_controller(controller: RunController) -> str:
     Re-registering the identical object is a no-op; binding a different object
     to an already-bound identity is refused.
     """
-    identity_hash = controller.runtime_identity_hash
+    identity_hash = controller.runtime_hash
     require_full_hash(identity_hash, field="controller_identity_hash")
     existing = _CONTROLLERS.get(identity_hash)
     if existing is not None and existing is not controller:
@@ -160,7 +160,7 @@ def _registered_controller(request: RunRequest) -> RunController:
         raise RunWorkflowError(
             "run controller is not registered before DBOS launch"
         ) from None
-    if controller.runtime_identity_hash != request.controller_identity_hash:
+    if controller.runtime_hash != request.controller_identity_hash:
         raise RunWorkflowError("registered run controller identity drifted")
     return controller
 

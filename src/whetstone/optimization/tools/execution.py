@@ -332,7 +332,7 @@ class EvaluatingToolExecutor:
         evaluation: ToolEvaluation,
         config: ToolConfig,
     ) -> ToolResult:
-        if evaluation.eval_config_hash != config.eval_config_identity_hash:
+        if evaluation.eval_config_hash != config.eval_config_hash:
             raise ToolEvaluationError(
                 TerminalFailure(
                     code="tool_eval_config_mismatch",
@@ -340,7 +340,7 @@ class EvaluatingToolExecutor:
                         "Tool evaluation bound a different exact Eval Config"
                     ),
                     details={
-                        "expected": config.eval_config_identity_hash,
+                        "expected": config.eval_config_hash,
                         "actual": evaluation.eval_config_hash,
                     },
                 )

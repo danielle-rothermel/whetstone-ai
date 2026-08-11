@@ -30,7 +30,7 @@ def _request(
 ) -> EffectRequest:
     return EffectRequest(
         semantic_key=OpaqueKey(key),
-        request_identity_hash=IdentityHash(identity_hash),
+        request_hash=IdentityHash(identity_hash),
         replay_policy=policy,
     )
 

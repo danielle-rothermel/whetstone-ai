@@ -174,7 +174,7 @@ def test_successful_proposal_step_is_not_terminalized(tmp_path) -> None:
 
 def _proposal_response(request) -> Miprov2ProposalResponse:
     return Miprov2ProposalResponse(
-        request_identity_hash=request.identity_hash,
+        request_hash=request.identity_hash,
         text="Instruction: improved {query}.",
         evidence={"ordinal": request.effect_ordinal},
     )

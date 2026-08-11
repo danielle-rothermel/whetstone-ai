@@ -28,7 +28,7 @@ class EvaluationRuntimeConfig(BaseModel):
     model: StrictStr
     pool_n_per_stratum: StrictInt | None = None
     split_sizes: tuple[int, int, int] | None = None
-    repeats: StrictInt
+    num_samples: StrictInt
     completeness: Completeness = Completeness.PROPAGATE
     max_skip_fraction: float = 0.0
     expected_eval_config_hash: StrictStr
@@ -45,8 +45,8 @@ class EvaluationRuntimeConfig(BaseModel):
             raise ValueError(
                 "row_job_entrypoint must be 'importable.module:callable'"
             )
-        if self.repeats < 1 or self.concurrency < 1:
-            raise ValueError("repeats and concurrency must be positive")
+        if self.num_samples < 1 or self.concurrency < 1:
+            raise ValueError("num_samples and concurrency must be positive")
         return self
 
     def _row_job(self, request: InternalRowRequest) -> ProcessJob:
@@ -62,12 +62,12 @@ class EvaluationRuntimeConfig(BaseModel):
             pool_n_per_stratum=self.pool_n_per_stratum,
             completeness=self.completeness,
             max_skip_fraction=self.max_skip_fraction,
-            repeats=self.repeats,
+            num_samples=self.num_samples,
             split_sizes=self.split_sizes,
         )
         split = experiment.eval_configs.internal
         sampling = split.eval_config
-        if sampling.config_identity_hash != self.expected_eval_config_hash:
+        if sampling.config_hash != self.expected_eval_config_hash:
             raise ValueError(
                 "reconstructed runtime produced a different Eval Config"
             )

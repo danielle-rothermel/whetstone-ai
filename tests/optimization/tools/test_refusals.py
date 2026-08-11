@@ -661,9 +661,7 @@ def test_execution_request_conflict_is_explicit(tmp_path) -> None:
     store.admit(call, config)
     request = tool_effect_request(call)
     authority.acquire(
-        request.model_copy(
-            update={"request_identity_hash": IdentityHash("b" * 64)}
-        ),
+        request.model_copy(update={"request_hash": IdentityHash("b" * 64)}),
         owner_id="other-owner",
         attempt_id="other-attempt",
         lease_duration=timedelta(seconds=10),

@@ -66,7 +66,7 @@ def test_projection_reports_every_official_arm(tmp_path: Path) -> None:
     for row in lines:
         assert row["schema"] == VIEWER_ROLLOUT_ROW_SCHEMA
         assert row["cell_id"] == outcome.record.cell_id
-        assert row["task_identity"]
+        assert row["task_hash"]
 
 
 def test_projection_composes_every_ordered_step(tmp_path: Path) -> None:

@@ -93,7 +93,7 @@ def in_process_row_job_factory(
         instance = request.instance.to_instance()
         env = env_spec(request.env_name)
         if (
-            env_procedure_config(env).config_identity_hash
+            env_procedure_config(env).config_hash
             != request.procedure_config_hash
         ):
             raise ValueError("row procedure identity is not canonical")
@@ -111,7 +111,7 @@ def in_process_row_job_factory(
             transport=FakeTransport(lambda _prompt: answer),
             procedure_config_hash=request.procedure_config_hash,
             logical_call_id=request.logical_call_id,
-            repeat_index=request.repeat_index,
+            sample_index=request.sample_index,
             drive_ordinal=request.drive_ordinal,
             cache=None,
             cache_phase=request.cache_phase,
@@ -121,7 +121,7 @@ def in_process_row_job_factory(
         return ProcessJob(
             entrypoint="tests.envs.process_workers:return_payload",
             payload=InternalRowResult(
-                request_identity=request.request_identity,
+                request_hash=request.request_hash,
                 outcome=outcome,
             ).model_dump(mode="json"),
         )
@@ -133,7 +133,7 @@ def official_engine(
     store: ObjectStore,
     *,
     reply_for: Callable[[str], str] | None = None,
-    repeats: int = 1,
+    num_samples: int = 1,
 ) -> EvaluationEngine:
     """A real engine bound to the official split."""
     experiment = build_env_experiment(
@@ -141,7 +141,7 @@ def official_engine(
         model=TASK_MODEL,
         pool_n_per_stratum=2,
         split_sizes=(1, 1, 1),
-        repeats=repeats,
+        num_samples=num_samples,
     )
     return EvaluationEngine(
         store=store,
@@ -248,7 +248,7 @@ def cell_config(
     def driver() -> TypedRef:
         return controller.drive(
             controller.control.run_request(
-                controller_identity_hash=controller.runtime_identity_hash
+                controller_identity_hash=controller.runtime_hash
             )
         )
 

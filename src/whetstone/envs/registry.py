@@ -100,7 +100,7 @@ _ENV_TOKEN_ESTIMATES: dict[str, TokenEstimate] = {
 }
 
 #: Default deliberate-observation repeats per task.
-DEFAULT_REPEATS = 3
+DEFAULT_NUM_SAMPLES = 3
 
 #: Envs whose oracle ``score_gold`` is ``(gold, response)`` rather than the
 #: usual ``(prediction, gold)``. c22 and its hard variant c22h (same c22
@@ -261,7 +261,7 @@ def env_spec(name: str) -> EnvSpec:
 
 
 __all__ = [
-    "DEFAULT_REPEATS",
+    "DEFAULT_NUM_SAMPLES",
     "ENV_NAMES",
     "ESTIMATE_LIVE_MEASURED",
     "ESTIMATE_SCALED_PENDING",

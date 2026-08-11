@@ -78,7 +78,7 @@ class DuplicateIntentAdapter:
         )
 
 
-class RepeatedCandidateAdapter:
+class SampleedCandidateAdapter:
     @property
     def key(self) -> str:
         return "proposal-test"
@@ -205,7 +205,7 @@ def test_intent_effect_and_result_namespaces_are_v2(tmp_path) -> None:
     assert INTENT_EFFECT_KEY_SCHEMA_VERSION == 2
     assert effect_request.semantic_key == (
         f"{INTENT_EFFECT_KEY_PREFIX}"
-        "7c53474e62bd45c4ac1a278473a62640a7ce348467cb89311e4e2dc87602a97d"
+        "a4baae56a974a8bb18fb3292ca81260018952424aa4cbc77dccb3f19acaade5a"
     )
     assert harness._result_binding_key(request.run_id, 0) == (
         f"{STEP_RESULT_BINDING_PREFIX}{request.run_id}#0"
@@ -322,7 +322,7 @@ def test_unique_intents_preserve_repeated_candidate_multisets(
     request = proposal_request(contract=output_contract(2))
     harness = make_harness(
         store=store,
-        adapter_registry=registry(RepeatedCandidateAdapter()),
+        adapter_registry=registry(SampleedCandidateAdapter()),
         run=request.run,
         evaluation_service=service,
     )

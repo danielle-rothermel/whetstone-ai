@@ -69,7 +69,7 @@ def tiny_experiment(env_name: str) -> EnvExperiment:
         model=TEST_MODEL,
         pool_n_per_stratum=n,
         split_sizes=_TINY_SPLIT,
-        repeats=2,
+        num_samples=2,
     )
 
 
@@ -101,14 +101,14 @@ def row_job_factory(
         ):
             raise TypeError(f"unsupported row request {type(request)!r}")
         instance = request.instance.to_instance()
-        repeat = request.repeat_index
+        sample_index = request.sample_index
         drive_ordinal = request.drive_ordinal
-        outcome = payload_for(instance, repeat, drive_ordinal)
+        outcome = payload_for(instance, sample_index, drive_ordinal)
         if isinstance(request, InternalRowRequest):
             if not isinstance(outcome, InternalRowOutcome):
                 raise TypeError("internal request requires InternalRowOutcome")
             envelope = InternalRowResult(
-                request_identity=request.request_identity,
+                request_hash=request.request_hash,
                 outcome=outcome,
             )
         elif isinstance(request, DirectRowRequest):
@@ -117,7 +117,7 @@ def row_job_factory(
             ):
                 raise TypeError("D1 request requires a D1 row outcome")
             envelope = DirectRowResult(
-                request_identity=request.request_identity,
+                request_hash=request.request_hash,
                 outcome=outcome,
             )
         else:
@@ -126,7 +126,7 @@ def row_job_factory(
             ):
                 raise TypeError("ED1 request requires an ED1 row outcome")
             envelope = EncDecRowResult(
-                request_identity=request.request_identity,
+                request_hash=request.request_hash,
                 outcome=outcome,
             )
         return ProcessJob(

@@ -108,7 +108,7 @@ def test_claim_attestation_rejects_forged_component_traces(
     forgery: str,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / f"trace-{forgery}.sqlite"))
-    engine = _engine(tmp_path, store=store, repeats=2)
+    engine = _engine(tmp_path, store=store, num_samples=2)
     intent = _intent(
         engine,
         intent_id=f"trace-{forgery}",
@@ -135,9 +135,9 @@ def test_claim_attestation_rejects_forged_component_traces(
     elif forgery == "graph":
         trace_content["graph_hash"] = "f" * 64
     elif forgery == "task":
-        trace_content["task_identities"] = ["forged-task"]
+        trace_content["task_hashes"] = ["forged-task"]
         for row in trace_content["rows"]:
-            row["task_identity"] = "forged-task"
+            row["task_hash"] = "forged-task"
     elif forgery == "row_reorder":
         trace_content["rows"] = list(reversed(trace_content["rows"]))
     elif forgery == "row_state":

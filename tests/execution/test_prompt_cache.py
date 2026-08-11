@@ -66,7 +66,7 @@ def _execute(
     request: ProviderCallRequest,
     transport: Callable,
     logical_call_id: str,
-    repeat_index: int = 0,
+    sample_index: int = 0,
     drive_ordinal: int = 0,
     policy: ProviderExecutionPolicy | None = None,
 ):
@@ -75,7 +75,7 @@ def _execute(
         policy=policy or s.build_execution_policy(max_attempts=1),
         transport=transport,
         logical_call_id=logical_call_id,
-        repeat_index=repeat_index,
+        sample_index=sample_index,
         drive_ordinal=drive_ordinal,
         cache=cache,
         phase="internal",
@@ -200,12 +200,12 @@ def test_v2_key_pins_all_semantic_identity_components() -> None:
     assert prompt_cache_key(request, policy, 0, 0) == base
     assert (
         base
-        == "22a01e3a5c8dbda3e782885852cb93b7f8b83519964d80e9834d45bdcb6ac0d0"
+        == "215c269af431dad560b800cb3fc8865de4b251e68c1b72ddd134102d75989fb1"
     )
 
 
 @pytest.mark.parametrize(
-    ("repeat_index", "drive_ordinal", "error"),
+    ("sample_index", "drive_ordinal", "error"),
     [
         (-1, 0, ValueError),
         (0, -1, ValueError),
@@ -214,7 +214,7 @@ def test_v2_key_pins_all_semantic_identity_components() -> None:
     ],
 )
 def test_key_ordinals_are_explicit_non_negative_integers(
-    repeat_index: int,
+    sample_index: int,
     drive_ordinal: int,
     error: type[Exception],
 ) -> None:
@@ -222,7 +222,7 @@ def test_key_ordinals_are_explicit_non_negative_integers(
         prompt_cache_key(
             _request(),
             s.build_execution_policy(max_attempts=1),
-            repeat_index,
+            sample_index,
             drive_ordinal,
         )
 
@@ -304,9 +304,9 @@ def test_hit_preserves_original_entry_provenance_and_nulls_latency(
     assert set(stored) == {
         "schema",
         "key",
-        "request_identity",
+        "request_hash",
         "execution_policy_hash",
-        "repeat_index",
+        "sample_index",
         "drive_ordinal",
         "result_policy_hash",
         "publication_id",
@@ -315,9 +315,9 @@ def test_hit_preserves_original_entry_provenance_and_nulls_latency(
     }
     assert stored["schema"] == "whetstone.execution.prompt_cache_entry/v3"
     assert stored["key"] == key
-    assert stored["request_identity"] == request.identity_payload()
+    assert stored["request_hash"] == request.identity_payload()
     assert stored["execution_policy_hash"] == stored["result_policy_hash"]
-    assert stored["repeat_index"] == 0
+    assert stored["sample_index"] == 0
     assert stored["drive_ordinal"] == 0
 
 
@@ -353,7 +353,7 @@ def test_cache_disabled_is_byte_identical_and_creates_no_bytes(
         policy=policy,
         transport=wrapped_transport,
         logical_call_id="same-call",
-        repeat_index=0,
+        sample_index=0,
         drive_ordinal=0,
         cache=None,
         phase="internal",
@@ -566,7 +566,7 @@ def test_corrupt_entry_repair_is_single_flight_across_processes(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("request_identity", {"tampered": True}, "request identities"),
+        ("request_hash", {"tampered": True}, "request identities"),
         ("execution_policy_hash", "0" * 64, "policy hashes"),
         ("key", "0" * 64, "provenance keys"),
     ],

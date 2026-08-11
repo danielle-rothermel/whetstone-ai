@@ -31,7 +31,7 @@ def _pc(route: str, *, temperature: float = 1.0) -> ProposerConfig:
                 "dr_providers.provider_call_config",
                 {"route": route},
             ),
-            identity_hash="f" * 64,
+            record_hash="f" * 64,
         ),
         temperature=temperature,
     )
@@ -97,7 +97,7 @@ def test_proposer_config_rejects_invalid_provider_identity_hash() -> None:
                     "dr_providers.provider_call_config",
                     {"route": "r"},
                 ),
-                identity_hash="short",
+                record_hash="short",
             )
         )
 
@@ -170,7 +170,7 @@ def _golden_proposal_request() -> ProposalRequest:
     )
 
 
-def test_proposal_request_identity_payload_is_golden() -> None:
+def test_proposal_request_hash_payload_is_golden() -> None:
     assert _golden_proposal_request().identity_payload() == {
         "proposal_mode": "seed_proposal",
         "request_ordinal": 3,
@@ -192,14 +192,14 @@ def test_proposal_request_identity_payload_is_golden() -> None:
     }
 
 
-def test_proposal_request_identity_digest_is_golden() -> None:
+def test_proposal_request_hash_digest_is_golden() -> None:
     assert (
         _golden_proposal_request().identity_hash()
         == "40c01150145269f42e08158bee66c5f910a2b18077dfa5dddc64ad63ec7af398"
     )
 
 
-def test_proposal_request_identity_payload_carries_no_extra_keys() -> None:
+def test_proposal_request_hash_payload_carries_no_extra_keys() -> None:
     payload = _golden_proposal_request().identity_payload()
 
     assert sorted(payload) == [
@@ -215,7 +215,7 @@ def test_proposal_request_identity_payload_carries_no_extra_keys() -> None:
     ]
 
 
-def test_proposal_request_identity_ignores_unaddressed_base_payload() -> None:
+def test_proposal_request_hash_ignores_unaddressed_base_payload() -> None:
 
     payload = _golden_proposal_request().identity_payload()
 

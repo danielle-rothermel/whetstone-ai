@@ -9,20 +9,20 @@ from whetstone.execution.resume import (
 )
 
 
-def _record(request_identity: str, *, pending: bool) -> PartialCallRecord:
+def _record(request_hash: str, *, pending: bool) -> PartialCallRecord:
     return PartialCallRecord(
         phase="internal_eval",
-        instance_id="task-1",
+        task_id="task-1",
         unit="candidate-1",
-        repeat_id=0,
-        request_identity=request_identity,
+        sample_index=0,
+        request_hash=request_hash,
         redrive_pending=pending,
         score=None if pending else 1.0,
         failed=pending,
     )
 
 
-def test_other_request_identity_is_not_restorable() -> None:
+def test_other_request_hash_is_not_restorable() -> None:
     records = index_partial_records(
         (_record("c" * 64, pending=False),),
         phase="internal_eval",
@@ -31,10 +31,10 @@ def test_other_request_identity_is_not_restorable() -> None:
 
     decision = resolve_exact_resume(
         records,
-        instance_id="task-1",
-        repeat_id=0,
-        ordinal_0_request_identity="a" * 64,
-        ordinal_1_request_identity="b" * 64,
+        task_id="task-1",
+        sample_index=0,
+        ordinal_0_request_hash="a" * 64,
+        ordinal_1_request_hash="b" * 64,
     )
 
     assert decision.record is None
@@ -52,10 +52,10 @@ def test_terminal_ordinal_one_wins_over_pending_ordinal_zero() -> None:
 
     decision = resolve_exact_resume(
         records,
-        instance_id="task-1",
-        repeat_id=0,
-        ordinal_0_request_identity=ordinal_0.request_identity,
-        ordinal_1_request_identity=ordinal_1.request_identity,
+        task_id="task-1",
+        sample_index=0,
+        ordinal_0_request_hash=ordinal_0.request_hash,
+        ordinal_1_request_hash=ordinal_1.request_hash,
     )
 
     assert decision.record == ordinal_1
@@ -71,10 +71,10 @@ def test_pending_ordinal_zero_requires_exact_ordinal_one() -> None:
 
     decision = resolve_exact_resume(
         records,
-        instance_id="task-1",
-        repeat_id=0,
-        ordinal_0_request_identity=ordinal_0.request_identity,
-        ordinal_1_request_identity="b" * 64,
+        task_id="task-1",
+        sample_index=0,
+        ordinal_0_request_hash=ordinal_0.request_hash,
+        ordinal_1_request_hash="b" * 64,
     )
 
     assert decision.record == ordinal_0
@@ -90,8 +90,8 @@ def test_pending_ordinal_one_is_rejected() -> None:
     with pytest.raises(ValueError, match="ordinal-1 partial record"):
         resolve_exact_resume(
             records,
-            instance_id="task-1",
-            repeat_id=0,
-            ordinal_0_request_identity="a" * 64,
-            ordinal_1_request_identity=ordinal_1.request_identity,
+            task_id="task-1",
+            sample_index=0,
+            ordinal_0_request_hash="a" * 64,
+            ordinal_1_request_hash=ordinal_1.request_hash,
         )

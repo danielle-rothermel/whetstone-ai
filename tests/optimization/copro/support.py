@@ -68,7 +68,7 @@ def copro_prompt_model() -> ProposerConfig:
                 "dr_providers.provider_call_config",
                 {"route": "copro-proposer"},
             ),
-            identity_hash=FULL_A,
+            record_hash=FULL_A,
         ),
         temperature=None,
     )

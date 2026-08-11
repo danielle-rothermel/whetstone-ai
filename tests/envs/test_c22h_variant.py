@@ -62,9 +62,9 @@ def test_c22h_split_is_six_eighteen_thirtysix() -> None:
 
 def test_c22h_splits_are_disjoint_and_holdout_untouched() -> None:
     exp = build_env_experiment("c22h", model=_MODEL)
-    internal = set(exp.eval_configs.internal.task_set.task_identities)
-    official = set(exp.eval_configs.official.task_set.task_identities)
-    held_out = set(exp.eval_configs.held_out_task_identities)
+    internal = set(exp.eval_configs.internal.task_set.task_hashes)
+    official = set(exp.eval_configs.official.task_set.task_hashes)
+    held_out = set(exp.eval_configs.held_out_task_hashes)
     assert len(internal) == 6
     assert len(official) == 18
     assert len(held_out) == 36
@@ -77,23 +77,19 @@ def test_c22h_eval_config_hash_differs_from_c22() -> None:
     c22 = build_env_experiment("c22", model=_MODEL)
     c22h = build_env_experiment("c22h", model=_MODEL)
     for role in ("internal", "official"):
-        c22_hash = getattr(
-            c22.eval_configs, role
-        ).eval_config.config_identity_hash
-        c22h_hash = getattr(
-            c22h.eval_configs, role
-        ).eval_config.config_identity_hash
+        c22_hash = getattr(c22.eval_configs, role).eval_config.config_hash
+        c22h_hash = getattr(c22h.eval_configs, role).eval_config.config_hash
         assert c22_hash != c22h_hash, f"{role} eval_config_hash collides"
 
 
-def test_c22h_task_identities_are_disjoint_from_c22() -> None:
+def test_c22h_task_hashes_are_disjoint_from_c22() -> None:
     c22 = build_env_experiment("c22", model=_MODEL)
     c22h = build_env_experiment("c22h", model=_MODEL)
-    c22_ids = set(c22.eval_configs.official.task_set.task_identities) | set(
-        c22.eval_configs.internal.task_set.task_identities
+    c22_ids = set(c22.eval_configs.official.task_set.task_hashes) | set(
+        c22.eval_configs.internal.task_set.task_hashes
     )
-    c22h_ids = set(c22h.eval_configs.official.task_set.task_identities) | set(
-        c22h.eval_configs.internal.task_set.task_identities
+    c22h_ids = set(c22h.eval_configs.official.task_set.task_hashes) | set(
+        c22h.eval_configs.internal.task_set.task_hashes
     )
     assert c22_ids.isdisjoint(c22h_ids)
 

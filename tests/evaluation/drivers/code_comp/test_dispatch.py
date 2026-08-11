@@ -36,8 +36,8 @@ def mutant_dataset_dir(tmp_path: Path) -> Path:
         timeout_seconds=5.0,
         task_ids=("HumanEval/0",),
         canonical_suite_digest="opaque-schema-v1-suite-provenance",
-        runner_identity="whetstone-test-fixture@v1",
-        runtime_identity="whetstone-test-fixture-runtime@v1",
+        runner_label="whetstone-test-fixture@v1",
+        runtime_label="whetstone-test-fixture-runtime@v1",
     )
     manifest = build_manifest(
         config=config,

@@ -175,11 +175,11 @@ def test_c23_output_extraction_flows_through_adapter() -> None:
 def test_procedure_identity_is_env_distinct(env_name: str) -> None:
     proc = env_procedure_config(env_spec(env_name))
     others = {
-        env_procedure_config(env_spec(other)).config_identity_hash
+        env_procedure_config(env_spec(other)).config_hash
         for other in ENV_NAMES
         if other != env_name
     }
-    assert proc.config_identity_hash not in others
+    assert proc.config_hash not in others
 
 
 def test_operator_version_is_resolved_explicitly() -> None:

@@ -12,7 +12,7 @@ from whetstone.envs.procedure import (
     env_procedure_config,
 )
 from whetstone.envs.registry import EnvSpec
-from whetstone.envs.task import EnvTask
+from whetstone.envs.task import Task
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.graph.nodes import (
     eval_node_definition,
@@ -141,13 +141,13 @@ def build_rollout_definition(
     procedure = env_procedure_config(env)
     graph_config = build_graph_config(
         provider_call_config_hash=provider_call_config.identity_hash,
-        evaluation_procedure_config_hash=procedure.config_identity_hash,
+        evaluation_procedure_config_hash=procedure.config_hash,
     )
     return EnvRolloutDefinition(
         env_name=env.name,
         definition=llm_eval_graph_definition(),
         provider_call_config=provider_call_config,
-        procedure_config_hash=procedure.config_identity_hash,
+        procedure_config_hash=procedure.config_hash,
         graph_config=graph_config,
     )
 
@@ -240,10 +240,10 @@ class PromptInputError(ValueError):
 def validate_candidate_prompt(
     env: EnvSpec,
     candidate: Candidate,
-    instances: tuple[Instance, ...],
+    tasks: tuple[Instance, ...],
 ) -> None:
     """Validate the candidate before any provider call can be made."""
-    del instances
+    del tasks  # parameter reserved for future per-task validation
     template = candidate.payload.get(MUTATION_FIELD)
     contract = env.surface.template_render_contract
     try:
@@ -262,10 +262,10 @@ def validate_candidate_prompt(
         raise PromptInputError((), reason=str(error)) from error
 
 
-def env_task_for(env: EnvSpec, instance: Instance) -> EnvTask:
-    """Wrap an env instance as an :class:`EnvTask` (Graph External Inputs +
+def env_task_for(env: EnvSpec, instance: Instance) -> Task:
+    """Wrap an env instance as an :class:`Task` (Graph External Inputs +
     evaluation inputs)."""
-    return EnvTask.from_instance(env.name, instance)
+    return Task.from_instance(env.name, instance)
 
 
 __all__ = [

@@ -122,7 +122,7 @@ def test_persisted_authority_literals_and_sqlite_schema_are_pinned(
         ).fetchone()
     assert columns == [
         "semantic_key",
-        "request_identity_hash",
+        "request_hash",
         "replay_policy",
         "state",
         "owner_id",
@@ -139,7 +139,7 @@ def test_persisted_authority_literals_and_sqlite_schema_are_pinned(
     compact_metadata_sql = "".join(metadata_sql[0].split())
     for column in (
         "semantic_key",
-        "request_identity_hash",
+        "request_hash",
         "replay_policy",
         "state",
         "owner_id",

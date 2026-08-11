@@ -63,14 +63,14 @@ def load_tasks(
     limit: int | None = None,
 ) -> tuple[CodeCompTaskInstance, ...]:
     """Load the pinned live dataset or an explicit Whetstone snapshot."""
-    tasks = load_humaneval_plus(
+    humaneval_tasks = load_humaneval_plus(
         prefer_snapshot=snapshot_path is not None,
         snapshot_path=snapshot_path,
     )
     if limit is not None:
-        tasks = tasks[:limit]
-    instances: list[CodeCompTaskInstance] = []
-    for plus in tasks:
+        humaneval_tasks = humaneval_tasks[:limit]
+    tasks: list[CodeCompTaskInstance] = []
+    for plus in humaneval_tasks:
         ht = HumanEvalTask(
             task_id=plus.task_id,
             prompt=plus.prompt,
@@ -78,8 +78,8 @@ def load_tasks(
             entry_point=plus.entry_point,
             test=plus.test,
         )
-        instances.append(ed1_instance_from_task(ht))
-    return tuple(instances)
+        tasks.append(ed1_instance_from_task(ht))
+    return tuple(tasks)
 
 
 __all__ = [

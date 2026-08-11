@@ -105,11 +105,11 @@ def build_direct_reward_policy() -> RewardPolicy:
 def _direct_split(
     *,
     split_role: str,
-    instances: tuple[Instance, ...],
+    tasks: tuple[Instance, ...],
     procedure,
     completeness: Completeness,
     max_skip_fraction: float,
-    repeats: int,
+    num_samples: int,
     input_arm: str,
     rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN,
     manifest_tag: str | None = None,
@@ -135,9 +135,9 @@ def _direct_split(
         namespace=namespace,
         dataset_revision=CODE_COMP_DATASET_REVISION,
         split_role=split_role,
-        instances=instances,
-        task_identity_of=lambda instance: str(instance.id),
-        repeats=repeats,
+        tasks=tasks,
+        task_hash_of=lambda instance: str(instance.id),
+        num_samples=num_samples,
         procedure=procedure,
         aggregation=aggregation,
     )
@@ -170,7 +170,7 @@ def build_direct_experiment(
     official_n: int | None = None,
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
-    repeats: int = 3,
+    num_samples: int = 3,
     tasks: tuple[CodeCompTaskInstance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
     split_manifest: TaskSplitRoles | None = None,
@@ -200,7 +200,7 @@ def build_direct_experiment(
     procedure = build_direct_procedure_config()
     rollout = build_direct_rollout_definition(
         model=model,
-        procedure_config_hash=procedure.config_identity_hash,
+        procedure_config_hash=procedure.config_hash,
         input_arm=input_arm,
         rename_token=rename_token,
     )
@@ -214,7 +214,7 @@ def build_direct_experiment(
             official_n=official_n,
         )
         internal_instances = tuple(t.instance for t in resolved.internal)
-        official_instances = tuple(t.instance for t in resolved.official)
+        official_tasks = tuple(t.instance for t in resolved.official)
         manifest_tag = resolved.manifest_tag
         if resolved.official_capped:
             print(f"[d1] {resolved.official_capped}")
@@ -225,39 +225,37 @@ def build_direct_experiment(
         internal_instances = all_instances[:i_n]
         rest = all_instances[i_n:]
         o_n = official_n if official_n is not None else len(rest)
-        official_instances = (
-            rest[:o_n] if rest else internal_instances[: o_n or n]
-        )
-        if not official_instances:
-            official_instances = internal_instances
+        official_tasks = rest[:o_n] if rest else internal_instances[: o_n or n]
+        if not official_tasks:
+            official_tasks = internal_instances
     internal_split = _direct_split(
         split_role="internal_eval",
-        instances=internal_instances,
+        tasks=internal_instances,
         procedure=procedure,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
-        repeats=repeats,
+        num_samples=num_samples,
         input_arm=input_arm,
         rename_token=rename_token,
         manifest_tag=manifest_tag,
     )
     official_split = _direct_split(
         split_role="official",
-        instances=official_instances,
+        tasks=official_tasks,
         procedure=procedure,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
-        repeats=repeats,
+        num_samples=num_samples,
         input_arm=input_arm,
         rename_token=rename_token,
         manifest_tag=manifest_tag,
     )
     eval_configs = EnvEvalConfigs(
         env_name=CODE_COMP_ENV_NAME,
-        procedure_config_hash=procedure.config_identity_hash,
+        procedure_config_hash=procedure.config_hash,
         internal=internal_split,
         official=official_split,
-        held_out_task_identities=(),
+        held_out_task_hashes=(),
     )
     return DirectExperiment(
         env_name=CODE_COMP_ENV_NAME,

@@ -169,7 +169,7 @@ def _replay_to_completion(
     records = json.loads(effect_log.read_text())
     assert crashes == len(records) == expected_effect_count
     payload = json.loads(completed.stdout)
-    assert payload["effect_identities"] == [
+    assert payload["effect_hashes"] == [
         record["identity"] for record in records
     ]
     return payload
@@ -328,7 +328,7 @@ class _RecorderBackedOracleBroker:
                 )
             )
         result = GepaEvaluationEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             rows=tuple(rows),
             logical_metric_calls=len(rows),
         )
@@ -371,12 +371,12 @@ class _RecorderBackedOracleBroker:
         provider_attempt_ref = typed_ref_for_record(
             "test.gepa.differential_provider_attempt",
             {
-                "request_identity_hash": request.identity_hash(),
+                "request_hash": request.identity_hash(),
                 "raw_response": f"```\n{replacement}\n```",
             },
         )
         result = GepaProposalEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             raw_response=f"```\n{replacement}\n```",
             parsed_components=(
                 GepaCandidateComponent(
@@ -518,8 +518,7 @@ def test_direct_upstream_oracle_matches_frozen_crash_fixture_across_hash_seeds(
     assert effect_kinds.count("propose") == expected["proposal_count"]
     assert merge_parents == expected["merge_parents"]
     assert (
-        _digest(seed_one["effect_identities"])
-        == expected["effect_identities_sha256"]
+        _digest(seed_one["effect_hashes"]) == expected["effect_hashes_sha256"]
     )
     assert _digest(result) == expected["result_sha256"]
 
@@ -562,7 +561,7 @@ def test_native_adapter_matches_independent_upstream_oracle_and_replays(
                 "dr_providers.provider_call_config",
                 {"provider_call_config_ref": "provider://gepa-differential"},
             ),
-            identity_hash=_D,
+            record_hash=_D,
         ),
     )
     train_labels = (
@@ -598,8 +597,8 @@ def test_native_adapter_matches_independent_upstream_oracle_and_replays(
         task_model_identity_hash=_C,
         prompt_format_identity_hash=services.descriptor.identity_hash(),
         prompt_binding_identity_hash=services.binding.identity_hash(),
-        trainset_task_identities=tuple(item.data_id for item in train),
-        valset_task_identities=tuple(item.data_id for item in val),
+        trainset_task_hashes=tuple(item.data_id for item in train),
+        valset_task_hashes=tuple(item.data_id for item in val),
         component_names=("alpha", "beta"),
         num_predictors=2,
         max_metric_calls=100,
@@ -620,7 +619,7 @@ def test_native_adapter_matches_independent_upstream_oracle_and_replays(
     )
     evaluation_authority = GepaEvaluationAuthorityBinding(
         authority_identity_hash=_A,
-        evaluation_config_identity_hash=control.metric.identity_hash,
+        evaluation_config_hash=control.metric.config_hash,
         reward_policy_identity_hash=control.reward_policy_hash,
         provider_route_identity_hash=control.task_model_identity_hash,
         execution_policy_identity_hash=(
@@ -693,7 +692,7 @@ def test_native_adapter_matches_independent_upstream_oracle_and_replays(
     assert _canonical(
         _normalized_native_result(
             native,
-            val_identities=control.valset_task_identities,
+            val_identities=control.valset_task_hashes,
         )
     ) == _canonical(direct["result"])
     assert _canonical(

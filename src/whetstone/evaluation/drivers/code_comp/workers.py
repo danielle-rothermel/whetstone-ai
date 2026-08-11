@@ -78,7 +78,7 @@ def _reconstruct_worker_experiment(
             tasks=(fixture,),
             internal_n=1,
             official_n=1,
-            repeats=1,
+            num_samples=1,
         ),
     )
     rollout = experiment.encdec_rollout
@@ -177,7 +177,7 @@ def drive_dummy_encdec_generation(payload: JsonValue) -> JsonValue:
         transport=transport,
         scorer=None,
         logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
+        sample_index=request.sample_index,
         drive_ordinal=request.drive_ordinal,
         cache=_prompt_cache(request),
         cache_phase=request.cache_phase,
@@ -186,7 +186,7 @@ def drive_dummy_encdec_generation(payload: JsonValue) -> JsonValue:
     if transport.call_index != 2:
         raise ValueError("dummy ED1 row did not complete both provider calls")
     return EncDecRowResult(
-        request_identity=request.request_identity,
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")
 
@@ -208,14 +208,14 @@ def drive_provider_encdec_generation(payload: JsonValue) -> JsonValue:
             transport=provider.invoke,
             scorer=None,
             logical_call_id=request.logical_call_id,
-            repeat_index=request.repeat_index,
+            sample_index=request.sample_index,
             drive_ordinal=request.drive_ordinal,
             cache=_prompt_cache(request),
             cache_phase=request.cache_phase,
             cache_unit=request.cache_unit,
         )
     return EncDecRowResult(
-        request_identity=request.request_identity,
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")
 

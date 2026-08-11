@@ -174,7 +174,7 @@ class CoproControl(BaseModel):
                 COPRO_CONTROL_SCHEMA,
                 self.record_content(),
             ),
-            identity_hash=self.identity_hash(),
+            record_hash=self.identity_hash(),
         )
 
     def require_identity_hash(self, persisted_hash: str) -> None:

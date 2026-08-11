@@ -35,7 +35,7 @@ def _configure(**overrides) -> GepaControl:
                     "dr_providers.provider_call_config",
                     {"provider_call_config_ref": "provider://reflection"},
                 ),
-                identity_hash=FULL_A,
+                record_hash=FULL_A,
             ),
         ),
         "metric": eval_config_reference(eval_config()),
@@ -47,8 +47,8 @@ def _configure(**overrides) -> GepaControl:
         "task_model_identity_hash": FULL_D,
         "prompt_format_identity_hash": FULL_A,
         "prompt_binding_identity_hash": FULL_B,
-        "trainset_task_identities": (FULL_A, FULL_B),
-        "valset_task_identities": (FULL_C,),
+        "trainset_task_hashes": (FULL_A, FULL_B),
+        "valset_task_hashes": (FULL_C,),
         "component_names": ("alpha", "beta"),
         "num_predictors": 2,
         "max_metric_calls": 40,
@@ -89,10 +89,8 @@ def test_auto_presets_and_budget_arithmetic_match_frozen_dspy() -> None:
         control = _configure(
             auto=mode,
             max_metric_calls=None,
-            trainset_task_identities=(FULL_A, FULL_B),
-            valset_task_identities=tuple(
-                f"{index:064x}" for index in range(10)
-            ),
+            trainset_task_hashes=(FULL_A, FULL_B),
+            valset_task_hashes=tuple(f"{index:064x}" for index in range(10)),
         )
         assert control.resolved_max_metric_calls == metric_calls
 
@@ -110,7 +108,7 @@ def test_max_full_evals_copies_dspy_valset_none_arithmetic() -> None:
     omitted = _configure(
         max_metric_calls=None,
         max_full_evals=4,
-        valset_task_identities=None,
+        valset_task_hashes=None,
     )
     explicit = _configure(
         max_metric_calls=None,
@@ -118,7 +116,7 @@ def test_max_full_evals_copies_dspy_valset_none_arithmetic() -> None:
     )
 
     assert omitted.resolved_max_metric_calls == 8
-    assert omitted.valset_task_identities == omitted.trainset_task_identities
+    assert omitted.valset_task_hashes == omitted.trainset_task_hashes
     assert explicit.resolved_max_metric_calls == 12
 
 
@@ -188,12 +186,12 @@ def test_identity_binds_prompt_data_execution_and_upstream_source() -> None:
 
     assert payload["prompt_format_identity_hash"] == FULL_A
     assert payload["prompt_binding_identity_hash"] == FULL_B
-    assert payload["source_trainset_task_identities"] == [FULL_A, FULL_B]
-    assert payload["source_valset_task_identities"] == [FULL_C]
+    assert payload["source_trainset_task_hashes"] == [FULL_A, FULL_B]
+    assert payload["source_valset_task_hashes"] == [FULL_C]
     assert payload["reflection_model_identity_hash"] == (
         control.reflection_model.identity_hash()
     )
-    assert payload["metric_identity_hash"] == control.metric.identity_hash
+    assert payload["metric_identity_hash"] == control.metric.config_hash
     assert len(payload["gepa_source_manifest_hash"]) == 64
     assert len(payload["merge_policy_identity_hash"]) == 64
     assert (

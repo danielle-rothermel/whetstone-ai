@@ -52,7 +52,7 @@ _COMPLETE_PROCESS_STATES = frozenset(
 _CACHE_SCHEMA = "whetstone.execution.prompt_cache_entry/v3"
 _CACHE_KEY = re.compile(r"[0-9a-f]{64}")
 _LOGICAL_CALL_ID = re.compile(
-    r"^(?P<candidate>.+):(?P<task>[^:]+)#(?P<repeat>\d+):(?P<leg>enc|dec)$"
+    r"^(?P<candidate>.+):(?P<task>[^:]+)#(?P<sample_index>\d+):(?P<leg>enc|dec)$"
 )
 _ENCODER_CODE = re.compile(r"\n```python\n(?P<code>.*)\n```\Z", re.DOTALL)
 
@@ -241,7 +241,7 @@ def _validate_plan(
         )
     repeats = plan.get("repeats", manifest.get("repeats"))
     for arm in (transcript.baseline, transcript.ceiling):
-        if repeats is not None and arm.evidence.repeat_count != repeats:
+        if repeats is not None and arm.evidence.num_samples != repeats:
             raise InspectionError(
                 f"treatment {treatment_id!r} result changed planned repeats"
             )
@@ -330,17 +330,17 @@ def _arm_rows(
     blend_config = encdec_blend_config_from_metadata(transcript.metadata)
     task_model = encdec_task_model_from_metadata(transcript.metadata)
     outputs = {
-        (row.task_identity, row.repeat): row for row in arm.outputs.outputs
+        (row.task_hash, row.sample_index): row for row in arm.outputs.outputs
     }
     traces = {
-        (row.task_identity, row.repeat): row
+        (row.task_hash, row.sample_index): row
         for row in arm.component_traces.rows
     }
     if set(outputs) != set(traces):
         raise InspectionError(
             f"{treatment_id}/{arm_name} output and trace coordinates differ"
         )
-    expected = len(arm.evidence.task_identities) * arm.evidence.repeat_count
+    expected = len(arm.evidence.task_hashes) * arm.evidence.num_samples
     accounting = arm.evidence.row_accounting
     counted = (
         accounting.present
@@ -410,8 +410,8 @@ def _arm_rows(
             "budget_ratio": transcript.budget_ratio,
             "arm": arm_name,
             "candidate_id": output.candidate_id,
-            "task_identity": output.task_identity,
-            "repeat": output.repeat,
+            "task_hash": output.task_hash,
+            "sample_index": output.sample_index,
             "row_state": traces[key].executed_component_trace.row_state.value,
             "score": output.score,
             "failed": output.failed,
@@ -440,29 +440,28 @@ def _arm_rows(
             "decoder_provider_cache_key": None,
         }
         rows.append(item)
-        by_task[output.task_identity].append(item)
+        by_task[output.task_hash].append(item)
 
     per_task: list[dict[str, Any]] = []
     stored = dict(
         zip(
-            arm.evidence.task_identities,
+            arm.evidence.task_hashes,
             arm.evidence.per_task_values,
             strict=True,
         )
     )
     counts = dict(
         zip(
-            arm.evidence.task_identities,
+            arm.evidence.task_hashes,
             arm.evidence.per_task_counts,
             strict=True,
         )
     )
-    for task_identity in arm.evidence.task_identities:
-        task_rows = by_task[task_identity]
-        if len(task_rows) != arm.evidence.repeat_count:
+    for task_hash in arm.evidence.task_hashes:
+        task_rows = by_task[task_hash]
+        if len(task_rows) != arm.evidence.num_samples:
             raise InspectionError(
-                f"{treatment_id}/{arm_name}/{task_identity} repeat "
-                "count differs"
+                f"{treatment_id}/{arm_name}/{task_hash} repeat count differs"
             )
         primary = sum(float(row["score"] or 0.0) for row in task_rows) / len(
             task_rows
@@ -482,13 +481,11 @@ def _arm_rows(
             compression_ratio=compression,
             config=blend_config,
         )
-        if counts[
-            task_identity
-        ] != arm.evidence.repeat_count or not math.isclose(
-            blend, stored[task_identity], rel_tol=0.0, abs_tol=1e-12
+        if counts[task_hash] != arm.evidence.num_samples or not math.isclose(
+            blend, stored[task_hash], rel_tol=0.0, abs_tol=1e-12
         ):
             raise InspectionError(
-                f"{treatment_id}/{arm_name}/{task_identity} derived "
+                f"{treatment_id}/{arm_name}/{task_hash} derived "
                 "per-task blend "
                 "does not equal stored per_task evidence"
             )
@@ -498,8 +495,8 @@ def _arm_rows(
                 "model": task_model.model,
                 "budget_ratio": transcript.budget_ratio,
                 "arm": arm_name,
-                "task_identity": task_identity,
-                "repeat_count": len(task_rows),
+                "task_hash": task_hash,
+                "num_samples": len(task_rows),
                 "correctness_reward": primary,
                 "compression_ratio": compression,
                 "compression_reward": (
@@ -508,7 +505,7 @@ def _arm_rows(
                     else compression_score(compression, blend_config)
                 ),
                 "blended_reward": blend,
-                "stored_per_task_value": stored[task_identity],
+                "stored_per_task_value": stored[task_hash],
             }
         )
     return rows, per_task
@@ -536,17 +533,17 @@ def _provider_metadata(response_body: object) -> dict[str, object] | None:
     return found or None
 
 
-def _config_identity(request_identity: Mapping[str, Any]) -> object | None:
+def _config_identity(request_hash: Mapping[str, Any]) -> object | None:
     for key in (
-        "config_identity_hash",
+        "config_hash",
         "provider_call_config",
         "provider_call_config_ref",
         "config",
         "config_ref",
-        "config_identity",
+        "config_hash",
     ):
-        if key in request_identity:
-            return request_identity[key]
+        if key in request_hash:
+            return request_hash[key]
     return None
 
 
@@ -586,7 +583,7 @@ def _provider_calls(
                 raise InspectionError(
                     f"invalid ProviderCallResult at {path}: {exc}"
                 ) from exc
-            if raw.get("request_identity") != result.request_identity:
+            if raw.get("request_hash") != result.request_hash:
                 raise InspectionError(
                     f"cache/result request identity mismatch at {path}"
                 )
@@ -605,7 +602,7 @@ def _provider_calls(
                 None if response is None else response.response_body
             )
             telemetry = asdict(call_telemetry(result))
-            config_identity = _config_identity(result.request_identity)
+            config_hash = _config_identity(result.request_hash)
             item = {
                 "treatment_id": treatment_id,
                 "cache_key": key,
@@ -613,16 +610,16 @@ def _provider_calls(
                 "logical_call_id": result.logical_call_id,
                 "candidate_id": candidate,
                 "arm": candidate_arms.get(candidate or "", "unavailable"),
-                "task_identity": match.group("task") if match else None,
-                "repeat": int(match.group("repeat")) if match else None,
+                "task_hash": match.group("task") if match else None,
+                "sample_index": int(match.group("sample_index"))
+                if match
+                else None,
                 "leg": match.group("leg") if match else None,
                 "succeeded": result.succeeded,
                 "attempt_count": result.attempt_count,
-                "requested_config_identity": config_identity,
+                "requested_config_identity": config_hash,
                 "requested_config_identity_availability": (
-                    "available"
-                    if config_identity is not None
-                    else "unavailable"
+                    "available" if config_hash is not None else "unavailable"
                 ),
                 "returned_model": None if response is None else response.model,
                 "returned_model_availability": (
@@ -844,20 +841,19 @@ def _paired_deltas(
     indexed = {
         (
             str(row["treatment_id"]),
-            str(row["task_identity"]),
+            str(row["task_hash"]),
             str(row["arm"]),
         ): row
         for row in per_task
     }
     deltas: list[dict[str, Any]] = []
     coordinates = sorted({(key[0], key[1]) for key in indexed})
-    for treatment_id, task_identity in coordinates:
-        baseline = indexed.get((treatment_id, task_identity, "BASELINE"))
-        human = indexed.get((treatment_id, task_identity, "HUMAN_BEST"))
+    for treatment_id, task_hash in coordinates:
+        baseline = indexed.get((treatment_id, task_hash, "BASELINE"))
+        human = indexed.get((treatment_id, task_hash, "HUMAN_BEST"))
         if baseline is None or human is None:
             raise InspectionError(
-                "paired arms are not aligned for "
-                f"{treatment_id}/{task_identity}"
+                f"paired arms are not aligned for {treatment_id}/{task_hash}"
             )
 
         def delta(
@@ -877,7 +873,7 @@ def _paired_deltas(
                 "treatment_id": treatment_id,
                 "model": human["model"],
                 "budget_ratio": human["budget_ratio"],
-                "task_identity": task_identity,
+                "task_hash": task_hash,
                 "direction": "HUMAN_BEST-BASELINE",
                 "correctness_delta": delta("correctness_reward"),
                 "compression_ratio_delta": delta("compression_ratio"),
@@ -926,8 +922,8 @@ def _write_reports(output_dir: Path, report: Mapping[str, Any]) -> Path:
         else (
             "treatment_id",
             "arm",
-            "task_identity",
-            "repeat",
+            "task_hash",
+            "sample_index",
         )
     )
     temporary = inspection / ".rows.csv.tmp"
@@ -1038,15 +1034,15 @@ def inspect_matrix(output_dir: Path) -> dict[str, Any]:
     for call in provider_calls:
         if (
             call["arm"] != "unavailable"
-            and call["task_identity"] is not None
-            and call["repeat"] is not None
+            and call["task_hash"] is not None
+            and call["sample_index"] is not None
             and call["leg"] is not None
         ):
             key = (
                 str(call["treatment_id"]),
                 str(call["arm"]),
-                str(call["task_identity"]),
-                int(call["repeat"]),
+                str(call["task_hash"]),
+                int(call["sample_index"]),
                 str(call["leg"]),
             )
             if key in call_index:
@@ -1058,8 +1054,8 @@ def inspect_matrix(output_dir: Path) -> dict[str, Any]:
         coordinate = (
             str(row["treatment_id"]),
             str(row["arm"]),
-            str(row["task_identity"]),
-            int(row["repeat"]),
+            str(row["task_hash"]),
+            int(row["sample_index"]),
         )
         row["encoder_provider_cache_key"] = call_index.get(
             (*coordinate, "enc")

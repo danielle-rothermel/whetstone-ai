@@ -219,8 +219,8 @@ class CodexCliProposerTransport:
         if type(count) is not int or count < 1:
             raise ValueError("proposer draft count must be a positive integer")
         request_evidence = {
-            "proposal_request_identity_hash": request.identity_hash(),
-            "proposer_config_identity_hash": config.identity_hash(),
+            "proposal_request_hash": request.identity_hash(),
+            "proposer_config_hash": config.identity_hash(),
             "proposer": "codex_cli",
         }
         runner = SubprocessCodexRunner(

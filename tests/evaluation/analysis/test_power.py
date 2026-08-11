@@ -123,7 +123,7 @@ def test_repeats_shrink_mdd_and_a_plateau_is_detected() -> None:
         config=PowerConfig(repeat_cap=20),
     )
     at_n = {
-        row.repeats: row.mdd_at_target
+        row.num_samples: row.mdd_at_target
         for row in res.surface
         if row.n_tasks == 12
     }
@@ -187,8 +187,8 @@ def test_repeat_cap_changes_the_grid_and_the_c22_verdict() -> None:
         anchor_repeats=3,
         config=PowerConfig(repeat_cap=20),
     )
-    assert max(point.repeats for point in low.surface) == 6
-    assert max(point.repeats for point in high.surface) == 20
+    assert max(point.num_samples for point in low.surface) == 6
+    assert max(point.num_samples for point in high.surface) == 20
     assert low.recommendation.pool_limited is True
     assert low.recommendation.best_repeats == 6
     assert high.recommendation.achievable is True
@@ -206,7 +206,7 @@ def test_surface_covers_full_grid_and_cost_model() -> None:
     assert len(res.surface) == 12 * 10
     for row in res.surface:
         assert isinstance(row, PowerSurfacePoint)
-        assert row.calls == row.n_tasks * row.repeats
+        assert row.calls == row.n_tasks * row.num_samples
         assert 0.0 <= row.simulated_rank_probability <= 1.0
     assert res.recommendation.recommended_usd is not None
     assert res.recommendation.recommended_usd == pytest.approx(
@@ -377,7 +377,7 @@ def test_simulation_allocates_one_trials_vector_for_large_task_count() -> None:
     power._simulate_ranking_prob(
         decomposition,
         n_tasks=10_000,
-        repeats=3,
+        num_samples=3,
         delta=0.1,
         trials=37,
         rng=cast(np.random.Generator, recorder),

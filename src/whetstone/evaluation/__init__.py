@@ -44,13 +44,13 @@ from whetstone.evaluation.measurements import (
     Score,
 )
 from whetstone.evaluation.plan import (
-    Repeat,
-    RepeatId,
-    RepeatPlan,
-    RepeatProvenanceRow,
+    Sample,
+    SampleId,
+    SamplePlan,
+    SampleProvenanceRow,
     SelectionRule,
     TaskSet,
-    repeat_plan_from_provenance,
+    sample_plan_from_provenance,
 )
 
 __all__ = [
@@ -81,10 +81,10 @@ __all__ = [
     "PreprocessingDefinition",
     "PreprocessingStepBinding",
     "ReferenceResolutionError",
-    "Repeat",
-    "RepeatId",
-    "RepeatPlan",
-    "RepeatProvenanceRow",
+    "Sample",
+    "SampleId",
+    "SamplePlan",
+    "SampleProvenanceRow",
     "SamplingConfig",
     "SamplingDefinition",
     "Score",
@@ -95,7 +95,7 @@ __all__ = [
     "aggregate",
     "compression_ratio",
     "identity_hash_for",
-    "repeat_plan_from_provenance",
     "resolve_assignment",
+    "sample_plan_from_provenance",
     "zstd_compressed_utf8_byte_length",
 ]

@@ -37,7 +37,7 @@ def register_gepa_evaluation_authority(
         identity_hash,
         field="GEPA evaluation authority identity",
     )
-    if authority.runtime_identity_hash != identity_hash:
+    if authority.runtime_hash != identity_hash:
         raise GepaEffectDurabilityError(
             "GEPA evaluation authority identity does not match its registry "
             "key"
@@ -57,7 +57,7 @@ def register_gepa_proposal_authority(
     """Register the exact proposer before DBOS may recover child workflows."""
 
     require_full_hash(identity_hash, field="GEPA proposal authority identity")
-    if authority.runtime_identity_hash != identity_hash:
+    if authority.runtime_hash != identity_hash:
         raise GepaEffectDurabilityError(
             "GEPA proposal authority identity does not match its registry key"
         )
@@ -79,7 +79,7 @@ def _evaluation_authority(
         raise GepaEffectDurabilityError(
             "GEPA evaluation authority is not registered before DBOS launch"
         ) from None
-    if authority.runtime_identity_hash != identity_hash:
+    if authority.runtime_hash != identity_hash:
         raise GepaEffectDurabilityError(
             "registered GEPA evaluation authority identity drifted"
         )
@@ -96,7 +96,7 @@ def _proposal_authority(
         raise GepaEffectDurabilityError(
             "GEPA proposal authority is not registered before DBOS launch"
         ) from None
-    if authority.runtime_identity_hash != identity_hash:
+    if authority.runtime_hash != identity_hash:
         raise GepaEffectDurabilityError(
             "registered GEPA proposal authority identity drifted"
         )
@@ -107,7 +107,7 @@ def _gepa_evaluation_effect_implementation(
     request: GepaEvaluationEffectRequest,
 ) -> GepaEvaluationEffectResult:
     result = _evaluation_authority(request).evaluate(request)
-    if result.request_identity_hash != request.identity_hash():
+    if result.request_hash != request.identity_hash():
         raise GepaEffectDurabilityError(
             "GEPA evaluation authority returned another request's result"
         )
@@ -129,7 +129,7 @@ def _gepa_proposal_effect_implementation(
     request: GepaProposalEffectRequest,
 ) -> GepaProposalEffectResult:
     result = _proposal_authority(request).propose(request)
-    if result.request_identity_hash != request.identity_hash():
+    if result.request_hash != request.identity_hash():
         raise GepaEffectDurabilityError(
             "GEPA proposal authority returned another request's result"
         )

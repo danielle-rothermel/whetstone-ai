@@ -116,9 +116,7 @@ def test_admission_replay_debits_once_and_completion_is_exact(
     assert store.load_terminal_result(completed) == result
 
     wrong_request = completed.model_dump(mode="json")
-    wrong_request["effect_terminal"]["request"]["request_identity_hash"] = (
-        FULL_B
-    )
+    wrong_request["effect_terminal"]["request"]["request_hash"] = FULL_B
     with pytest.raises(
         ValidationError,
         match="belongs to another exact Tool request",

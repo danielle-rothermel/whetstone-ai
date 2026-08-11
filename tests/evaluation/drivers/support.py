@@ -23,7 +23,7 @@ from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.evaluation.drivers.internal import (
     InternalRowOutcome,
     InternalRowRequest,
-    ProcessInstance,
+    ProcessTask,
 )
 from whetstone.evaluation.traces import ExecutedRowState, _llm_component_step
 from whetstone.experiment.binding import (
@@ -73,7 +73,7 @@ def _binding(
     )
 
 
-def _correct_reply(env_name: str, instances) -> ReplyFn:
+def _correct_reply(env_name: str, tasks) -> ReplyFn:
     env = env_spec(env_name)
     from whetstone.envs.rollout_definition import (
         initial_candidate,
@@ -82,7 +82,7 @@ def _correct_reply(env_name: str, instances) -> ReplyFn:
 
     naive = initial_candidate(env)
     correct_by_prompt: dict[str, str] = {}
-    for inst in instances:
+    for inst in tasks:
         prompt = render_prompt(env, naive, inst)
         correct_by_prompt[prompt] = _correct_generation(env, inst)
 
@@ -178,7 +178,7 @@ def _fixed_unordered_provider_request() -> InternalRowRequest:
                 content_hash="1" * 64,
             ),
         ),
-        instance=ProcessInstance(
+        instance=ProcessTask(
             id="fixed-instance",
             seed=1,
             strata=("fixed",),
@@ -190,7 +190,7 @@ def _fixed_unordered_provider_request() -> InternalRowRequest:
         procedure_config_hash="2" * 64,
         evaluation_binding_hash=IdentityHash("3" * 64),
         logical_call_id="fixed-call#0",
-        repeat_index=0,
+        sample_index=0,
         drive_ordinal=0,
         cache_phase="internal_eval",
         cache_unit="fixed-candidate",

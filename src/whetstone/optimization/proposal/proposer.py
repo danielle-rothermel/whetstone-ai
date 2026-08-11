@@ -101,7 +101,7 @@ class ProposerConfig(BaseModel):
                         self.provider_call_config.record_ref.content_hash
                     ),
                 },
-                "identity_hash": str(self.provider_call_config.identity_hash),
+                "identity_hash": str(self.provider_call_config.record_hash),
             },
             "temperature": (
                 None if self.temperature is None else float(self.temperature)
@@ -503,7 +503,7 @@ class ProviderProposerTransport:
             )
         if (
             provider_config.identity_hash
-            != config.provider_call_config.identity_hash
+            != config.provider_call_config.record_hash
         ):
             raise ValueError(
                 "resolved Provider Call Config hash does not match "
@@ -593,9 +593,7 @@ class ProviderProposerTransport:
             "batch_slot": slot,
             "proposal_mode": proposal_request.proposal_mode,
             "request_ordinal": proposal_request.request_ordinal,
-            "proposal_request_identity_hash": (
-                proposal_request.identity_hash()
-            ),
+            "proposal_request_hash": (proposal_request.identity_hash()),
             "provider_call_config": config.provider_call_config.model_dump(
                 mode="json"
             ),
@@ -607,7 +605,7 @@ class ProviderProposerTransport:
             "prompt_adapter_identity_hash": (
                 self.prompt_adapter_identity_hash
             ),
-            "provider_call_request": result.request_identity,
+            "provider_call_request": result.request_hash,
         }
         response_evidence = {
             "logical_call_id": logical_call_id,

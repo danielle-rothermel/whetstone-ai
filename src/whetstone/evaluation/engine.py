@@ -145,7 +145,7 @@ class EvaluationEngine:
                 else experiment.eval_configs.official
             )
             expected_subset = self._derive_sampling(
-                canonical, sampling.task_set.task_identities
+                canonical, sampling.task_set.task_hashes
             )
             if expected_subset != sampling:
                 raise ValueError(
@@ -189,7 +189,7 @@ class EvaluationEngine:
                 PROVIDER_EXECUTION_POLICY_SCHEMA,
                 self._execution_policy.identity_payload(),
             ),
-            identity_hash=self._execution_policy.identity_hash,
+            record_hash=self._execution_policy.identity_hash,
         )
 
     @property
@@ -208,8 +208,8 @@ class EvaluationEngine:
             raise ValueError("derived sampling task IDs must be unique")
         source_by_id = dict(
             zip(
-                source.task_set.task_identities,
-                source.instances,
+                source.task_set.task_hashes,
+                source.tasks,
                 strict=True,
             )
         )
@@ -236,13 +236,11 @@ class EvaluationEngine:
             namespace=namespace,
             dataset_revision=source.task_set.dataset_revision,
             split_role=source.split_role,
-            instances=selected,
-            task_identity_of=lambda instance: identity_by_instance[
-                id(instance)
-            ],
+            tasks=selected,
+            task_hash_of=lambda instance: identity_by_instance[id(instance)],
             procedure=source.procedure_config,
             aggregation=source.aggregation_config,
-            repeats=source.repeat_plan.repeat_count,
+            num_samples=source.sample_plan.num_samples,
         )
 
     def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine:
@@ -286,7 +284,7 @@ class EvaluationEngine:
         validate_candidate_prompt(
             env_spec(self.experiment.env_name),
             candidate,
-            self.sampling.instances,
+            self.sampling.tasks,
         )
 
     def validate_request(self, request: EvaluationRequest) -> None:
@@ -330,8 +328,8 @@ class EvaluationEngine:
             graph_hash=self.experiment.rollout_definition.graph_hash,
             purpose=request.purpose,
             split_role=self.sampling.split_role,
-            task_identities=self.sampling.task_set.task_identities,
-            repeat_count=self.sampling.repeat_plan.repeat_count,
+            task_hashes=self.sampling.task_set.task_hashes,
+            num_samples=self.sampling.sample_plan.num_samples,
             component_traces_ref=component_traces_ref,
             outputs=rows,
         )
@@ -341,30 +339,29 @@ class EvaluationEngine:
         request: EvaluationRequest,
         result: InternalEvalResult,
     ) -> tuple[EvaluationComponentTraces, tuple[EvaluationOutputRow, ...]]:
-        instance_ids = tuple(
-            str(instance.id) for instance in self.sampling.instances
-        )
-        task_identities = self.sampling.task_set.task_identities
-        if len(instance_ids) != len(task_identities):
+        task_ids = tuple(str(instance.id) for instance in self.sampling.tasks)
+        task_hashes = self.sampling.task_set.task_hashes
+        if len(task_ids) != len(task_hashes):
             raise ValueError(
                 "sampling instances and task identities must align exactly"
             )
-        if len(set(instance_ids)) != len(instance_ids):
+        if len(set(task_ids)) != len(task_ids):
             raise ValueError("sampling instance IDs must be unique")
-        if len(set(task_identities)) != len(task_identities):
+        if len(set(task_hashes)) != len(task_hashes):
             raise ValueError("sampling task identities must be unique")
 
-        task_identity_by_instance = dict(
-            zip(instance_ids, task_identities, strict=True)
-        )
+        task_hash_by_instance = dict(zip(task_ids, task_hashes, strict=True))
         instance_by_id = {
-            str(instance.id): instance for instance in self.sampling.instances
+            str(instance.id): instance for instance in self.sampling.tasks
         }
-        repeat_count = self.sampling.repeat_plan.repeat_count
+        task_index_by_id = {
+            task_id: task_index for task_index, task_id in enumerate(task_ids)
+        }
+        num_samples = self.sampling.sample_plan.num_samples
         planned_ordinal = {
-            (instance_id, repeat): instance_index * repeat_count + repeat
-            for instance_index, instance_id in enumerate(instance_ids)
-            for repeat in range(repeat_count)
+            (task_id, sample_index): task_index * num_samples + sample_index
+            for task_index, task_id in enumerate(task_ids)
+            for sample_index in range(num_samples)
         }
         trace_rows: list[EvaluationComponentTraceRow] = []
         output_rows: list[EvaluationOutputRow] = []
@@ -374,7 +371,7 @@ class EvaluationEngine:
                 raise ValueError(
                     "evaluation trace candidate_id does not match request"
                 )
-            key = (output.instance_id, output.repeat)
+            key = (output.task_id, output.sample_index)
             ordinal = planned_ordinal.get(key)
             if ordinal is None:
                 raise ValueError(
@@ -386,12 +383,14 @@ class EvaluationEngine:
                     "repeat order"
                 )
             prior_ordinal = ordinal
-            task_identity = task_identity_by_instance[output.instance_id]
+            task_hash = task_hash_by_instance[output.task_id]
+            task_index = task_index_by_id[output.task_id]
             trace_rows.append(
                 EvaluationComponentTraceRow(
-                    instance_id=output.instance_id,
-                    task_identity=task_identity,
-                    repeat=output.repeat,
+                    task_id=output.task_id,
+                    task_hash=task_hash,
+                    task_index=task_index,
+                    sample_index=output.sample_index,
                     executed_component_trace=ExecutedComponentTracePayload(
                         row_state=output.row_state,
                         executed_component_steps=(
@@ -403,12 +402,13 @@ class EvaluationEngine:
             output_rows.append(
                 EvaluationOutputRow(
                     candidate_id=output.candidate_id,
-                    instance_id=output.instance_id,
-                    task_identity=task_identity,
-                    repeat=output.repeat,
+                    task_id=output.task_id,
+                    task_hash=task_hash,
+                    task_index=task_index,
+                    sample_index=output.sample_index,
                     rendered_prompt=self._rendered_prompt(
                         request.candidate,
-                        instance_by_id[output.instance_id],
+                        instance_by_id[output.task_id],
                         max_budget=output.max_budget,
                     ),
                     output_text=output.output_text,
@@ -432,8 +432,8 @@ class EvaluationEngine:
                 graph_hash=self.experiment.rollout_definition.graph_hash,
                 purpose=request.purpose,
                 split_role=self.sampling.split_role,
-                task_identities=task_identities,
-                repeat_count=repeat_count,
+                task_hashes=task_hashes,
+                num_samples=num_samples,
                 rows=tuple(trace_rows),
             ),
             tuple(output_rows),
@@ -625,13 +625,13 @@ class EvaluationEngine:
             graph_hash=aggregate.graph_hash,
             graph_config_ref=aggregate.graph_hash,
             purpose=request.purpose,
-            dataset_identity=self.sampling.task_set.dataset_revision,
-            task_identities=self.sampling.task_set.task_identities,
-            repeat_count=self.sampling.repeat_plan.repeat_count,
+            dataset_hash=self.sampling.task_set.dataset_revision,
+            task_hashes=self.sampling.task_set.task_hashes,
+            num_samples=self.sampling.sample_plan.num_samples,
             per_task_values=result.per_task_scores,
             per_task_counts=result.per_task_counts,
             row_accounting=RowAccounting(
-                planned=aggregate.task_count * aggregate.repeat_count,
+                planned=aggregate.task_count * aggregate.num_samples,
                 present=aggregate.rows_present,
                 missing=aggregate.rows_missing,
                 failed=aggregate.rows_failed,
@@ -670,7 +670,7 @@ class EvaluationEngine:
             for row in self._partial_log.load()
             if row.unit == candidate_id
             and row.phase == self.sampling.split_role
-            and row.request_identity in request_identities
+            and row.request_hash in request_identities
         ]
         hits = [row for row in rows if row.cache_hit]
         return CacheEvidence(

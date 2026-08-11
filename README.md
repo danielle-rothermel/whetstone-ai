@@ -25,7 +25,7 @@ these areas:
   preserve partial progress, reuse prompt results, and resume completed work
   without changing its identity.
 - **[Evaluation and scoring](src/whetstone/evaluation/)** own evaluation
-  definitions and configs, task-and-repeat plans, measurements, compression,
+  definitions and configs, task-and-sample plans, measurements, compression,
   aggregation, graph execution, and complete reward evidence.
 - **[Optimization](src/whetstone/optimization/)** provides the shared harness,
   proposal and tool contracts, native COPRO, MIPROv2, and GEPA flows, and a
@@ -71,6 +71,10 @@ class TypedRef(BaseModel):
     schema_name: NonEmptyId
     content_hash: ContentHash
 
+class IdentityRef(BaseModel):
+    record_ref: TypedRef
+    record_hash: IdentityHash
+
 class TerminalFailure(BaseModel):
     code: NonEmptyId
     message: NonEmptyId
@@ -87,6 +91,11 @@ class Candidate(BaseModel):
     candidate_id: NonEmptyId
     base_ref: TypedRef
     payload: ImmutableJsonObject
+
+class EvalConfigRef(BaseModel):
+    record: EvalConfig
+    record_ref: TypedRef
+    config_hash: IdentityHash
 
 class EvaluationBinding(BaseModel):
     eval_config: EvalConfigRef
@@ -156,7 +165,7 @@ class ProviderCallAttempt(BaseModel):
 
 class ProviderCallResult(BaseModel):
     logical_call_id: StrictStr
-    request_identity: dict[str, Any]
+    request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
     attempts: tuple[ProviderCallAttempt, ...]
     generation: Generation | None
@@ -206,9 +215,9 @@ class PromptResultCache:
         self,
         key: str,
         *,
-        request_identity: dict[str, Any],
+        request_hash: dict[str, Any],
         execution_policy_hash: str,
-        repeat_index: int,
+        sample_index: int,
         drive_ordinal: int,
         result: ProviderCallResult,
         phase: str,
@@ -234,11 +243,19 @@ class EvaluationEngine:
 ```
 
 ```python
+class EvaluationOutputRow(BaseModel):
+    task_id: StrictStr
+    task_hash: StrictStr
+    task_index: StrictInt
+    sample_index: StrictInt
+
 class EvaluationEvidence(BaseModel):
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     graph_hash: StrictStr
-    task_identities: tuple[str, ...]
+    dataset_hash: StrictStr
+    task_hashes: tuple[str, ...]
+    num_samples: StrictInt
     row_accounting: RowAccounting
     component_traces_ref: TypedRef
     outputs_ref: TypedRef
@@ -378,6 +395,13 @@ Run the complete local gate before committing or pushing:
 
 ```bash
 ./scripts/pre-check.sh
+```
+
+For faster iteration while editing, run the fast subset (unit tests excluding slow
+integration, runner, and preview buckets):
+
+```bash
+./scripts/test-fast.sh
 ```
 
 Install the same gate for both Git hooks with:

@@ -116,7 +116,7 @@ def run_code_comp_anchor_baseline_preview(
     concurrency: int = 1,
     partial_log: PartialLog | None = None,
     prompt_cache: PromptResultCache | None = None,
-    repeats: int = 1,
+    num_samples: int = 1,
     blend_config: BoundedCompressionMetricConfig = (
         CODE_COMP_DEFAULT_BLEND_CONFIG
     ),
@@ -156,7 +156,7 @@ def run_code_comp_anchor_baseline_preview(
             tasks=tasks,
             internal_n=len(tasks),
             official_n=len(tasks),
-            repeats=repeats,
+            num_samples=num_samples,
             blend_config=blend_config,
         ),
     )
@@ -219,7 +219,7 @@ def run_code_comp_anchor_baseline_sweep(
     concurrency: int = 1,
     partial_log: PartialLog | None = None,
     prompt_cache: PromptResultCache | None = None,
-    repeats: int = 1,
+    num_samples: int = 1,
     blend_config: BoundedCompressionMetricConfig = (
         CODE_COMP_DEFAULT_BLEND_CONFIG
     ),
@@ -249,7 +249,7 @@ def run_code_comp_anchor_baseline_sweep(
                 concurrency=concurrency,
                 partial_log=partial_log,
                 prompt_cache=prompt_cache,
-                repeats=repeats,
+                num_samples=num_samples,
                 blend_config=blend_config,
                 power_config=power_config,
                 bootstrap_level=bootstrap_level,
@@ -278,7 +278,7 @@ def run_code_comp_copro_scoring_preview(
     task_selection: TaskRoleSelection | None = None,
     preflight_task: CodeCompTaskInstance | None = None,
     concurrency: int = 1,
-    repeats: int = 1,
+    num_samples: int = 1,
     blend_config: BoundedCompressionMetricConfig = (
         CODE_COMP_DEFAULT_BLEND_CONFIG
     ),
@@ -298,8 +298,8 @@ def run_code_comp_copro_scoring_preview(
 
     if not tasks:
         raise ValueError("COPRO scoring preview requires at least one task")
-    if repeats < 1:
-        raise ValueError("COPRO scoring preview repeats must be positive")
+    if num_samples < 1:
+        raise ValueError("COPRO scoring preview num_samples must be positive")
     task_ids = tuple(task.humaneval_task.task_id for task in tasks)
     preflight = run_encdec_scoring_preflight(
         (preflight_task or tasks[0],), batch_scorer
@@ -320,7 +320,7 @@ def run_code_comp_copro_scoring_preview(
                 tasks=tasks,
                 internal_n=len(tasks),
                 official_n=len(tasks),
-                repeats=repeats,
+                num_samples=num_samples,
                 blend_config=blend_config,
             ),
         )

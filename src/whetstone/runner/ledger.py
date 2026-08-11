@@ -505,8 +505,8 @@ class OfficialAnchorRecord(BaseModel):
     eval_config_hash: StrictStr
     #: Raw environment IDs and semantic task identities preserve evaluation
     #: order independently; every per-task vector below aligns to both.
-    official_instance_ids: tuple[StrictStr, ...]
-    official_task_identities: tuple[StrictStr, ...]
+    official_task_ids: tuple[StrictStr, ...]
+    official_task_hashes: tuple[StrictStr, ...]
     baseline_evidence_ref: TypedRef
     ceiling_evidence_ref: TypedRef
     baseline_official: StrictFloat
@@ -530,34 +530,23 @@ class OfficialAnchorRecord(BaseModel):
         require_full_hash(self.graph_hash, field="graph_hash")
         require_full_hash(self.eval_config_hash, field="eval_config_hash")
 
-        if not self.official_instance_ids:
-            raise ValueError(
-                "official_instance_ids must contain at least one ID"
-            )
-        if any(
-            not instance_id.strip()
-            for instance_id in self.official_instance_ids
-        ):
-            raise ValueError(
-                "official_instance_ids must contain non-empty IDs"
-            )
-        if len(set(self.official_instance_ids)) != len(
-            self.official_instance_ids
-        ):
-            raise ValueError("official_instance_ids must contain unique IDs")
+        if not self.official_task_ids:
+            raise ValueError("official_task_ids must contain at least one ID")
+        if any(not task_id.strip() for task_id in self.official_task_ids):
+            raise ValueError("official_task_ids must contain non-empty IDs")
+        if len(set(self.official_task_ids)) != len(self.official_task_ids):
+            raise ValueError("official_task_ids must contain unique IDs")
 
-        for identity in self.official_task_identities:
-            require_full_hash(identity, field="official_task_identities")
-        if len(set(self.official_task_identities)) != len(
-            self.official_task_identities
+        for identity in self.official_task_hashes:
+            require_full_hash(identity, field="official_task_hashes")
+        if len(set(self.official_task_hashes)) != len(
+            self.official_task_hashes
         ):
-            raise ValueError(
-                "official_task_identities must contain unique hashes"
-            )
+            raise ValueError("official_task_hashes must contain unique hashes")
 
-        official_count = len(self.official_instance_ids)
+        official_count = len(self.official_task_ids)
         aligned_fields = (
-            "official_task_identities",
+            "official_task_hashes",
             "baseline_per_task",
             "ceiling_per_task",
             "baseline_per_task_counts",
@@ -566,7 +555,7 @@ class OfficialAnchorRecord(BaseModel):
         for field_name in aligned_fields:
             if len(getattr(self, field_name)) != official_count:
                 raise ValueError(
-                    f"{field_name} length must match official_instance_ids"
+                    f"{field_name} length must match official_task_ids"
                 )
 
         if self.official_repeats_used <= 0:

@@ -153,7 +153,7 @@ def _parse_args() -> argparse.Namespace:
         "--concurrency",
         type=_positive_int,
         default=8,
-        help="maximum task/repeat rows evaluated concurrently",
+        help="maximum task/sample rows evaluated concurrently",
     )
     parser.add_argument(
         "--task-model",
@@ -339,7 +339,7 @@ def render_runtime(
     table.add_row("evaluation Python", runtime.evaluation_python)
     table.add_row("Python", runtime.probe.python_version)
     table.add_row("NumPy", runtime.probe.numpy_version)
-    table.add_row("runtime identity", runtime.runtime_identity_hash)
+    table.add_row("runtime identity", runtime.runtime_hash)
     table.add_row("tasks", ", ".join(transcript.task_ids))
     if transcript.task_selection is not None:
         table.add_row(
@@ -485,7 +485,7 @@ def render_candidate(
     console.print(Panel(Text(body), title="Instruction"))
     for row in candidate.component_traces.rows:
         console.print(
-            f"[bold]Task {row.task_identity}, repeat {row.repeat}[/bold]"
+            f"[bold]Task {row.task_hash}, repeat {row.sample_index}[/bold]"
         )
         for step in row.executed_component_trace.executed_component_steps:
             prompt = _step_text(step, "prompt")
@@ -687,7 +687,7 @@ def _render_launch_plan(
     task_model: EncDecTaskModelConfig,
     tasks: tuple[CodeCompTaskInstance, ...],
     sweep: CodeCompCoproSweepRanges,
-    repeats: int,
+    num_samples: int,
     concurrency: int,
     open_file_limit: int,
     output_dir: Path,
@@ -696,7 +696,7 @@ def _render_launch_plan(
     candidate_evaluations = sum(
         point.copro.breadth * point.copro.depth for point in points
     )
-    task_model_calls = candidate_evaluations * len(tasks) * repeats * 2
+    task_model_calls = candidate_evaluations * len(tasks) * num_samples * 2
     table = Table(show_header=False, box=None, pad_edge=False)
     table.add_column("field", style="bold cyan")
     table.add_column("value")
@@ -706,7 +706,7 @@ def _render_launch_plan(
     table.add_row(
         "task IDs", ", ".join(task.humaneval_task.task_id for task in tasks)
     )
-    table.add_row("repeats", str(repeats))
+    table.add_row("num samples", str(num_samples))
     table.add_row("row concurrency", str(concurrency))
     table.add_row("open-file soft limit", str(open_file_limit))
     table.add_row("COPRO points", str(len(points)))
@@ -858,7 +858,7 @@ def main() -> None:
     runtime_summary = EncDecScoringRuntimeSummary(
         evaluation_python=runtime.probe.python_executable,
         dr_code_version=version("dr-code"),
-        runtime_identity_hash=runtime.runtime_identity_hash,
+        runtime_hash=runtime.runtime_hash,
         probe=runtime.probe,
     )
     tasks, task_selection, preflight_task = _select_tasks(args)
@@ -874,7 +874,7 @@ def main() -> None:
         task_model=task_model,
         tasks=tasks,
         sweep=sweep,
-        repeats=args.repeats,
+        num_samples=args.repeats,
         concurrency=args.concurrency,
         open_file_limit=open_file_limit,
         output_dir=output_dir,
@@ -882,7 +882,7 @@ def main() -> None:
     try:
         with CheckpointedCodeBatchScorer(
             output_dir / "execution-cache.sqlite3",
-            runtime_identity=runtime.runtime_identity,
+            runtime_document=runtime.runtime_document,
             executor=runtime.executor,
         ) as scorer:
             transcript = run_code_comp_copro_scoring_preview(
@@ -898,7 +898,7 @@ def main() -> None:
                 batch_scorer=scorer,
                 runtime=runtime_summary,
                 concurrency=args.concurrency,
-                repeats=args.repeats,
+                num_samples=args.repeats,
                 proposal_observer=lambda attempt: _observe_proposal(
                     attempt, console=console, output_dir=output_dir
                 ),

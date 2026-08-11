@@ -369,7 +369,7 @@ class IdentityRef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record_ref: TypedRef
-    identity_hash: IdentityHash
+    record_hash: IdentityHash
 
 
 class TerminalFailure(BaseModel):

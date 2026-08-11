@@ -450,7 +450,7 @@ def test_restart_rejects_forged_or_incomplete_result_graphs(
     elif forgery == "evidence_purpose":
         evidence_update["purpose"] = "forged-purpose"
     elif forgery == "evidence_dataset":
-        evidence_update["dataset_identity"] = "forged-dataset"
+        evidence_update["dataset_hash"] = "forged-dataset"
     elif forgery == "aggregate_value":
         assert evidence.aggregate_value is not None
         evidence_update["aggregate_value"] = evidence.aggregate_value + 1.0
@@ -483,10 +483,10 @@ def test_restart_rejects_forged_or_incomplete_result_graphs(
         elif forgery == "output_split":
             outputs_content["split_role"] = "official"
         elif forgery == "output_task":
-            outputs_content["task_identities"] = ["forged-task"]
-            outputs_content["outputs"][0]["task_identity"] = "forged-task"
+            outputs_content["task_hashes"] = ["forged-task"]
+            outputs_content["outputs"][0]["task_hash"] = "forged-task"
         elif forgery == "output_repeat":
-            outputs_content["repeat_count"] = 2
+            outputs_content["num_samples"] = 2
         elif forgery == "output_trace":
             outputs_content["outputs"][0]["rendered_prompt"] = "forged prompt"
         elif forgery == "output_metadata":
@@ -561,7 +561,7 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
     )
     assert len(original_outputs.outputs) == 1
     original_row = original_outputs.outputs[0]
-    instance = engine.sampling.instances[0]
+    instance = engine.sampling.tasks[0]
     rewritten_text = "not the expected answer"
     rewritten_score = float(
         env_exact_match_score(
@@ -597,7 +597,7 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
         evaluation_binding_hash=intent.evaluation_binding.identity_hash(),
         task_rows=(
             TaskRows(
-                task_identity=original_row.task_identity,
+                task_hash=original_row.task_hash,
                 rows=(RowValue(value=rewritten_score),),
             ),
         ),
@@ -835,7 +835,7 @@ def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
     def one_success_one_failure(request: InternalRowRequest) -> ProcessJob:
         outcome = (
             _successful_internal_outcome(request)
-            if request.repeat_index == 0
+            if request.sample_index == 0
             else InternalRowOutcome(
                 score=None,
                 row_state=ExecutedRowState.FAILED,
@@ -847,7 +847,7 @@ def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
         return ProcessJob(
             entrypoint="tests.envs.process_workers:return_payload",
             payload=InternalRowResult(
-                request_identity=request.request_identity,
+                request_hash=request.request_hash,
                 outcome=outcome,
             ).model_dump(mode="json"),
         )
@@ -856,7 +856,7 @@ def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
         tmp_path,
         store=store,
         row_job_factory=one_success_one_failure,
-        repeats=2,
+        num_samples=2,
         role=EvaluationRole.OFFICIAL,
     )
     intent = _intent(

@@ -255,10 +255,10 @@ def test_executed_component_trace_partial_round_trip_preserves_order(
     log.append(
         PartialCallRecord(
             phase="internal",
-            instance_id="instance",
+            task_id="instance",
             unit="unit",
-            repeat_id=0,
-            request_identity="0" * 64,
+            sample_index=0,
+            request_hash="0" * 64,
             redrive_pending=False,
             observation_payload=payload.model_dump(mode="json"),
         )

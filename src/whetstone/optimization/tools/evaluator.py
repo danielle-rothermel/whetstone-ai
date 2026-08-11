@@ -28,8 +28,8 @@ class EngineToolEvaluator:
     def _resolve_engine(
         self, call: ToolCall, config: ToolConfig
     ) -> EvaluationEngine:
-        if config.eval_config_identity_hash != (
-            self._engine.eval_config_ref.identity_hash
+        if config.eval_config_hash != (
+            self._engine.eval_config_ref.config_hash
         ):
             raise ToolValidationError(
                 "tool config is not bound to the engine's exact Eval Config"
@@ -124,7 +124,7 @@ class EngineToolEvaluator:
             rollout_refs=(evaluated.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
             eval_config_hash=(
-                evidence.evaluation_binding.eval_config.identity_hash
+                evidence.evaluation_binding.eval_config.config_hash
             ),
         )
 

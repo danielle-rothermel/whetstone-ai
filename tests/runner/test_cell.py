@@ -414,9 +414,7 @@ def test_official_anchor_projects_both_reference_arms(tmp_path: Path) -> None:
     assert anchor["cell_id"] == outcome.record.cell_id
     assert anchor["baseline_official"] == outcome.record.baseline_official
     assert anchor["ceiling_official"] == outcome.record.ceiling_official
-    assert len(anchor["official_instance_ids"]) == len(
-        anchor["baseline_per_task"]
-    )
+    assert len(anchor["official_task_ids"]) == len(anchor["baseline_per_task"])
 
 
 def test_a_completed_line_always_cites_committed_viewer_files(

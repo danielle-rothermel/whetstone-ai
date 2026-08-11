@@ -26,7 +26,7 @@ from whetstone.provider.policy import PROVIDER_EXECUTION_POLICY_SCHEMA
 
 EVAL_CONFIG_RECORD_SCHEMA = SCHEMA_EVAL_CONFIG
 EVALUATION_BINDING_SCHEMA = "whetstone.evaluation_binding"
-EVALUATION_BINDING_SCHEMA_VERSION = 2
+EVALUATION_BINDING_SCHEMA_VERSION = 3
 
 
 def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
@@ -55,11 +55,11 @@ class EvalConfigRef(BaseModel):
 
     record: EvalConfig
     record_ref: TypedRef
-    identity_hash: IdentityHash
+    config_hash: IdentityHash
 
     @model_validator(mode="after")
     def _validate(self) -> EvalConfigRef:
-        if self.identity_hash != self.record.config_identity_hash:
+        if self.config_hash != self.record.config_hash:
             raise ValueError(
                 "Eval Config identity_hash must match the exact typed record"
             )
@@ -79,7 +79,7 @@ def eval_config_reference(eval_config: EvalConfig) -> EvalConfigRef:
         record_ref=typed_ref_for_record(
             EVAL_CONFIG_RECORD_SCHEMA, eval_config.model_dump(mode="json")
         ),
-        identity_hash=eval_config.config_identity_hash,
+        config_hash=eval_config.config_hash,
     )
 
 
@@ -90,7 +90,7 @@ class ExecutionEnvironmentFingerprint(BaseModel):
 
     dependency_versions: tuple[tuple[NonEmptyId, NonEmptyId], ...] = ()
     code_revision: NonEmptyId | None = None
-    runtime_identity: NonEmptyId | None = None
+    runtime_hash: NonEmptyId | None = None
 
     @field_validator("dependency_versions", mode="before")
     @classmethod
@@ -125,7 +125,7 @@ class EvaluationBinding(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     eval_config: EvalConfigRef
     role: EvaluationRole
     authority_principal: NonEmptyId | None = None

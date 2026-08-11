@@ -223,9 +223,7 @@ def render_proposal_call(
     request_table.add_column(style="bold cyan", no_wrap=True)
     request_table.add_column(overflow="fold")
     request_table.add_row("Proposer", call.proposer_kind)
-    request_table.add_row(
-        "Config identity", call.proposer_config_identity_hash
-    )
+    request_table.add_row("Config identity", call.proposer_config_hash)
     request_table.add_row(
         "Config", Pretty(call.proposer_config.to_json(), expand_all=True)
     )

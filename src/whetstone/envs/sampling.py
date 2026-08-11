@@ -7,14 +7,14 @@ from enum import StrEnum
 from whetstone_envs.core import Instance, PoolSplit, TaskPool
 
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.registry import DEFAULT_REPEATS, EnvSpec
-from whetstone.envs.task import EnvTask
+from whetstone.envs.registry import DEFAULT_NUM_SAMPLES, EnvSpec
+from whetstone.envs.task import Task
 from whetstone.evaluation import (
     AggregationConfig,
     EvalConfig,
     EvalDefinition,
     EvaluationProcedureConfig,
-    RepeatPlan,
+    SamplePlan,
     SamplingConfig,
     SamplingDefinition,
     TaskSet,
@@ -90,13 +90,10 @@ def _dataset_revision(env: EnvSpec) -> str:
     return str(env.generator_version)
 
 
-def task_identities(
-    env: EnvSpec, instances: tuple[Instance, ...]
-) -> tuple[str, ...]:
+def task_hashes(env: EnvSpec, tasks: tuple[Instance, ...]) -> tuple[str, ...]:
     """The ordered task identities for ``instances`` (pool order preserved)."""
     return tuple(
-        EnvTask.from_instance(env.name, inst).task_identity()
-        for inst in instances
+        Task.from_instance(env.name, inst).task_hash() for inst in tasks
     )
 
 
@@ -104,7 +101,7 @@ def build_task_set(
     env: EnvSpec,
     *,
     split_role: str,
-    instances: tuple[Instance, ...],
+    tasks: tuple[Instance, ...],
 ) -> TaskSet:
     """A versioned, ordered Task Set manifest for one split's instances.
 
@@ -116,27 +113,27 @@ def build_task_set(
         manifest_id=f"whetstone.env.{env.name}.{split_role}",
         version=_DEFINITION_VERSION,
         dataset_revision=_dataset_revision(env),
-        task_identities=task_identities(env, instances),
+        task_hashes=task_hashes(env, tasks),
     )
 
 
-def build_repeat_plan(
+def build_sample_plan(
     env: EnvSpec,
     *,
     split_role: str,
     task_set: TaskSet,
-    repeats: int = DEFAULT_REPEATS,
-) -> RepeatPlan:
-    """The Repeat Plan: ``repeats`` ordered slots per task in the Task Set.
+    num_samples: int = DEFAULT_NUM_SAMPLES,
+) -> SamplePlan:
+    """The Sample Plan: ``num_samples`` ordered slots per task in the Task Set.
 
-    Per-slot RNG seeds are slot data (excluded from Repeat Plan identity);
-    the spec-default repeat count is :data:`DEFAULT_REPEATS`.
+    Per-slot RNG seeds are slot data (excluded from Sample Plan identity);
+    the spec-default repeat count is :data:`DEFAULT_NUM_SAMPLES`.
     """
-    return RepeatPlan(
+    return SamplePlan(
         plan_id=f"whetstone.env.{env.name}.{split_role}",
         version=_DEFINITION_VERSION,
-        task_identities=task_set.task_identities,
-        repeat_count=repeats,
+        task_hashes=task_set.task_hashes,
+        num_samples=num_samples,
     )
 
 
@@ -145,9 +142,9 @@ def build_sampling_config(
     *,
     split_role: str,
     task_set: TaskSet,
-    repeat_plan: RepeatPlan,
+    sample_plan: SamplePlan,
 ) -> SamplingConfig:
-    """The Sampling Config binding this split's Task Set + Repeat Plan."""
+    """The Sampling Config binding this split's Task Set + Sample Plan."""
     definition = SamplingDefinition(
         definition_id=f"whetstone.env.{env.name}.{split_role}.sampling",
         version=_DEFINITION_VERSION,
@@ -155,7 +152,7 @@ def build_sampling_config(
     return definition.materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
 
@@ -220,9 +217,9 @@ class EnvSplitSampling:
     """The sampling artifacts for one split (internal_eval or official)."""
 
     split_role: str
-    instances: tuple[Instance, ...]
+    tasks: tuple[Instance, ...]
     task_set: TaskSet
-    repeat_plan: RepeatPlan
+    sample_plan: SamplePlan
     sampling_config: SamplingConfig
     procedure_config: EvaluationProcedureConfig
     aggregation_config: AggregationConfig
@@ -246,7 +243,7 @@ class EnvSplitSampling:
             eval_config=self.eval_config,
             sampling_config=self.sampling_config,
             task_set=self.task_set,
-            repeat_plan=self.repeat_plan,
+            sample_plan=self.sample_plan,
             aggregation_config=self.aggregation_config,
         )
 
@@ -264,7 +261,7 @@ class EnvEvalConfigs:
     procedure_config_hash: str
     internal: EnvSplitSampling
     official: EnvSplitSampling
-    held_out_task_identities: tuple[str, ...]
+    held_out_task_hashes: tuple[str, ...]
 
     def eval_config_for(self, split_role: str) -> EvalConfig:
         if split_role == INTERNAL_EVAL:
@@ -364,35 +361,33 @@ def derive_split_sampling(
     namespace: str,
     dataset_revision: str,
     split_role: str,
-    instances: tuple[Instance, ...],
-    task_identity_of: Callable[[Instance], str],
+    tasks: tuple[Instance, ...],
+    task_hash_of: Callable[[Instance], str],
     procedure: EvaluationProcedureConfig,
     aggregation: AggregationConfig,
-    repeats: int,
+    num_samples: int,
 ) -> EnvSplitSampling:
     """Derive one exact sampling and EvalConfig contract.
 
-    The ordered ``instances``, exact ``repeats``, ``split_role``, Procedure,
+    The ordered ``tasks``, exact ``num_samples``, ``split_role``, Procedure,
     and Aggregation are all bound into the returned value. Evaluation drives
     consume this object directly, so the rows they execute cannot diverge
     from the identity they record.
     """
-    if repeats < 1:
-        raise ValueError(f"repeats must be at least 1; got {repeats}")
-    task_identities = tuple(
-        task_identity_of(instance) for instance in instances
-    )
+    if num_samples < 1:
+        raise ValueError(f"num_samples must be at least 1; got {num_samples}")
+    task_hashes = tuple(task_hash_of(instance) for instance in tasks)
     task_set = TaskSet(
         manifest_id=f"{namespace}.{split_role}",
         version=_DEFINITION_VERSION,
         dataset_revision=dataset_revision,
-        task_identities=task_identities,
+        task_hashes=task_hashes,
     )
-    repeat_plan = RepeatPlan(
+    sample_plan = SamplePlan(
         plan_id=f"{namespace}.{split_role}",
         version=_DEFINITION_VERSION,
-        task_identities=task_identities,
-        repeat_count=repeats,
+        task_hashes=task_hashes,
+        num_samples=num_samples,
     )
     sampling = SamplingDefinition(
         definition_id=f"{namespace}.{split_role}.sampling",
@@ -400,7 +395,7 @@ def derive_split_sampling(
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
     eval_config = EvalDefinition(
@@ -413,9 +408,9 @@ def derive_split_sampling(
     )
     return EnvSplitSampling(
         split_role=split_role,
-        instances=instances,
+        tasks=tasks,
         task_set=task_set,
-        repeat_plan=repeat_plan,
+        sample_plan=sample_plan,
         sampling_config=sampling,
         procedure_config=procedure,
         aggregation_config=aggregation,
@@ -438,7 +433,7 @@ def build_eval_configs(
     procedure: EvaluationProcedureConfig,
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
-    repeats: int = DEFAULT_REPEATS,
+    num_samples: int = DEFAULT_NUM_SAMPLES,
     split_sizes: tuple[int, int, int] | None = None,
 ) -> EnvEvalConfigs:
     """Build the internal + official Eval Configs from ``pool``'s splits.
@@ -463,37 +458,37 @@ def build_eval_configs(
     namespace = f"whetstone.env.{env.name}"
 
     def identity_of(instance: Instance) -> str:
-        return EnvTask.from_instance(env.name, instance).task_identity()
+        return Task.from_instance(env.name, instance).task_hash()
 
     internal = derive_split_sampling(
         namespace=namespace,
         dataset_revision=_dataset_revision(env),
         split_role=INTERNAL_EVAL,
-        instances=split.internal_eval,
-        task_identity_of=identity_of,
+        tasks=split.internal_eval,
+        task_hash_of=identity_of,
         procedure=procedure,
         aggregation=aggregation,
-        repeats=repeats,
+        num_samples=num_samples,
     )
     official = derive_split_sampling(
         namespace=namespace,
         dataset_revision=_dataset_revision(env),
         split_role=OFFICIAL,
-        instances=split.official,
-        task_identity_of=identity_of,
+        tasks=split.official,
+        task_hash_of=identity_of,
         procedure=procedure,
         aggregation=aggregation,
-        repeats=repeats,
+        num_samples=num_samples,
     )
 
-    internal_ids = set(internal.task_set.task_identities)
-    official_ids = set(official.task_set.task_identities)
+    internal_ids = set(internal.task_set.task_hashes)
+    official_ids = set(official.task_set.task_hashes)
     if internal_ids & official_ids:
         raise SplitOverlapError(
             "internal and official Task Sets share a task identity"
         )
 
-    held_out_ids = task_identities(env, split.held_out)
+    held_out_ids = task_hashes(env, split.held_out)
     held_out_set = set(held_out_ids)
     if (internal_ids | official_ids) & held_out_set:
         raise HeldOutReferencedError(
@@ -502,10 +497,10 @@ def build_eval_configs(
 
     return EnvEvalConfigs(
         env_name=env.name,
-        procedure_config_hash=procedure.config_identity_hash,
+        procedure_config_hash=procedure.config_hash,
         internal=internal,
         official=official,
-        held_out_task_identities=held_out_ids,
+        held_out_task_hashes=held_out_ids,
     )
 
 
@@ -520,10 +515,10 @@ __all__ = [
     "build_aggregation_config",
     "build_eval_config",
     "build_eval_configs",
-    "build_repeat_plan",
+    "build_sample_plan",
     "build_sampling_config",
     "build_task_set",
     "derive_split_sampling",
-    "task_identities",
+    "task_hashes",
     "validate_evaluation_role_for_split",
 ]

@@ -137,11 +137,9 @@ def test_register_runtime_binds_every_run_controller(tmp_path: Path) -> None:
         transport=_transport(), controllers=(controller,)
     )
 
-    assert registered.controller_identity_hashes == (
-        controller.runtime_identity_hash,
-    )
+    assert registered.controller_identity_hashes == (controller.runtime_hash,)
     request = controller.control.run_request(
-        controller_identity_hash=controller.runtime_identity_hash
+        controller_identity_hash=controller.runtime_hash
     )
     assert _resolve_controller(request) is controller
 
@@ -152,7 +150,7 @@ def test_an_unregistered_controller_is_refused_at_resolution(
     """Registration must happen before launch; nothing resolves without it."""
     controller = cell_config(tmp_path).controller
     request = controller.control.run_request(
-        controller_identity_hash=controller.runtime_identity_hash
+        controller_identity_hash=controller.runtime_hash
     )
 
     with pytest.raises(

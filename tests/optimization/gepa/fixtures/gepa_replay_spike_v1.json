@@ -11,7 +11,7 @@
   "scenarios": {
     "all-merge-false": {
       "effect_count": 47,
-      "effect_identities_sha256": "066f1cf386c664a4f470794974cc55dec21553176942ff9ff425b92acaed9d22",
+      "effect_hashes_sha256": "066f1cf386c664a4f470794974cc55dec21553176942ff9ff425b92acaed9d22",
       "evaluation_count": 34,
       "merge_parents": [],
       "proposal_count": 13,
@@ -19,7 +19,7 @@
     },
     "all-merge-true": {
       "effect_count": 50,
-      "effect_identities_sha256": "818917a5060894a909cb31717b24e4a549cf77ccc5d221957e3131e8ead0ead7",
+      "effect_hashes_sha256": "818917a5060894a909cb31717b24e4a549cf77ccc5d221957e3131e8ead0ead7",
       "evaluation_count": 36,
       "merge_parents": [
         [
@@ -32,7 +32,7 @@
     },
     "round_robin-merge-false": {
       "effect_count": 52,
-      "effect_identities_sha256": "23c96008a502bfd0c7a674ff91c6123b47cc0b913aa80647a180aac777495c48",
+      "effect_hashes_sha256": "23c96008a502bfd0c7a674ff91c6123b47cc0b913aa80647a180aac777495c48",
       "evaluation_count": 37,
       "merge_parents": [],
       "proposal_count": 15,
@@ -40,7 +40,7 @@
     },
     "round_robin-merge-true": {
       "effect_count": 46,
-      "effect_identities_sha256": "12429889e99ec8d35c328db6f640ec1b2c7d1c62897316c73facbd1b272d4658",
+      "effect_hashes_sha256": "12429889e99ec8d35c328db6f640ec1b2c7d1c62897316c73facbd1b272d4658",
       "evaluation_count": 34,
       "merge_parents": [
         [

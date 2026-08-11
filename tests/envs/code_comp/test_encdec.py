@@ -159,17 +159,17 @@ def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
     tasks = _tasks(2)
     experiment = build_encdec_experiment(
         tasks=tasks,
-        repeats=2,
+        num_samples=2,
         internal_n=2,
         official_n=2,
     )
     candidate = encdec_initial_candidate()
     batch_sizes: list[int] = []
 
-    def generated(instance, repeat: int, _drive_ordinal: int):
+    def generated(instance, sample_index: int, _drive_ordinal: int):
         return _generated_outcome(
             instance,
-            decoder_text=f"# {instance.id} repeat {repeat}",
+            decoder_text=f"# {instance.id} sample {sample_index}",
         )
 
     def score_batch(inputs, *, max_wall_seconds: float | None = None):
@@ -247,7 +247,7 @@ def test_checkpointed_batch_scorer_owns_one_cache_lifecycle(
 
     with CheckpointedCodeBatchScorer(
         "execution-cache.sqlite3",
-        runtime_identity=IdentityDocument(
+        runtime_document=IdentityDocument(
             schema="tests/runtime",
             schema_version=1,
             payload={"runtime": "test"},
@@ -290,7 +290,7 @@ def test_checkpointed_batch_scorer_restores_execution_without_reexecuting(
 
     with CheckpointedCodeBatchScorer(
         cache_path,
-        runtime_identity=runtime_identity,
+        runtime_document=runtime_identity,
         executor=code_executor,
     ) as scorer:
         first_scores = scorer((scoring_input, scoring_input))
@@ -303,7 +303,7 @@ def test_checkpointed_batch_scorer_restores_execution_without_reexecuting(
 
     with CheckpointedCodeBatchScorer(
         cache_path,
-        runtime_identity=runtime_identity,
+        runtime_document=runtime_identity,
         executor=FakeExecutor(responder=unexpected_execution),
     ) as scorer:
         restored_scores = scorer((scoring_input,))
@@ -325,7 +325,7 @@ def test_checkpointed_batch_scorer_rejects_expired_wall_before_execution(
 
     with CheckpointedCodeBatchScorer(
         tmp_path / "expired-execution-cache.sqlite3",
-        runtime_identity=IdentityDocument(
+        runtime_document=IdentityDocument(
             schema="tests/runtime",
             schema_version=1,
             payload={"runtime": "expired"},
@@ -349,7 +349,7 @@ def test_checkpointed_batch_scorer_rejects_expired_wall_before_execution(
 def _evaluate(
     *,
     tasks=None,
-    repeats: int = 1,
+    num_samples: int = 1,
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
     outcome_for=None,
@@ -364,7 +364,7 @@ def _evaluate(
         tasks=selected,
         internal_n=len(selected),
         official_n=len(selected),
-        repeats=repeats,
+        num_samples=num_samples,
         completeness=completeness,
         max_skip_fraction=max_skip_fraction,
         blend_config=blend_config,
@@ -601,7 +601,7 @@ def test_decoder_prompt_matches_fixed_prompt_contract() -> None:
 
 
 def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
-    experiment, result = _evaluate(repeats=2, apply_reward=True)
+    experiment, result = _evaluate(num_samples=2, apply_reward=True)
     assert result.primary_aggregate.name == CODE_COMP_SUBMISSION_SCORE_NAME
     assert result.primary_aggregate.aggregation_output.value == pytest.approx(
         1
@@ -609,9 +609,9 @@ def test_end_to_end_records_exact_dual_scores_and_outputs() -> None:
     compression = result.compression_aggregate.aggregation_output.value
     assert compression is not None and compression > 0
     assert result.primary_aggregate.eval_config_hash == (
-        experiment.eval_configs.internal.eval_config.config_identity_hash
+        experiment.eval_configs.internal.eval_config.config_hash
     )
-    assert result.primary_aggregate.repeat_count == 2
+    assert result.primary_aggregate.num_samples == 2
     assert {row.metric_name for row in result.row_diags} == {
         CODE_COMP_SUBMISSION_SCORE_NAME
     }
@@ -628,7 +628,7 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
         tasks=tasks,
-        repeats=1,
+        num_samples=1,
         internal_n=1,
         official_n=1,
     )
@@ -672,7 +672,7 @@ def test_ed1_process_job_runs_real_row_driver() -> None:
 def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
-        tasks=tasks, repeats=1, internal_n=1, official_n=1
+        tasks=tasks, num_samples=1, internal_n=1, official_n=1
     )
     instance = tasks[0].instance
     candidate = encdec_initial_candidate()
@@ -709,7 +709,7 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
         transport=transport,
         scorer=scorer_must_not_run,
         logical_call_id="decoder-failure",
-        repeat_index=0,
+        sample_index=0,
         drive_ordinal=0,
         cache=None,
         cache_phase="internal_eval",
@@ -734,7 +734,7 @@ def test_decoder_failure_preserves_only_the_real_encoder_step() -> None:
 def test_encoder_failure_still_reports_what_was_measured() -> None:
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
-        tasks=tasks, repeats=1, internal_n=1, official_n=1
+        tasks=tasks, num_samples=1, internal_n=1, official_n=1
     )
     instance = tasks[0].instance
     candidate = encdec_initial_candidate()
@@ -764,7 +764,7 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
         transport=transport,
         scorer=scorer_must_not_run,
         logical_call_id="encoder-failure",
-        repeat_index=0,
+        sample_index=0,
         drive_ordinal=0,
         cache=None,
         cache_phase="internal_eval",
@@ -784,7 +784,7 @@ def test_encoder_failure_still_reports_what_was_measured() -> None:
 def test_ed1_v2_request_hash_is_pinned() -> None:
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
-        tasks=tasks, repeats=1, internal_n=1, official_n=1
+        tasks=tasks, num_samples=1, internal_n=1, official_n=1
     )
     candidate = encdec_initial_candidate()
     requests: list[EncDecRowRequest] = []
@@ -808,8 +808,8 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
         ),
     )
 
-    assert requests[0].request_identity == (
-        "899b7370b857b363d8ed0936e6078f26879e6a0e4d37258d13ce25d2acb39981"
+    assert requests[0].request_hash == (
+        "c4b668d9e77bedf1ab19f0caed773b256094f96d74e4800248ecbbfd5bad21fa"
     )
 
 
@@ -820,7 +820,7 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
 def test_ed1_rejects_binding_role_mismatch_before_restore(
     monkeypatch, split_name: str, official_binding: bool
 ) -> None:
-    experiment = build_encdec_experiment(tasks=_tasks(), repeats=1)
+    experiment = build_encdec_experiment(tasks=_tasks(), num_samples=1)
     sampling = getattr(experiment.eval_configs, split_name)
     candidate = encdec_initial_candidate()
 
@@ -1087,7 +1087,7 @@ def test_encdec_partial_payload_rejects_shape_and_type_drift() -> None:
 
 def test_ed1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
     tasks = _tasks(2)
-    experiment = build_encdec_experiment(tasks=tasks, repeats=1)
+    experiment = build_encdec_experiment(tasks=tasks, num_samples=1)
     sampling = experiment.eval_configs.internal
     candidate = encdec_initial_candidate()
     binding_a = evaluation_binding(sampling)
@@ -1106,7 +1106,7 @@ def test_ed1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
         evaluation_binding=binding_a,
         partial_log=log,
     )
-    identities_a = {record.request_identity for record in log.load()}
+    identities_a = {record.request_hash for record in log.load()}
 
     served_b: list[str] = []
 
@@ -1125,11 +1125,11 @@ def test_ed1_resume_requires_exact_evaluation_binding(tmp_path: Path) -> None:
         partial_log=log,
     )
 
-    assert len(served_b) == len(sampling.instances)
+    assert len(served_b) == len(sampling.tasks)
     identities_b = {
-        record.request_identity
+        record.request_hash
         for record in log.load()
-        if record.request_identity not in identities_a
+        if record.request_hash not in identities_a
     }
     assert len(identities_b) == len(identities_a)
 
@@ -1139,7 +1139,7 @@ def test_ed1_pending_ordinal_zero_resumes_at_ordinal_one(
 ) -> None:
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
-        tasks=tasks, repeats=1, internal_n=1, official_n=1
+        tasks=tasks, num_samples=1, internal_n=1, official_n=1
     )
     sampling = experiment.eval_configs.internal
     candidate = encdec_initial_candidate()
@@ -1225,7 +1225,7 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
         tasks=tasks,
-        repeats=1,
+        num_samples=1,
         internal_n=1,
         official_n=1,
     )
@@ -1271,7 +1271,7 @@ def test_ed1_terminal_timeout_is_persisted_and_phase_deadline_is_missing(
     assert len(records) == 2
     assert {record.failure_code for record in records} == {"runner_timeout"}
     assert {record.redrive_pending for record in records} == {False, True}
-    assert len({record.request_identity for record in records}) == 2
+    assert len({record.request_hash for record in records}) == 2
     assert {record.split_role for record in records} == {
         experiment.eval_configs.official.split_role
     }
@@ -1341,7 +1341,7 @@ def test_process_job_cache_hit_and_provenance_are_persisted(
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
         tasks=tasks,
-        repeats=1,
+        num_samples=1,
         internal_n=1,
         official_n=1,
     )
@@ -1384,7 +1384,7 @@ def test_transient_encoder_failure_is_redriven_to_success() -> None:
     tasks = _tasks(1)
     experiment = build_encdec_experiment(
         tasks=tasks,
-        repeats=1,
+        num_samples=1,
         internal_n=1,
         official_n=1,
     )

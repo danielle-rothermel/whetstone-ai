@@ -303,12 +303,12 @@ def test_draft_revalidates_copied_and_constructed_run_authority() -> None:
     exact_run = proposal_run()
     invalid_run = exact_run.model_copy(update={"mode": StepMode.PURE})
     invalid_ref = optimization_run_reference(exact_run).model_copy(
-        update={"identity_hash": "0" * 64}
+        update={"config_hash": "0" * 64}
     )
     constructed_ref = type(invalid_ref).model_construct(
         record=exact_run,
         record_ref=base_ref("not-the-run"),
-        identity_hash=exact_run.identity_hash(),
+        config_hash=exact_run.identity_hash(),
     )
 
     for authority in (invalid_run, invalid_ref, constructed_ref):

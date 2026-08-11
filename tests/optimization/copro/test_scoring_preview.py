@@ -77,7 +77,7 @@ def test_scoring_preview_runs_real_engine_and_folds_two_rounds() -> None:
     runtime = EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
-        runtime_identity_hash="a" * 64,
+        runtime_hash="a" * 64,
         probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
@@ -165,7 +165,7 @@ def test_scoring_preview_observes_rejected_round_before_failure() -> None:
     runtime = EncDecScoringRuntimeSummary(
         evaluation_python="/copied/python",
         dr_code_version="0.1.5",
-        runtime_identity_hash="a" * 64,
+        runtime_hash="a" * 64,
         probe=CodeCompRuntimeProbe(
             implementation="CPython",
             numpy_version="2.0.0",
