@@ -2,12 +2,28 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from pathlib import Path
 
 from whetstone.envs.ed1_behavior_matrix import (
     DEFAULT_CONCURRENCY,
     run_ed1_baseline_behavior_matrix,
 )
+
+
+def _baseline_provider_routes():
+    routes_path = (
+        Path(__file__).resolve().with_name("code_comp_matrix_routes.py")
+    )
+    spec = importlib.util.spec_from_file_location(
+        "code_comp_matrix_routes",
+        routes_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load matrix routes from {routes_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.baseline_provider_routes()
 
 
 def _positive_int(value: str) -> int:
@@ -41,6 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     run_ed1_baseline_behavior_matrix(
+        provider_routes=_baseline_provider_routes()(),
         evaluation_python=args.evaluation_python,
         snapshot_path=args.snapshot_path,
         output_dir=args.output_dir,

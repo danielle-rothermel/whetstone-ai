@@ -8,15 +8,14 @@ from typing import Literal
 import pytest
 from dr_providers import ProviderKind, ReasoningEffort
 
-from whetstone.envs import ed1_behavior_matrix as matrix
+from whetstone.envs import ed1_behavior_matrix
+from whetstone.envs.code_comp import behavior_matrix as matrix
 from whetstone.envs.ed1_behavior_matrix import (
     EXCLUDED_TASK_IDS,
     FULL_BUDGET_RATIOS,
     Ed1BehaviorMatrixPlan,
-    baseline_provider_routes,
     build_matrix_plan,
     map_openai_credential,
-    run_ed1_baseline_behavior_matrix,
 )
 from whetstone.envs.ed1_runtime import (
     Ed1RuntimeProbe,
@@ -47,6 +46,21 @@ _EXPECTED_TASK_IDS = (
 _MANIFEST = Path(__file__).resolve().parents[2] / (
     "src/whetstone/experiment/task_selection/humaneval_copro_challenge_v1.json"
 )
+_ROUTES_MODULE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "scripts/experiments/code_comp_matrix_routes.py"
+)
+
+
+def _baseline_provider_routes():
+    spec = importlib.util.spec_from_file_location(
+        "code_comp_matrix_routes",
+        _ROUTES_MODULE_PATH,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.baseline_provider_routes()
 
 
 def _runtime(evaluation_python: Path) -> Ed1ScoringRuntimeSummary:
@@ -95,6 +109,7 @@ def _plan(
         else _selection((_EXPECTED_TASK_IDS[0],))
     )
     return build_matrix_plan(
+        provider_routes=_baseline_provider_routes(),
         mode=mode,
         evaluation_python=evaluation_python,
         snapshot_path=snapshot,
@@ -107,7 +122,7 @@ def _plan(
 
 
 def test_provider_routes_are_the_exact_four_treatments() -> None:
-    routes = baseline_provider_routes()
+    routes = _baseline_provider_routes()
 
     assert tuple((route.lane, route.model) for route in routes) == (
         ("openai", "gpt-5.4-nano"),
@@ -294,7 +309,8 @@ def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
         lambda *_args, **_kwargs: _FakeScorer(),
     )
 
-    result = run_ed1_baseline_behavior_matrix(
+    result = ed1_behavior_matrix.run_ed1_baseline_behavior_matrix(
+        provider_routes=_baseline_provider_routes(),
         evaluation_python=evaluation_python,
         snapshot_path=snapshot,
         output_dir=output,

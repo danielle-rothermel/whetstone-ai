@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+_FORBIDDEN_PREFIXES = (
+    "whetstone.runner",
+    "whetstone.optimization.adapters",
+    "whetstone.optimization.copro",
+    "whetstone.optimization.proposal",
+)
+
+
+def _module_level_imports(tree: ast.Module) -> list[str]:
+    imports: list[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is not None and node.level == 0:
+                imports.append(node.module)
+    return imports
+
+
+def _python_files(root: Path) -> list[Path]:
+    return sorted(path for path in root.rglob("*.py") if path.is_file())
+
+
+def test_legacy_env_shims_expose_public_builders() -> None:
+    import whetstone.envs.d1 as d1
+    import whetstone.envs.ed1 as ed1
+    import whetstone.envs.ed1m as ed1m
+
+    assert hasattr(d1, "build_d1_experiment")
+    assert hasattr(ed1, "build_ed1_experiment")
+    assert hasattr(ed1m, "build_ed1m_experiment")
+
+
+def test_code_comp_imports_exclude_runner_and_optimization() -> None:
+    root = Path("src/whetstone/envs/code_comp")
+    for path in _python_files(root):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for module in _module_level_imports(tree):
+            if module.startswith("whetstone.optimization.validation"):
+                continue
+            assert not module.startswith(_FORBIDDEN_PREFIXES), (
+                f"{path} imports forbidden module {module!r}"
+            )

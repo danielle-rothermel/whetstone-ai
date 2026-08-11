@@ -198,7 +198,7 @@ def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
 def test_checkpointed_batch_scorer_owns_one_cache_lifecycle(
     monkeypatch,
 ) -> None:
-    import whetstone.envs.ed1_scoring as scoring_module
+    import whetstone.envs.code_comp.scoring as scoring_module
 
     events: list[str] = []
 
