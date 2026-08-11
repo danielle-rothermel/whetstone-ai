@@ -6,7 +6,10 @@ from functools import cache
 from dr_serialize import Jsonable
 from dr_store import ObjectStore
 
-from tests.envs.support import execution_policy, process_row_job_factory
+from tests.envs.support import (
+    execution_policy,
+    in_process_internal_row_job_factory,
+)
 from whetstone.coordination.evaluation_claims import (
     EVALUATION_INTENT_CLAIM_SCHEMA,
     EVALUATION_RESULT_ATTESTATION_SCHEMA,
@@ -52,9 +55,7 @@ from whetstone.optimization.contracts import (
 )
 from whetstone.provider.policy import ProviderExecutionPolicy
 
-_DEFAULT_ROW_JOB_FACTORY = process_row_job_factory(
-    "tests.envs.process_workers:drive_internal_success"
-)
+_DEFAULT_ROW_JOB_FACTORY = in_process_internal_row_job_factory()
 
 
 def _uncached_experiment(*, num_samples: int = 1) -> EnvExperiment:

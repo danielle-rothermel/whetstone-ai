@@ -150,6 +150,69 @@ def process_row_job_factory(
     return build
 
 
+_PROCESS_INTERNAL_ROW_JOB_FACTORY = process_row_job_factory(
+    "tests.envs.process_workers:drive_internal_success"
+)
+
+
+def in_process_internal_row_job_factory(
+    reply_for: ReplyFn | None = None,
+) -> Callable[[BaseModel], ProcessJob]:
+    """Drive the real internal row adapter in-process and return its payload.
+
+    The row still travels the engine's exact ProcessJob seam, but the work
+    happens here rather than in a spawned worker, so the test stays fast while
+    the evidence it produces is real.
+    """
+    from whetstone.envs.procedure import env_procedure_config
+    from whetstone.evaluation.drivers.internal import (
+        InternalRowRequest,
+        InternalRowResult,
+        drive_internal_row,
+    )
+
+    def build(request: BaseModel) -> ProcessJob:
+        if not isinstance(request, InternalRowRequest):
+            raise TypeError(f"unsupported row request {type(request)!r}")
+        instance = request.instance.to_instance()
+        env = env_spec(request.env_name)
+        if (
+            env_procedure_config(env).config_hash
+            != request.procedure_config_hash
+        ):
+            raise ValueError("row procedure identity is not canonical")
+        answer = (
+            reply_for(instance.gold)
+            if reply_for is not None
+            else instance.gold
+        )
+        outcome = drive_internal_row(
+            env,
+            candidate=request.candidate,
+            instance=instance,
+            provider_call_config=request.provider_call_config,
+            execution_policy=request.execution_policy,
+            transport=FakeTransport(constant_reply(answer)),
+            procedure_config_hash=request.procedure_config_hash,
+            logical_call_id=request.logical_call_id,
+            sample_index=request.sample_index,
+            drive_ordinal=request.drive_ordinal,
+            cache=None,
+            cache_phase=request.cache_phase,
+            cache_unit=request.cache_unit,
+            render_guard=request.render_guard,
+        )
+        return ProcessJob(
+            entrypoint="tests.envs.process_workers:return_payload",
+            payload=InternalRowResult(
+                request_hash=request.request_hash,
+                outcome=outcome,
+            ).model_dump(mode="json"),
+        )
+
+    return build
+
+
 def evaluation_binding(
     sampling: EnvSplitSampling, *, official: bool = False
 ) -> EvaluationBinding:

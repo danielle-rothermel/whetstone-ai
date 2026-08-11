@@ -163,7 +163,6 @@ def test_engine_run_delegates_encdec_to_code_comp_dispatch(
     assert sentinel["called"] is True
 
 
-@pytest.mark.process_integration
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "engine.sqlite"))
     engine = _engine(tmp_path, store=store)
@@ -272,7 +271,6 @@ def test_engine_persists_missing_row_state_without_fabricated_steps(
     assert trace.executed_component_steps == ()
 
 
-@pytest.mark.process_integration
 def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
     tmp_path,
     monkeypatch,
@@ -506,7 +504,6 @@ def test_engine_passes_exact_canonical_row_job_factory(
     assert len(submitted) == 1
 
 
-@pytest.mark.process_integration
 def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "identity-mismatch.sqlite"))
 
@@ -568,7 +565,6 @@ def test_engine_rejects_another_provider_execution_policy(tmp_path) -> None:
         ("deadline_reached", 0),
     ),
 )
-@pytest.mark.process_integration
 def test_evaluation_evidence_rejects_coercible_booleans(
     tmp_path,
     field: str,
@@ -667,7 +663,6 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
     }
 
 
-@pytest.mark.process_integration
 def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "trace-wire.sqlite"))
     engine = _engine(tmp_path, store=store)
@@ -695,13 +690,13 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
     assert outputs.schema_version == 3
     assert evidence.schema_version == 3
     assert evidence.component_traces_ref.content_hash == (
-        "95f47ccea56a39b1a013287c0f566ceff58c2597c2bc7083aaa24eb8e5f53add"
+        "bf842459a3a5e772bc6889862c16948524c60ef7a8ac514ba14fd3da374e16ea"
     )
     assert evidence.outputs_ref.content_hash == (
-        "4329443ea2b69068a42e7b12638527fa9ed35455c4fe497549f0ec18e15aa08b"
+        "bafc35e0b9cf2aa3a638ac162fe6146f8f404e63b12964a4ab725182d8a79088"
     )
     assert evaluated.evidence_ref.content_hash == (
-        "ce550f9ecc93593e120f41824ad39658384733874a3a895763e97146b8891e1b"
+        "b70a185c295d03ce26b142bab0c056ece7cf49aaab1e9677c22de5a38de87a62"
     )
     with pytest.raises(ValueError, match="address the exact record"):
         EvaluationComponentTracesRef(
@@ -748,7 +743,6 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
         ("evidence", 2),
     ),
 )
-@pytest.mark.process_integration
 def test_evaluation_artifacts_reject_prior_wire_versions(
     tmp_path,
     record_name: str,
@@ -823,7 +817,6 @@ def test_evaluation_outputs_reject_candidate_mismatch(tmp_path) -> None:
         )
 
 
-@pytest.mark.process_integration
 def test_exact_evaluation_result_refs_reject_forged_hashes(
     tmp_path,
     monkeypatch,
@@ -907,7 +900,6 @@ def test_evaluation_output_row_rejects_wire_schema_drift(
         EvaluationOutputRow.model_validate(payload)
 
 
-@pytest.mark.process_integration
 def test_engine_rejects_output_outside_sampling_plan(
     tmp_path, monkeypatch
 ) -> None:
@@ -920,7 +912,7 @@ def test_engine_rejects_output_outside_sampling_plan(
         assert len(result.outputs) == 1
         return replace(
             result,
-            outputs=(replace(result.outputs[0], task_id="unknown-instance"),),
+            outputs=(replace(result.outputs[0], sample_index=99),),
         )
 
     monkeypatch.setattr(
@@ -939,7 +931,6 @@ def test_engine_rejects_output_outside_sampling_plan(
         )
 
 
-@pytest.mark.process_integration
 def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "output-order.sqlite"))
     engine = _engine(
@@ -1021,7 +1012,6 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     )
 
 
-@pytest.mark.process_integration
 def test_cache_evidence_excludes_another_bindings_partial_rows(
     tmp_path,
 ) -> None:

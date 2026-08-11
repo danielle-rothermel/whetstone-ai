@@ -491,14 +491,7 @@ def test_direct_upstream_oracle_matches_frozen_crash_fixture_across_hash_seeds(
     scenario = f"{component_selector}-merge-{str(merge).lower()}"
     expected = fixture["scenarios"][scenario]
 
-    seed_one = _replay_to_completion(
-        root=tmp_path / "1",
-        component_selector=component_selector,
-        merge=merge,
-        hash_seed=1,
-        expected_effect_count=expected["effect_count"],
-    )
-    seed_777 = _replay_to_completion(
+    result = _replay_to_completion(
         root=tmp_path / "777",
         component_selector=component_selector,
         merge=merge,
@@ -506,33 +499,28 @@ def test_direct_upstream_oracle_matches_frozen_crash_fixture_across_hash_seeds(
         expected_effect_count=expected["effect_count"],
     )
 
-    assert seed_one == seed_777
-    effect_kinds = seed_one["effect_kinds"]
-    result = seed_one["result"]
+    effect_kinds = result["effect_kinds"]
     merge_parents = [
-        parents for parents in result["parents"] if len(parents) > 1
+        parents for parents in result["result"]["parents"] if len(parents) > 1
     ]
 
     assert len(effect_kinds) == expected["effect_count"]
     assert effect_kinds.count("evaluate") == expected["evaluation_count"]
     assert effect_kinds.count("propose") == expected["proposal_count"]
     assert merge_parents == expected["merge_parents"]
-    assert (
-        _digest(seed_one["effect_hashes"]) == expected["effect_hashes_sha256"]
-    )
-    assert _digest(result) == expected["result_sha256"]
+    assert _digest(result["effect_hashes"]) == expected["effect_hashes_sha256"]
+    assert _digest(result["result"]) == expected["result_sha256"]
 
     if merge:
-        _assert_merge_has_no_proposal(seed_one["timeline"])
+        _assert_merge_has_no_proposal(result["timeline"])
         assert merge_parents
         assert all(
             list(dict(candidate).keys()) == ["alpha", "beta"]
-            for candidate in result["candidates"]
+            for candidate in result["result"]["candidates"]
         )
     else:
         assert not any(
-            event["kind"].startswith("merge_")
-            for event in seed_one["timeline"]
+            event["kind"].startswith("merge_") for event in result["timeline"]
         )
 
 

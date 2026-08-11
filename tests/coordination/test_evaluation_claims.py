@@ -101,7 +101,6 @@ def _fail_unexpected_evaluate(
         "model_copy_dump",
     ),
 )
-@pytest.mark.process_integration
 def test_claim_attestation_rejects_forged_component_traces(
     tmp_path,
     forgery: str,
@@ -222,7 +221,6 @@ def test_claim_attestation_rejects_forged_component_traces(
         )
 
 
-@pytest.mark.process_integration
 def test_two_resolvers_share_one_durable_evaluation(
     tmp_path, monkeypatch
 ) -> None:
@@ -293,7 +291,6 @@ def _failing_renewal_wait(_interval: float, _stop: Event) -> bool:
     raise sqlite3.OperationalError("transient store blip")
 
 
-@pytest.mark.process_integration
 def test_heartbeat_error_keeps_a_durably_bound_resolution(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "heartbeat-bound.sqlite"))
     engine = _engine(tmp_path, store=store)
@@ -316,7 +313,6 @@ def test_heartbeat_error_keeps_a_durably_bound_resolution(tmp_path) -> None:
     assert service._load(bound, expected_intent=intent) == resolution
 
 
-@pytest.mark.process_integration
 def test_heartbeat_error_raises_when_nothing_was_bound(
     tmp_path, monkeypatch
 ) -> None:
@@ -346,7 +342,6 @@ def test_heartbeat_error_raises_when_nothing_was_bound(
     assert store.resolve(service._key(intent)) is None
 
 
-@pytest.mark.process_integration
 def test_slow_evaluation_renews_claim_on_scripted_tick(
     tmp_path, monkeypatch
 ) -> None:
@@ -473,7 +468,6 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(
     assert len(evaluation_calls) == 1
 
 
-@pytest.mark.process_integration
 def test_renewal_wins_same_event_slot_as_stale_takeover(
     tmp_path, monkeypatch
 ) -> None:
@@ -547,7 +541,7 @@ def test_renewal_wins_same_event_slot_as_stale_takeover(
 
     def delayed_takeover(**kwargs):
         prior = kwargs["prior"]
-        if prior is not None and kwargs["provider_generation"] == 1:
+        if prior is not None and kwargs["generation"] == 1:
             stale_takeover_ready.set()
             assert renewal_bound.wait(timeout=2)
         return append_claim_event(**kwargs)
@@ -690,10 +684,7 @@ def test_expired_owner_cannot_renew_after_new_generation_claims(
 @pytest.mark.parametrize(
     "outcome",
     (
-        pytest.param(
-            IntentOutcome.COMPLETED,
-            marks=pytest.mark.process_integration,
-        ),
+        IntentOutcome.COMPLETED,
         IntentOutcome.FAILED,
     ),
 )
@@ -794,7 +785,6 @@ def test_stale_owner_cannot_attest_after_takeover(
     assert second._bind(intent, resolution) == resolution
 
 
-@pytest.mark.process_integration
 def test_fresh_resolver_reconciles_terminal_attestation_without_evaluation(
     tmp_path,
     monkeypatch,

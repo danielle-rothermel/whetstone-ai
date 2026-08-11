@@ -877,7 +877,7 @@ def test_long_evaluation_renews_lease_and_prevents_takeover(
             return super().evaluate(call, config)
 
     evaluator = BlockingEvaluator()
-    lease_duration = timedelta(seconds=1.2)
+    lease_duration = timedelta(milliseconds=200)
     renewal_observed_past_original_expiry = Event()
     renewal_lock = Lock()
     original_expiry: datetime | None = None

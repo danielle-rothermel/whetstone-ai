@@ -107,7 +107,6 @@ def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
     return engine, binding, store, experiment
 
 
-@pytest.mark.process_integration
 def test_calibration_evaluates_aligned_anchors_and_plans_power(
     tmp_path, monkeypatch
 ) -> None:

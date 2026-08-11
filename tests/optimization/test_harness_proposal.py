@@ -342,7 +342,7 @@ def test_fresh_sqlite_restart_reuses_adapter_checkpoint(tmp_path) -> None:
     adapter = CountingProposalAdapter()
     request = proposal_request()
     effect_database = tmp_path / "effects.sqlite"
-    lease_duration = timedelta(seconds=1.2)
+    lease_duration = timedelta(milliseconds=200)
     crashed_store = make_store(tmp_path)
     crashed = make_harness(
         store=crashed_store,

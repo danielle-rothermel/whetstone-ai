@@ -164,10 +164,7 @@ class _CoordinatedAuthority(EffectAuthority):
     name="backend",
     params=(
         "memory",
-        pytest.param(
-            "sqlite",
-            marks=pytest.mark.sqlite_time_integration,
-        ),
+        "sqlite",
     ),
 )
 def backend_fixture(
@@ -252,6 +249,7 @@ def test_same_attempt_replays_but_same_owner_new_attempt_is_busy(
     assert competing.busy_expires_at == first.lease.expires_at
 
 
+@pytest.mark.sqlite_time_integration
 def test_renew_and_takeover_share_backend_authority_time(
     backend: _Backend,
 ) -> None:
@@ -290,6 +288,7 @@ def test_renew_and_takeover_share_backend_authority_time(
     "policy",
     (ReplayPolicy.IDEMPOTENT, ReplayPolicy.DURABLE_WORKFLOW),
 )
+@pytest.mark.sqlite_time_integration
 def test_stale_attempt_cannot_terminalize_after_takeover(
     backend: _Backend,
     policy: ReplayPolicy,
@@ -319,6 +318,7 @@ def test_stale_attempt_cannot_terminalize_after_takeover(
     assert terminal.result_ref == _result_ref("second")
 
 
+@pytest.mark.sqlite_time_integration
 def test_no_redrive_expiry_becomes_immutable_recovery_required(
     backend: _Backend,
 ) -> None:

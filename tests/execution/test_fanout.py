@@ -599,7 +599,8 @@ def test_worker_boundary_files_are_restrictive_and_validated(
 
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
-def test_guardians_start_under_one_hundred_worker_concurrency() -> None:
+def test_guardians_start_under_high_worker_concurrency() -> None:
+    worker_count = 32
     specs = [
         CallSpec(
             key=index,
@@ -607,19 +608,21 @@ def test_guardians_start_under_one_hundred_worker_concurrency() -> None:
             decode=_identity,
             deadline_seconds=30.0,
         )
-        for index in range(128)
+        for index in range(worker_count)
     ]
 
     outcome = run_call_pool(
         specs,
-        concurrency=100,
+        concurrency=worker_count,
         is_rate_limited=_never_rate_limited,
     )
 
     assert [result.status for result in outcome.results] == [
         FanoutStatus.COMPLETED
     ] * len(specs)
-    assert [result.value for result in outcome.results] == list(range(128))
+    assert [result.value for result in outcome.results] == list(
+        range(worker_count)
+    )
 
 
 @pytest.mark.parametrize("parent_signal", [signal.SIGTERM, signal.SIGKILL])

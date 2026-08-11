@@ -15,9 +15,11 @@ from datetime import timedelta
 from pathlib import Path
 
 from dr_store import ObjectStore
-from pydantic import BaseModel
 
-from tests.envs.support import FakeTransport, execution_policy
+from tests.envs.support import (
+    execution_policy,
+    in_process_internal_row_job_factory,
+)
 from tests.optimization.support import (
     candidate,
     make_store,
@@ -33,15 +35,7 @@ from whetstone.core.effects.authority import (
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.factory import build_env_experiment
-from whetstone.envs.procedure import env_procedure_config
-from whetstone.envs.registry import env_spec
-from whetstone.evaluation.drivers.internal import (
-    InternalRowRequest,
-    InternalRowResult,
-    drive_internal_row,
-)
 from whetstone.evaluation.engine import EvaluationEngine
-from whetstone.execution.fanout import ProcessJob
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
     EvaluationBinding,
@@ -77,56 +71,7 @@ TASK_MODEL = "openai/test"
 PROPOSER_MODEL = "openai/test-proposer"
 
 
-def in_process_row_job_factory(
-    reply_for: Callable[[str], str] | None = None,
-) -> Callable[[BaseModel], ProcessJob]:
-    """Drive the real internal row adapter and return its payload directly.
-
-    The row still travels the engine's exact ProcessJob seam, but the work
-    happens here rather than in a spawned worker, so the test stays fast while
-    the evidence it produces is real.
-    """
-
-    def build(request: BaseModel) -> ProcessJob:
-        if not isinstance(request, InternalRowRequest):
-            raise TypeError(f"unsupported row request {type(request)!r}")
-        instance = request.instance.to_instance()
-        env = env_spec(request.env_name)
-        if (
-            env_procedure_config(env).config_hash
-            != request.procedure_config_hash
-        ):
-            raise ValueError("row procedure identity is not canonical")
-        answer = (
-            reply_for(instance.gold)
-            if reply_for is not None
-            else instance.gold
-        )
-        outcome = drive_internal_row(
-            env,
-            candidate=request.candidate,
-            instance=instance,
-            provider_call_config=request.provider_call_config,
-            execution_policy=request.execution_policy,
-            transport=FakeTransport(lambda _prompt: answer),
-            procedure_config_hash=request.procedure_config_hash,
-            logical_call_id=request.logical_call_id,
-            sample_index=request.sample_index,
-            drive_ordinal=request.drive_ordinal,
-            cache=None,
-            cache_phase=request.cache_phase,
-            cache_unit=request.cache_unit,
-            render_guard=request.render_guard,
-        )
-        return ProcessJob(
-            entrypoint="tests.envs.process_workers:return_payload",
-            payload=InternalRowResult(
-                request_hash=request.request_hash,
-                outcome=outcome,
-            ).model_dump(mode="json"),
-        )
-
-    return build
+in_process_row_job_factory = in_process_internal_row_job_factory
 
 
 def official_engine(
