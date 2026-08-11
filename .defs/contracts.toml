@@ -64,6 +64,22 @@ date = "2026-08-06"
 check = "uv run pytest -q tests/envs/code_comp/test_direct.py tests/envs/code_comp/test_encdec.py tests/envs/code_comp/test_mutant.py"
 
 [[contracts]]
+title = "Encdec realizes compression artifacts at evaluation time"
+statement = """
+The encdec generation graph may condition the decoder directly on raw_ir \
+without explicit comp or comp-inverse graph nodes when the configured \
+compression is lossless on that text channel. Compression ratio and comp_ir \
+length are derived at evaluation from encoder output bytes against the task \
+ground-truth reference, not from a persisted comp_ir graph artifact."""
+rationale = """
+The design graph names raw_ir, comp_ir, and an explicit compress-decompress \
+roundtrip as semantic intentions. Eliding redundant lossless steps in the \
+realized graph preserves decode input while keeping compression measurement \
+faithful at evaluation time."""
+date = "2026-08-11"
+check = "uv run python scripts/ci/check_defs.py --structural-only"
+
+[[contracts]]
 title = "Persisted evaluation references address exact records"
 statement = """
 Evaluation bindings, outputs, component traces, aggregates, rewards, and \

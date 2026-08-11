@@ -148,6 +148,50 @@ exported_symbols = ["whetstone.evaluation.generation.GenerationIndex"]
 categories = ["generation", "sampling"]
 
 [[terms]]
+name = "raw_ir"
+definition = """
+The encoder's intermediate representation before optional compression: lossless \
+text describing or encoding the task ground-truth code. In encdec rollouts, \
+realized as the encoder step's provider generation text."""
+exported_symbols = [
+    "whetstone.evaluation.drivers.code_comp.EncDecGeneratedRowOutcome",
+]
+categories = ["generation"]
+part_of = ["generation graph"]
+
+[[terms]]
+name = "comp"
+definition = """
+A lossless compression operator applied to intermediate-representation bytes. \
+The code_comp evaluation procedure binds one concrete operator identity (zstd \
+at a fixed level) through its metric-extraction settings."""
+exported_symbols = [
+    "whetstone.evaluation.compression.ZSTD_LEVEL",
+    "whetstone.evaluation.compression.zstd_compressed_utf8_byte_length",
+]
+categories = ["generation", "evaluation"]
+
+[[terms]]
+name = "comp_ir"
+definition = """
+The losslessly compressed form of raw_ir. In encdec rollouts, measured at \
+evaluation time from encoder output bytes; not emitted as a separate graph-node \
+output."""
+categories = ["generation", "evaluation"]
+part_of = ["generation graph"]
+
+[[terms]]
+name = "generation output"
+definition = """
+The final generated output from a generation graph run. In encdec rollouts, \
+the decoder step's provider generation submitted for correctness scoring."""
+exported_symbols = [
+    "whetstone.experiment.graph.nodes.PROVIDER_GENERATION_OUTPUT_FIELD",
+]
+categories = ["generation"]
+part_of = ["generation graph"]
+
+[[terms]]
 name = "aggregate"
 definition = """
 A provenance-bearing aggregate over an explicit planned task-and-sample matrix \
