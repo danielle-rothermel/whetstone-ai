@@ -59,24 +59,26 @@ def require_path_then_return(payload: JsonValue) -> JsonValue:
     return body.get("value")
 
 
+def descendant_ready(signal_path: str, key: str) -> None:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    publish_ready(signal_path, f"{key}-descendant")
+    signal.pause()
+
+
 def block_process_tree(payload: JsonValue) -> JsonValue:
     body = _mapping(payload)
     signal_path = _string(body, "signal_path")
     key = _string(body, "key")
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
-    descendant_script = """
-import signal
-import sys
-
-from tests.execution.process_signals import publish_ready
-
-path, key = sys.argv[1:]
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-publish_ready(path, f"{key}-descendant")
-signal.pause()
-"""
     subprocess.Popen(
-        [sys.executable, "-c", descendant_script, signal_path, key],
+        [
+            sys.executable,
+            "-m",
+            "tests.execution.process_workers",
+            "descendant_ready",
+            signal_path,
+            key,
+        ],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -162,3 +164,21 @@ def non_finite_result(payload: JsonValue) -> JsonValue:
     if body.get("nested") is True:
         return {"nested": [float("inf")]}
     return float("nan")
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        raise SystemExit("usage: process_workers <command> [args...]")
+    command = sys.argv[1]
+    if command == "descendant_ready":
+        if len(sys.argv) != 4:
+            raise SystemExit(
+                "usage: process_workers descendant_ready <signal_path> <key>"
+            )
+        descendant_ready(sys.argv[2], sys.argv[3])
+        return
+    raise SystemExit(f"unknown command: {command}")
+
+
+if __name__ == "__main__":
+    main()

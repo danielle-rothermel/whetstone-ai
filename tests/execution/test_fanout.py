@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import errno
 import json
+import multiprocessing
 import os
-import select
 import selectors
 import signal
 import subprocess
@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 
 import pytest
 from dr_serialize import StrictJsonDecodeError
@@ -21,6 +21,15 @@ from pydantic import JsonValue, ValidationError
 
 import whetstone.execution.fanout as fanout_module
 import whetstone.execution.process_worker as process_worker_module
+from tests.execution.fanout_guardian_support import (
+    GuardianThreadRun,
+    SchedulerProcess,
+    release_signal_if_entered,
+    run_pre_ready_guardian_starter,
+)
+from tests.execution.fanout_guardian_support import (
+    assert_process_gone as _assert_process_gone,
+)
 from tests.execution.process_signals import ProcessSignals
 from whetstone.execution.fanout import (
     CallSpec,
@@ -32,39 +41,6 @@ from whetstone.execution.fanout import (
 )
 
 _WORKERS = "tests.execution.process_workers"
-
-
-class _KqueueEvent(Protocol):
-    fflags: int
-
-
-class _Kqueue(Protocol):
-    def control(
-        self,
-        changes: list[_KqueueEvent],
-        max_events: int,
-        timeout: float,
-    ) -> list[_KqueueEvent]: ...
-
-    def close(self) -> None: ...
-
-
-class _KqueueApi(Protocol):
-    KQ_FILTER_PROC: int
-    KQ_EV_ADD: int
-    KQ_EV_ONESHOT: int
-    KQ_NOTE_EXIT: int
-
-    def kqueue(self) -> _Kqueue: ...
-
-    def kevent(
-        self,
-        ident: int,
-        *,
-        filter: int,
-        flags: int,
-        fflags: int,
-    ) -> _KqueueEvent: ...
 
 
 def _identity(value: JsonValue) -> JsonValue:
@@ -128,42 +104,6 @@ def _blocking_tree_spec(
         commit=commit,
         cancellation_barrier=cancellation_barrier,
     )
-
-
-def _assert_process_gone(pid: int) -> None:
-    try:
-        os.kill(pid, 0)
-    except OSError as error:
-        assert error.errno == errno.ESRCH
-        return
-    if hasattr(os, "pidfd_open"):
-        try:
-            descriptor = os.pidfd_open(pid)
-        except ProcessLookupError:
-            return
-        try:
-            with selectors.DefaultSelector() as selector:
-                selector.register(descriptor, selectors.EVENT_READ)
-                assert selector.select(3.0), (
-                    f"process {pid} survived scheduler return"
-                )
-        finally:
-            os.close(descriptor)
-        return
-    kqueue_api = cast(_KqueueApi, cast(object, select))
-    queue = kqueue_api.kqueue()
-    try:
-        event = kqueue_api.kevent(
-            pid,
-            filter=kqueue_api.KQ_FILTER_PROC,
-            flags=kqueue_api.KQ_EV_ADD | kqueue_api.KQ_EV_ONESHOT,
-            fflags=kqueue_api.KQ_NOTE_EXIT,
-        )
-        observed = queue.control([event], 1, 3.0)
-    finally:
-        queue.close()
-    assert observed, f"process {pid} survived scheduler return"
-    assert observed[0].fflags & kqueue_api.KQ_NOTE_EXIT
 
 
 @pytest.mark.process_integration
@@ -701,51 +641,16 @@ def test_guardians_start_under_high_worker_concurrency() -> None:
 def test_parent_death_kills_fresh_worker_process_group(
     parent_signal: int,
 ) -> None:
-    signals = ProcessSignals()
-    scheduler_script = """
-import os
-import sys
-
-from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
-
-path = sys.argv[1]
-job = ProcessJob(
-    entrypoint="tests.execution.process_workers:block_process_tree",
-    payload={"signal_path": path, "key": "worker"},
-)
-run_call_pool(
-    [
-        CallSpec(
-            key="worker",
-            job=job,
-            decode=lambda value: value,
-            deadline_seconds=30.0,
-        )
-    ],
-    concurrency=1,
-    is_rate_limited=lambda value: False,
-)
-"""
-    scheduler = subprocess.Popen(
-        [sys.executable, "-c", scheduler_script, os.fspath(signals.path)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    try:
-        signals.wait_entered(["worker-worker", "worker-descendant"])
-        os.kill(scheduler.pid, parent_signal)
-        scheduler.wait(timeout=3.0)
+    with SchedulerProcess("parent_death_pool") as run:
+        run.signals.wait_entered(["worker-worker", "worker-descendant"])
+        assert run.scheduler is not None
+        os.kill(run.scheduler.pid, parent_signal)
+        run.scheduler.wait(timeout=3.0)
         for pid in (
-            signals.pid("worker-worker"),
-            signals.pid("worker-descendant"),
+            run.signals.pid("worker-worker"),
+            run.signals.pid("worker-descendant"),
         ):
             _assert_process_gone(pid)
-    finally:
-        if scheduler.poll() is None:
-            scheduler.kill()
-            scheduler.wait(timeout=3.0)
-        signals.close()
 
 
 @pytest.mark.process_integration
@@ -774,34 +679,30 @@ def test_stopped_guardian_on_completion_forces_local_containment(
         return process
 
     monkeypatch.setattr(fanout_module, "_spawn", record_spawn)
-    failures: list[BaseException] = []
+    thread_run = GuardianThreadRun()
 
     def schedule() -> None:
-        try:
-            run_call_pool(
-                [
-                    CallSpec(
-                        key="worker",
-                        job=_job(
-                            "spawn_descendant_and_return",
-                            {
-                                "signal_path": os.fspath(signals.path),
-                                "release_key": "release",
-                                "value": "complete",
-                            },
-                        ),
-                        decode=_identity,
-                        deadline_seconds=5.0,
-                    )
-                ],
-                concurrency=1,
-                is_rate_limited=_never_rate_limited,
-            )
-        except BaseException as error:
-            failures.append(error)
+        run_call_pool(
+            [
+                CallSpec(
+                    key="worker",
+                    job=_job(
+                        "spawn_descendant_and_return",
+                        {
+                            "signal_path": os.fspath(signals.path),
+                            "release_key": "release",
+                            "value": "complete",
+                        },
+                    ),
+                    decode=_identity,
+                    deadline_seconds=5.0,
+                )
+            ],
+            concurrency=1,
+            is_rate_limited=_never_rate_limited,
+        )
 
-    scheduler = threading.Thread(target=schedule)
-    scheduler.start()
+    thread_run.start(schedule)
     assert spawned_event.wait(timeout=10)
     process = spawned[0]
     signals.wait_entered(["descendant", "release"])
@@ -811,11 +712,11 @@ def test_stopped_guardian_on_completion_forces_local_containment(
     try:
         os.kill(guardian_pid, signal.SIGSTOP)
         signals.release("release")
-        scheduler.join(timeout=3.0)
-        assert not scheduler.is_alive()
-        assert len(failures) == 1
-        assert isinstance(failures[0], ProcessCancellationError)
-        assert "did not exit" in str(failures[0])
+        thread_run.join(timeout=3.0)
+        assert not thread_run.is_alive
+        assert len(thread_run.failures) == 1
+        assert isinstance(thread_run.failures[0], ProcessCancellationError)
+        assert "did not exit" in str(thread_run.failures[0])
         for pid in (
             process.process.pid,
             guardian_pid,
@@ -825,14 +726,8 @@ def test_stopped_guardian_on_completion_forces_local_containment(
         assert not process.directory.exists()
         assert fanout_module._parent_control_fds == set()
     finally:
-        if "release" in signals.entered_keys:
-            try:
-                signals.release("release")
-            except (AssertionError, BrokenPipeError, EOFError, OSError):
-                pass
-        if scheduler.is_alive():
-            os.killpg(process.process_group_id, signal.SIGKILL)
-            scheduler.join(timeout=3.0)
+        release_signal_if_entered(signals, "release")
+        thread_run.kill_process_group(process.process_group_id)
         signals.close()
 
 
@@ -863,33 +758,29 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
         return process
 
     monkeypatch.setattr(fanout_module, "_spawn", record_spawn)
-    failures: list[BaseException] = []
+    thread_run = GuardianThreadRun()
 
     def schedule() -> None:
-        try:
-            run_call_pool(
-                [
-                    CallSpec(
-                        key="worker",
-                        job=_job(
-                            "spawn_descendant_and_return",
-                            {
-                                "signal_path": os.fspath(signals.path),
-                                "release_key": "release",
-                                "value": "complete",
-                            },
-                        ),
-                        decode=_identity,
-                        deadline_seconds=5.0,
-                    )
-                ],
-                is_rate_limited=_never_rate_limited,
-            )
-        except BaseException as error:
-            failures.append(error)
+        run_call_pool(
+            [
+                CallSpec(
+                    key="worker",
+                    job=_job(
+                        "spawn_descendant_and_return",
+                        {
+                            "signal_path": os.fspath(signals.path),
+                            "release_key": "release",
+                            "value": "complete",
+                        },
+                    ),
+                    decode=_identity,
+                    deadline_seconds=5.0,
+                )
+            ],
+            is_rate_limited=_never_rate_limited,
+        )
 
-    scheduler = threading.Thread(target=schedule)
-    scheduler.start()
+    thread_run.start(schedule)
     assert spawned_event.wait(timeout=10)
     process = spawned[0]
     signals.wait_entered(["descendant", "release"])
@@ -925,10 +816,10 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
             retain_group,
         )
         signals.release("release")
-        scheduler.join(timeout=5.0)
-        assert not scheduler.is_alive()
-        assert len(failures) == 1
-        failure = failures[0]
+        thread_run.join(timeout=5.0)
+        assert not thread_run.is_alive
+        assert len(thread_run.failures) == 1
+        failure = thread_run.failures[0]
         assert isinstance(failure, ProcessCancellationError)
         assert "could not confirm terminal local process group" in str(failure)
         assert isinstance(failure.__cause__, ProcessCancellationError)
@@ -940,11 +831,7 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
         os.killpg(process.process_group_id, 0)
     finally:
         monkeypatch.undo()
-        if "release" in signals.entered_keys:
-            try:
-                signals.release("release")
-            except (AssertionError, BrokenPipeError, EOFError, OSError):
-                pass
+        release_signal_if_entered(signals, "release")
         try:
             os.kill(guardian_pid, signal.SIGCONT)
         except ProcessLookupError:
@@ -958,7 +845,7 @@ def test_harvest_retains_state_when_fallback_cannot_prove_containment(
         process.cleanup_allowed = True
         process.release_guardian_after_containment()
         process.cleanup()
-        scheduler.join(timeout=3.0)
+        thread_run.join(timeout=3.0)
         signals.close()
 
 
@@ -1107,343 +994,88 @@ def test_cancellation_failure_retains_uncontained_process_state(
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_worker_contains_group_when_guardian_and_scheduler_die() -> None:
-    signals = ProcessSignals()
-    scheduler_script = """
-import os
-import sys
-
-import whetstone.execution.fanout as fanout
-from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
-from tests.execution.process_signals import publish_ready
-
-signal_path = sys.argv[1]
-real_refresh_dispatch_marker = fanout._ActiveProcess.refresh_dispatch_marker
-published_guardian = False
-
-def record_dispatch_marker(self, *, required):
-    global published_guardian
-    started_at = real_refresh_dispatch_marker(self, required=required)
-    if (
-        started_at is not None
-        and self.guardian_pid is not None
-        and not published_guardian
-    ):
-        published_guardian = True
-        assert self.guardian_pid is not None
-        publish_ready(signal_path, "guardian")
-    return started_at
-
-fanout._ActiveProcess.refresh_dispatch_marker = record_dispatch_marker
-run_call_pool(
-    [
-        CallSpec(
-            key="worker",
-            job=ProcessJob(
-                entrypoint="tests.execution.process_workers:block_process_tree",
-                payload={"signal_path": signal_path, "key": "worker"},
-            ),
-            decode=lambda value: value,
-            deadline_seconds=30.0,
-        )
-    ],
-    concurrency=1,
-    is_rate_limited=lambda value: False,
-)
-"""
-    scheduler = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            scheduler_script,
-            os.fspath(signals.path),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-    )
-    observed_pids: list[int] = []
-    try:
-        signals.wait_entered(
+    with SchedulerProcess(
+        "guardian_scheduler_die",
+        capture_stderr=True,
+    ) as run:
+        run.signals.wait_entered(
             ["worker-worker", "worker-descendant", "guardian"]
         )
-        worker_pid = signals.pid("worker-worker")
-        guardian_pid = signals.pid("guardian")
+        worker_pid = run.signals.pid("worker-worker")
+        guardian_pid = run.signals.pid("guardian")
         observed_pids = [
             worker_pid,
             guardian_pid,
-            signals.pid("worker-descendant"),
+            run.signals.pid("worker-descendant"),
         ]
+        run.track_pids(observed_pids)
+        assert run.scheduler is not None
         os.kill(guardian_pid, signal.SIGKILL)
-        os.kill(scheduler.pid, signal.SIGKILL)
-        scheduler.wait(timeout=3.0)
+        os.kill(run.scheduler.pid, signal.SIGKILL)
+        run.scheduler.wait(timeout=3.0)
         for pid in observed_pids:
             _assert_process_gone(pid)
-    finally:
-        if scheduler.poll() is None:
-            scheduler.kill()
-            scheduler.wait(timeout=3.0)
-        if observed_pids:
-            try:
-                os.killpg(observed_pids[0], signal.SIGKILL)
-            except (PermissionError, ProcessLookupError):
-                pass
-        signals.close()
-        for pid in observed_pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
 
 @pytest.mark.parametrize("guardian_behavior", ["exit", "hang"])
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_guardian_pre_ready_failure_hard_contains_group(
-    tmp_path: Path,
     guardian_behavior: str,
 ) -> None:
-    ready_reader, ready_writer = os.pipe()
-    fake_guardian_path = tmp_path / "fake_guardian.py"
-    fake_guardian_path.write_text(
-        """
-import os
-import signal
-import sys
-
-ready_writer, behavior = sys.argv[1:]
-signal.signal(signal.SIGTERM, signal.SIG_IGN)
-os.write(int(ready_writer), f"{os.getpid()}\\n".encode())
-os.close(int(ready_writer))
-if behavior == "exit":
-    raise SystemExit(2)
-signal.pause()
-""",
-        encoding="utf-8",
-    )
-    starter_script = """
-import os
-import subprocess
-import sys
-
-import whetstone.execution.process_worker as worker
-
-fake_guardian_path, ready_writer, behavior = sys.argv[1:]
-real_popen = subprocess.Popen
-worker._GUARDIAN_READY_TIMEOUT_SECONDS = 0.1
-
-def fake_popen(*args, **kwargs):
-    return real_popen(
-        [sys.executable, fake_guardian_path, ready_writer, behavior],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        pass_fds=(*kwargs["pass_fds"], int(ready_writer)),
-    )
-
-worker.subprocess.Popen = fake_popen
-lifetime_reader, lifetime_writer = os.pipe()
-done_reader, done_writer = os.pipe()
-worker._start_guardian(lifetime_reader, done_writer)
-"""
-    starter = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            starter_script,
-            os.fspath(fake_guardian_path),
-            str(ready_writer),
-            guardian_behavior,
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        start_new_session=True,
-        pass_fds=(ready_writer,),
-    )
-    os.close(ready_writer)
-    ready_writer = -1
-    child_pids: list[int] = []
+    run = run_pre_ready_guardian_starter(guardian_behavior)
     try:
         with selectors.DefaultSelector() as selector:
-            selector.register(ready_reader, selectors.EVENT_READ)
+            selector.register(run.ready_reader, selectors.EVENT_READ)
             assert selector.select(3.0), "fake guardian did not publish ready"
-        child_pids = [int(os.read(ready_reader, 32).strip())]
-        starter.wait(timeout=3.0)
-        assert starter.returncode == -signal.SIGKILL
-        for pid in child_pids:
+        run.child_pids = [int(os.read(run.ready_reader, 32).strip())]
+        run.starter.wait(timeout=3.0)
+        assert run.starter.returncode == -signal.SIGKILL
+        for pid in run.child_pids:
             _assert_process_gone(pid)
     finally:
-        if starter.poll() is None:
-            os.killpg(starter.pid, signal.SIGKILL)
-            starter.wait(timeout=3.0)
-        for pid in child_pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        if ready_writer >= 0:
-            os.close(ready_writer)
-        os.close(ready_reader)
+        run.cleanup()
 
 
+@pytest.mark.skipif(
+    "fork" not in multiprocessing.get_all_start_methods(),
+    reason="fork is unavailable on this platform",
+)
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_forked_scheduler_sibling_cannot_keep_worker_group_alive() -> None:
-    signals = ProcessSignals()
-    scheduler_script = """
-import os
-import signal
-import sys
-
-import whetstone.execution.fanout as fanout
-from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
-from tests.execution.process_signals import publish_ready
-
-signal_path = sys.argv[1]
-real_spawn = fanout._spawn
-
-def fork_after_spawn(*args, **kwargs):
-    process = real_spawn(*args, **kwargs)
-    sibling_pid = os.fork()
-    if sibling_pid == 0:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        publish_ready(signal_path, "scheduler-sibling")
-        signal.pause()
-    return process
-
-fanout._spawn = fork_after_spawn
-run_call_pool(
-    [
-        CallSpec(
-            key="worker",
-            job=ProcessJob(
-                entrypoint="tests.execution.process_workers:block_process_tree",
-                payload={"signal_path": signal_path, "key": "worker"},
-            ),
-            decode=lambda value: value,
-            deadline_seconds=30.0,
-        )
-    ],
-    concurrency=1,
-    is_rate_limited=lambda value: False,
-)
-"""
-    scheduler = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            scheduler_script,
-            os.fspath(signals.path),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
     sibling_pid: int | None = None
     worker_pids: list[int] = []
-    try:
-        signals.wait_entered(
+    with SchedulerProcess("forked_scheduler_sibling") as run:
+        run.signals.wait_entered(
             ["scheduler-sibling", "worker-worker", "worker-descendant"]
         )
-        sibling_pid = signals.pid("scheduler-sibling")
+        sibling_pid = run.signals.pid("scheduler-sibling")
         worker_pids = [
-            signals.pid("worker-worker"),
-            signals.pid("worker-descendant"),
+            run.signals.pid("worker-worker"),
+            run.signals.pid("worker-descendant"),
         ]
-        os.kill(scheduler.pid, signal.SIGKILL)
-        scheduler.wait(timeout=3.0)
+        run.track_pids([sibling_pid, *worker_pids])
+        assert run.scheduler is not None
+        os.kill(run.scheduler.pid, signal.SIGKILL)
+        run.scheduler.wait(timeout=3.0)
         for pid in worker_pids:
             _assert_process_gone(pid)
         os.kill(sibling_pid, 0)
-    finally:
-        if scheduler.poll() is None:
-            scheduler.kill()
-            scheduler.wait(timeout=3.0)
-        if sibling_pid is not None:
-            try:
-                os.kill(sibling_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        signals.close()
-        for pid in worker_pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
 
 @pytest.mark.process_integration
 @pytest.mark.process_guardian
 def test_scheduler_death_after_worker_return_kills_left_descendant() -> None:
-    signals = ProcessSignals()
-    scheduler_script = """
-import os
-import signal
-import sys
-
-import whetstone.execution.fanout as fanout
-from whetstone.execution.fanout import CallSpec, ProcessJob, run_call_pool
-from tests.execution.process_signals import publish_ready
-
-signal_path = sys.argv[1]
-real_read_worker_result = fanout._read_worker_result
-
-def block_harvest(process):
-    publish_ready(signal_path, "harvest")
-    signal.pause()
-
-fanout._read_worker_result = block_harvest
-run_call_pool(
-    [
-        CallSpec(
-            key="worker",
-            job=ProcessJob(
-                entrypoint=(
-                    "tests.execution.process_workers:"
-                    "spawn_descendant_and_return"
-                ),
-                payload={
-                    "signal_path": signal_path,
-                    "value": "complete",
-                },
-            ),
-            decode=lambda value: value,
-            deadline_seconds=30.0,
-        )
-    ],
-    concurrency=1,
-    is_rate_limited=lambda value: False,
-)
-"""
-    scheduler = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            scheduler_script,
-            os.fspath(signals.path),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    descendant_pids: list[int] = []
-    try:
-        signals.wait_entered(["harvest", "descendant"])
-        descendant_pids = [signals.pid("descendant")]
-        os.kill(scheduler.pid, signal.SIGKILL)
-        scheduler.wait(timeout=3.0)
+    with SchedulerProcess("block_harvest") as run:
+        run.signals.wait_entered(["harvest", "descendant"])
+        descendant_pids = [run.signals.pid("descendant")]
+        run.track_pids(descendant_pids)
+        assert run.scheduler is not None
+        os.kill(run.scheduler.pid, signal.SIGKILL)
+        run.scheduler.wait(timeout=3.0)
         for pid in descendant_pids:
             _assert_process_gone(pid)
-    finally:
-        if scheduler.poll() is None:
-            scheduler.kill()
-            scheduler.wait(timeout=3.0)
-        for pid in descendant_pids:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        signals.close()
 
 
 @pytest.mark.process_integration
