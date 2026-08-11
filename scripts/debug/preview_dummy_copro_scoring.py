@@ -28,14 +28,15 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
 from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
-from whetstone.envs.task_selection import (
+from whetstone.envs.task_pools import select_role_for_env
+from whetstone.evaluation.metrics.blended import compression_score
+from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
+from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitManifestError,
     TaskSplitRole,
     load_task_split_manifest,
 )
-from whetstone.evaluation.metrics.blended import compression_score
-from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
 from whetstone.optimization.codex.proposer import (
     CodexCliProposerConfig,
     CodexCliProposerTransport,
@@ -265,8 +266,10 @@ def _select_tasks(
     if has_manifest:
         try:
             manifest = load_task_split_manifest(args.task_manifest)
-            selection = manifest.select_role(
-                env="ed1", role=TaskSplitRole(args.task_role)
+            selection = select_role_for_env(
+                manifest,
+                env="ed1",
+                role=TaskSplitRole(args.task_role),
             )
         except TaskSplitManifestError as exc:
             raise SystemExit(str(exc)) from None

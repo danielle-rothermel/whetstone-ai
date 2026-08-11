@@ -362,7 +362,7 @@ def test_task_split_manifest_reports_an_unreadable_path(
     tmp_path: Path,
 ) -> None:
     """The folded-in loader names the file it could not read."""
-    from whetstone.envs.task_selection import TaskSplitManifestError
+    from whetstone.experiment.task_selection import TaskSplitManifestError
 
     with pytest.raises(TaskSplitManifestError, match="cannot read"):
         load_task_split_manifest(tmp_path / "absent.json")

@@ -34,10 +34,8 @@ from whetstone.envs.ed1 import (
 )
 from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
 from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
-from whetstone.envs.task_selection import (
-    TaskRoleSelection,
-    TaskSplitRole,
-    load_task_split_manifest,
+from whetstone.envs.task_pools import (
+    select_lowest_historical_pass_rate_for_env,
 )
 from whetstone.evaluation.schema import RowAccounting
 from whetstone.execution._file_lock import (
@@ -46,6 +44,11 @@ from whetstone.execution._file_lock import (
 )
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
+from whetstone.experiment.task_selection import (
+    TaskRoleSelection,
+    TaskSplitRole,
+    load_task_split_manifest,
+)
 from whetstone.optimization.copro.ed1_baseline_preview import (
     Ed1BaselinePreviewTranscript,
     run_ed1_baseline_preview,
@@ -489,7 +492,8 @@ def _select_tasks(
     *, manifest_path: Path, snapshot_path: Path, smoke: bool
 ) -> tuple[tuple[Ed1Instance, ...], TaskRoleSelection, Ed1Instance]:
     manifest = load_task_split_manifest(manifest_path)
-    selected = manifest.select_lowest_historical_pass_rate(
+    selected = select_lowest_historical_pass_rate_for_env(
+        manifest,
         env="ed1",
         role=TaskSplitRole.TRAIN,
         count=10,

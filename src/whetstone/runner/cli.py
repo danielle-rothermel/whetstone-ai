@@ -39,7 +39,7 @@ import typer
 
 from whetstone.coordination.run_workflow import RunController
 from whetstone.core.identity import compute_identity_hash
-from whetstone.envs.task_selection import load_task_split_manifest
+from whetstone.experiment.task_selection import load_task_split_manifest
 from whetstone.optimization.gepa.factory import CanonicalGepaAdapterFactory
 from whetstone.optimization.proposal.proposer import ProviderProposerTransport
 from whetstone.runner.cell import (

@@ -34,10 +34,6 @@ from whetstone.envs.sampling import (
     EnvSplitSampling,
     derive_split_sampling,
 )
-from whetstone.envs.task_selection import (
-    TaskSplitRoles,
-    resolve_manifest_split,
-)
 from whetstone.evaluation import (
     EvaluationProcedureConfig,
     EvaluationProcedureDefinition,
@@ -59,6 +55,10 @@ from whetstone.experiment.reward import (
     RewardPolicy,
     RewardTerm,
     apply_reward_policy,
+)
+from whetstone.experiment.task_selection import (
+    TaskSplitRoles,
+    resolve_manifest_split,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 

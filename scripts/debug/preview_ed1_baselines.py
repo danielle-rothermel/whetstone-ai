@@ -18,14 +18,18 @@ from rich.text import Text
 from whetstone.envs.ed1 import ED1_CANONICAL_MODEL, Ed1Instance, load_ed1_tasks
 from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
 from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
-from whetstone.envs.task_selection import (
+from whetstone.envs.task_pools import (
+    select_lowest_historical_pass_rate_for_env,
+    select_role_for_env,
+)
+from whetstone.evaluation.analysis.power import PowerConfig
+from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
+from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitManifestError,
     TaskSplitRole,
     load_task_split_manifest,
 )
-from whetstone.evaluation.analysis.power import PowerConfig
-from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
 from whetstone.optimization.copro.ed1_baseline_preview import (
     Ed1BaselineArmPreview,
     Ed1BaselinePreviewTranscript,
@@ -175,9 +179,10 @@ def _select_tasks(
             manifest = load_task_split_manifest(args.task_manifest)
             role = TaskSplitRole(args.task_role)
             selection = (
-                manifest.select_role(env="ed1", role=role)
+                select_role_for_env(manifest, env="ed1", role=role)
                 if args.worst_task_count is None
-                else manifest.select_lowest_historical_pass_rate(
+                else select_lowest_historical_pass_rate_for_env(
+                    manifest,
                     env="ed1",
                     role=role,
                     count=args.worst_task_count,

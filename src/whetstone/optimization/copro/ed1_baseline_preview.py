@@ -14,7 +14,6 @@ from whetstone.envs.ed1 import (
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_calibration import run_ed1_calibration
 from whetstone.envs.ed1_scoring import CodeBatchScorer
-from whetstone.envs.task_selection import TaskRoleSelection
 from whetstone.evaluation.analysis.power import PowerConfig, PowerResult
 from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
@@ -29,6 +28,7 @@ from whetstone.evaluation.schema import (
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.task_selection import TaskRoleSelection
 from whetstone.optimization.copro.ed1_scoring_preview import (
     Ed1ScoringPreflight,
     Ed1ScoringRuntimeSummary,

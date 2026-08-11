@@ -32,10 +32,6 @@ from whetstone.envs.sampling import (
     EnvSplitSampling,
     derive_split_sampling,
 )
-from whetstone.envs.task_selection import (
-    TaskSplitRoles,
-    resolve_manifest_split,
-)
 from whetstone.evaluation.aggregate import aggregation_definition
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.graph.nodes import (
@@ -48,6 +44,10 @@ from whetstone.experiment.reward import (
     MissingDataPolicy,
     RewardPolicy,
     RewardTerm,
+)
+from whetstone.experiment.task_selection import (
+    TaskSplitRoles,
+    resolve_manifest_split,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 

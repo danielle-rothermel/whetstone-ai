@@ -3,9 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
-from enum import UNIQUE, StrEnum, verify
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
@@ -15,73 +13,17 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
-    model_validator,
+)
+
+from whetstone.experiment.task_selection.roles import (
+    TaskRoleSelection,
+    TaskRoleSelectionMethod,
+    TaskSplitManifestError,
+    TaskSplitRole,
+    TaskSplitRoles,
 )
 
 TASK_SELECTION_SCHEMA = "whetstone.run.task_selection/v1"
-_ENV_TO_POOL: dict[str, str] = {"d1": "d1", "ed1": "ed1"}
-
-
-class TaskSplitManifestError(ValueError):
-    """A typed failure parsing or applying a task-selection manifest."""
-
-
-@verify(UNIQUE)
-class TaskSplitRole(StrEnum):
-    """One explicit role from a persisted task-selection manifest."""
-
-    TRAIN = "train"
-    VALIDATION = "validation"
-    TEST = "test"
-
-
-@verify(UNIQUE)
-class TaskRoleSelectionMethod(StrEnum):
-    """How an ordered selection was derived from its manifest role."""
-
-    FULL_ROLE = "full_role"
-    LOWEST_HISTORICAL_PASS_RATE = "lowest_historical_pass_rate"
-
-
-class TaskRoleSelection(BaseModel):
-    """The exact persisted manifest-derived selection for one evaluation."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    manifest_content_hash: str
-    pool_key: str
-    role: TaskSplitRole
-    task_ids: tuple[str, ...]
-    selection_method: TaskRoleSelectionMethod = (
-        TaskRoleSelectionMethod.FULL_ROLE
-    )
-    source_role_count: int | None = None
-    eligible_pool_count: int | None = None
-    excluded_task_ids: tuple[str, ...] = ()
-    historical_pass_rates: tuple[float, ...] = ()
-
-    @model_validator(mode="after")
-    def _validate_selection(self) -> TaskRoleSelection:
-        if self.historical_pass_rates and len(
-            self.historical_pass_rates
-        ) != len(self.task_ids):
-            raise ValueError(
-                "historical pass rates must align with selected task IDs"
-            )
-        if self.source_role_count is not None and self.source_role_count < len(
-            self.task_ids
-        ):
-            raise ValueError(
-                "source role count cannot be smaller than selection"
-            )
-        if (
-            self.eligible_pool_count is not None
-            and self.eligible_pool_count < len(self.task_ids)
-        ):
-            raise ValueError(
-                "eligible pool count cannot be smaller than selection"
-            )
-        return self
 
 
 class _HistoricalSelectionMetadata(BaseModel):
@@ -131,24 +73,12 @@ class TaskSplitManifest(BaseModel):
     selection: _HistoricalSelectionMetadata | None = None
     content_hash: str = Field(exclude=True)
 
-    def for_env(self, env: str) -> TaskSplitRoles:
-        """Resolve the role arrays applicable to ``env``."""
-        pool_key = _ENV_TO_POOL.get(env)
-        if pool_key is None:
-            if env == "ed1m":
-                raise TaskSplitManifestError(
-                    "task-selection manifests do not apply to ed1m: "
-                    "manifest pools contain HumanEval task ids, while ed1m "
-                    "uses behavioral-mutant ids"
-                )
-            raise TaskSplitManifestError(
-                "task-selection manifests apply only to "
-                f"{sorted(_ENV_TO_POOL)}; got env {env!r}"
-            )
+    def pool_roles(self, pool_key: str) -> TaskSplitRoles:
+        """Resolve the role arrays for one persisted pool key."""
         pool = self.pools.get(pool_key)
         if pool is None:
             raise TaskSplitManifestError(
-                f"manifest has no pool {pool_key!r} for env {env!r}; "
+                f"manifest has no pool {pool_key!r}; "
                 f"pools present: {sorted(self.pools)}"
             )
         return TaskSplitRoles(
@@ -160,10 +90,10 @@ class TaskSplitManifest(BaseModel):
         )
 
     def select_role(
-        self, *, env: str, role: TaskSplitRole
+        self, *, pool_key: str, role: TaskSplitRole
     ) -> TaskRoleSelection:
         """Resolve and record one ordered role without folding role meaning."""
-        roles = self.for_env(env)
+        roles = self.pool_roles(pool_key)
         return TaskRoleSelection(
             manifest_content_hash=self.content_hash,
             pool_key=roles.pool_key,
@@ -176,7 +106,7 @@ class TaskSplitManifest(BaseModel):
     def select_lowest_historical_pass_rate(
         self,
         *,
-        env: str,
+        pool_key: str,
         role: TaskSplitRole,
         count: int,
         excluded_task_ids: tuple[str, ...] = (),
@@ -188,7 +118,7 @@ class TaskSplitManifest(BaseModel):
             )
         if len(set(excluded_task_ids)) != len(excluded_task_ids):
             raise TaskSplitManifestError("excluded task IDs must be unique")
-        roles = self.for_env(env)
+        roles = self.pool_roles(pool_key)
         unknown_exclusions = tuple(
             task_id
             for task_id in excluded_task_ids
@@ -254,46 +184,6 @@ class TaskSplitManifest(BaseModel):
         )
 
 
-@dataclass(frozen=True, slots=True)
-class TaskSplitRoles:
-    """One pool's ordered train, validation, and test role sets."""
-
-    pool_key: str
-    train_ids: tuple[str, ...]
-    val_ids: tuple[str, ...]
-    test_ids: tuple[str, ...]
-    content_hash: str
-
-    @property
-    def internal_ids(self) -> tuple[str, ...]:
-        return self.train_ids + self.val_ids
-
-    @property
-    def official_ids(self) -> tuple[str, ...]:
-        return self.test_ids
-
-    def all_role_ids(self) -> frozenset[str]:
-        return frozenset(self.train_ids + self.val_ids + self.test_ids)
-
-    def ids_for(self, role: TaskSplitRole) -> tuple[str, ...]:
-        """Return one role exactly as ordered in the manifest."""
-        if role is TaskSplitRole.TRAIN:
-            return self.train_ids
-        if role is TaskSplitRole.VALIDATION:
-            return self.val_ids
-        return self.test_ids
-
-
-@dataclass(frozen=True, slots=True)
-class ResolvedSplit[T]:
-    """A manifest-resolved internal and official task partition."""
-
-    internal: tuple[T, ...]
-    official: tuple[T, ...]
-    manifest_tag: str
-    official_capped: str | None
-
-
 def parse_task_split_manifest(
     payload: object,
 ) -> TaskSplitManifest:
@@ -340,7 +230,7 @@ def parse_task_split_manifest(
 
 
 def load_task_split_manifest(path: Path) -> TaskSplitManifest:
-    """Read and validate one environment-owned manifest from disk."""
+    """Read and validate one persisted manifest from disk."""
     try:
         payload = path.read_bytes()
     except OSError as exc:
@@ -350,58 +240,9 @@ def load_task_split_manifest(path: Path) -> TaskSplitManifest:
     return parse_task_split_manifest(payload)
 
 
-def resolve_manifest_split[T](
-    *,
-    roles: TaskSplitRoles,
-    items: Sequence[T],
-    id_of: Callable[[T], str],
-    official_n: int | None = None,
-) -> ResolvedSplit[T]:
-    """Resolve manifest membership in manifest order, refusing unknown ids."""
-    by_id = {str(id_of(item)): item for item in items}
-    missing = sorted(roles.all_role_ids() - frozenset(by_id))
-    if missing:
-        raise TaskSplitManifestError(
-            f"manifest pool {roles.pool_key!r} references "
-            f"{len(missing)} task id(s) absent from the loaded task pool "
-            f"(unknown ids: {missing})"
-        )
-    if official_n is not None and official_n < 1:
-        raise TaskSplitManifestError(
-            f"official_n must be at least 1; got {official_n}"
-        )
-    internal = tuple(by_id[item_id] for item_id in roles.internal_ids)
-    official = tuple(by_id[item_id] for item_id in roles.official_ids)
-    capped: str | None = None
-    if official_n is not None and official_n < len(official):
-        capped = (
-            f"official_n={official_n} caps the manifest test split "
-            f"({len(official)} tasks) to its first {official_n}"
-        )
-        official = official[:official_n]
-    elif official_n is not None and official_n > len(official):
-        capped = (
-            f"official_n={official_n} exceeds the manifest test split size "
-            f"({len(official)}); using all {len(official)} test tasks"
-        )
-    return ResolvedSplit(
-        internal=internal,
-        official=official,
-        manifest_tag=f"tsm:{roles.content_hash[:16]}.{roles.pool_key}",
-        official_capped=capped,
-    )
-
-
 __all__ = [
     "TASK_SELECTION_SCHEMA",
-    "ResolvedSplit",
-    "TaskRoleSelection",
-    "TaskRoleSelectionMethod",
     "TaskSplitManifest",
-    "TaskSplitManifestError",
-    "TaskSplitRole",
-    "TaskSplitRoles",
     "load_task_split_manifest",
     "parse_task_split_manifest",
-    "resolve_manifest_split",
 ]

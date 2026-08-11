@@ -23,7 +23,6 @@ from whetstone.envs.ed1_scoring import (
     CodeScore,
     CodeScoringInput,
 )
-from whetstone.envs.task_selection import TaskRoleSelection
 from whetstone.evaluation import AggregationOutput
 from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 from whetstone.evaluation.schema import (
@@ -41,6 +40,7 @@ from whetstone.experiment.candidate import (
     CandidateRef,
     candidate_reference,
 )
+from whetstone.experiment.task_selection import TaskRoleSelection
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA_VERSION,
     EvaluationIntent,

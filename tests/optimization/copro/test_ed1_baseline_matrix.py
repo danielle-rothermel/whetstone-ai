@@ -8,12 +8,15 @@ from dr_providers import ProviderKind, ReasoningEffort
 from pydantic import ValidationError
 
 from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
-from whetstone.envs.task_selection import (
+from whetstone.envs.task_pools import (
+    select_lowest_historical_pass_rate_for_env,
+)
+from whetstone.evaluation.schema import RowAccounting
+from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitRole,
     load_task_split_manifest,
 )
-from whetstone.evaluation.schema import RowAccounting
 from whetstone.optimization.copro import ed1_baseline_matrix as matrix
 from whetstone.optimization.copro.ed1_baseline_matrix import (
     EXCLUDED_TASK_IDS,
@@ -140,7 +143,8 @@ def test_frozen_manifest_selection_matches_declared_screen() -> None:
         / "src/whetstone/optimization/copro/humaneval_copro_challenge_v1.json"
     )
 
-    selection = manifest.select_lowest_historical_pass_rate(
+    selection = select_lowest_historical_pass_rate_for_env(
+        manifest,
         env="ed1",
         role=TaskSplitRole.TRAIN,
         count=10,
