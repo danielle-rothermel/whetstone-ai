@@ -62,11 +62,13 @@ from whetstone.core.identity import (
     require_full_hash,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.evaluation.code.statistics import (
+from whetstone.evaluation.analysis.statistics import (
     BootstrapCI,
     bootstrap_delta_ci,
 )
-from whetstone.evaluation.code.statistics import bootstrap_mean_ci as _mean_ci
+from whetstone.evaluation.analysis.statistics import (
+    bootstrap_mean_ci as _mean_ci,
+)
 from whetstone.evaluation.engine import EngineEvaluation, EvaluationEngine
 from whetstone.evaluation.schema import EvaluationEvidence
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA

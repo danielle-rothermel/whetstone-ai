@@ -15,8 +15,8 @@ from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_calibration import run_ed1_calibration
 from whetstone.envs.ed1_scoring import CodeBatchScorer
 from whetstone.envs.task_selection import TaskRoleSelection
-from whetstone.evaluation.code.power import PowerConfig, PowerResult
-from whetstone.evaluation.code.statistics import (
+from whetstone.evaluation.analysis.power import PowerConfig, PowerResult
+from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
     BootstrapCI,
 )

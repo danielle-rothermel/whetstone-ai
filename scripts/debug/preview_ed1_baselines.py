@@ -24,7 +24,7 @@ from whetstone.envs.task_selection import (
     TaskSplitRole,
     load_task_split_manifest,
 )
-from whetstone.evaluation.code.power import PowerConfig
+from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
 from whetstone.optimization.copro.ed1_baseline_preview import (
     Ed1BaselineArmPreview,

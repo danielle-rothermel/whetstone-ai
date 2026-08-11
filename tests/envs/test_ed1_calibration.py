@@ -17,7 +17,7 @@ from whetstone.envs.ed1_calibration import (
     run_ed1_calibration,
 )
 from whetstone.evaluation import engine as engine_module
-from whetstone.evaluation.code.power import PowerConfig
+from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.evaluation.drivers.ed1 import (
     Ed1RowOutcome,
     Ed1RowRequest,

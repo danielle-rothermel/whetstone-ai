@@ -5,12 +5,12 @@ from dataclasses import dataclass
 
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import ED1_ENV_NAME, Ed1Experiment
-from whetstone.evaluation.code.power import (
+from whetstone.evaluation.analysis.power import (
     PowerConfig,
     PowerResult,
     analyze_power,
 )
-from whetstone.evaluation.code.statistics import (
+from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
     BootstrapCI,
     bootstrap_paired_delta_ci,

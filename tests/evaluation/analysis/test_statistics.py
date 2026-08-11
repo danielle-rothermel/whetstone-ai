@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from whetstone.evaluation.code.statistics import (
+from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
     bootstrap_delta_ci,
     bootstrap_mean_ci,

@@ -17,7 +17,7 @@ from tests.provider import support as provider_support
 from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
-from whetstone.evaluation.code.power import PowerConfig
+from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (
     PromptResultCache,

@@ -9,17 +9,11 @@ import dr_code.trace as dr_trace
 import whetstone.evaluation as local_evaluation
 import whetstone.evaluation.code as code_package
 from whetstone.evaluation.code import (
-    BootstrapCI,
     CompletenessPolicy,
     EvaluationMatrixPlan,
-    PowerConfig,
-    PowerRecommendation,
-    PowerResult,
-    PowerSurfacePoint,
     RolloutAggregate,
     RowValue,
     TaskRows,
-    VarianceDecomposition,
     compressed_description_length_fact,
     compression_ratio_score,
     select_compression_reference,
@@ -102,37 +96,6 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
             task_identity="task",
             rows=(RowValue(value=1.0),),
         ),
-        BootstrapCI(point=0.5, low=0.25, high=0.75, level=0.95, resamples=10),
-        PowerConfig(),
-        VarianceDecomposition(
-            base_rate=0.5,
-            within_repeat_var=0.25,
-            interaction_var=0.1,
-            between_task_var=0.2,
-            anchor_repeats=3,
-            n_tasks_observed=2,
-        ),
-        PowerRecommendation(
-            target_gap=0.1,
-            achievable=True,
-            recommended_n_tasks=2,
-            recommended_repeats=1,
-            achieved_mdd=0.1,
-            recommended_calls=2,
-            recommended_usd=None,
-            best_achievable_mdd=0.1,
-            best_n_tasks=2,
-            best_repeats=1,
-            repeat_plateau=None,
-            pool_limited=False,
-        ),
-        PowerSurfacePoint(
-            n_tasks=2,
-            repeats=1,
-            calls=2,
-            mdd_at_target=0.1,
-            simulated_rank_probability=0.8,
-        ),
     )
     for value in value_objects:
         assert is_dataclass(value)
@@ -163,16 +126,6 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         rows_failed=0,
         rows_invalid=0,
     )
-    result = PowerResult(
-        config=PowerConfig(),
-        certified_headroom=0.0,
-        naive_mean=0.5,
-        ceiling_mean=0.5,
-        pool_ceiling=1,
-        decomposition=value_objects[5],
-        recommendation=value_objects[6],
-    )
-    for value in (aggregate, result):
-        assert is_dataclass(value)
-        assert hasattr(type(value), "__slots__")
-        assert type(value).__dataclass_params__.frozen
+    assert is_dataclass(aggregate)
+    assert hasattr(type(aggregate), "__slots__")
+    assert type(aggregate).__dataclass_params__.frozen

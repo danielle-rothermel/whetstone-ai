@@ -6,8 +6,8 @@ from typing import cast
 import numpy as np
 import pytest
 
-from whetstone.evaluation.code import power
-from whetstone.evaluation.code.power import (
+from whetstone.evaluation.analysis import power
+from whetstone.evaluation.analysis.power import (
     PowerConfig,
     PowerSurfacePoint,
     analyze_power,
