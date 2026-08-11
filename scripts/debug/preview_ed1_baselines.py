@@ -18,6 +18,8 @@ from rich.text import Text
 from whetstone.envs.ed1 import (
     ED1_CANONICAL_MODEL,
     Ed1Instance,
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
     ed1_task_model_from_metadata,
     load_ed1_tasks,
     run_ed1_anchor_baseline_sweep,
@@ -35,10 +37,6 @@ from whetstone.envs.task_pools import (
     select_role_for_env,
 )
 from whetstone.evaluation.analysis.power import PowerConfig
-from whetstone.evaluation.drivers.ed1_row_jobs import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
-)
 from whetstone.evaluation.preview.anchor import (
     AnchorArmPreview,
     BaselinePreviewTranscript,

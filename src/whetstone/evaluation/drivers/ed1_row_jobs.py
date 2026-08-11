@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-from enum import UNIQUE, StrEnum, verify
-
-from dr_providers import ProviderCallConfig
-from pydantic import BaseModel, ConfigDict
-
+from whetstone.envs.ed1 import Ed1TaskModelConfig, Ed1TaskModelKind
 from whetstone.evaluation.drivers.ed1 import Ed1RowJobFactory, Ed1RowRequest
 from whetstone.execution.fanout import ProcessJob
-from whetstone.provider.policy import ProviderExecutionPolicy
 
 _DUMMY_ROW_ENTRYPOINT = (
     "whetstone.evaluation.drivers.ed1_workers:drive_dummy_ed1_generation"
@@ -15,29 +10,6 @@ _DUMMY_ROW_ENTRYPOINT = (
 _PROVIDER_ROW_ENTRYPOINT = (
     "whetstone.evaluation.drivers.ed1_workers:drive_provider_ed1_generation"
 )
-
-
-@verify(UNIQUE)
-class Ed1TaskModelKind(StrEnum):
-    """Execution route for ED1 encoder and decoder generations."""
-
-    DUMMY = "dummy"
-    PROVIDER = "provider"
-
-
-class Ed1TaskModelConfig(BaseModel):
-    """Exact task-model mode, provider request, and execution policy."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Ed1TaskModelKind
-    provider_call_config: ProviderCallConfig
-    execution_policy: ProviderExecutionPolicy
-
-    @property
-    def model(self) -> str:
-        """The exact provider request's model slug for display."""
-        return self.provider_call_config.definition.route.model
 
 
 def dummy_ed1_row_job(request: Ed1RowRequest) -> ProcessJob:
@@ -67,8 +39,6 @@ def ed1_task_model_row_job(config: Ed1TaskModelConfig) -> Ed1RowJobFactory:
 
 
 __all__ = [
-    "Ed1TaskModelConfig",
-    "Ed1TaskModelKind",
     "dummy_ed1_row_job",
     "ed1_task_model_row_job",
     "provider_ed1_row_job",

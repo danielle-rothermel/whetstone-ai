@@ -8,34 +8,16 @@ import dr_code.trace as dr_trace
 import whetstone.evaluation as local_evaluation
 import whetstone.evaluation.code as code_package
 from whetstone.evaluation.code import (
-    compressed_description_length_fact,
-    compression_ratio_score,
     select_compression_reference,
     submission,
     submission_text_artifact,
 )
 
-from .support import generation, operator_lineage
+from .support import generation
 
 
 def test_boundary_reuses_released_text_artifact() -> None:
     assert submission.TextArtifact is dr_trace.TextArtifact
-
-
-def test_scoring_returns_whetstone_score_and_fact_types() -> None:
-    fact = compressed_description_length_fact(
-        "code", lineage=operator_lineage()
-    )
-    assert type(fact) is local_evaluation.MetricFact
-
-    ratio_score = compression_ratio_score(
-        compressed_description_length=1,
-        reference=local_evaluation.CompressionReferenceArtifact(
-            content=b"abcd"
-        ),
-        evaluation_procedure_config_hash="0" * 64,
-    )
-    assert type(ratio_score) is local_evaluation.Score
 
 
 def test_compression_selection_returns_generic_types() -> None:

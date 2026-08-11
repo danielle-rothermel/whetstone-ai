@@ -7,6 +7,8 @@ from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
 from whetstone.envs.ed1 import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
     ed1_task_model_from_metadata,
     run_ed1_copro_scoring_preview,
 )
@@ -16,10 +18,6 @@ from whetstone.envs.ed1_runtime import (
 )
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
-from whetstone.evaluation.drivers.ed1_row_jobs import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
-)
 from whetstone.evaluation.drivers.ed1_workers import (
     DUMMY_ALTERNATE_PASSING_BODY,
     DUMMY_FAILING_BODY,

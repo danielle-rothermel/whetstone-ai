@@ -15,6 +15,8 @@ from dr_store import MemoryBackend, ObjectStore
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
 from tests.provider import support as provider_support
 from whetstone.envs.ed1 import (
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
     ed1_task_model_from_metadata,
     run_ed1_anchor_baseline_preview,
 )
@@ -25,10 +27,6 @@ from whetstone.envs.ed1_runtime import (
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
 from whetstone.evaluation.analysis.power import PowerConfig
-from whetstone.evaluation.drivers.ed1_row_jobs import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
-)
 from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.execution.partials import PartialCallRecord, PartialLog
 from whetstone.execution.prompt_cache import (

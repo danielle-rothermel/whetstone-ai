@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from dr_code.humaneval import (
     HUMANEVAL_OVERRIDE_SET,
@@ -13,14 +14,11 @@ from dr_code.humaneval import (
 from dr_code.humaneval.plus_dataset import HF_REVISION
 from dr_providers import ProviderCallConfig
 from dr_store import ObjectStore
+from pydantic import BaseModel, ConfigDict
 from whetstone_envs.core import Instance
 
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.ed1_blended import (
-    BoundedCompressionMetricConfig,
-    ed1_blended_aggregate_values,
-)
 from whetstone.envs.ed1_runtime import (
     Ed1ScoringRuntimeSummary,
     ed1_environment_fingerprint,
@@ -39,7 +37,6 @@ from whetstone.experiment.task_selection import TaskRoleSelection
 
 if TYPE_CHECKING:
     from whetstone.evaluation.analysis.power import PowerConfig
-    from whetstone.evaluation.drivers.ed1_row_jobs import Ed1TaskModelConfig
     from whetstone.evaluation.engine import EvaluationEngine
     from whetstone.evaluation.preview.anchor import (
         BaselinePreviewTranscript,
@@ -82,6 +79,8 @@ from whetstone.evaluation import (
     identity_hash_for,
 )
 from whetstone.evaluation.aggregate import aggregation_definition
+from whetstone.evaluation.metrics.blended import BoundedCompressionBlendConfig
+from whetstone.evaluation.preview.persisted import load_aggregate_value
 from whetstone.experiment.candidate import (
     Candidate,
     TemplateRenderContract,
@@ -91,6 +90,7 @@ from whetstone.experiment.reward import (
     MissingDataPolicy,
     Reward,
     RewardPolicy,
+    RewardRef,
     RewardTerm,
     apply_reward_policy,
 )
@@ -99,8 +99,62 @@ from whetstone.experiment.task_selection import (
     resolve_manifest_split,
 )
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
+from whetstone.provider.policy import ProviderExecutionPolicy
 
 ED1_ENV_NAME = "ed1"
+
+BLENDED_METRIC_ID = "primary_score_with_bounded_compression_penalty"
+
+
+class BoundedCompressionMetricConfig(BoundedCompressionBlendConfig):
+    """ED1 identity-bearing blended-reward configuration."""
+
+    metric_id: Literal["primary_score_with_bounded_compression_penalty"] = (
+        BLENDED_METRIC_ID
+    )
+
+    def identity_key(self) -> str:
+        """Fold ED1 metric identity with the shared blend parameters."""
+        return f"{self.metric_id}|{self.blend_identity_key()}"
+
+
+def ed1_blended_aggregate_values(
+    store: ObjectStore,
+    reward_ref: RewardRef,
+) -> tuple[float | None, float | None]:
+    """Load primary and compression aggregate values from a blended reward."""
+    if len(reward_ref.record.evidence_refs) != 2:
+        raise RuntimeError(
+            "ED1 blended Reward must cite primary and compression aggregates"
+        )
+    return (
+        load_aggregate_value(store, reward_ref.record.evidence_refs[0]),
+        load_aggregate_value(store, reward_ref.record.evidence_refs[1]),
+    )
+
+
+@verify(UNIQUE)
+class Ed1TaskModelKind(StrEnum):
+    """Execution route for ED1 encoder and decoder generations."""
+
+    DUMMY = "dummy"
+    PROVIDER = "provider"
+
+
+class Ed1TaskModelConfig(BaseModel):
+    """Exact task-model mode, provider request, and execution policy."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Ed1TaskModelKind
+    provider_call_config: ProviderCallConfig
+    execution_policy: ProviderExecutionPolicy
+
+    @property
+    def model(self) -> str:
+        """The exact provider request's model slug for display."""
+        return self.provider_call_config.definition.route.model
+
 
 #: The canonical enc/dec task model (same route plays both encoder + decoder).
 #: ``--task-model`` overrides and folds into ``graph_hash``.
@@ -128,6 +182,7 @@ ED1_DATASET_REVISION = identity_hash_for(
 ED1_SUBMISSION_SCORE_NAME = "humaneval_submission_score"
 
 ED1_BLENDED_REWARD_NAME = "blended_reward"
+ED1_COMPRESSED_DESCRIPTION_LENGTH_NAME = "compressed_description_length"
 ED1_COMPRESSION_NAME = "compression_ratio"
 
 _ED1_STRATUM = "humaneval_plus"
@@ -810,8 +865,6 @@ def ed1_preview_metadata(
 def ed1_task_model_from_metadata(
     metadata: PreviewMetadata,
 ) -> Ed1TaskModelConfig:
-    from whetstone.evaluation.drivers.ed1_row_jobs import Ed1TaskModelConfig
-
     return Ed1TaskModelConfig.model_validate(
         metadata.model_dump(mode="python")["task_model"]
     )
@@ -1108,8 +1161,10 @@ def run_ed1_copro_scoring_preview(
 HumanEvalTaskFromInstance = Callable[[Instance], HumanEvalTask]
 
 __all__ = [
+    "BLENDED_METRIC_ID",
     "DECODER_TEMPLATE",
     "ED1_CANONICAL_MODEL",
+    "ED1_COMPRESSED_DESCRIPTION_LENGTH_NAME",
     "ED1_COMPRESSION_NAME",
     "ED1_DATASET_ID",
     "ED1_DATASET_REVISION",
@@ -1121,9 +1176,12 @@ __all__ = [
     "ENCODER_BODY_A",
     "ENCODER_BODY_B",
     "ENCODER_FRAME",
+    "BoundedCompressionMetricConfig",
     "Ed1BodyError",
     "Ed1Experiment",
     "Ed1Instance",
+    "Ed1TaskModelConfig",
+    "Ed1TaskModelKind",
     "build_code_eval_procedure_config",
     "build_ed1_experiment",
     "build_ed1_preview_engine",

@@ -24,6 +24,8 @@ from rich.text import Text
 from whetstone.envs.ed1 import (
     ED1_CANONICAL_MODEL,
     Ed1Instance,
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
     ed1_blend_config_from_metadata,
     ed1_runtime_from_metadata,
     ed1_task_model_from_metadata,
@@ -39,10 +41,6 @@ from whetstone.envs.ed1_scoring import (
     CheckpointedCodeBatchScorer,
 )
 from whetstone.envs.task_pools import select_role_for_env
-from whetstone.evaluation.drivers.ed1_row_jobs import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
-)
 from whetstone.evaluation.drivers.ed1_workers import (
     DUMMY_ALTERNATE_PASSING_BODY,
     DUMMY_FAILING_BODY,

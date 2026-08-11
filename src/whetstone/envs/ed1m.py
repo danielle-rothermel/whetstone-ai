@@ -8,13 +8,13 @@ from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
 from whetstone.envs.ed1 import (
+    BoundedCompressionMetricConfig,
     Ed1Experiment,
     build_code_eval_procedure_config,
     build_ed1_blended_reward_policy,
     ed1_ceiling_candidate,
     ed1_initial_candidate,
 )
-from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import CodeScore
 from whetstone.envs.ed1m_dataset import MutantRecord, load_dataset
 from whetstone.envs.ed1m_oracle import MutantScore

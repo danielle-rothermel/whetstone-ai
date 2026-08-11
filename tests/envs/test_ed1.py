@@ -22,6 +22,7 @@ from tests.envs.support import (
 from tests.execution.fake_python import local_python_executor
 from tests.provider.support import build_evidence, failure_outcome
 from whetstone.envs.ed1 import (
+    BLENDED_METRIC_ID,
     DECODER_TEMPLATE,
     ED1_BLENDED_REWARD_NAME,
     ED1_CANONICAL_MODEL,
@@ -31,6 +32,7 @@ from whetstone.envs.ed1 import (
     ED1_INVALID_BODY,
     ED1_SUBMISSION_SCORE_NAME,
     ENCODER_BODY_A,
+    BoundedCompressionMetricConfig,
     Ed1BodyError,
     build_ed1_blended_reward_policy,
     build_ed1_experiment,
@@ -39,7 +41,6 @@ from whetstone.envs.ed1 import (
     render_encoder_frame,
     validate_ed1_body,
 )
-from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
 from whetstone.envs.ed1_scoring import (
     BatchScoringDeadlineExceeded,
     CheckpointedCodeBatchScorer,
@@ -796,7 +797,7 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_identity == (
-        "2c802e1d605d6daf87e4d1834e84e90895de0937a82c252fd818a20c2b514b78"
+        "3c2dc471b97f48bfb16f2f0364c98c0cd8c5f4dfac6e3d0738ccc0d28c6e99cb"
     )
 
 
@@ -1389,3 +1390,54 @@ def test_transient_encoder_failure_is_redriven_to_success() -> None:
     assert result.primary_aggregate.aggregation_output.value == pytest.approx(
         1
     )
+
+
+def _blend_cfg(weight: float = 0.10, lo: float = 0.01, hi: float = 4.0):
+    return BoundedCompressionMetricConfig(
+        weight=weight, min_compression_ratio=lo, max_compression_ratio=hi
+    )
+
+
+def test_metric_identity_folds_metric_id_weight_bounds() -> None:
+    base = _blend_cfg(weight=0.10)
+    diff_w = _blend_cfg(weight=0.05)
+    diff_lo = _blend_cfg(weight=0.10, lo=0.02)
+    diff_hi = _blend_cfg(weight=0.10, hi=5.0)
+    keys = {
+        base.identity_key(),
+        diff_w.identity_key(),
+        diff_lo.identity_key(),
+        diff_hi.identity_key(),
+    }
+    assert len(keys) == 4
+    assert BLENDED_METRIC_ID in base.identity_key()
+    assert "w=0.1" in base.identity_key()
+    assert base.identity_key() == _blend_cfg(weight=0.10).identity_key()
+
+
+def test_default_ed1_blend_config() -> None:
+    assert BoundedCompressionMetricConfig().weight == 0.10
+    assert BoundedCompressionMetricConfig().metric_id == BLENDED_METRIC_ID
+
+
+def test_ed1_config_accepts_shared_blend_math() -> None:
+    from whetstone.evaluation.metrics.blended import (
+        blended_reward,
+        blended_reward_from_components,
+    )
+
+    cfg = _blend_cfg(weight=0.2)
+    live = blended_reward(primary_score=0.9, compression_ratio=1.3, config=cfg)
+    derived = blended_reward_from_components(
+        primary_score=0.9,
+        compression_ratio=1.3,
+        weight=0.2,
+    )
+    assert live == pytest.approx(derived)
+
+
+def test_ed1_config_rejects_invalid_blend_parameters() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        BoundedCompressionMetricConfig(weight=1.5)

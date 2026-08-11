@@ -273,8 +273,10 @@ def test_oracle_failure_is_infrastructure_unknown() -> None:
 def test_build_uses_content_and_dataset_identities(
     mutant_dataset_dir: Path,
 ) -> None:
-    from whetstone.envs.ed1 import build_ed1_procedure_config
-    from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
+    from whetstone.envs.ed1 import (
+        BoundedCompressionMetricConfig,
+        build_ed1_procedure_config,
+    )
     from whetstone.envs.ed1m import (
         Ed1mExperiment,
         build_ed1m_experiment,

@@ -24,6 +24,8 @@ from pydantic import (
 
 from whetstone.envs.ed1 import (
     Ed1Instance,
+    Ed1TaskModelConfig,
+    Ed1TaskModelKind,
     build_ed1_procedure_config,
     ed1_runtime_from_metadata,
     ed1_task_model_from_metadata,
@@ -40,10 +42,6 @@ from whetstone.envs.ed1_scoring import (
 )
 from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
-)
-from whetstone.evaluation.drivers.ed1_row_jobs import (
-    Ed1TaskModelConfig,
-    Ed1TaskModelKind,
 )
 from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.evaluation.schema import RowAccounting

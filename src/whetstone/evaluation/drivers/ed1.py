@@ -56,10 +56,7 @@ from whetstone.evaluation.aggregate import (
 from whetstone.evaluation.code.compression_selection import (
     select_compression_reference,
 )
-from whetstone.evaluation.code.scoring import (
-    compressed_description_length_bytes,
-    compression_ratio_value,
-)
+from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
 from whetstone.evaluation.drivers.internal import (
     ProcessInstance,
     RolloutOutput,
@@ -71,6 +68,9 @@ from whetstone.evaluation.drivers.internal import (
     start_phase_deadline,
 )
 from whetstone.evaluation.metrics.blended import blend_per_task
+from whetstone.evaluation.metrics.compression_measurements import (
+    compression_ratio_from_bytes,
+)
 from whetstone.evaluation.traces import (
     ExecutedComponentStep,
     ExecutedRowState,
@@ -934,9 +934,9 @@ def _compression_ratio(encoder_text: str, input_code: str) -> float | None:
     coerced).
     """
     reference = select_compression_reference(_RefView(input_code))
-    length = compressed_description_length_bytes(encoder_text)
-    return compression_ratio_value(
-        compressed_description_length=length, reference=reference
+    length = zstd_compressed_utf8_byte_length(encoder_text)
+    return compression_ratio_from_bytes(
+        numerator_bytes=length, reference=reference
     )
 
 
