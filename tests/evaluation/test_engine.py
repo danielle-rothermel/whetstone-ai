@@ -116,6 +116,54 @@ def test_uncached_experiment_uses_real_production_constructor() -> None:
     assert len(experiment.eval_configs.official.instances) == 1
 
 
+def test_engine_run_delegates_encdec_to_code_comp_dispatch(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.envs.support import synthetic_ed1_tasks
+    from whetstone.envs.code_comp import (
+        CodeCompMode,
+        build_code_comp_experiment,
+    )
+
+    class _StopEval(Exception):
+        pass
+
+    experiment = build_code_comp_experiment(
+        CodeCompMode.ENCDEC,
+        tasks=synthetic_ed1_tasks(1),
+        internal_n=1,
+        official_n=1,
+    )
+    store = ObjectStore(SqliteBackend(tmp_path / "code-comp-dispatch.sqlite"))
+    engine = EvaluationEngine(
+        store=store,
+        experiment=experiment,
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=_DEFAULT_ROW_JOB_FACTORY,
+    )
+    sentinel: dict[str, object] = {"called": False}
+
+    def fake_run_code_comp_eval(*args, **kwargs):
+        sentinel["called"] = True
+        raise _StopEval()
+
+    monkeypatch.setattr(
+        evaluation_engine_module,
+        "run_code_comp_eval",
+        fake_run_code_comp_eval,
+    )
+    request = EvaluationRequest(
+        candidate=experiment.initial_candidate,
+        evaluation_binding=_binding(engine),
+        purpose="code-comp-dispatch-test",
+    )
+    with pytest.raises(_StopEval):
+        engine._run(request)
+    assert sentinel["called"] is True
+
+
 @pytest.mark.process_integration
 def test_engine_persists_exact_evidence_and_reward(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "engine.sqlite"))

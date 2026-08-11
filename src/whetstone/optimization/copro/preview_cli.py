@@ -14,7 +14,7 @@ from whetstone.optimization.codex.proposer import (
     CodexCliProposerConfig,
     CodexCliProposerTransport,
 )
-from whetstone.optimization.copro.ed1_dry_run import (
+from whetstone.optimization.copro.code_comp.dry_run import (
     Ed1CoproPreviewTask,
     Ed1CoproSweepRanges,
     run_ed1_copro_codex_preview,

@@ -54,7 +54,7 @@ def _one_preflight_score(
     return scores[0]
 
 
-def run_ed1_scoring_preflight(
+def run_encdec_scoring_preflight(
     tasks: tuple[_PreflightTask, ...],
     batch_scorer: CodeBatchScorer,
 ) -> ScoringPreflight:
@@ -355,6 +355,6 @@ __all__ = [
     "CodeBatchScorer",
     "CodeScore",
     "CodeScoringInput",
-    "run_ed1_scoring_preflight",
+    "run_encdec_scoring_preflight",
     "score_ed1_submission",
 ]

@@ -13,7 +13,7 @@ from whetstone.envs.code_comp.constants import (
     ED1_SUBMISSION_SCORE_NAME,
     MUTATION_FIELD,
 )
-from whetstone.envs.code_comp.dataset import Ed1Instance, load_ed1_tasks
+from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
 from whetstone.envs.code_comp.procedure import build_ed1_procedure_config
 from whetstone.envs.code_comp.rollout.direct import (
     D1_DEFAULT_RENAME_TOKEN,
@@ -140,7 +140,7 @@ def _d1_split(
 
 
 @dataclass(frozen=True, slots=True)
-class D1Experiment(EnvExperiment):
+class DirectExperiment(EnvExperiment):
     """An ``EnvExperiment`` for the d1 direct-generation env."""
 
     input_arm: str = "original"
@@ -154,7 +154,7 @@ class D1Experiment(EnvExperiment):
         return self.humaneval_by_id[str(instance.id)]
 
 
-def build_d1_experiment(
+def build_direct_experiment(
     *,
     model: str = D1_CANONICAL_MODEL,
     input_arm: str = "original",
@@ -167,10 +167,10 @@ def build_d1_experiment(
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
     repeats: int = 3,
-    tasks: tuple[Ed1Instance, ...] | None = None,
+    tasks: tuple[CodeCompTaskInstance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
     split_manifest: TaskSplitRoles | None = None,
-) -> D1Experiment:
+) -> DirectExperiment:
     """Build the d1 direct-generation experiment the runner cell consumes."""
     if input_arm not in D1_INPUT_ARMS:
         raise ValueError(
@@ -185,7 +185,7 @@ def build_d1_experiment(
     pool = (
         tasks
         if tasks is not None
-        else load_ed1_tasks(snapshot_path=snapshot_path, limit=limit)
+        else load_tasks(snapshot_path=snapshot_path, limit=limit)
     )
     if exclude_task_ids:
         pool = tuple(
@@ -255,7 +255,7 @@ def build_d1_experiment(
         official=official_split,
         held_out_task_identities=(),
     )
-    return D1Experiment(
+    return DirectExperiment(
         env_name=D1_ENV_NAME,
         rollout_definition=rollout,  # type: ignore[arg-type]
         initial_candidate=d1_initial_candidate(),
@@ -286,12 +286,12 @@ __all__ = [
     "D1_SUBMISSION_SCORE_NAME",
     "D1_WRAPPER_BODY_CEILING",
     "D1_WRAPPER_BODY_NAIVE",
-    "D1Experiment",
     "D1RolloutDefinition",
-    "build_d1_experiment",
+    "DirectExperiment",
     "build_d1_procedure_config",
     "build_d1_reward_policy",
     "build_d1_rollout_definition",
+    "build_direct_experiment",
     "d1_ceiling_candidate",
     "d1_graph_definition",
     "d1_initial_candidate",

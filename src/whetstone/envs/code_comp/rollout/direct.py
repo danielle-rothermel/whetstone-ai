@@ -18,7 +18,8 @@ from whetstone.experiment.graph.nodes import (
     llm_call_variable_assignment,
 )
 
-D1_ENV_NAME = "d1"
+DIRECT_ENV_NAME = "d1"
+D1_ENV_NAME = DIRECT_ENV_NAME
 
 D1_PROCEDURE_CONFIG_SCHEMA = "whetstone.d1_code_eval_procedure"
 

@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from whetstone.envs.ed1 import (
+from whetstone.envs.code_comp.modes.encdec import (
     ed1_blend_config_from_metadata,
     ed1_task_model_from_metadata,
 )

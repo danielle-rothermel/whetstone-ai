@@ -7,8 +7,11 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.envs.ed1 import DECODER_TEMPLATE
-from whetstone.envs.encdec_rollout import DECODER_NODE_ID, ENCODER_NODE_ID
+from whetstone.envs.code_comp.constants import DECODER_TEMPLATE
+from whetstone.envs.code_comp.rollout.encdec import (
+    DECODER_NODE_ID,
+    ENCODER_NODE_ID,
+)
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt

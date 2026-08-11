@@ -1,7 +1,4 @@
-"""Legacy import path.
-
-Implementation lives in whetstone.optimization.copro.code_comp.contract.
-"""
+"""Code-compression COPRO mode plugins."""
 
 from whetstone.optimization.copro.code_comp.contract import (
     ED1_COPRO_OUTPUT_RULE,

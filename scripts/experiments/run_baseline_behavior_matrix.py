@@ -5,7 +5,7 @@ import argparse
 import importlib.util
 from pathlib import Path
 
-from whetstone.envs.ed1_behavior_matrix import (
+from whetstone.envs.code_comp.behavior_matrix import (
     DEFAULT_CONCURRENCY,
     run_ed1_baseline_behavior_matrix,
 )

@@ -20,9 +20,11 @@ from whetstone.envs.code_comp.scoring import (
     CodeScore,
     CodeScoringInput,
     _project_submission_score,
-    run_ed1_scoring_preflight,
+    run_encdec_scoring_preflight,
     score_ed1_submission,
 )
+
+run_ed1_scoring_preflight = run_encdec_scoring_preflight
 
 __all__ = [
     "ED1_SCORING_PREFLIGHT_TASK_ID",
@@ -38,6 +40,7 @@ __all__ = [
     "SqliteRecordCache",
     "_project_submission_score",
     "run_ed1_scoring_preflight",
+    "run_encdec_scoring_preflight",
     "score_ed1_submission",
     "score_humaneval_submissions_batch",
 ]

@@ -16,7 +16,7 @@ _ED1_BODY_RENDER_CONTRACT = TemplateRenderContract(
 )
 
 
-class Ed1BodyError(ValueError):
+class InstructionBodyError(ValueError):
     """A mutable ED1/D1 body violated the environment-owned frame contract."""
 
     code = ED1_INVALID_BODY
@@ -39,7 +39,7 @@ def render_encoder_frame(
     )
 
 
-def ed1_body_rejection(body: str) -> tuple[str, ...]:
+def instruction_body_rejection(body: str) -> tuple[str, ...]:
     """Return offending tokens for an invalid encoder body, else empty."""
     offending: list[str] = []
     seen: set[str] = set()
@@ -57,16 +57,16 @@ def ed1_body_rejection(body: str) -> tuple[str, ...]:
     return tuple(offending)
 
 
-def validate_ed1_body(body: str) -> None:
+def validate_instruction_body(body: str) -> None:
     """Reject invalid body text before any provider call can be made."""
-    offending = ed1_body_rejection(body)
+    offending = instruction_body_rejection(body)
     if offending:
-        raise Ed1BodyError(offending)
+        raise InstructionBodyError(offending)
 
 
 __all__ = [
-    "Ed1BodyError",
-    "ed1_body_rejection",
+    "InstructionBodyError",
+    "instruction_body_rejection",
     "render_encoder_frame",
-    "validate_ed1_body",
+    "validate_instruction_body",
 ]

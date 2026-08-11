@@ -24,25 +24,32 @@ from whetstone_envs.core import Instance
 
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.ed1 import (
+from whetstone.envs.code_comp.constants import (
     DECODER_TEMPLATE,
     ED1_COMPRESSION_NAME,
     ED1_SUBMISSION_SCORE_NAME,
-    Ed1Experiment,
-    ed1_reward_from_blended,
-    humaneval_task_from_instance,
-    render_encoder_frame,
-    reward_from_primary_score,
-    validate_ed1_body,
 )
-from whetstone.envs.ed1_scoring import (
+from whetstone.envs.code_comp.dataset import humaneval_task_from_instance
+from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
+from whetstone.envs.code_comp.mutant.dataset import MutantRecord
+from whetstone.envs.code_comp.mutation_surface import (
+    render_encoder_frame,
+    validate_instruction_body,
+)
+from whetstone.envs.code_comp.reward.blended import (
+    ed1_reward_from_blended,
+    reward_from_primary_score,
+)
+from whetstone.envs.code_comp.rollout.encdec import (
+    DECODER_NODE_ID,
+    ENCODER_NODE_ID,
+)
+from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeBatchScorer,
     CodeScore,
     CodeScoringInput,
 )
-from whetstone.envs.ed1m_dataset import MutantRecord
-from whetstone.envs.encdec_rollout import DECODER_NODE_ID, ENCODER_NODE_ID
 from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
@@ -479,7 +486,7 @@ class Ed1RowRequest(BaseModel):
 
     @model_validator(mode="after")
     def _valid_mutant_binding(self) -> Ed1RowRequest:
-        from whetstone.envs.ed1m import ED1M_ENV_NAME
+        from whetstone.envs.code_comp.modes.mutant import ED1M_ENV_NAME
 
         if self.env_name == ED1M_ENV_NAME:
             if self.mutant_record is None:
@@ -590,7 +597,7 @@ def _render_encoder(
 
 def drive_ed1_row(
     *,
-    experiment: Ed1Experiment,
+    experiment: EncDecExperiment,
     candidate_template: str,
     instance: Instance,
     provider_call_config: ProviderCallConfig,
@@ -806,21 +813,24 @@ def drive_ed1_row(
 
 
 def _score_row(
-    experiment: Ed1Experiment,
+    experiment: EncDecExperiment,
     instance: Instance,
     decoder_text: str,
     scorer: Callable[..., object],
 ) -> CodeScore:
     """Score one reconstruction: ed1 HumanEval suite OR ed1m mutant oracle.
 
-    ed1m (an ``Ed1mExperiment``) scores the decoder output against the
+    ed1m (an ``MutantExperiment``) scores the decoder output against the
     instance's mutant per-input oracle (fractional fidelity + reported
     attractor pull). Every other ed1 experiment scores the HumanEval test suite
     via the injected HumanEval submission scorer.
     """
-    from whetstone.envs.ed1m import Ed1mExperiment, score_ed1m_row
+    from whetstone.envs.code_comp.modes.mutant import (
+        MutantExperiment,
+        score_ed1m_row,
+    )
 
-    if isinstance(experiment, Ed1mExperiment):
+    if isinstance(experiment, MutantExperiment):
         return score_ed1m_row(
             experiment,
             instance,
@@ -951,20 +961,20 @@ class _RefView:
     gt_code_wo_comments: str
 
 
-def _primary_metric_name(experiment: Ed1Experiment) -> str:
+def _primary_metric_name(experiment: EncDecExperiment) -> str:
     """Return the concrete primary metric identity for this ED1-family env."""
-    from whetstone.envs.ed1m import (
+    from whetstone.envs.code_comp.modes.mutant import (
         ED1M_FIDELITY_NAME,
-        Ed1mExperiment,
+        MutantExperiment,
     )
 
-    if isinstance(experiment, Ed1mExperiment):
+    if isinstance(experiment, MutantExperiment):
         return ED1M_FIDELITY_NAME
     return ED1_SUBMISSION_SCORE_NAME
 
 
 def run_ed1_eval(
-    experiment: Ed1Experiment,
+    experiment: EncDecExperiment,
     *,
     candidate_template: str,
     candidate_id: str,
@@ -998,7 +1008,7 @@ def run_ed1_eval(
     crash in that interval may repeat generation; the prompt cache remains the
     available no-wire replay path.
     """
-    validate_ed1_body(candidate_template)
+    validate_instruction_body(candidate_template)
     instances = sampling.instances
     repeats = sampling.repeat_plan.repeat_count
     split_role = sampling.split_role
@@ -1076,11 +1086,11 @@ def run_ed1_eval(
         *,
         drive_ordinal: int,
     ) -> Ed1RowRequest:
-        from whetstone.envs.ed1m import Ed1mExperiment
+        from whetstone.envs.code_comp.modes.mutant import MutantExperiment
 
         mutant_record = (
             experiment.mutants[str(instance.id)]
-            if isinstance(experiment, Ed1mExperiment)
+            if isinstance(experiment, MutantExperiment)
             else None
         )
         return Ed1RowRequest(
@@ -1283,9 +1293,9 @@ def run_ed1_eval(
         )
     ]
     if generated_keys:
-        from whetstone.envs.ed1m import Ed1mExperiment
+        from whetstone.envs.code_comp.modes.mutant import MutantExperiment
 
-        if isinstance(experiment, Ed1mExperiment):
+        if isinstance(experiment, MutantExperiment):
             raise ValueError("ED1M rows require their mutant scorer in-worker")
         if batch_scorer is None:
             raise ValueError(

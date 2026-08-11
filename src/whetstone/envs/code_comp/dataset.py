@@ -10,7 +10,7 @@ from whetstone.envs.code_comp.constants import ED1_STRATUM
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1Instance:
+class CodeCompTaskInstance:
     """A HumanEval+ task packed for the runner as a whetstone Instance."""
 
     instance: Instance
@@ -25,8 +25,8 @@ class Ed1Instance:
         return self.input_code
 
 
-def ed1_instance_from_task(task: HumanEvalTask) -> Ed1Instance:
-    """Pack one parsed HumanEval task into an ``Ed1Instance``."""
+def ed1_instance_from_task(task: HumanEvalTask) -> CodeCompTaskInstance:
+    """Pack one parsed HumanEval task into an ``CodeCompTaskInstance``."""
     gt_wo = task.ground_truth_code_without_comments or task.ground_truth_code
     instance = Instance(
         id=task.task_id,
@@ -42,7 +42,7 @@ def ed1_instance_from_task(task: HumanEvalTask) -> Ed1Instance:
         },
         gold=task.ground_truth_code,
     )
-    return Ed1Instance(instance=instance, humaneval_task=task)
+    return CodeCompTaskInstance(instance=instance, humaneval_task=task)
 
 
 def humaneval_task_from_instance(instance: Instance) -> HumanEvalTask:
@@ -57,11 +57,11 @@ def humaneval_task_from_instance(instance: Instance) -> HumanEvalTask:
     )
 
 
-def load_ed1_tasks(
+def load_tasks(
     *,
     snapshot_path: Path | None = None,
     limit: int | None = None,
-) -> tuple[Ed1Instance, ...]:
+) -> tuple[CodeCompTaskInstance, ...]:
     """Load the pinned live dataset or an explicit Whetstone snapshot."""
     tasks = load_humaneval_plus(
         prefer_snapshot=snapshot_path is not None,
@@ -69,7 +69,7 @@ def load_ed1_tasks(
     )
     if limit is not None:
         tasks = tasks[:limit]
-    instances: list[Ed1Instance] = []
+    instances: list[CodeCompTaskInstance] = []
     for plus in tasks:
         ht = HumanEvalTask(
             task_id=plus.task_id,
@@ -83,8 +83,8 @@ def load_ed1_tasks(
 
 
 __all__ = [
-    "Ed1Instance",
+    "CodeCompTaskInstance",
     "ed1_instance_from_task",
     "humaneval_task_from_instance",
-    "load_ed1_tasks",
+    "load_tasks",
 ]

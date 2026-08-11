@@ -24,25 +24,21 @@ from whetstone_envs.core import Instance
 
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.d1 import (
-    D1_SUBMISSION_SCORE_NAME,
-    D1Experiment,
-    render_d1_frame,
+from whetstone.envs.code_comp.constants import ED1_SUBMISSION_SCORE_NAME
+from whetstone.envs.code_comp.input_arms import (
+    direct_body,
+    renamed_task,
+    split_prompt,
 )
-from whetstone.envs.ed1 import (
-    reward_from_primary_score,
-    validate_ed1_body,
-)
-from whetstone.envs.ed1_scoring import (
+from whetstone.envs.code_comp.modes.direct import DirectExperiment
+from whetstone.envs.code_comp.mutation_surface import validate_instruction_body
+from whetstone.envs.code_comp.reward.blended import reward_from_primary_score
+from whetstone.envs.code_comp.rollout.direct import render_d1_frame
+from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeBatchScorer,
     CodeScore,
     CodeScoringInput,
-)
-from whetstone.envs.input_transform import (
-    direct_body,
-    renamed_task,
-    split_prompt,
 )
 from whetstone.envs.rollout_definition import LLM_NODE_ID
 from whetstone.envs.sampling import (
@@ -95,6 +91,8 @@ from whetstone.experiment.binding import (
 from whetstone.experiment.reward import Reward
 from whetstone.provider.driver import TransportCall
 from whetstone.provider.policy import ProviderExecutionPolicy
+
+D1_SUBMISSION_SCORE_NAME = ED1_SUBMISSION_SCORE_NAME
 
 
 def _d1_compat():
@@ -347,7 +345,7 @@ def _request(config: ProviderCallConfig, prompt: str) -> ProviderCallRequest:
 
 
 def _input_arm_text(
-    experiment: D1Experiment, instance: Instance
+    experiment: DirectExperiment, instance: Instance
 ) -> tuple[str, HumanEvalTask]:
     """The frozen input-arm text + the (possibly renamed) scoring task.
 
@@ -370,7 +368,7 @@ def _input_arm_text(
 
 def drive_d1_row(
     *,
-    experiment: D1Experiment,
+    experiment: DirectExperiment,
     candidate_body: str,
     instance: Instance,
     provider_call_config: ProviderCallConfig,
@@ -577,7 +575,7 @@ def _deadline(execution_policy: ProviderExecutionPolicy) -> float:
 
 
 def run_d1_eval(
-    experiment: D1Experiment,
+    experiment: DirectExperiment,
     *,
     candidate_body: str,
     candidate_id: str,
@@ -608,7 +606,7 @@ def run_d1_eval(
     completes, so a crash in that interval may repeat generation; the prompt
     cache remains the available no-wire replay path.
     """
-    validate_ed1_body(candidate_body)
+    validate_instruction_body(candidate_body)
     instances = sampling.instances
     repeats = sampling.repeat_plan.repeat_count
     split_role = sampling.split_role

@@ -29,32 +29,38 @@ def build_code_comp_experiment(
     """Build one code-compression experiment for the selected mode."""
 
     if mode is CodeCompMode.DIRECT:
-        from whetstone.envs.code_comp.modes.direct import build_d1_experiment
+        from whetstone.envs.code_comp.modes.direct import (
+            build_direct_experiment,
+        )
 
-        return build_d1_experiment(**kwargs)
+        return build_direct_experiment(**kwargs)
     if mode is CodeCompMode.ENCDEC:
-        from whetstone.envs.code_comp.modes.encdec import build_ed1_experiment
+        from whetstone.envs.code_comp.modes.encdec import (
+            build_encdec_experiment,
+        )
 
-        return build_ed1_experiment(**kwargs)
+        return build_encdec_experiment(**kwargs)
     if mode is CodeCompMode.ENCDEC_MUTANT:
-        from whetstone.envs.code_comp.modes.mutant import build_ed1m_experiment
+        from whetstone.envs.code_comp.modes.mutant import (
+            build_mutant_experiment,
+        )
 
-        return build_ed1m_experiment(**kwargs)
+        return build_mutant_experiment(**kwargs)
     raise ValueError(f"unsupported code_comp mode {mode!r}")
 
 
 def code_comp_mode_for(experiment: EnvExperiment) -> CodeCompMode:
     """Resolve the mode for one built code-compression experiment."""
 
-    from whetstone.envs.code_comp.modes.direct import D1Experiment
-    from whetstone.envs.code_comp.modes.encdec import Ed1Experiment
-    from whetstone.envs.code_comp.modes.mutant import Ed1mExperiment
+    from whetstone.envs.code_comp.modes.direct import DirectExperiment
+    from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
+    from whetstone.envs.code_comp.modes.mutant import MutantExperiment
 
-    if isinstance(experiment, Ed1mExperiment):
+    if isinstance(experiment, MutantExperiment):
         return CodeCompMode.ENCDEC_MUTANT
-    if isinstance(experiment, Ed1Experiment):
+    if isinstance(experiment, EncDecExperiment):
         return CodeCompMode.ENCDEC
-    if isinstance(experiment, D1Experiment):
+    if isinstance(experiment, DirectExperiment):
         return CodeCompMode.DIRECT
     raise TypeError(
         "experiment is not a code_comp direct, encdec, or mutant experiment"

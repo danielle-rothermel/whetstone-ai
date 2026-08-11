@@ -8,11 +8,10 @@ from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 
 from tests.envs.support import synthetic_ed1_tasks
 from tests.envs.test_ed1m import _mutant_record
-from whetstone.envs.code_comp.modes.direct import build_d1_experiment
-from whetstone.envs.code_comp.modes.encdec import build_ed1_experiment
-from whetstone.envs.code_comp.modes.mutant import (
-    Ed1mExperiment,
-    build_ed1m_experiment,
+from whetstone.envs.code_comp import (
+    CodeCompMode,
+    MutantExperiment,
+    build_code_comp_experiment,
 )
 from whetstone.envs.ed1m_dataset import (
     FamilyCount,
@@ -62,7 +61,8 @@ def mutant_dataset_dir(tmp_path: Path) -> Path:
 def test_run_code_comp_eval_routes_direct(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    experiment = build_d1_experiment(
+    experiment = build_code_comp_experiment(
+        CodeCompMode.DIRECT,
         tasks=synthetic_ed1_tasks(1),
         internal_n=1,
         official_n=1,
@@ -85,7 +85,8 @@ def test_run_code_comp_eval_routes_direct(
 def test_run_code_comp_eval_routes_encdec(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    experiment = build_ed1_experiment(
+    experiment = build_code_comp_experiment(
+        CodeCompMode.ENCDEC,
         tasks=synthetic_ed1_tasks(1),
         internal_n=1,
         official_n=1,
@@ -111,12 +112,13 @@ def test_run_code_comp_eval_routes_mutant_via_encdec(
     monkeypatch: pytest.MonkeyPatch,
     mutant_dataset_dir: Path,
 ) -> None:
-    experiment = build_ed1m_experiment(
+    experiment = build_code_comp_experiment(
+        CodeCompMode.ENCDEC_MUTANT,
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,
     )
-    assert isinstance(experiment, Ed1mExperiment)
+    assert isinstance(experiment, MutantExperiment)
     sentinel: dict[str, Any] = {"called": False}
 
     def fake_run_ed1_eval(*args: Any, **kwargs: Any) -> str:

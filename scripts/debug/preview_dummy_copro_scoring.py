@@ -21,22 +21,21 @@ from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
 
-from whetstone.envs.ed1 import (
-    ED1_CANONICAL_MODEL,
-    Ed1Instance,
-    Ed1TaskModelConfig,
+from whetstone.envs.code_comp.constants import ED1_CANONICAL_MODEL
+from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
+from whetstone.envs.code_comp.modes.encdec import (
     Ed1TaskModelKind,
+    EncDecTaskModelConfig,
     ed1_blend_config_from_metadata,
     ed1_runtime_from_metadata,
     ed1_task_model_from_metadata,
-    load_ed1_tasks,
-    run_ed1_copro_scoring_preview,
 )
-from whetstone.envs.ed1_runtime import (
+from whetstone.envs.code_comp.preview import run_ed1_copro_scoring_preview
+from whetstone.envs.code_comp.runtime import (
     Ed1ScoringRuntimeSummary,
     build_ed1_scoring_runtime,
 )
-from whetstone.envs.ed1_scoring import (
+from whetstone.envs.code_comp.scoring import (
     ED1_SCORING_PREFLIGHT_TASK_ID,
     CheckpointedCodeBatchScorer,
 )
@@ -240,8 +239,8 @@ def _ensure_open_file_limit(worker_count: int) -> int:
 
 
 def _tasks_by_id(
-    pool: tuple[Ed1Instance, ...], task_ids: tuple[str, ...]
-) -> tuple[Ed1Instance, ...]:
+    pool: tuple[CodeCompTaskInstance, ...], task_ids: tuple[str, ...]
+) -> tuple[CodeCompTaskInstance, ...]:
     if not task_ids:
         raise SystemExit("task selection must contain at least one task")
     by_id = {task.humaneval_task.task_id: task for task in pool}
@@ -257,7 +256,11 @@ def _tasks_by_id(
 
 def _select_tasks(
     args: argparse.Namespace,
-) -> tuple[tuple[Ed1Instance, ...], TaskRoleSelection | None, Ed1Instance]:
+) -> tuple[
+    tuple[CodeCompTaskInstance, ...],
+    TaskRoleSelection | None,
+    CodeCompTaskInstance,
+]:
     has_manifest = args.task_manifest is not None
     has_role = args.task_role is not None
     if has_manifest != has_role:
@@ -276,20 +279,20 @@ def _select_tasks(
             )
         except TaskSplitManifestError as exc:
             raise SystemExit(str(exc)) from None
-        pool = load_ed1_tasks(snapshot_path=args.snapshot_path)
+        pool = load_tasks(snapshot_path=args.snapshot_path)
         return (
             _tasks_by_id(pool, selection.task_ids),
             selection,
             _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
         )
     if args.task_ids:
-        pool = load_ed1_tasks(snapshot_path=args.snapshot_path)
+        pool = load_tasks(snapshot_path=args.snapshot_path)
         return (
             _tasks_by_id(pool, tuple(args.task_ids)),
             None,
             _tasks_by_id(pool, (ED1_SCORING_PREFLIGHT_TASK_ID,))[0],
         )
-    selected = load_ed1_tasks(
+    selected = load_tasks(
         snapshot_path=args.snapshot_path,
         limit=args.task_count,
     )
@@ -675,8 +678,8 @@ def _render_launch_plan(
     console: Console,
     *,
     proposer_kind: str,
-    task_model: Ed1TaskModelConfig,
-    tasks: tuple[Ed1Instance, ...],
+    task_model: EncDecTaskModelConfig,
+    tasks: tuple[CodeCompTaskInstance, ...],
     sweep: Ed1CoproSweepRanges,
     repeats: int,
     concurrency: int,
@@ -796,7 +799,7 @@ def _build_proposer(
 
 def _build_task_model(
     args: argparse.Namespace,
-) -> Ed1TaskModelConfig:
+) -> EncDecTaskModelConfig:
     kind = Ed1TaskModelKind(args.task_model)
     route = canonical_task_route(
         model=args.provider_model,
@@ -804,12 +807,12 @@ def _build_task_model(
         max_attempts=1,
     )
     if kind is Ed1TaskModelKind.PROVIDER:
-        return Ed1TaskModelConfig(
+        return EncDecTaskModelConfig(
             kind=kind,
             provider_call_config=route.call_config,
             execution_policy=route.execution_policy,
         )
-    return Ed1TaskModelConfig(
+    return EncDecTaskModelConfig(
         kind=kind,
         provider_call_config=route.call_config,
         execution_policy=ProviderExecutionPolicy(

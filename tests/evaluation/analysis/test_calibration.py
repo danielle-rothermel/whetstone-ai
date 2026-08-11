@@ -6,16 +6,16 @@ from dr_store import ObjectStore, SqliteBackend
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
 from tests.evaluation.support import _binding, _engine
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.ed1 import (
-    DECODER_TEMPLATE,
-    ENCODER_BODY_B,
-    build_ed1_experiment,
-    render_encoder_frame,
+from whetstone.envs.code_comp import (
+    CodeCompMode,
+    build_code_comp_experiment,
 )
+from whetstone.envs.code_comp.constants import DECODER_TEMPLATE, ENCODER_BODY_B
+from whetstone.envs.code_comp.mutation_surface import render_encoder_frame
 from whetstone.evaluation import engine as engine_module
 from whetstone.evaluation.analysis.calibration import run_anchor_calibration
 from whetstone.evaluation.analysis.power import PowerConfig
-from whetstone.evaluation.drivers.ed1 import (
+from whetstone.evaluation.drivers.code_comp.encdec import (
     Ed1RowOutcome,
     Ed1RowRequest,
     Ed1RowResult,
@@ -89,7 +89,8 @@ def _internal_engine_and_binding(tmp_path):
 
 def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
     tasks = synthetic_ed1_tasks(3)
-    experiment = build_ed1_experiment(
+    experiment = build_code_comp_experiment(
+        CodeCompMode.ENCDEC,
         tasks=tasks,
         internal_n=3,
         official_n=3,
@@ -156,13 +157,13 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
         tmp_path, concurrency=7
     )
     observed_concurrency: list[int] = []
-    canonical_run = engine_module.run_ed1_eval
+    canonical_run = engine_module.run_code_comp_eval
 
     def recording_run(*args, **kwargs):
         observed_concurrency.append(kwargs["concurrency"])
         return canonical_run(*args, **kwargs)
 
-    monkeypatch.setattr(engine_module, "run_ed1_eval", recording_run)
+    monkeypatch.setattr(engine_module, "run_code_comp_eval", recording_run)
     task_ids = ("Synthetic/2", "Synthetic/0")
     result = run_anchor_calibration(
         engine=engine,

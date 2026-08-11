@@ -5,7 +5,8 @@ from dr_code.humaneval.plus_dataset import HF_REVISION
 
 from whetstone.evaluation import identity_hash_for
 
-ED1_ENV_NAME = "ed1"
+ENCDEC_ENV_NAME = "ed1"
+ED1_ENV_NAME = ENCDEC_ENV_NAME
 
 BLENDED_METRIC_ID = "primary_score_with_bounded_compression_penalty"
 
@@ -73,6 +74,7 @@ __all__ = [
     "ED1_INVALID_BODY",
     "ED1_STRATUM",
     "ED1_SUBMISSION_SCORE_NAME",
+    "ENCDEC_ENV_NAME",
     "ENCODER_BODY_A",
     "ENCODER_BODY_B",
     "ENCODER_FRAME",

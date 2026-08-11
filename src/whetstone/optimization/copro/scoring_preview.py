@@ -28,7 +28,7 @@ from whetstone.optimization.copro.adapter import (
     CoproFinalization,
     CoproState,
 )
-from whetstone.optimization.copro.ed1_dry_run import (
+from whetstone.optimization.copro.code_comp.dry_run import (
     Ed1CoproPreviewTask,
     Ed1CoproRoundAttempt,
     Ed1CoproRoundPreview,

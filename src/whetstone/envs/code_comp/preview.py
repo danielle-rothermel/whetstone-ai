@@ -5,10 +5,10 @@ from typing import TYPE_CHECKING, cast
 
 from dr_store import ObjectStore
 
-from whetstone.envs.code_comp.dataset import Ed1Instance
+from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1Experiment,
-    Ed1TaskModelConfig,
+    EncDecExperiment,
+    EncDecTaskModelConfig,
     ed1_preview_metadata,
 )
 from whetstone.envs.code_comp.registry import (
@@ -26,7 +26,7 @@ from whetstone.envs.code_comp.runtime import (
 )
 from whetstone.envs.code_comp.scoring import (
     CodeBatchScorer,
-    run_ed1_scoring_preflight,
+    run_encdec_scoring_preflight,
 )
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
@@ -59,8 +59,8 @@ if TYPE_CHECKING:
 def build_ed1_preview_engine(
     *,
     store: ObjectStore,
-    experiment: Ed1Experiment,
-    task_model: Ed1TaskModelConfig,
+    experiment: EncDecExperiment,
+    task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
     concurrency: int = 1,
     partial_log: PartialLog | None = None,
@@ -87,9 +87,9 @@ def build_ed1_preview_engine(
 
 
 def _selected_ed1_tasks(
-    tasks: tuple[Ed1Instance, ...],
+    tasks: tuple[CodeCompTaskInstance, ...],
     task_ids: tuple[str, ...],
-) -> tuple[Ed1Instance, ...]:
+) -> tuple[CodeCompTaskInstance, ...]:
     if not task_ids:
         raise ValueError("baseline preview requires at least one task ID")
     if len(set(task_ids)) != len(task_ids):
@@ -104,14 +104,14 @@ def _selected_ed1_tasks(
 def run_ed1_anchor_baseline_preview(
     *,
     store: ObjectStore,
-    tasks: tuple[Ed1Instance, ...],
+    tasks: tuple[CodeCompTaskInstance, ...],
     task_ids: tuple[str, ...],
     pool_ceiling: int,
-    task_model: Ed1TaskModelConfig,
+    task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
     runtime: Ed1ScoringRuntimeSummary,
     task_selection: TaskRoleSelection | None = None,
-    preflight_task: Ed1Instance | None = None,
+    preflight_task: CodeCompTaskInstance | None = None,
     budget_ratio: float | None = None,
     concurrency: int = 1,
     partial_log: PartialLog | None = None,
@@ -137,7 +137,7 @@ def run_ed1_anchor_baseline_preview(
     )
     if log is not None:
         log(f"{budget_label}: starting scoring-runtime preflight")
-    preflight = run_ed1_scoring_preflight(
+    preflight = run_encdec_scoring_preflight(
         (preflight_task or selected[0],), batch_scorer
     )
     if log is not None:
@@ -146,7 +146,7 @@ def run_ed1_anchor_baseline_preview(
             f"({preflight.task_id}: {preflight.outcome})"
         )
     experiment = cast(
-        Ed1Experiment,
+        EncDecExperiment,
         build_code_comp_experiment(
             CodeCompMode.ENCDEC,
             provider_call_config=task_model.provider_call_config,
@@ -205,15 +205,15 @@ def run_ed1_anchor_baseline_preview(
 def run_ed1_anchor_baseline_sweep(
     *,
     store: ObjectStore,
-    tasks: tuple[Ed1Instance, ...],
+    tasks: tuple[CodeCompTaskInstance, ...],
     task_ids: tuple[str, ...],
     pool_ceiling: int,
-    task_model: Ed1TaskModelConfig,
+    task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
     runtime: Ed1ScoringRuntimeSummary,
     budget_ratios: tuple[float | None, ...],
     task_selection: TaskRoleSelection | None = None,
-    preflight_task: Ed1Instance | None = None,
+    preflight_task: CodeCompTaskInstance | None = None,
     concurrency: int = 1,
     partial_log: PartialLog | None = None,
     prompt_cache: PromptResultCache | None = None,
@@ -261,16 +261,16 @@ def run_ed1_anchor_baseline_sweep(
 def run_ed1_copro_scoring_preview(
     *,
     store: ObjectStore,
-    tasks: tuple[Ed1Instance, ...],
+    tasks: tuple[CodeCompTaskInstance, ...],
     sweep: Ed1CoproSweepRanges,
     proposer_kind: str,
     proposer_config: ProposerRouteConfig,
     proposer_transport: ProposerTransport,
-    task_model: Ed1TaskModelConfig,
+    task_model: EncDecTaskModelConfig,
     batch_scorer: CodeBatchScorer,
     runtime: Ed1ScoringRuntimeSummary,
     task_selection: TaskRoleSelection | None = None,
-    preflight_task: Ed1Instance | None = None,
+    preflight_task: CodeCompTaskInstance | None = None,
     concurrency: int = 1,
     repeats: int = 1,
     blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
@@ -290,7 +290,7 @@ def run_ed1_copro_scoring_preview(
     if repeats < 1:
         raise ValueError("COPRO scoring preview repeats must be positive")
     task_ids = tuple(task.humaneval_task.task_id for task in tasks)
-    preflight = run_ed1_scoring_preflight(
+    preflight = run_encdec_scoring_preflight(
         (preflight_task or tasks[0],), batch_scorer
     )
     first = tasks[0]
@@ -299,9 +299,9 @@ def run_ed1_copro_scoring_preview(
         input_code=first.input_code,
     )
 
-    def _experiment_for(settings: Ed1CoproSweepPoint) -> Ed1Experiment:
+    def _experiment_for(settings: Ed1CoproSweepPoint) -> EncDecExperiment:
         return cast(
-            Ed1Experiment,
+            EncDecExperiment,
             build_code_comp_experiment(
                 CodeCompMode.ENCDEC,
                 provider_call_config=task_model.provider_call_config,

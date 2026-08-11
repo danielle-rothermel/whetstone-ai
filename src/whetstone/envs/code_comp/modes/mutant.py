@@ -8,7 +8,7 @@ from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1Experiment,
+    EncDecExperiment,
     _ed1_split,
     ed1_ceiling_candidate,
     ed1_initial_candidate,
@@ -33,7 +33,8 @@ from whetstone.experiment.reward import (
     RewardTerm,
 )
 
-ED1M_ENV_NAME = "ed1m"
+MUTANT_ENV_NAME = "ed1m"
+ED1M_ENV_NAME = MUTANT_ENV_NAME
 #: ed1m uses the same task model as ed1 (deepseek), a distinct provider Config.
 ED1M_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 _ED1M_CANONICAL_PROVIDER_CALL_CONFIG = build_encoder_provider_call_config(
@@ -100,14 +101,15 @@ def _mutant_to_instance(mutant: MutantRecord) -> Instance:
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1mExperiment(Ed1Experiment):
-    """An ``Ed1Experiment`` whose correctness scorer is the mutant oracle.
+class MutantExperiment(EncDecExperiment):
+    """An ``EncDecExperiment`` whose correctness scorer is the mutant oracle.
 
     Carries the per-instance mutant map (``mutants`` keyed by Instance id) so
     :func:`score_ed1m_row` scores a reconstruction against the right mutant's
     dual oracle. Everything else (enc-dec rollout, blend config, budget frame,
-    reward policy, completeness) is inherited from :class:`Ed1Experiment`, so
-    the ed1 eval / cell / telemetry pipeline flows unchanged.
+    reward policy, completeness) is inherited from
+    :class:`EncDecExperiment`, so the ed1 eval / cell / telemetry pipeline
+    flows unchanged.
     """
 
     #: Per-instance mutant map (Instance id -> the mutant its oracle scores).
@@ -115,7 +117,7 @@ class Ed1mExperiment(Ed1Experiment):
 
 
 def score_ed1m_row(
-    experiment: Ed1mExperiment,
+    experiment: MutantExperiment,
     instance: Instance,
     reconstruction: str,
     scorer: Callable[..., object],
@@ -152,7 +154,7 @@ def score_ed1m_row(
     )
 
 
-def build_ed1m_experiment(
+def build_mutant_experiment(
     *,
     artifact_dir: Path,
     provider_call_config: ProviderCallConfig = (
@@ -168,7 +170,7 @@ def build_ed1m_experiment(
     exclude_mutant_ids: frozenset[str] | None = None,
     blend_config: BoundedCompressionMetricConfig | None = None,
     scorer: Callable[..., CodeScore] | None = None,
-) -> Ed1mExperiment:
+) -> MutantExperiment:
     """Build the ed1m experiment (mutant enc-dec + dual scoring).
 
     Verifies the retained artifact schemas, hashes, identities, ordering, and
@@ -238,7 +240,7 @@ def build_ed1m_experiment(
         official=official_split,
         held_out_task_identities=(),
     )
-    experiment = Ed1mExperiment(
+    experiment = MutantExperiment(
         env_name=ED1M_ENV_NAME,
         rollout_definition=rollout,  # type: ignore[arg-type]
         initial_candidate=ed1_initial_candidate(),
@@ -268,9 +270,9 @@ __all__ = [
     "ED1M_CANONICAL_MODEL",
     "ED1M_ENV_NAME",
     "ED1M_FIDELITY_NAME",
-    "Ed1mExperiment",
-    "build_ed1m_experiment",
+    "MutantExperiment",
     "build_ed1m_procedure_config",
     "build_ed1m_reward_policy",
+    "build_mutant_experiment",
     "score_ed1m_row",
 ]

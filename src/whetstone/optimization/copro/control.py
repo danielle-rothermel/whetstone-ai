@@ -23,7 +23,9 @@ from whetstone.experiment.binding import (
     EvaluationBinding,
 )
 from whetstone.optimization.codex.proposer import CodexCliProposerConfig
-from whetstone.optimization.copro.ed1_contract import Ed1CoproProposalContract
+from whetstone.optimization.copro.code_comp.contract import (
+    Ed1CoproProposalContract,
+)
 from whetstone.optimization.proposal.prompts import (
     COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
 )

@@ -22,10 +22,10 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.envs.code_comp.dataset import Ed1Instance, load_ed1_tasks
+from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
 from whetstone.envs.code_comp.modes.encdec import (
-    Ed1TaskModelConfig,
     Ed1TaskModelKind,
+    EncDecTaskModelConfig,
     ed1_runtime_from_metadata,
     ed1_task_model_from_metadata,
 )
@@ -105,7 +105,7 @@ class Ed1BehaviorMatrixTreatmentPlan(MatrixTreatmentBase):
     provider_call_config_hash: StrictStr
     execution_policy_hash: StrictStr
     budget_ratio: StrictFloat | None
-    task_model: Ed1TaskModelConfig
+    task_model: EncDecTaskModelConfig
     planned_rows: StrictInt
     planned_provider_calls: StrictInt
 
@@ -136,7 +136,7 @@ class Ed1BehaviorMatrixTreatmentPlan(MatrixTreatmentBase):
         return self
 
 
-class Ed1BehaviorMatrixPlan(BaseModel):
+class BehaviorMatrixPlan(BaseModel):
     """Exact, restart-comparable plan persisted before provider calls."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -161,7 +161,7 @@ class Ed1BehaviorMatrixPlan(BaseModel):
     treatments: tuple[Ed1BehaviorMatrixTreatmentPlan, ...]
 
     @model_validator(mode="after")
-    def _validate_plan(self) -> Ed1BehaviorMatrixPlan:
+    def _validate_plan(self) -> BehaviorMatrixPlan:
         if not self.task_ids or self.task_selection.task_ids != self.task_ids:
             raise ValueError("matrix task selection must match its task IDs")
         if self.repeats < 1 or self.concurrency < 1:
@@ -185,13 +185,13 @@ class Ed1BehaviorMatrixPlan(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class _Ed1MatrixShared:
-    tasks: tuple[Ed1Instance, ...]
-    preflight_task: Ed1Instance
+    tasks: tuple[CodeCompTaskInstance, ...]
+    preflight_task: CodeCompTaskInstance
     scorer: CheckpointedCodeBatchScorer
 
 
-def _task_model(route: MatrixProviderRoute) -> Ed1TaskModelConfig:
-    return Ed1TaskModelConfig(
+def _task_model(route: MatrixProviderRoute) -> EncDecTaskModelConfig:
+    return EncDecTaskModelConfig(
         kind=Ed1TaskModelKind.PROVIDER,
         provider_call_config=route.call_config,
         execution_policy=route.execution_policy,
@@ -219,7 +219,7 @@ def build_matrix_plan(
     task_selection: TaskRoleSelection,
     concurrency: int,
     runtime: Ed1ScoringRuntimeSummary,
-) -> Ed1BehaviorMatrixPlan:
+) -> BehaviorMatrixPlan:
     """Build the exact immutable plan for a full matrix or four-model smoke."""
 
     task_ids = task_selection.task_ids
@@ -256,7 +256,7 @@ def build_matrix_plan(
         if mode == "smoke"
         else task_selection.eligible_pool_count or len(task_ids)
     )
-    return Ed1BehaviorMatrixPlan(
+    return BehaviorMatrixPlan(
         mode=mode,
         evaluation_python=str(evaluation_python),
         evaluation_python_sha256=_sha256_file(evaluation_python),
@@ -288,8 +288,8 @@ def _sha256_file(path: Path) -> str:
 
 
 def _tasks_by_id(
-    pool: tuple[Ed1Instance, ...], task_ids: tuple[str, ...]
-) -> tuple[Ed1Instance, ...]:
+    pool: tuple[CodeCompTaskInstance, ...], task_ids: tuple[str, ...]
+) -> tuple[CodeCompTaskInstance, ...]:
     by_id = {task.humaneval_task.task_id: task for task in pool}
     missing = tuple(task_id for task_id in task_ids if task_id not in by_id)
     if missing:
@@ -299,7 +299,9 @@ def _tasks_by_id(
 
 def _select_tasks(
     *, manifest_path: Path, snapshot_path: Path, smoke: bool
-) -> tuple[tuple[Ed1Instance, ...], TaskRoleSelection, Ed1Instance]:
+) -> tuple[
+    tuple[CodeCompTaskInstance, ...], TaskRoleSelection, CodeCompTaskInstance
+]:
     manifest = load_task_split_manifest(manifest_path)
     selected = select_lowest_historical_pass_rate_for_env(
         manifest,
@@ -316,7 +318,7 @@ def _select_tasks(
                 "historical_pass_rates": selected.historical_pass_rates[:1],
             }
         )
-    pool = load_ed1_tasks(snapshot_path=snapshot_path)
+    pool = load_tasks(snapshot_path=snapshot_path)
     return (
         _tasks_by_id(pool, selected.task_ids),
         selected,
@@ -327,7 +329,7 @@ def _select_tasks(
 def _validate_result(
     transcript: BaselinePreviewTranscript,
     *,
-    plan: Ed1BehaviorMatrixPlan,
+    plan: BehaviorMatrixPlan,
     treatment: Ed1BehaviorMatrixTreatmentPlan,
 ) -> None:
     baseline_binding = transcript.baseline.evidence.evaluation_binding
@@ -380,7 +382,7 @@ def _validate_result(
 def _load_valid_result(
     path: Path,
     *,
-    plan: Ed1BehaviorMatrixPlan,
+    plan: BehaviorMatrixPlan,
     treatment: Ed1BehaviorMatrixTreatmentPlan,
 ) -> BaselinePreviewTranscript | None:
     if not path.exists():
@@ -424,20 +426,20 @@ def _build_hooks(
     *,
     shared: _Ed1MatrixShared,
 ) -> BehaviorMatrixHooks[
-    Ed1BehaviorMatrixPlan,
+    BehaviorMatrixPlan,
     Ed1BehaviorMatrixTreatmentPlan,
     BaselinePreviewTranscript,
     _Ed1MatrixShared,
 ]:
     @contextmanager
     def shared_context(
-        _output_dir: Path, _plan: Ed1BehaviorMatrixPlan
+        _output_dir: Path, _plan: BehaviorMatrixPlan
     ) -> Iterator[_Ed1MatrixShared]:
         yield shared
 
     def execute_treatment(
         treatment: Ed1BehaviorMatrixTreatmentPlan,
-        plan: Ed1BehaviorMatrixPlan,
+        plan: BehaviorMatrixPlan,
         matrix_shared: _Ed1MatrixShared,
         log: Callable[[str], None],
     ) -> BaselinePreviewTranscript:
@@ -491,7 +493,7 @@ def run_ed1_baseline_behavior_matrix(
     resume: bool = False,
     concurrency: int = DEFAULT_CONCURRENCY,
     smoke: bool = False,
-) -> Ed1BehaviorMatrixPlan:
+) -> BehaviorMatrixPlan:
     """Run or exactly resume the fixed ED1 baseline behavior matrix."""
 
     launched_at = perf_counter()
@@ -571,7 +573,7 @@ __all__ = [
     "DEFAULT_TASK_MANIFEST",
     "EXCLUDED_TASK_IDS",
     "FULL_BUDGET_RATIOS",
-    "Ed1BehaviorMatrixPlan",
+    "BehaviorMatrixPlan",
     "Ed1BehaviorMatrixTreatmentPlan",
     "build_matrix_plan",
     "run_ed1_baseline_behavior_matrix",

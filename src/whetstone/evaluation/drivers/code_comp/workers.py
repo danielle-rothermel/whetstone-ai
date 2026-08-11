@@ -13,16 +13,15 @@ from dr_providers import (
 )
 from pydantic import JsonValue
 
+from whetstone.envs.code_comp.constants import DECODER_TEMPLATE, ENCODER_BODY_A
+from whetstone.envs.code_comp.dataset import (
+    CodeCompTaskInstance,
+    humaneval_task_from_instance,
+)
+from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
 from whetstone.envs.code_comp.registry import (
     CodeCompMode,
     build_code_comp_experiment,
-)
-from whetstone.envs.ed1 import (
-    DECODER_TEMPLATE,
-    ENCODER_BODY_A,
-    Ed1Experiment,
-    Ed1Instance,
-    humaneval_task_from_instance,
 )
 from whetstone.evaluation.drivers.code_comp.encdec import (
     Ed1RowRequest,
@@ -64,14 +63,14 @@ def _description_for(body: str) -> str:
 
 def _reconstruct_worker_experiment(
     request: Ed1RowRequest,
-) -> tuple[Ed1Experiment, Ed1Instance]:
+) -> tuple[EncDecExperiment, CodeCompTaskInstance]:
     if request.mutant_record is not None:
         raise ValueError("COPRO scoring preview supports ED1 only")
     instance = request.instance.to_instance()
     task = humaneval_task_from_instance(instance)
-    fixture = Ed1Instance(instance=instance, humaneval_task=task)
+    fixture = CodeCompTaskInstance(instance=instance, humaneval_task=task)
     experiment = cast(
-        Ed1Experiment,
+        EncDecExperiment,
         build_code_comp_experiment(
             CodeCompMode.ENCDEC,
             provider_call_config=request.provider_call_config,

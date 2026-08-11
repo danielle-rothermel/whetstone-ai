@@ -19,7 +19,7 @@ from whetstone.envs.code_comp.constants import (
     ENCODER_BODY_B,
     MUTATION_FIELD,
 )
-from whetstone.envs.code_comp.dataset import Ed1Instance, load_ed1_tasks
+from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
 from whetstone.envs.code_comp.procedure import build_ed1_procedure_config
 from whetstone.envs.code_comp.reward.blended import (
     ED1_DEFAULT_BLEND_CONFIG,
@@ -60,7 +60,7 @@ class Ed1TaskModelKind(StrEnum):
     PROVIDER = "provider"
 
 
-class Ed1TaskModelConfig(BaseModel):
+class EncDecTaskModelConfig(BaseModel):
     """Exact task-model mode, provider request, and execution policy."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -143,7 +143,7 @@ def ed1_ceiling_candidate() -> Candidate:
 
 
 @dataclass(frozen=True, slots=True)
-class Ed1Experiment(EnvExperiment):
+class EncDecExperiment(EnvExperiment):
     """An ``EnvExperiment`` carrying the ed1-specific enc-dec rollout + tasks.
 
     Adds the enc-dec :class:`EncDecRolloutDefinition` (a 3-node graph, with the
@@ -181,7 +181,7 @@ class Ed1Experiment(EnvExperiment):
             raise ValueError("ED1 requires a bounded compression blend config")
 
 
-def build_ed1_experiment(
+def build_encdec_experiment(
     *,
     provider_call_config: ProviderCallConfig = (
         _ED1_CANONICAL_PROVIDER_CALL_CONFIG
@@ -195,11 +195,11 @@ def build_ed1_experiment(
     completeness: Completeness = Completeness.PROPAGATE,
     max_skip_fraction: float = 0.0,
     repeats: int = 3,
-    tasks: tuple[Ed1Instance, ...] | None = None,
+    tasks: tuple[CodeCompTaskInstance, ...] | None = None,
     exclude_task_ids: frozenset[str] | None = None,
     blend_config: BoundedCompressionMetricConfig = ED1_DEFAULT_BLEND_CONFIG,
     split_manifest: TaskSplitRoles | None = None,
-) -> Ed1Experiment:
+) -> EncDecExperiment:
     """Build the ed1 enc-dec experiment the runner cell consumes.
 
     Loads the pinned HumanEval+ pool (or uses injected ``tasks`` for tests),
@@ -234,7 +234,7 @@ def build_ed1_experiment(
     pool = (
         tasks
         if tasks is not None
-        else load_ed1_tasks(snapshot_path=snapshot_path, limit=limit)
+        else load_tasks(snapshot_path=snapshot_path, limit=limit)
     )
     if exclude_task_ids:
         pool = tuple(
@@ -303,7 +303,7 @@ def build_ed1_experiment(
         official=official_split,
         held_out_task_identities=(),
     )
-    return Ed1Experiment(
+    return EncDecExperiment(
         env_name=ED1_ENV_NAME,
         rollout_definition=rollout,  # type: ignore[arg-type]
         initial_candidate=ed1_initial_candidate(),
@@ -325,7 +325,7 @@ def build_ed1_experiment(
 
 def ed1_preview_metadata(
     *,
-    task_model: Ed1TaskModelConfig,
+    task_model: EncDecTaskModelConfig,
     runtime: Ed1ScoringRuntimeSummary,
     blend_config: BoundedCompressionMetricConfig,
 ) -> PreviewMetadata:
@@ -342,8 +342,8 @@ def ed1_preview_metadata(
 
 def ed1_task_model_from_metadata(
     metadata: PreviewMetadata,
-) -> Ed1TaskModelConfig:
-    return Ed1TaskModelConfig.model_validate(
+) -> EncDecTaskModelConfig:
+    return EncDecTaskModelConfig.model_validate(
         metadata.model_dump(mode="python")["task_model"]
     )
 
@@ -368,12 +368,12 @@ def ed1_blend_config_from_metadata(
 HumanEvalTaskFromInstance = Callable[[Instance], HumanEvalTask]
 
 __all__ = [
-    "Ed1Experiment",
-    "Ed1TaskModelConfig",
     "Ed1TaskModelKind",
+    "EncDecExperiment",
+    "EncDecTaskModelConfig",
     "HumanEvalTaskFromInstance",
     "_ed1_split",
-    "build_ed1_experiment",
+    "build_encdec_experiment",
     "ed1_blend_config_from_metadata",
     "ed1_ceiling_candidate",
     "ed1_initial_candidate",

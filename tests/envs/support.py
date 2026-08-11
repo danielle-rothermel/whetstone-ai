@@ -17,7 +17,10 @@ from pydantic import BaseModel, JsonValue
 from whetstone_envs.core import Instance
 
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.ed1 import Ed1Instance, ed1_instance_from_task
+from whetstone.envs.code_comp.dataset import (
+    CodeCompTaskInstance,
+    ed1_instance_from_task,
+)
 from whetstone.envs.factory import EnvExperiment, build_env_experiment
 from whetstone.envs.registry import env_spec
 from whetstone.envs.sampling import EnvSplitSampling
@@ -219,8 +222,8 @@ def constant_reply(text: str) -> ReplyFn:
     return _reply
 
 
-def synthetic_ed1_tasks(count: int = 3) -> tuple[Ed1Instance, ...]:
-    tasks: list[Ed1Instance] = []
+def synthetic_ed1_tasks(count: int = 3) -> tuple[CodeCompTaskInstance, ...]:
+    tasks: list[CodeCompTaskInstance] = []
     for index in range(count):
         entry_point = f"add_{index}"
         task = HumanEvalTask(

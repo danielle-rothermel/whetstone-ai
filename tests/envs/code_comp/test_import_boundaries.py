@@ -45,6 +45,23 @@ def test_legacy_env_shims_expose_public_builders() -> None:
     assert hasattr(ed1m, "build_ed1m_experiment")
 
 
+def test_code_comp_surface_modules_exclude_runner_and_optimization() -> None:
+    root = Path("src/whetstone/envs/code_comp")
+    targets = [
+        root / "behavior_matrix.py",
+        root / "preview.py",
+        *sorted((root / "modes").glob("*.py")),
+    ]
+    for path in targets:
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for module in _module_level_imports(tree):
+            if module.startswith("whetstone.optimization.validation"):
+                continue
+            assert not module.startswith(_FORBIDDEN_PREFIXES), (
+                f"{path} imports forbidden module {module!r}"
+            )
+
+
 def test_code_comp_imports_exclude_runner_and_optimization() -> None:
     root = Path("src/whetstone/envs/code_comp")
     for path in _python_files(root):

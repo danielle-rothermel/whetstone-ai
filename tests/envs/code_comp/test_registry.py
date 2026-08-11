@@ -7,22 +7,19 @@ from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 
 from tests.envs.support import synthetic_ed1_tasks
 from tests.envs.test_ed1m import _mutant_record
-from whetstone.envs.code_comp.modes.direct import (
-    D1Experiment,
-    build_d1_experiment,
-)
-from whetstone.envs.code_comp.modes.encdec import (
-    Ed1Experiment,
-    build_ed1_experiment,
-)
-from whetstone.envs.code_comp.modes.mutant import (
-    build_ed1m_experiment,
-)
-from whetstone.envs.code_comp.registry import (
+from whetstone.envs.code_comp import (
     CodeCompMode,
+    DirectExperiment,
+    EncDecExperiment,
     build_code_comp_experiment,
+    build_direct_experiment,
+    build_encdec_experiment,
+    build_mutant_experiment,
     code_comp_mode_for,
 )
+from whetstone.envs.d1 import build_d1_experiment
+from whetstone.envs.ed1 import build_ed1_experiment
+from whetstone.envs.ed1m import build_ed1m_experiment
 from whetstone.envs.ed1m_dataset import (
     FamilyCount,
     GenerationConfig,
@@ -116,7 +113,7 @@ def test_registry_mutant_matches_legacy_builder(
     ("experiment", "expected_mode"),
     [
         (
-            build_d1_experiment(
+            build_direct_experiment(
                 tasks=synthetic_ed1_tasks(1),
                 internal_n=1,
                 official_n=1,
@@ -124,7 +121,7 @@ def test_registry_mutant_matches_legacy_builder(
             CodeCompMode.DIRECT,
         ),
         (
-            build_ed1_experiment(
+            build_encdec_experiment(
                 tasks=synthetic_ed1_tasks(1),
                 internal_n=1,
                 official_n=1,
@@ -134,14 +131,14 @@ def test_registry_mutant_matches_legacy_builder(
     ],
 )
 def test_code_comp_mode_for_direct_and_encdec(
-    experiment: D1Experiment | Ed1Experiment,
+    experiment: DirectExperiment | EncDecExperiment,
     expected_mode: CodeCompMode,
 ) -> None:
     assert code_comp_mode_for(experiment) is expected_mode
 
 
 def test_code_comp_mode_for_mutant(mutant_dataset_dir: Path) -> None:
-    experiment = build_ed1m_experiment(
+    experiment = build_mutant_experiment(
         artifact_dir=mutant_dataset_dir,
         internal_n=1,
         official_n=1,

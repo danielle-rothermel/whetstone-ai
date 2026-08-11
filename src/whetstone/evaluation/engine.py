@@ -11,12 +11,14 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.envs.ed1 import (
-    Ed1Experiment,
+from whetstone.envs.code_comp.modes.direct import DirectExperiment
+from whetstone.envs.code_comp.mutation_surface import (
     render_encoder_frame,
-    validate_ed1_body,
+    validate_instruction_body,
 )
-from whetstone.envs.ed1_scoring import CodeBatchScorer
+from whetstone.envs.code_comp.registry import CodeCompMode, code_comp_mode_for
+from whetstone.envs.code_comp.rollout.direct import render_d1_frame
+from whetstone.envs.code_comp.scoring import CodeBatchScorer
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import (
@@ -25,10 +27,9 @@ from whetstone.envs.rollout_definition import (
 )
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
 from whetstone.evaluation.aggregate import ROLLOUT_AGGREGATE_SCHEMA
-from whetstone.evaluation.drivers.code_comp.encdec import (
-    Ed1RowJobFactory,
-    run_ed1_eval,
-)
+from whetstone.evaluation.drivers.code_comp.direct import D1RowJobFactory
+from whetstone.evaluation.drivers.code_comp.dispatch import run_code_comp_eval
+from whetstone.evaluation.drivers.code_comp.encdec import Ed1RowJobFactory
 from whetstone.evaluation.drivers.internal import (
     InternalEvalResult,
     InternalRowJobFactory,
@@ -265,13 +266,22 @@ class EvaluationEngine:
             batch_scorer=self._batch_scorer,
         )
 
+    def _code_comp_mode(self) -> CodeCompMode | None:
+        try:
+            return code_comp_mode_for(self.experiment)
+        except TypeError:
+            return None
+
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
-        if isinstance(self.experiment, Ed1Experiment):
+        mode = self._code_comp_mode()
+        if mode is not None:
             body = candidate.payload.get(MUTATION_FIELD)
             if type(body) is not str:
-                raise ValueError("ED1 candidate body must be a strict string")
-            validate_ed1_body(body)
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
+            validate_instruction_body(body)
             return
         validate_candidate_prompt(
             env_spec(self.experiment.env_name),
@@ -436,14 +446,28 @@ class EvaluationEngine:
         *,
         max_budget: int | None,
     ) -> str:
-        if isinstance(self.experiment, Ed1Experiment):
+        mode = self._code_comp_mode()
+        if mode in {CodeCompMode.ENCDEC, CodeCompMode.ENCDEC_MUTANT}:
             body = candidate.payload[MUTATION_FIELD]
             if type(body) is not str:
-                raise ValueError("ED1 candidate body must be a strict string")
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
             return render_encoder_frame(
                 body,
                 input_code=instance.prompt_inputs["input_code"],
                 max_budget=max_budget,
+            )
+        if mode is CodeCompMode.DIRECT:
+            body = candidate.payload[MUTATION_FIELD]
+            if type(body) is not str:
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
+            assert isinstance(self.experiment, DirectExperiment)
+            return render_d1_frame(
+                body,
+                input_arm=self.experiment.input_arm,
             )
         return render_prompt(
             env_spec(self.experiment.env_name), candidate, instance
@@ -455,24 +479,57 @@ class EvaluationEngine:
         return self._persist(request, result)
 
     def _run(self, request: EvaluationRequest) -> InternalEvalResult:
-        if isinstance(self.experiment, Ed1Experiment):
+        mode = self._code_comp_mode()
+        if mode is not None:
             body = request.candidate.payload[MUTATION_FIELD]
             if type(body) is not str:
-                raise ValueError("ED1 candidate body must be a strict string")
-            result = run_ed1_eval(
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
+            common = {
+                "candidate_id": request.candidate.candidate_id,
+                "sampling": self.sampling,
+                "execution_policy": self._execution_policy,
+                "evaluation_binding": request.evaluation_binding,
+                "concurrency": self._concurrency,
+                "max_wall_seconds": self._max_wall_seconds,
+                "partial_log": self._partial_log,
+                "cache": self._prompt_cache,
+                "batch_scorer": self._batch_scorer,
+            }
+            if mode is CodeCompMode.DIRECT:
+                from whetstone.evaluation.drivers.code_comp.direct import (
+                    D1EvalResult,
+                )
+
+                result = run_code_comp_eval(
+                    self.experiment,
+                    candidate_body=body,
+                    row_job_factory=cast(
+                        D1RowJobFactory, self._row_job_factory
+                    ),
+                    **common,
+                )
+                assert isinstance(result, D1EvalResult)
+                return InternalEvalResult(
+                    aggregate=result.submission_score_aggregate,
+                    reward=result.reward,
+                    per_task_scores=result.per_task_scores,
+                    per_task_counts=result.per_task_counts,
+                    outputs=result.outputs,
+                    supplemental_aggregates=(),
+                )
+            from whetstone.evaluation.drivers.code_comp.encdec import (
+                Ed1EvalResult,
+            )
+
+            result = run_code_comp_eval(
                 self.experiment,
                 candidate_template=body,
-                candidate_id=request.candidate.candidate_id,
-                sampling=self.sampling,
-                execution_policy=self._execution_policy,
                 row_job_factory=cast(Ed1RowJobFactory, self._row_job_factory),
-                evaluation_binding=request.evaluation_binding,
-                concurrency=self._concurrency,
-                max_wall_seconds=self._max_wall_seconds,
-                partial_log=self._partial_log,
-                cache=self._prompt_cache,
-                batch_scorer=self._batch_scorer,
+                **common,
             )
+            assert isinstance(result, Ed1EvalResult)
             return InternalEvalResult(
                 aggregate=result.primary_aggregate,
                 reward=result.reward,
