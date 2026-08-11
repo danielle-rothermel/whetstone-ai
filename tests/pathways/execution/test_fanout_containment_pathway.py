@@ -1,4 +1,9 @@
-"""Fanout guardian and containment pathway tests."""
+"""Fanout guardian and containment pathway tests.
+
+Linux CI (``depot-ubuntu-24.04``) is the authoritative environment for these
+tests. Fork and signal behavior may differ on macOS; fork-specific cases are
+skipped when ``multiprocessing`` fork is unavailable locally.
+"""
 
 from __future__ import annotations
 

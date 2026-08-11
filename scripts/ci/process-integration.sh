@@ -3,7 +3,6 @@ set -euo pipefail
 
 uv sync --locked --group dev
 uv run pytest \
-  tests/coordination/test_evaluation_claims.py \
   tests/coordination/test_evaluation_service.py \
   tests/coordination/test_proposal_provider.py \
   tests/core/effects/test_postgres.py \

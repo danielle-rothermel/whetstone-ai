@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 from dr_store import ObjectNotFoundError, ObjectStore
 
@@ -28,6 +30,13 @@ from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
 from whetstone.optimization.contracts import EvaluationIntent
 
 
+@dataclass(frozen=True, slots=True)
+class EvaluatedIntentBundle:
+    evaluated: EngineEvaluation
+    intent: EvaluationIntent
+    alternate_outputs_ref: TypedRef
+
+
 def evaluate_intent(
     engine: EvaluationEngine,
     intent: EvaluationIntent,
@@ -41,6 +50,28 @@ def evaluate_intent(
     )
 
 
+def evaluate_intent_bundle(
+    engine: EvaluationEngine,
+    intent: EvaluationIntent,
+) -> EvaluatedIntentBundle:
+    evaluated = evaluate_intent(engine, intent)
+    other_candidate = intent.candidate.record.model_copy(
+        update={"candidate_id": "candidate-b"}
+    )
+    alternate = engine.evaluate(
+        EvaluationRequest(
+            candidate=other_candidate,
+            evaluation_binding=intent.evaluation_binding,
+            purpose=intent.purpose,
+        )
+    )
+    return EvaluatedIntentBundle(
+        evaluated=evaluated,
+        intent=intent,
+        alternate_outputs_ref=alternate.evidence.outputs_ref,
+    )
+
+
 def build_forged_evidence(
     forgery: str,
     *,
@@ -48,22 +79,17 @@ def build_forged_evidence(
     intent: EvaluationIntent,
     engine: EvaluationEngine,
     store: ObjectStore,
+    alternate_outputs_ref: TypedRef | None = None,
 ) -> TypedRef:
     evidence = evaluated.evidence
     evidence_update: dict[str, object] = {}
 
     if forgery == "candidate":
-        other_candidate = intent.candidate.record.model_copy(
-            update={"candidate_id": "candidate-b"}
-        )
-        other = engine.evaluate(
-            EvaluationRequest(
-                candidate=other_candidate,
-                evaluation_binding=intent.evaluation_binding,
-                purpose=intent.purpose,
+        if alternate_outputs_ref is None:
+            raise ValueError(
+                "alternate_outputs_ref is required for candidate forgery"
             )
-        )
-        evidence_update["outputs_ref"] = other.evidence.outputs_ref
+        evidence_update["outputs_ref"] = alternate_outputs_ref
     elif forgery == "evidence_binding":
         evidence_update["evaluation_binding"] = _binding(
             engine,
@@ -168,3 +194,27 @@ def assert_restart_rejects_forged_resolution(
 
     with pytest.raises((ObjectNotFoundError, ValueError)):
         service.resolve_evaluation_intent(intent)
+
+
+def assert_restart_rejects_forgery(
+    *,
+    store: ObjectStore,
+    engine: EvaluationEngine,
+    bundle: EvaluatedIntentBundle,
+    forgery: str,
+) -> None:
+    forged_evidence_ref = build_forged_evidence(
+        forgery,
+        evaluated=bundle.evaluated,
+        intent=bundle.intent,
+        engine=engine,
+        store=store,
+        alternate_outputs_ref=bundle.alternate_outputs_ref,
+    )
+    assert_restart_rejects_forged_resolution(
+        store=store,
+        engine=engine,
+        intent=bundle.intent,
+        evaluated=bundle.evaluated,
+        forged_evidence_ref=forged_evidence_ref,
+    )

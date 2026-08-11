@@ -19,9 +19,8 @@ from dr_store import (
 )
 
 from tests.coordination.evaluation_restart_support import (
-    assert_restart_rejects_forged_resolution,
-    build_forged_evidence,
-    evaluate_intent,
+    assert_restart_rejects_forgery,
+    evaluate_intent_bundle,
 )
 from tests.envs.support import (
     execution_policy,
@@ -935,20 +934,12 @@ def test_restart_rejects_forged_or_incomplete_result_graphs(
         intent_id=f"forged-{forgery}",
         purpose="graph-validation",
     )
-    evaluated = evaluate_intent(engine, intent)
-    forged_evidence_ref = build_forged_evidence(
-        forgery,
-        evaluated=evaluated,
-        intent=intent,
-        engine=engine,
-        store=store,
-    )
-    assert_restart_rejects_forged_resolution(
+    bundle = evaluate_intent_bundle(engine, intent)
+    assert_restart_rejects_forgery(
         store=store,
         engine=engine,
-        intent=intent,
-        evaluated=evaluated,
-        forged_evidence_ref=forged_evidence_ref,
+        bundle=bundle,
+        forgery=forgery,
     )
 
 

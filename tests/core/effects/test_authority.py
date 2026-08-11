@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from threading import Event, Thread
+from threading import Thread
 
 import pytest
 from pydantic import ValidationError
@@ -13,12 +11,13 @@ from tests.core.effects.authority_support import (
     _LEASE_DURATION,
     _NOW,
     _acquire,
+    _Backend,
+    _CoordinatedAuthority,
     _FakeClock,
     _request,
     _result_ref,
     _ScriptedRenewalWait,
 )
-from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
 from whetstone.core.effects.authority import (
     AcquireOutcome,
     EffectAuthority,
@@ -28,113 +27,7 @@ from whetstone.core.effects.authority import (
     TerminalFailure,
     TerminalOutcome,
 )
-from whetstone.core.identity import NonEmptyId, TypedRef
-
-
-@dataclass(frozen=True, slots=True)
-class _Backend:
-    authority: EffectAuthority
-    clock: _FakeClock | None
-    database: Path | None
-
-    def advance_past(self, instant: datetime) -> None:
-        if self.clock is not None:
-            now = self.clock()
-            if now <= instant:
-                self.clock.advance(instant - now + timedelta(microseconds=1))
-            return
-        assert self.database is not None
-        wait_for_sqlite_authority_after(self.database, instant)
-
-
-class _CoordinatedAuthority(EffectAuthority):
-    def __init__(self, authority: EffectAuthority) -> None:
-        self._authority = authority
-        self._renewal_wait_strategy = authority._renewal_wait_strategy
-        self.release_renewal = Event()
-        self.renewal_entered = Event()
-        self.terminal_entered = Event()
-        self.renew_calls = 0
-        self.terminal_lease: EffectLease | None = None
-
-    def renew(
-        self,
-        lease: EffectLease,
-        *,
-        lease_duration: timedelta,
-    ) -> EffectLease:
-        self.renew_calls += 1
-        self.renewal_entered.set()
-        if not self.release_renewal.wait(timeout=2):
-            raise TimeoutError("test did not release coordinated renewal")
-        return self._authority.renew(
-            lease,
-            lease_duration=lease_duration,
-        )
-
-    def _validate_lease_duration(self, value: timedelta) -> timedelta:
-        return self._authority._validate_lease_duration(value)
-
-    def succeed(
-        self,
-        lease: EffectLease,
-        *,
-        result_ref: TypedRef,
-    ) -> EffectTerminal:
-        self.terminal_lease = lease
-        self.terminal_entered.set()
-        return self._authority.succeed(lease, result_ref=result_ref)
-
-    def fail(
-        self,
-        lease: EffectLease,
-        *,
-        result_ref: TypedRef,
-        failure: TerminalFailure,
-    ) -> EffectTerminal:
-        self.terminal_lease = lease
-        self.terminal_entered.set()
-        return self._authority.fail(
-            lease,
-            result_ref=result_ref,
-            failure=failure,
-        )
-
-
-@pytest.fixture(
-    name="backend",
-    params=(
-        "memory",
-        "sqlite",
-    ),
-)
-def backend_fixture(
-    request: pytest.FixtureRequest,
-    tmp_path: Path,
-) -> _Backend:
-    if request.param == "memory":
-        clock = _FakeClock()
-        return _Backend(EffectAuthority.memory(clock=clock), clock, None)
-    database = tmp_path / "authority.sqlite"
-    return _Backend(EffectAuthority.sqlite(database), None, database)
-
-
-@pytest.fixture(
-    name="timed_backend",
-    params=(
-        "memory",
-        pytest.param("sqlite", marks=pytest.mark.sqlite_time_integration),
-    ),
-)
-def timed_backend_fixture(
-    request: pytest.FixtureRequest,
-    tmp_path: Path,
-) -> _Backend:
-    if request.param == "memory":
-        clock = _FakeClock()
-        return _Backend(EffectAuthority.memory(clock=clock), clock, None)
-    database = tmp_path / "timed-authority.sqlite"
-    return _Backend(EffectAuthority.sqlite(database), None, database)
+from whetstone.core.identity import NonEmptyId
 
 
 def test_public_transitions_expose_duration_but_no_process_time() -> None:
