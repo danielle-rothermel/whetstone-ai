@@ -16,6 +16,10 @@ from whetstone.evaluation.preview.persisted import (
     load_component_traces,
     load_evaluation_outputs,
 )
+from whetstone.evaluation.preview.preflight import (
+    PreviewMetadata,
+    ScoringPreflight,
+)
 from whetstone.evaluation.schema import (
     EvaluationComponentTraces,
     EvaluationEvidence,
@@ -37,10 +41,30 @@ __all__ = [
 ]
 
 
-from whetstone.evaluation.preview.preflight import (
-    PreviewMetadata,
-    ScoringPreflight,
-)
+def _calibration_task_hashes(
+    engine: EvaluationEngine,
+    task_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Map caller task IDs to the engine sampling's canonical task hashes."""
+    hashes = engine.sampling.task_set.task_hashes
+    if set(task_ids).issubset(hashes):
+        return task_ids
+    by_instance = {
+        str(instance.id): task_hash
+        for instance, task_hash in zip(
+            engine.sampling.tasks,
+            hashes,
+            strict=True,
+        )
+    }
+    unknown = tuple(
+        task_id for task_id in task_ids if task_id not in by_instance
+    )
+    if unknown:
+        raise ValueError(
+            f"baseline preview task IDs are unknown to sampling: {unknown!r}"
+        )
+    return tuple(by_instance[task_id] for task_id in task_ids)
 
 
 class AnchorArmPreview(BaseModel):
@@ -144,6 +168,7 @@ def run_baseline_preview(
         if budget_ratio is None
         else f"budget ratio {budget_ratio:g}"
     )
+    calibration_task_ids = _calibration_task_hashes(engine, task_ids)
     calibration = run_anchor_calibration(
         engine=engine,
         evaluation_binding=evaluation_binding,
@@ -153,7 +178,7 @@ def run_baseline_preview(
         ceiling_purpose=ceiling_purpose,
         baseline_log_label=baseline_log_label,
         ceiling_log_label=ceiling_log_label,
-        task_ids=task_ids,
+        task_ids=calibration_task_ids,
         pool_ceiling=pool_ceiling,
         power_config=power_config,
         bootstrap_level=bootstrap_level,

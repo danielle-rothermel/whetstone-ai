@@ -1,11 +1,11 @@
 """Shared cell fixtures: a real engine driving real in-process evaluations.
 
-These build the genuine article rather than a stub: ``build_env_experiment``
-produces a real experiment, ``drive_internal_row`` executes the real row
-adapter against a fake transport in-process, and the engine persists real
-Evaluation Evidence. A cell test therefore exercises the same evidence path
-production does, which is what makes assertions about scores, per-task vectors,
-and viewer rows mean anything.
+These build the genuine article rather than a stub:
+``code_comp_direct_experiment`` produces a real experiment,
+``drive_direct_row`` executes the real row adapter against a fake transport
+in-process, and the engine persists real Evaluation Evidence. A cell test
+therefore exercises the same evidence path production does, which is what
+makes assertions about scores, per-task vectors, and viewer rows mean anything.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ from pathlib import Path
 from dr_store import ObjectStore
 
 from tests.envs.support import (
+    code_comp_direct_experiment,
     execution_policy,
-    in_process_internal_row_job_factory,
+    in_process_direct_row_job_factory,
 )
 from tests.optimization.support import (
-    candidate,
     make_store,
     memory_tool_call_store,
     optimizer_config_ref,
@@ -34,7 +34,15 @@ from whetstone.core.effects.authority import (
 )
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.factory import build_env_experiment
+from whetstone.envs.code_comp.candidates import env_candidate_base_ref
+from whetstone.envs.code_comp.constants import (
+    CODE_COMP_ENV_NAME,
+    MUTATION_FIELD,
+)
+from whetstone.envs.code_comp.modes.direct import (
+    DIRECT_WRAPPER_BODY_CEILING,
+    DIRECT_WRAPPER_BODY_NAIVE,
+)
 from whetstone.evaluation.engine import EvaluationEngine
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
@@ -62,13 +70,23 @@ from whetstone.runner.optimization_run import (
     OptimizationRunControl,
 )
 
-ENV_NAME = "c18"
-#: Real c18 prompt placeholders, so preflight and rendering exercise the actual
-#: template contract rather than a template the env would reject.
-BASELINE_TEMPLATE = "{question}\n{query}\nAnswer:"
-CEILING_TEMPLATE = "{question}\n{query}\nThink, then answer:"
+ENV_NAME = CODE_COMP_ENV_NAME
+BASELINE_TEMPLATE = DIRECT_WRAPPER_BODY_NAIVE
+CEILING_TEMPLATE = DIRECT_WRAPPER_BODY_CEILING
 TASK_MODEL = "openai/test"
 PROPOSER_MODEL = "openai/test-proposer"
+
+
+def _code_comp_candidate(
+    candidate_id: str,
+    *,
+    body: str,
+) -> Candidate:
+    return Candidate(
+        candidate_id=candidate_id,
+        base_ref=env_candidate_base_ref(CODE_COMP_ENV_NAME),
+        payload={MUTATION_FIELD: body},
+    )
 
 
 def official_engine(
@@ -78,19 +96,19 @@ def official_engine(
     num_samples: int = 1,
 ) -> EvaluationEngine:
     """A real engine bound to the official split."""
-    experiment = build_env_experiment(
-        ENV_NAME,
+    experiment = code_comp_direct_experiment(
         model=TASK_MODEL,
-        pool_n_per_stratum=2,
-        split_sizes=(1, 1, 1),
         num_samples=num_samples,
+        task_count=3,
+        internal_n=1,
+        official_n=1,
     )
     return EvaluationEngine(
         store=store,
         experiment=experiment,
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(),
-        row_job_factory=in_process_internal_row_job_factory(reply_for),
+        row_job_factory=in_process_direct_row_job_factory(reply_for),
     )
 
 
@@ -116,7 +134,7 @@ def identity_run(
             mode=StepMode.PURE,
             terminal_output_contract=contract,
             template_render_contract=python_format_contract(
-                available_fields=("question", "query"),
+                available_fields=("input_code",),
             ),
         )
     )
@@ -130,7 +148,11 @@ def identity_controller(
     candidates: tuple[Candidate, ...] | None = None,
 ) -> HarnessRunController:
     """A controller over the identity adapter: one pure step, then COMPLETE."""
-    records = candidates if candidates is not None else (candidate(),)
+    records = (
+        candidates
+        if candidates is not None
+        else (_code_comp_candidate("baseline", body=BASELINE_TEMPLATE),)
+    )
     contract = OutputContract(returned_proposal_count=len(records))
     run = identity_run(run_id, contract=contract)
     authority = EffectAuthority.memory()
@@ -163,6 +185,14 @@ def identity_controller(
     )
 
 
+def code_comp_candidate(
+    candidate_id: str,
+    *,
+    body: str,
+) -> Candidate:
+    return _code_comp_candidate(candidate_id, body=body)
+
+
 def cell_config(
     tmp_path: Path,
     *,
@@ -175,9 +205,11 @@ def cell_config(
     """One complete cell over real evidence, driven by the identity adapter."""
     exact_store = store if store is not None else make_store(tmp_path)
     engine = official_engine(exact_store, reply_for=reply_for)
-    baseline = candidate("baseline", text=BASELINE_TEMPLATE)
+    baseline = _code_comp_candidate("baseline", body=BASELINE_TEMPLATE)
     ceiling_candidate = (
-        candidate("ceiling", text=CEILING_TEMPLATE) if ceiling else None
+        _code_comp_candidate("ceiling", body=CEILING_TEMPLATE)
+        if ceiling
+        else None
     )
     run_id = f"identity:{ENV_NAME}:a{attempt}"
     controller = identity_controller(
@@ -219,6 +251,7 @@ __all__ = [
     "PROPOSER_MODEL",
     "TASK_MODEL",
     "cell_config",
+    "code_comp_candidate",
     "identity_controller",
     "official_binding",
     "official_engine",

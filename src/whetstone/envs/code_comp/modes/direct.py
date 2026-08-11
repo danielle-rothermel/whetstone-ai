@@ -15,7 +15,10 @@ from whetstone.envs.code_comp.constants import (
     CODE_COMP_SUBMISSION_SCORE_NAME,
     MUTATION_FIELD,
 )
-from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+from whetstone.envs.code_comp.dataset import (
+    CodeCompTaskInstance,
+    code_comp_task_hash,
+)
 from whetstone.envs.code_comp.experiment import DirectExperiment
 from whetstone.envs.code_comp.generation_graph.direct import (
     DIRECT_DEFAULT_RENAME_TOKEN,
@@ -132,7 +135,7 @@ def _direct_split(
         dataset_revision=CODE_COMP_DATASET_REVISION,
         split_role=split_role,
         tasks=tasks,
-        task_hash_of=lambda instance: str(instance.id),
+        task_hash_of=code_comp_task_hash,
         num_samples=num_samples,
         procedure=procedure,
         aggregation=aggregation,

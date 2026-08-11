@@ -17,10 +17,9 @@ from tests.evaluation.support import (
     _DEFAULT_ROW_JOB_FACTORY,
     _binding,
     _engine,
-    _experiment,
     _intent,
     _load_component_traces,
-    _successful_internal_outcome,
+    _successful_direct_outcome,
     _uncached_experiment,
 )
 from whetstone.coordination.evaluation_service import EngineEvaluationService
@@ -35,21 +34,16 @@ from whetstone.envs.code_comp.constants import (
 from whetstone.envs.code_comp.generation_graph.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
-    build_encdec_generation_graph,
-    build_encoder_provider_call_config,
 )
-from whetstone.envs.generation_graph import render_prompt
-from whetstone.envs.registry import env_spec
 from whetstone.evaluation import engine as evaluation_engine_module
 from whetstone.evaluation.aggregate import (
     RowValue,
     TaskRows,
     unweighted_task_mean,
 )
-from whetstone.evaluation.drivers.internal import (
-    InternalRowRequest,
-    InternalRowResult,
-    _llm_component_step,
+from whetstone.evaluation.drivers.code_comp.direct import (
+    DirectRowRequest,
+    DirectRowResult,
 )
 from whetstone.evaluation.engine import (
     EngineEvaluation,
@@ -72,7 +66,7 @@ from whetstone.evaluation.schema import (
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
 )
-from whetstone.evaluation.traces import ExecutedRowState
+from whetstone.evaluation.traces import ExecutedRowState, _llm_component_step
 from whetstone.execution.fanout import ProcessJob
 from whetstone.execution.partials import PartialLog
 from whetstone.experiment.candidate import (
@@ -84,33 +78,34 @@ from whetstone.experiment.reward import (
 
 
 def _ed1_graph_engine(*, store: ObjectStore) -> EvaluationEngine:
-    base_experiment = _experiment()
-    experiment = replace(
-        base_experiment,
-        generation_graph=build_encdec_generation_graph(
-            CODE_COMP_ENV_NAME,
-            provider_call_config=build_encoder_provider_call_config(
-                "openai/test"
-            ),
-            procedure_config_hash=(
-                base_experiment.generation_graph.procedure_config_hash
-            ),
-            budget_ratio=None,
-        ),
+    from tests.envs.support import synthetic_code_comp_tasks
+    from whetstone.envs.code_comp import (
+        CodeCompMode,
+        build_code_comp_experiment,
+    )
+
+    experiment = build_code_comp_experiment(
+        CodeCompMode.ENCDEC,
+        tasks=synthetic_code_comp_tasks(3),
+        internal_n=1,
+        official_n=1,
+        num_samples=1,
     )
     return EvaluationEngine(
         store=store,
         experiment=experiment,
         sampling=experiment.eval_configs.official,
         execution_policy=execution_policy(),
-        row_job_factory=_DEFAULT_ROW_JOB_FACTORY,
+        row_job_factory=process_row_job_factory(
+            "tests.envs.process_workers:drive_ed1_success"
+        ),
     )
 
 
 def test_uncached_experiment_uses_real_production_constructor() -> None:
     experiment = _uncached_experiment()
 
-    assert experiment.env_name == "c18"
+    assert experiment.env_name == CODE_COMP_ENV_NAME
     assert len(experiment.eval_configs.internal.tasks) == 1
     assert len(experiment.eval_configs.official.tasks) == 1
 
@@ -271,6 +266,7 @@ def test_engine_persists_missing_row_state_without_fabricated_steps(
     assert trace.executed_component_steps == ()
 
 
+@pytest.mark.process_integration
 def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
     tmp_path,
     monkeypatch,
@@ -278,19 +274,43 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
     store = ObjectStore(SqliteBackend(tmp_path / "ed1-traces.sqlite"))
     engine = _ed1_graph_engine(store=store)
     experiment = engine.experiment
-    canonical_run = evaluation_engine_module.run_internal_eval
+    from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
+    from whetstone.envs.code_comp.mutation_surface import render_encoder_frame
+
+    assert isinstance(experiment, EncDecExperiment)
+    encdec_graph = experiment.generation_graph
+    from whetstone.envs.code_comp.generation_graph.encdec import (
+        EncDecGenerationGraph,
+    )
+
+    assert isinstance(encdec_graph, EncDecGenerationGraph)
+
+    canonical_run = evaluation_engine_module.run_code_comp_eval
     run_count = 0
     encoder_text = "compressed description distinct from final code"
 
-    def ed1_traced_run(*args, **kwargs):
+    def ed1_traced_run(experiment_arg, **kwargs):
+        from whetstone.evaluation.drivers.code_comp.encdec import (
+            EncDecEvalResult,
+        )
+
         nonlocal run_count
-        result = canonical_run(*args, **kwargs)
+        result = canonical_run(experiment_arg, **kwargs)
+        assert isinstance(result, EncDecEvalResult)
         original = result.outputs[0]
         instance = engine.sampling.tasks[0]
-        encoder_prompt = render_prompt(
-            env_spec(experiment.env_name),
-            kwargs["candidate"],
-            instance,
+        budget_ratio = encdec_graph.budget_ratio
+        max_budget = (
+            None
+            if budget_ratio is None
+            else round(
+                budget_ratio * len(instance.prompt_inputs["input_code"])
+            )
+        )
+        encoder_prompt = render_encoder_frame(
+            kwargs["candidate_template"],
+            input_code=instance.prompt_inputs["input_code"],
+            max_budget=max_budget,
         )
         encode_step = _llm_component_step(
             trace_index=0,
@@ -299,40 +319,55 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
             generation=encoder_text,
         )
         decoder_text = instance.gold
+        if len(original.executed_component_steps) >= 2:
+            decoder_generation = str(
+                original.executed_component_steps[1].outputs[
+                    "provider_generation"
+                ]
+            )
+        else:
+            decoder_generation = decoder_text
         decode_step = _llm_component_step(
             trace_index=1,
             component_id=DECODER_NODE_ID,
             prompt=DECODER_TEMPLATE.format(encoder_output=encoder_text),
-            generation=decoder_text,
+            generation=decoder_generation,
         )
         if run_count == 0:
+            combined_output = (
+                f"ENCODER:\n{encoder_text}\n\nDECODER:\n{decoder_generation}"
+            )
             output = replace(
                 original,
                 executed_component_steps=(encode_step, decode_step),
-                output_text=decoder_text,
+                output_text=combined_output,
             )
-            rewritten = replace(result, outputs=(output,))
+            rewritten = replace(result, outputs=(output, *result.outputs[1:]))
         else:
-            output = replace(
-                original,
-                row_state=ExecutedRowState.FAILED,
-                executed_component_steps=(
-                    (encode_step,)
-                    if run_count == 1
-                    else (encode_step, decode_step)
-                ),
-                output_text=None if run_count == 1 else decoder_text,
-                score=None,
-                failure_code=(
-                    "decoder_provider_failure"
-                    if run_count == 1
-                    else "scoring_infrastructure_failure"
-                ),
-                finish_reason=None,
-                provider_error={"type": "provider_unavailable"},
-            )
+            if run_count == 1:
+                output = replace(
+                    original,
+                    row_state=ExecutedRowState.FAILED,
+                    executed_component_steps=(encode_step,),
+                    output_text=None,
+                    score=None,
+                    failure_code="decoder_provider_failure",
+                    finish_reason=None,
+                    provider_error={"type": "provider_unavailable"},
+                )
+            else:
+                output = replace(
+                    original,
+                    row_state=ExecutedRowState.FAILED,
+                    executed_component_steps=(encode_step, decode_step),
+                    output_text=decoder_text,
+                    score=None,
+                    failure_code="scoring_infrastructure_failure",
+                    finish_reason=None,
+                    provider_error={"type": "provider_unavailable"},
+                )
             aggregate = unweighted_task_mean(
-                aggregate_name=result.aggregate.name,
+                aggregate_name=result.primary_aggregate.name,
                 graph_hash=experiment.generation_graph.graph_hash,
                 evaluation_binding_hash=(
                     kwargs["evaluation_binding"].identity_hash()
@@ -347,18 +382,19 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
             )
             rewritten = replace(
                 result,
-                aggregate=aggregate,
+                primary_aggregate=aggregate,
                 reward=None,
                 per_task_scores=(0.0,),
+                per_task_primary=(0.0,),
                 per_task_counts=(1,),
-                outputs=(output,),
+                outputs=(output, *result.outputs[1:]),
             )
         run_count += 1
         return rewritten
 
     monkeypatch.setattr(
         evaluation_engine_module,
-        "run_internal_eval",
+        "run_code_comp_eval",
         ed1_traced_run,
     )
     service = EngineEvaluationService(store=store, engine=engine)
@@ -467,11 +503,11 @@ def test_engine_passes_exact_canonical_row_job_factory(
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "factory.sqlite"))
     delegated = process_row_job_factory(
-        "tests.envs.process_workers:drive_internal_success"
+        "tests.envs.process_workers:drive_d1_success"
     )
-    submitted: list[InternalRowRequest] = []
+    submitted: list[DirectRowRequest] = []
 
-    def row_job_factory(request: InternalRowRequest) -> ProcessJob:
+    def row_job_factory(request: DirectRowRequest) -> ProcessJob:
         submitted.append(request)
         return delegated(request)
 
@@ -480,16 +516,16 @@ def test_engine_passes_exact_canonical_row_job_factory(
         store=store,
         row_job_factory=row_job_factory,
     )
-    canonical_run = evaluation_engine_module.run_internal_eval
+    canonical_run = evaluation_engine_module.run_code_comp_eval
 
-    def checked_run(*args, **kwargs):
+    def checked_run(experiment_arg, **kwargs):
         assert kwargs["row_job_factory"] is row_job_factory
         assert "transport" not in kwargs
-        return canonical_run(*args, **kwargs)
+        return canonical_run(experiment_arg, **kwargs)
 
     monkeypatch.setattr(
         evaluation_engine_module,
-        "run_internal_eval",
+        "run_code_comp_eval",
         checked_run,
     )
 
@@ -507,10 +543,10 @@ def test_engine_passes_exact_canonical_row_job_factory(
 def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "identity-mismatch.sqlite"))
 
-    def mismatched(request: InternalRowRequest) -> ProcessJob:
-        result = InternalRowResult(
+    def mismatched(request: DirectRowRequest) -> ProcessJob:
+        result = DirectRowResult(
             request_hash=f"mismatched-{request.request_hash}",
-            outcome=_successful_internal_outcome(request),
+            outcome=_successful_direct_outcome(request),
         )
         return ProcessJob(
             entrypoint="tests.envs.process_workers:return_payload",
@@ -525,7 +561,7 @@ def test_engine_rejects_mismatched_process_result_identity(tmp_path) -> None:
 
     with pytest.raises(
         ValueError,
-        match="internal row result does not match its submitted request",
+        match="D1 row result does not match its submitted request",
     ):
         engine.evaluate(
             EvaluationRequest(
@@ -692,13 +728,13 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
     assert outputs.schema_version == 4
     assert evidence.schema_version == 3
     assert evidence.component_traces_ref.content_hash == (
-        "bf842459a3a5e772bc6889862c16948524c60ef7a8ac514ba14fd3da374e16ea"
+        "10e2c24558c2e1078aeafb81db9044f4a61b8c45257713d6095a2d628f391588"
     )
     assert evidence.outputs_ref.content_hash == (
-        "fc277176e9bd7c168732e73577fa7a78a10076673c6980a5fcd4a57a3aecc7c6"
+        "acb63cc59fde8d4f957d8cd8d69e68ef46204c0fd1df9ecd2fb470fc465e7379"
     )
     assert evaluated.evidence_ref.content_hash == (
-        "8080365649c85f8c5cd2a266abeb4d2ee0314cf0b08e7d3e33c928ad7bc4d1f7"
+        "e5324b3929a42468e8ced7bb589c223b40b70f058c79ec4547d7be81bf453c4f"
     )
     with pytest.raises(ValueError, match="address the exact record"):
         EvaluationComponentTracesRef(
@@ -907,10 +943,10 @@ def test_engine_rejects_output_outside_sampling_plan(
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "output-drift.sqlite"))
     engine = _engine(tmp_path, store=store)
-    canonical_run = evaluation_engine_module.run_internal_eval
+    canonical_run = evaluation_engine_module.run_code_comp_eval
 
-    def drifted_run(*args, **kwargs):
-        result = canonical_run(*args, **kwargs)
+    def drifted_run(experiment_arg, **kwargs):
+        result = canonical_run(experiment_arg, **kwargs)
         assert len(result.outputs) == 1
         return replace(
             result,
@@ -919,7 +955,7 @@ def test_engine_rejects_output_outside_sampling_plan(
 
     monkeypatch.setattr(
         evaluation_engine_module,
-        "run_internal_eval",
+        "run_code_comp_eval",
         drifted_run,
     )
 
@@ -940,15 +976,15 @@ def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
         store=store,
         num_samples=2,
     )
-    canonical_run = evaluation_engine_module.run_internal_eval
+    canonical_run = evaluation_engine_module.run_code_comp_eval
 
-    def reversed_run(*args, **kwargs):
-        result = canonical_run(*args, **kwargs)
+    def reversed_run(experiment_arg, **kwargs):
+        result = canonical_run(experiment_arg, **kwargs)
         return replace(result, outputs=tuple(reversed(result.outputs)))
 
     monkeypatch.setattr(
         evaluation_engine_module,
-        "run_internal_eval",
+        "run_code_comp_eval",
         reversed_run,
     )
 
@@ -966,11 +1002,11 @@ def test_engine_rejects_output_order_drift(tmp_path, monkeypatch) -> None:
 def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "cache.sqlite"))
     delegated = process_row_job_factory(
-        "tests.envs.process_workers:drive_internal_success"
+        "tests.envs.process_workers:drive_d1_success"
     )
-    submitted: list[InternalRowRequest] = []
+    submitted: list[DirectRowRequest] = []
 
-    def record_submission(request: InternalRowRequest) -> ProcessJob:
+    def record_submission(request: DirectRowRequest) -> ProcessJob:
         submitted.append(request)
         return delegated(request)
 
@@ -989,7 +1025,7 @@ def test_cache_provenance_avoids_transport_replay(tmp_path) -> None:
             purpose="cache",
         )
     )
-    same_prompt = base.model_copy(update={"candidate_id": "same-prompt"})
+    same_prompt = base.model_copy(update={"candidate_id": base.candidate_id})
     result = engine.evaluate(
         EvaluationRequest(
             candidate=same_prompt,

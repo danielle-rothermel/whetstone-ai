@@ -277,6 +277,20 @@ exported_symbols = ["whetstone.envs.code_comp.CodeCompMode"]
 categories = ["experiment identity"]
 
 [[terms]]
+name = "code_comp experiment config"
+definition = """
+The unified typed configuration for one code_comp experiment: task pool, split \
+sizes, sampling plan, model routes, compression settings, and mode-specific \
+parameters. It is the sole supported input for building HumanEval \
+code-compression experiments and for subprocess runtime reconstruction."""
+exported_symbols = [
+    "whetstone.envs.code_comp.config.CodeCompExperimentConfig",
+    "whetstone.envs.code_comp.config.default_code_comp_config",
+    "whetstone.envs.code_comp.runtime_config.CodeCompEvaluationRuntimeConfig",
+]
+categories = ["experiment identity", "evaluation"]
+
+[[terms]]
 name = "code_comp row request schema"
 definition = """
 The persisted row-request schema for one code_comp evaluation mode: \

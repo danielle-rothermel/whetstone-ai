@@ -9,7 +9,10 @@ from whetstone.envs.code_comp import (
     CodeCompMode,
     build_code_comp_experiment,
 )
-from whetstone.envs.code_comp.constants import DECODER_TEMPLATE, ENCODER_BODY_B
+from whetstone.envs.code_comp.constants import (
+    DECODER_TEMPLATE,
+    ENCODER_BODY_B,
+)
 from whetstone.envs.code_comp.mutation_surface import render_encoder_frame
 from whetstone.evaluation import engine as engine_module
 from whetstone.evaluation.analysis.calibration import run_anchor_calibration
@@ -19,9 +22,8 @@ from whetstone.evaluation.drivers.code_comp.encdec import (
     EncDecRowRequest,
     EncDecRowResult,
 )
-from whetstone.evaluation.drivers.internal import _llm_component_step
 from whetstone.evaluation.engine import EvaluationEngine
-from whetstone.evaluation.traces import ExecutedRowState
+from whetstone.evaluation.traces import ExecutedRowState, _llm_component_step
 from whetstone.execution.fanout import ProcessJob
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
@@ -147,7 +149,8 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
     )
     assert result.evaluation_binding.eval_config != binding.eval_config
     assert baseline.evaluation_binding == ceiling.evaluation_binding
-    assert baseline.task_hashes == ceiling.task_hashes == task_ids
+    assert baseline.task_hashes == ceiling.task_hashes
+    assert len(baseline.task_hashes) == len(task_ids)
     assert baseline.num_samples == ceiling.num_samples == 2
     assert baseline.per_task_counts == ceiling.per_task_counts == (2, 2)
     assert (
@@ -198,6 +201,8 @@ def test_calibration_reports_each_paid_evaluation_boundary(tmp_path) -> None:
     engine, binding, _store, experiment = _ed1_engine_and_binding(tmp_path)
     messages: list[str] = []
 
+    task_hashes = engine.sampling.task_set.task_hashes
+
     run_anchor_calibration(
         engine=engine,
         evaluation_binding=binding,
@@ -207,7 +212,7 @@ def test_calibration_reports_each_paid_evaluation_boundary(tmp_path) -> None:
         ceiling_purpose=_CALIBRATION_CEILING_PURPOSE,
         baseline_log_label="hand-engineered baseline",
         ceiling_log_label="hand-engineered comparison anchor",
-        task_ids=("Synthetic/0",),
+        task_ids=(task_hashes[0],),
         pool_ceiling=1,
         power_config=PowerConfig(trials=1),
         bootstrap_resamples=1,

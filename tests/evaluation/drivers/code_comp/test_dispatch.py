@@ -7,7 +7,10 @@ import pytest
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 
 from tests.envs.code_comp.test_mutant import _mutant_record
-from tests.envs.support import synthetic_code_comp_tasks
+from tests.envs.support import (
+    non_code_comp_experiment,
+    synthetic_code_comp_tasks,
+)
 from whetstone.envs.code_comp import (
     CodeCompMode,
     MutantExperiment,
@@ -20,7 +23,6 @@ from whetstone.envs.code_comp.mutant.dataset import (
     build_manifest,
     encode_records,
 )
-from whetstone.envs.factory import build_env_experiment
 from whetstone.evaluation.drivers.code_comp.dispatch import run_code_comp_eval
 
 
@@ -137,11 +139,6 @@ def test_run_code_comp_eval_routes_mutant_via_encdec(
 
 
 def test_run_code_comp_eval_rejects_non_code_comp_experiment() -> None:
-    experiment = build_env_experiment(
-        "c18",
-        model="openai/test",
-        pool_n_per_stratum=1,
-        split_sizes=(1, 1, 1),
-    )
+    experiment = non_code_comp_experiment()
     with pytest.raises(TypeError, match="not a code_comp"):
         run_code_comp_eval(experiment)

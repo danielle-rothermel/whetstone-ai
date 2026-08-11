@@ -6,7 +6,10 @@ import pytest
 from dr_code.humaneval.plus_dataset import HF_DATASET_ID, HF_REVISION
 
 from tests.envs.code_comp.test_mutant import _mutant_record
-from tests.envs.support import synthetic_code_comp_tasks
+from tests.envs.support import (
+    non_code_comp_experiment,
+    synthetic_code_comp_tasks,
+)
 from whetstone.envs.code_comp import (
     CodeCompMode,
     build_code_comp_experiment,
@@ -150,14 +153,7 @@ def test_code_comp_mode_for_mutant(mutant_dataset_dir: Path) -> None:
 
 
 def test_code_comp_mode_for_rejects_non_code_comp_experiment() -> None:
-    from whetstone.envs.factory import build_env_experiment
-
-    experiment = build_env_experiment(
-        "c18",
-        model="openai/test",
-        pool_n_per_stratum=1,
-        split_sizes=(1, 1, 1),
-    )
+    experiment = non_code_comp_experiment()
     with pytest.raises(TypeError, match="not a code_comp"):
         code_comp_mode_for(experiment)
 

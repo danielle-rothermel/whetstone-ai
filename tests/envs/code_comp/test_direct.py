@@ -50,8 +50,7 @@ from whetstone.evaluation.drivers.code_comp.direct import (
     _input_arm_text,
     run_direct_eval,
 )
-from whetstone.evaluation.drivers.internal import _llm_component_step
-from whetstone.evaluation.traces import ExecutedRowState
+from whetstone.evaluation.traces import ExecutedRowState, _llm_component_step
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
@@ -511,7 +510,7 @@ def test_d1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_hash == (
-        "205e37d7a03a2be31b26b9db90dbc624315d4a792d5138c78464815e1f5ea6c7"
+        "6eca3d0a8a599d02fbedda403fcbcea513df9c9aa5d9231e093ef76bfd8bb9b2"
     )
 
 

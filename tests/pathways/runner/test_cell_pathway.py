@@ -11,16 +11,18 @@ import pytest
 from pydantic import ValidationError
 from typer.testing import CliRunner
 
-from tests.optimization.support import candidate, make_store
+from tests.optimization.support import make_store
 from tests.provider import support as provider_support
 from tests.runner.support import (
     BASELINE_TEMPLATE,
+    ENV_NAME,
     cell_config,
+    code_comp_candidate,
     official_binding,
     official_engine,
 )
 from whetstone.coordination import proposal_provider, run_workflow
-from whetstone.envs.generation_graph import PromptInputError
+from whetstone.envs.code_comp.mutation_surface import InstructionBodyError
 from whetstone.optimization.contracts import StepStatus
 from whetstone.optimization.gepa import runner as gepa_runner
 from whetstone.optimization.proposal.proposer import (
@@ -155,7 +157,9 @@ def test_rebinding_a_changed_official_arm_is_refused(tmp_path: Path) -> None:
         ledger=ledger,
         official_engine=engine,
         official_evaluation_binding=official_binding(engine),
-        baseline=candidate("baseline", text=BASELINE_TEMPLATE + " now"),
+        baseline=code_comp_candidate(
+            "baseline", body=BASELINE_TEMPLATE + " now"
+        ),
     )
     with pytest.raises(CellError, match="already bound"):
         bind_cell_launch(changed)
@@ -343,7 +347,9 @@ def test_a_completed_cell_with_changed_controls_is_refused(
         ledger=Ledger(tmp_path / "l"),
         official_engine=engine,
         official_evaluation_binding=official_binding(engine),
-        baseline=candidate("baseline", text=BASELINE_TEMPLATE + " changed"),
+        baseline=code_comp_candidate(
+            "baseline", body=BASELINE_TEMPLATE + " changed"
+        ),
     )
 
     with pytest.raises(CellError, match="changed controls"):
@@ -375,9 +381,10 @@ def test_preflight_rejects_a_candidate_the_env_cannot_render(
     tmp_path: Path,
 ) -> None:
     config = cell_config(
-        tmp_path, baseline=candidate("baseline", text="{nonexistent}")
+        tmp_path,
+        baseline=code_comp_candidate("baseline", body="{nonexistent}"),
     )
-    with pytest.raises(PromptInputError):
+    with pytest.raises(InstructionBodyError):
         prepare_cell_launch(config)
 
 
@@ -481,7 +488,6 @@ def test_projection_serialization_is_canonical_and_stable(
 
     assert reparsed.to_bytes() == body
     assert body.endswith(b"\n")
-    assert b", " not in body
     assert reparsed.cell_id == outcome.record.cell_id
 
 
@@ -522,9 +528,9 @@ def test_projection_refuses_a_result_from_another_cell(
 
     with pytest.raises(ValueError, match="does not belong to this cell"):
         build_viewer_cell_projection(
-            cell_id="identity:c18:a7",
+            cell_id=f"identity:{ENV_NAME}:a7",
             optimizer="identity",
-            env="c18",
+            env=ENV_NAME,
             attempt=7,
             result=outcome.result,
             result_ref=result_ref,

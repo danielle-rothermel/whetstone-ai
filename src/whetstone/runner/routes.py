@@ -104,12 +104,6 @@ ENCDEC_DEFAULT_TASK_MODEL = "google/gemini-3.1-flash-lite"
 #: Config (hence the graph hash) and is recorded on the cell line under
 #: ``models.task``. The ``--task-model`` CLI flag overrides this default.
 TASK_MODEL_BY_ENV: dict[str, str] = {
-    # The constraint-heavy entailment envs default to the deepseek model.
-    "c18": DEEPSEEK_TASK_MODEL,
-    "c18h": DEEPSEEK_TASK_MODEL,
-    "c22": DEEPSEEK_TASK_MODEL,
-    # c22h follows the c22 column convention; overridable via --task-model.
-    "c22h": DEEPSEEK_TASK_MODEL,
     # The code_comp env (direct, encdec, encdec_mutant) shares one task-model
     # family so anchor cells pair on the same model.
     "code_comp": ENCDEC_DEFAULT_TASK_MODEL,
@@ -122,12 +116,6 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
 #: identity-bearing: a tolerant cell has a distinct ``eval_config_hash`` from a
 #: strict one. Value: ``(missing_data, fraction)``.
 COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
-    # The deepseek task model is non-retryably flaky under concurrency at
-    # roughly 1%, so a strict propagate anchor never certifies. The bounded
-    # tolerance certifies while the skipped rows stay explicit counts on the
-    # aggregate and the cell line, never silently dropped.
-    "c18": ("skip", 0.02),
-    "c18h": ("skip", 0.02),
     # code_comp rows declare a higher tolerance for stochastic model behavior.
     "code_comp": ("skip", 0.15),
 }

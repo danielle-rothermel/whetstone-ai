@@ -7,7 +7,7 @@ uv run pytest \
   tests/coordination/test_proposal_provider.py \
   tests/core/effects/test_postgres.py \
   tests/core/effects/test_sqlite.py \
-  tests/evaluation/drivers/test_internal.py \
+  tests/evaluation/drivers/test_row_common.py \
   tests/evaluation/test_engine.py \
   tests/execution/test_fanout.py \
   tests/execution/test_partials.py \

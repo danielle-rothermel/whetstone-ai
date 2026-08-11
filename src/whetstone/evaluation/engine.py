@@ -11,6 +11,8 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
+from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
+from whetstone.envs.code_comp.experiment import CodeCompExperiment
 from whetstone.envs.code_comp.generation_graph.direct import (
     render_direct_frame,
 )
@@ -25,21 +27,12 @@ from whetstone.envs.code_comp.submission_result import (
     submission_result_to_record,
 )
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.generation_graph import (
-    render_prompt,
-    validate_candidate_prompt,
-)
-from whetstone.envs.registry import env_spec
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
 from whetstone.evaluation.aggregate import AGGREGATE_SCHEMA
 from whetstone.evaluation.drivers.code_comp.direct import DirectRowJobFactory
 from whetstone.evaluation.drivers.code_comp.dispatch import run_code_comp_eval
 from whetstone.evaluation.drivers.code_comp.encdec import EncDecRowJobFactory
-from whetstone.evaluation.drivers.internal import (
-    InternalEvalResult,
-    InternalRowJobFactory,
-    run_internal_eval,
-)
+from whetstone.evaluation.drivers.eval_result import InternalEvalResult
 from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
@@ -111,12 +104,7 @@ class EngineEvaluation:
 
 
 class EvaluationEngine:
-    """Render, execute, aggregate, and persist one exact sampling binding.
-
-    :func:`run_internal_eval` is the only row-driving loop.
-    This engine owns its external contract: exact Config validation, candidate
-    preflight, content-addressed evidence, and optimizer-facing references.
-    """
+    """Render, execute, aggregate, and persist one exact code_comp binding."""
 
     def __init__(
         self,
@@ -125,7 +113,7 @@ class EvaluationEngine:
         experiment: EnvExperiment,
         sampling: EnvSplitSampling,
         execution_policy: ProviderExecutionPolicy,
-        row_job_factory: InternalRowJobFactory | EncDecRowJobFactory,
+        row_job_factory: DirectRowJobFactory | EncDecRowJobFactory,
         concurrency: int = DEFAULT_CONCURRENCY,
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
@@ -142,6 +130,10 @@ class EvaluationEngine:
         self._partial_log = partial_log
         self._prompt_cache = prompt_cache
         self._batch_scorer = batch_scorer
+        if self.experiment.env_name != CODE_COMP_ENV_NAME:
+            raise TypeError(
+                "EvaluationEngine supports code_comp experiments only"
+            )
         expected = experiment.eval_configs.eval_config_for(sampling.split_role)
         if expected != sampling.eval_config:
             canonical = (
@@ -166,7 +158,9 @@ class EvaluationEngine:
     @property
     def task_model_identity_hash(self) -> str:
         """Identity of the exact task-model Provider Call Config route."""
-
+        if isinstance(self.experiment, CodeCompExperiment):
+            models = self.experiment.config.models
+            return models.encoder_call_config().identity_hash
         provider_config = self.experiment.generation_graph.provider_call_config
         return provider_config.identity_hash
 
@@ -276,20 +270,12 @@ class EvaluationEngine:
 
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
-        mode = self._code_comp_mode()
-        if mode is not None:
-            body = candidate.payload.get(MUTATION_FIELD)
-            if type(body) is not str:
-                raise ValueError(
-                    "code_comp candidate body must be a strict string"
-                )
-            validate_instruction_body(body)
-            return
-        validate_candidate_prompt(
-            env_spec(self.experiment.env_name),
-            candidate,
-            self.sampling.tasks,
-        )
+        body = candidate.payload.get(MUTATION_FIELD)
+        if type(body) is not str:
+            raise ValueError(
+                "code_comp candidate body must be a strict string"
+            )
+        validate_instruction_body(body)
 
     def validate_request(self, request: EvaluationRequest) -> None:
         """Validate the complete evaluation request before execution."""
@@ -477,13 +463,16 @@ class EvaluationEngine:
                     "code_comp candidate body must be a strict string"
                 )
             assert isinstance(self.experiment, DirectExperiment)
+            from whetstone.evaluation.drivers.code_comp.direct import (
+                _input_arm_text,
+            )
+
+            input_arm, _score_task = _input_arm_text(self.experiment, instance)
             return render_direct_frame(
                 body,
-                input_arm=self.experiment.input_arm,
+                input_arm=input_arm,
             )
-        return render_prompt(
-            env_spec(self.experiment.env_name), candidate, instance
-        )
+        raise TypeError("unsupported code_comp mode for prompt rendering")
 
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
         self.validate_request(request)
@@ -530,6 +519,7 @@ class EvaluationEngine:
                     per_task_counts=result.per_task_counts,
                     outputs=result.outputs,
                     supplemental_aggregates=(),
+                    request_identities=result.request_identities,
                 )
             from whetstone.evaluation.drivers.code_comp.encdec import (
                 EncDecEvalResult,
@@ -556,19 +546,7 @@ class EvaluationEngine:
                 deadline_reached=result.deadline_reached,
                 guard_timeouts=result.guard_timeouts,
             )
-        return run_internal_eval(
-            self.experiment,
-            candidate=request.candidate,
-            sampling=self.sampling,
-            execution_policy=self._execution_policy,
-            row_job_factory=cast(InternalRowJobFactory, self._row_job_factory),
-            evaluation_binding=request.evaluation_binding,
-            concurrency=self._concurrency,
-            max_wall_seconds=self._max_wall_seconds,
-            partial_log=self._partial_log,
-            render_guard=True,
-            cache=self._prompt_cache,
-        )
+        raise TypeError("EvaluationEngine supports code_comp experiments only")
 
     def _persist(
         self, request: EvaluationRequest, result: InternalEvalResult

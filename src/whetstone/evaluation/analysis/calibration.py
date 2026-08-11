@@ -140,7 +140,10 @@ def run_anchor_calibration(
     if bootstrap_resamples < 1:
         raise ValueError("bootstrap_resamples must be at least 1")
 
-    subset_engine = engine.for_task_ids(task_ids)
+    from whetstone.evaluation.preview.anchor import _calibration_task_hashes
+
+    calibration_task_ids = _calibration_task_hashes(engine, task_ids)
+    subset_engine = engine.for_task_ids(calibration_task_ids)
     subset_binding = _subset_binding(evaluation_binding, subset_engine)
     baseline_request = EvaluationRequest(
         candidate=baseline_candidate,
@@ -187,7 +190,7 @@ def run_anchor_calibration(
         _validate_anchor_evidence(
             evaluated=evaluated,
             expected_binding=subset_binding,
-            expected_task_ids=task_ids,
+            expected_task_ids=calibration_task_ids,
             expected_repeats=repeats,
             expected_reward_policy_hash=reward_policy_hash,
         )

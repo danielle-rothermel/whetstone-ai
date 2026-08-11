@@ -27,6 +27,7 @@ from whetstone_envs.core import Instance
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.code_comp.constants import CODE_COMP_SUBMISSION_SCORE_NAME
+from whetstone.envs.code_comp.dataset import code_comp_task_hash
 from whetstone.envs.code_comp.generation_graph.direct import (
     render_direct_frame,
 )
@@ -59,11 +60,9 @@ from whetstone.evaluation.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
-from whetstone.evaluation.drivers.internal import (
+from whetstone.evaluation.drivers.row_common import (
     ProcessTask,
     RolloutOutput,
-    _llm_component_step,
-    _llm_component_values,
     _process_payload_hash,
     process_request_hash,
     remaining_phase_wall_seconds,
@@ -73,6 +72,8 @@ from whetstone.evaluation.traces import (
     ExecutedComponentStep,
     ExecutedComponentTracePayload,
     ExecutedRowState,
+    _llm_component_step,
+    _llm_component_values,
     validate_executed_component_trace,
 )
 from whetstone.execution.call_support import (
@@ -119,6 +120,7 @@ class DirectEvalResult:
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     outputs: tuple[RolloutOutput, ...]
+    request_identities: frozenset[str] = frozenset()
 
 
 class DirectRowOutcome(BaseModel):
@@ -734,6 +736,11 @@ def run_direct_eval(
         for instance in instances
         for index in range(num_samples)
     }
+    planned_request_identities = frozenset(
+        request.request_hash
+        for requests in requests_by_key.values()
+        for request in requests
+    )
     partial_records = index_partial_records(
         () if partial_log is None else partial_log.load(),
         phase=split_role,
@@ -939,6 +946,7 @@ def run_direct_eval(
     per_task_counts: list[int] = []
     for task_index, instance in enumerate(instances):
         task_id = str(instance.id)
+        task_hash = code_comp_task_hash(instance)
         task_submission_rows: list[RowValue] = []
         for index in range(num_samples):
             outcome = driven[(task_id, index)]
@@ -972,7 +980,7 @@ def run_direct_eval(
                     code_submission_result=outcome.code_submission_result,
                 )
             )
-        submission_rows.append((task_id, task_submission_rows))
+        submission_rows.append((task_hash, task_submission_rows))
         # Per-task submission-score mean + planned-repeat weight. As in ED1/QA,
         # an absent/failed row counts 0 and weight is the repeat count.
         total = sum(
@@ -1012,6 +1020,7 @@ def run_direct_eval(
         per_task_scores=tuple(per_task_scores),
         per_task_counts=tuple(per_task_counts),
         outputs=tuple(outputs),
+        request_identities=planned_request_identities,
     )
 
 

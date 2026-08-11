@@ -7,6 +7,7 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_code_comp_tasks
+from whetstone.envs.code_comp.dataset import code_comp_task_hash
 from whetstone.envs.code_comp.generation_graph.encdec import (
     build_encoder_provider_call_config,
 )
@@ -119,8 +120,13 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
     assert transcript.ceiling.evidence.evaluation_binding == (
         transcript.evaluation_binding
     )
-    assert transcript.baseline.evidence.task_hashes == task_ids
-    assert transcript.ceiling.evidence.task_hashes == task_ids
+    expected_task_hashes = tuple(
+        code_comp_task_hash(by_id[task_id].instance)
+        for task_id in task_ids
+        for by_id in [{t.humaneval_task.task_id: t for t in tasks}]
+    )
+    assert transcript.baseline.evidence.task_hashes == expected_task_hashes
+    assert transcript.ceiling.evidence.task_hashes == expected_task_hashes
     assert transcript.baseline.evidence.num_samples == 2
     assert transcript.ceiling.evidence.num_samples == 2
     assert len(transcript.baseline.component_traces.rows) == 4

@@ -4,6 +4,10 @@ from collections.abc import Sequence
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.code_comp.constants import (
+    CODE_COMP_ENV_NAME,
+    MUTATION_FIELD,
+)
 from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
@@ -70,12 +74,15 @@ class EngineToolEvaluator:
 
     def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
         engine = self._resolve_engine(call, config)
+        template = call.args.get("template")
+        if engine.experiment.env_name == CODE_COMP_ENV_NAME:
+            payload = {MUTATION_FIELD: template}
+        else:
+            payload = {"user_prompt_template": template}
         candidate = Candidate(
             candidate_id=call.call_id,
             base_ref=TypedRef.model_validate(call.args["base_ref"]),
-            payload={
-                "user_prompt_template": call.args.get("template"),
-            },
+            payload=payload,
         )
         evaluated = engine.evaluate(
             EvaluationRequest(

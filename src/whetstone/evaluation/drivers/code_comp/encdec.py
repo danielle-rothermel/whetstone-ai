@@ -31,7 +31,10 @@ from whetstone.envs.code_comp.constants import (
     CODE_COMP_SUBMISSION_SCORE_NAME,
     DECODER_TEMPLATE,
 )
-from whetstone.envs.code_comp.dataset import humaneval_task_from_instance
+from whetstone.envs.code_comp.dataset import (
+    code_comp_task_hash,
+    humaneval_task_from_instance,
+)
 from whetstone.envs.code_comp.generation_graph.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
@@ -70,11 +73,9 @@ from whetstone.evaluation.code.compression_selection import (
     select_compression_reference,
 )
 from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
-from whetstone.evaluation.drivers.internal import (
+from whetstone.evaluation.drivers.row_common import (
     ProcessTask,
     RolloutOutput,
-    _llm_component_step,
-    _llm_component_values,
     _process_payload_hash,
     process_request_hash,
     remaining_phase_wall_seconds,
@@ -87,6 +88,8 @@ from whetstone.evaluation.metrics.compression_measurements import (
 from whetstone.evaluation.traces import (
     ExecutedComponentStep,
     ExecutedRowState,
+    _llm_component_step,
+    _llm_component_values,
     validate_executed_component_trace,
 )
 from whetstone.execution.call_support import CallTelemetry, call_telemetry
@@ -1399,6 +1402,7 @@ def run_encdec_eval(
     per_task_attractor: list[float | None] = []
     for task_index, instance in enumerate(instances):
         task_id = str(instance.id)
+        task_hash = code_comp_task_hash(instance)
         task_primary_rows: list[RowValue] = []
         c_rows: list[RowValue] = []
         comp_vals: list[float] = []
@@ -1464,8 +1468,8 @@ def run_encdec_eval(
                     code_submission_result=outcome.code_submission_result,
                 )
             )
-        primary_rows.append((task_id, task_primary_rows))
-        comp_rows.append((task_id, c_rows))
+        primary_rows.append((task_hash, task_primary_rows))
+        comp_rows.append((task_hash, c_rows))
         # Per-task primary mean + observation weight for the paired CI,
         # computed identically to the QA lane
         # (``internal_eval._per_task_score`` / ``_per_task_count``), so ED1

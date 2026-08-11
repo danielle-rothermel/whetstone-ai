@@ -8,7 +8,11 @@ import anyio
 from dr_store import ObjectStore, SqliteBackend
 from mcp.client import Client
 
-from tests.envs.support import execution_policy, process_row_job_factory
+from tests.envs.support import (
+    code_comp_direct_experiment,
+    execution_policy,
+    process_row_job_factory,
+)
 from tests.optimization.support import (
     memory_tool_call_store,
     optimizer_config_ref,
@@ -16,7 +20,14 @@ from tests.optimization.support import (
 )
 from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
 from whetstone.core.identity import TypedRef
-from whetstone.envs.factory import EnvExperiment, build_env_experiment
+from whetstone.envs.code_comp import CodeCompMode
+from whetstone.envs.code_comp.config import default_code_comp_config
+from whetstone.envs.code_comp.constants import MUTATION_FIELD
+from whetstone.envs.code_comp.experiment import CodeCompExperiment
+from whetstone.envs.code_comp.runtime_config import (
+    CodeCompEvaluationRuntimeConfig,
+)
+from whetstone.envs.factory import EnvExperiment
 from whetstone.evaluation.engine import EvaluationEngine
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optimization.codex.adapter import (
@@ -25,7 +36,6 @@ from whetstone.optimization.codex.adapter import (
     OpaqueStepError,
 )
 from whetstone.optimization.codex.mcp_bridge import EvaluateCandidateServer
-from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
 from whetstone.optimization.contracts import (
     BudgetState,
     OptimizationRun,
@@ -51,17 +61,17 @@ from whetstone.optimization.tools.evaluator import EngineToolEvaluator
 from whetstone.optimization.tools.execution import EvaluatingToolExecutor
 from whetstone.optimization.tools.facade import ToolCallStore
 
-ROW_JOB_ENTRYPOINT = "tests.envs.process_workers:drive_internal_success"
+ROW_JOB_ENTRYPOINT = "tests.envs.process_workers:drive_d1_success"
 MODEL_ROUTE = "openai/test"
 
 
 def experiment() -> EnvExperiment:
-    return build_env_experiment(
-        "c18",
+    return code_comp_direct_experiment(
         model=MODEL_ROUTE,
-        pool_n_per_stratum=2,
-        split_sizes=(1, 1, 1),
         num_samples=1,
+        task_count=3,
+        internal_n=1,
+        official_n=1,
     )
 
 
@@ -115,24 +125,18 @@ def tool_config(
 
 def proposals(base: Candidate) -> tuple[Candidate, Candidate]:
     base_record_ref = candidate_reference(base).record_ref
+    body = base.payload[MUTATION_FIELD]
+    assert isinstance(body, str)
     return (
         Candidate(
             candidate_id="codex-a",
             base_ref=base_record_ref,
-            payload={
-                "user_prompt_template": (
-                    "{question}\n{query}\nRespond True or False."
-                )
-            },
+            payload={MUTATION_FIELD: body + " Respond with complete code."},
         ),
         Candidate(
             candidate_id="codex-b",
             base_ref=base_record_ref,
-            payload={
-                "user_prompt_template": (
-                    "{question}\n{query}\nOnly True or False."
-                )
-            },
+            payload={MUTATION_FIELD: body + " Output only valid Python."},
         ),
     )
 
@@ -148,7 +152,7 @@ def optimization_run(
             mode=StepMode.TOOL_USING,
             terminal_output_contract=contract,
             template_render_contract=python_format_contract(
-                available_fields=("question", "query")
+                available_fields=("input_code",)
             ),
             tool_configs=(tool_config_reference(config),),
         )
@@ -286,7 +290,7 @@ def fake_runner(
     scripted_calls: Sequence[ScriptedAgentCall] | None = None,
     artifact_run_id: str | None = None,
 ) -> FakeCodexRunner:
-    template = base.payload["user_prompt_template"]
+    template = base.payload[MUTATION_FIELD]
     assert isinstance(template, str)
     return FakeCodexRunner(
         scripted_calls=(
@@ -357,13 +361,19 @@ def runtime_config(
     *,
     partial_log_path: str | None = None,
     prompt_cache_path: str | None = None,
-) -> EvaluationRuntimeConfig:
-    return EvaluationRuntimeConfig(
-        env_name="c18",
-        model=MODEL_ROUTE,
-        pool_n_per_stratum=2,
-        split_sizes=(1, 1, 1),
-        num_samples=1,
+) -> CodeCompEvaluationRuntimeConfig:
+    experiment = engine.experiment
+    if isinstance(experiment, CodeCompExperiment):
+        config = experiment.config
+    else:
+        config = default_code_comp_config(
+            CodeCompMode.DIRECT,
+            pool={"tasks": ()},
+            split={"internal_n": 1, "official_n": 1},
+            sampling={"num_samples": 1},
+        )
+    return CodeCompEvaluationRuntimeConfig(
+        experiment_config=config,
         expected_eval_config_hash=engine.eval_config_ref.config_hash,
         execution_policy=execution_policy(),
         row_job_entrypoint=ROW_JOB_ENTRYPOINT,

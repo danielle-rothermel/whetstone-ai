@@ -3,18 +3,30 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from whetstone_envs.core import Instance
+
 from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.envs.code_comp.constants import DECODER_TEMPLATE
+from whetstone.envs.code_comp.constants import (
+    CODE_COMP_ENV_NAME,
+    DECODER_TEMPLATE,
+)
+from whetstone.envs.code_comp.generation_graph.direct import (
+    render_direct_frame,
+)
 from whetstone.envs.code_comp.generation_graph.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
 )
-from whetstone.envs.generation_graph import LLM_NODE_ID, render_prompt
-from whetstone.envs.oracle_operator import env_exact_match_score
-from whetstone.envs.registry import env_spec
+from whetstone.envs.code_comp.modes.direct import DirectExperiment
+from whetstone.envs.code_comp.mutation_surface import render_encoder_frame
+from whetstone.envs.code_comp.registry import CodeCompMode, code_comp_mode_for
+from whetstone.envs.code_comp.submission_result import (
+    submission_result_from_record,
+)
+from whetstone.envs.generation_graph import LLM_NODE_ID
 from whetstone.envs.sampling import validate_evaluation_role_for_split
 from whetstone.evaluation import AggregationOutput
 from whetstone.evaluation.aggregate import (
@@ -51,6 +63,7 @@ from whetstone.optimization.contracts import (
     IntentResolution,
     ResolutionClass,
 )
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
@@ -227,32 +240,63 @@ class EvaluationEvidenceValidation:
                 expected_tasks, instances, strict=True
             )
         }
-        spec = env_spec(self._engine.experiment.env_name)
-        procedure_config_hash = (
-            self._engine.experiment.generation_graph.procedure_config_hash
+        if self._engine.experiment.env_name != CODE_COMP_ENV_NAME:
+            raise ValueError(
+                "evaluation outputs require a code_comp experiment; "
+                f"got env {self._engine.experiment.env_name!r}"
+            )
+        return self._validate_code_comp_outputs(
+            outputs,
+            intent=intent,
+            expected_instance_by_task=expected_instance_by_task,
         )
+
+    def _validate_code_comp_outputs(
+        self,
+        outputs: EvaluationOutputsRecord,
+        *,
+        intent: EvaluationIntent,
+        expected_instance_by_task: dict[str, Instance],
+    ) -> EvaluationOutputsRecord:
+        experiment = self._engine.experiment
+        mode = code_comp_mode_for(experiment)
+        body = intent.candidate.record.payload.get(MUTATION_FIELD)
+        if type(body) is not str:
+            raise ValueError(
+                "code_comp candidate body must be a strict string"
+            )
+        from whetstone.evaluation.drivers.code_comp.direct import (
+            _input_arm_text,
+        )
+
         for row in outputs.outputs:
             instance = expected_instance_by_task[row.task_hash]
             if row.task_id != str(instance.id):
                 raise ValueError(
                     "evaluation output task and instance do not align"
                 )
-            expected_prompt = render_prompt(
-                spec,
-                intent.candidate.record,
-                instance,
-            )
+            if mode is CodeCompMode.DIRECT:
+                assert isinstance(experiment, DirectExperiment)
+                input_arm, _score_task = _input_arm_text(experiment, instance)
+                expected_prompt = render_direct_frame(
+                    body,
+                    input_arm=input_arm,
+                )
+            elif mode in {CodeCompMode.ENCDEC, CodeCompMode.ENCDEC_MUTANT}:
+                expected_prompt = render_encoder_frame(
+                    body,
+                    input_code=instance.prompt_inputs["input_code"],
+                    max_budget=row.max_budget,
+                )
+            else:
+                raise ValueError("unsupported code_comp mode for validation")
             if row.rendered_prompt != expected_prompt:
                 raise ValueError(
                     "evaluation output trace does not match the candidate"
                 )
-            if row.max_budget is not None or row.over_budget is not None:
-                raise ValueError(
-                    "generic evaluation outputs cannot carry budget accounting"
-                )
             if row.invalid:
                 raise ValueError(
-                    "generic evaluation outputs cannot be invalid rows"
+                    "code_comp evaluation outputs cannot be invalid rows"
                 )
             if row.failed:
                 if not row.failure_code:
@@ -282,17 +326,18 @@ class EvaluationEvidenceValidation:
                     "successful evaluation output has inconsistent provider "
                     "accounting"
                 )
-            expected_score = env_exact_match_score(
-                env=spec,
-                generation=row.output_text,
-                gold=instance.gold,
-                evaluation_procedure_config_hash=procedure_config_hash,
-            )
-            if row.score != float(expected_score.value):
-                raise ValueError(
-                    "evaluation output score is not derived by the canonical "
-                    "local oracle"
+            if row.code_submission_result is not None:
+                submission = submission_result_from_record(
+                    row.code_submission_result
                 )
+                if (
+                    submission is not None
+                    and row.score != submission.score.row_value
+                ):
+                    raise ValueError(
+                        "evaluation output score does not match "
+                        "its submission result"
+                    )
         return outputs
 
     def _load_component_traces(
@@ -485,7 +530,39 @@ class EvaluationEvidenceValidation:
             if terminal_step_present:
                 final_step = trace.executed_component_steps[-1]
                 output_field = final_step.output_field_names[0]
-                if final_step.outputs[output_field] != output_row.output_text:
+                terminal_output = final_step.outputs[output_field]
+                expected_output = output_row.output_text
+                if (
+                    component_ids == (ENCODER_NODE_ID, DECODER_NODE_ID)
+                    and len(trace.executed_component_steps) == 2
+                    and expected_output is not None
+                ):
+                    encode_step = trace.executed_component_steps[0]
+                    encoder_generation = encode_step.outputs[
+                        "provider_generation"
+                    ]
+                    if (
+                        type(encoder_generation) is str
+                        and type(terminal_output) is str
+                    ):
+                        combined_output = (
+                            f"ENCODER:\n{encoder_generation}\n\n"
+                            f"DECODER:\n{terminal_output}"
+                        )
+                        if expected_output not in {
+                            terminal_output,
+                            combined_output,
+                        }:
+                            raise ValueError(
+                                "component trace output does not match the "
+                                "final output"
+                            )
+                    elif terminal_output != expected_output:
+                        raise ValueError(
+                            "component trace output does not match the "
+                            "final output"
+                        )
+                elif terminal_output != expected_output:
                     raise ValueError(
                         "component trace output does not match the final "
                         "output"
@@ -640,10 +717,21 @@ class EvaluationEvidenceValidation:
         expected_per_task_counts = tuple(
             outputs.num_samples for _task in task_rows
         )
-        if evidence.per_task_values != expected_per_task_values:
-            raise ValueError(
-                "Evaluation Evidence per-task values do not match outputs"
+        mode = None
+        try:
+            from whetstone.envs.code_comp.registry import (
+                CodeCompMode,
+                code_comp_mode_for,
             )
+
+            mode = code_comp_mode_for(self._engine.experiment)
+        except TypeError:
+            pass
+        if mode not in {CodeCompMode.ENCDEC, CodeCompMode.ENCDEC_MUTANT}:
+            if evidence.per_task_values != expected_per_task_values:
+                raise ValueError(
+                    "Evaluation Evidence per-task values do not match outputs"
+                )
         if evidence.per_task_counts != expected_per_task_counts:
             raise ValueError(
                 "Evaluation Evidence per-task counts do not match outputs"
@@ -678,9 +766,18 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "persisted Reward differs from its embedded record"
             )
-        if reward.evidence_refs != (aggregate_ref,):
+        if (
+            not reward.evidence_refs
+            or reward.evidence_refs[0] != aggregate_ref
+        ):
             raise ValueError(
-                "Reward evidence must be the ordered aggregate-only citations"
+                "Reward evidence must lead with the primary aggregate citation"
+            )
+        if any(
+            ref.schema_name != AGGREGATE_SCHEMA for ref in reward.evidence_refs
+        ):
+            raise ValueError(
+                "Reward evidence must be aggregate-only citations"
             )
         if len(reward.input_citations) != 1:
             raise ValueError("evaluation Reward must have one aggregate input")

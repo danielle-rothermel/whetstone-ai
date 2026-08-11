@@ -19,43 +19,6 @@ def _cache(root: str | None):
     return PromptResultCache(Path(root))
 
 
-def drive_internal_success(payload: JsonValue) -> JsonValue:
-    from tests.envs.support import FakeTransport, constant_reply
-    from whetstone.envs.procedure import env_procedure_config
-    from whetstone.envs.registry import env_spec
-    from whetstone.evaluation.drivers.internal import (
-        InternalRowRequest,
-        InternalRowResult,
-        drive_internal_row,
-    )
-
-    request = InternalRowRequest.from_process_payload(payload)
-    instance = request.instance.to_instance()
-    env = env_spec(request.env_name)
-    if env_procedure_config(env).config_hash != request.procedure_config_hash:
-        raise ValueError("internal row procedure identity is not canonical")
-    outcome = drive_internal_row(
-        env,
-        candidate=request.candidate,
-        instance=instance,
-        provider_call_config=request.provider_call_config,
-        execution_policy=request.execution_policy,
-        transport=FakeTransport(constant_reply(instance.gold)),
-        procedure_config_hash=request.procedure_config_hash,
-        logical_call_id=request.logical_call_id,
-        sample_index=request.sample_index,
-        drive_ordinal=request.drive_ordinal,
-        cache=_cache(request.cache_root),
-        cache_phase=request.cache_phase,
-        cache_unit=request.cache_unit,
-        render_guard=request.render_guard,
-    )
-    return InternalRowResult(
-        request_hash=request.request_hash,
-        outcome=outcome,
-    ).model_dump(mode="json")
-
-
 def drive_d1_success(payload: JsonValue) -> JsonValue:
     from tests.envs.support import FakeTransport, constant_reply
     from tests.execution.fake_python import local_python_executor

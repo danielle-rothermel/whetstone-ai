@@ -217,7 +217,8 @@ def _write_provider_cache(
         transcript.metadata
     ).execution_policy
     candidate_id = transcript.baseline.evidence.candidate.record.candidate_id
-    logical_call_id = f"{candidate_id}:Synthetic/0#0:enc"
+    task_hash = transcript.baseline.evidence.task_hashes[0]
+    logical_call_id = f"{candidate_id}:{task_hash}#0:enc"
     cache = PromptResultCache(treatment / "prompt-cache")
     key = prompt_cache_key(request, policy, 0, 0)
 

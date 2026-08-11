@@ -76,8 +76,7 @@ from whetstone.evaluation.drivers.code_comp.encdec import (
     drive_encdec_row,
     run_encdec_eval,
 )
-from whetstone.evaluation.drivers.internal import _llm_component_step
-from whetstone.evaluation.traces import ExecutedRowState
+from whetstone.evaluation.traces import ExecutedRowState, _llm_component_step
 from whetstone.execution.fanout import (
     FanoutResult,
     FanoutStatus,
@@ -841,7 +840,7 @@ def test_ed1_v2_request_hash_is_pinned() -> None:
     )
 
     assert requests[0].request_hash == (
-        "d0691f6c5bf903316735ee86074af394f8d88f029ef9bc1bc6e623f50d37d26f"
+        "6425d252a39a6519a1a57379406b12c096621c8b588a6ee98a235b527a0e23d1"
     )
 
 

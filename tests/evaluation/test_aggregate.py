@@ -8,7 +8,7 @@ import pytest
 from pydantic import JsonValue
 
 import whetstone.evaluation.code as code_eval
-from tests.envs.support import tiny_experiment
+from tests.envs.support import code_comp_direct_experiment
 from tests.evaluation.code.support import FULL_HASH
 from whetstone.core.identity import typed_ref_for_record
 from whetstone.evaluation import (
@@ -284,7 +284,7 @@ def test_failed_row_propagates_missing_data() -> None:
 
 
 def test_failed_rows_still_visible_in_provenance() -> None:
-    experiment = tiny_experiment("c18")
+    experiment = code_comp_direct_experiment(num_samples=2, internal_n=1)
     sampling = experiment.eval_configs.internal
     task_rows = tuple(
         TaskRows(
@@ -294,7 +294,7 @@ def test_failed_rows_still_visible_in_provenance() -> None:
         for task_hash in sampling.task_set.task_hashes
     )
     agg = unweighted_task_mean(
-        aggregate_name="env_exact_match",
+        aggregate_name="task_mean",
         graph_hash=experiment.generation_graph.graph_hash,
         evaluation_binding_hash="c" * 64,
         task_rows=task_rows,

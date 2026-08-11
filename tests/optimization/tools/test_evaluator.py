@@ -15,6 +15,7 @@ from whetstone.core.identity import (
     TypedRef,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.code_comp.constants import MUTATION_FIELD
 from whetstone.evaluation.engine import (
     EvaluationEngine,
 )
@@ -76,14 +77,21 @@ def _tool_call(
     config: ToolConfig,
     *,
     call_id: str,
-    model_route: str = "openai/test",
+    model_route: str | None = None,
     task_ids: list[str] | None = None,
 ) -> ToolCall:
     base = engine.experiment.initial_candidate
+    resolved_route = (
+        model_route
+        if model_route is not None
+        else (
+            engine.experiment.generation_graph.provider_call_config.definition.route.model
+        )
+    )
     args: dict[str, object] = {
         "base_ref": base.base_ref.model_dump(mode="json"),
-        "model_route": model_route,
-        "template": base.payload["user_prompt_template"],
+        "model_route": resolved_route,
+        "template": base.payload[MUTATION_FIELD],
     }
     if task_ids is not None:
         args["task_ids"] = task_ids

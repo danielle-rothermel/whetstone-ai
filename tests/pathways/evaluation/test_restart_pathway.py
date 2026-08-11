@@ -35,7 +35,7 @@ from tests.evaluation.support import (
     _load_component_traces,
     _publish_attestation,
     _put_typed,
-    _successful_internal_outcome,
+    _successful_direct_outcome,
 )
 from whetstone.coordination.evaluation_claims import (
     EvaluationIntentClaim,
@@ -46,19 +46,17 @@ from whetstone.core.identity import (
     TypedRef,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.oracle_operator import env_exact_match_score
-from whetstone.envs.registry import env_spec
-from whetstone.envs.reward import reward_from_internal_aggregate
+from whetstone.envs.code_comp.reward.blended import reward_from_primary_score
 from whetstone.evaluation.aggregate import (
     AGGREGATE_SCHEMA,
     RowValue,
     TaskRows,
     unweighted_task_mean,
 )
-from whetstone.evaluation.drivers.internal import (
-    InternalRowOutcome,
-    InternalRowRequest,
-    InternalRowResult,
+from whetstone.evaluation.drivers.code_comp.direct import (
+    DirectRowOutcome,
+    DirectRowRequest,
+    DirectRowResult,
 )
 from whetstone.evaluation.engine import (
     EngineEvaluation,
@@ -295,18 +293,8 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
     )
     assert len(original_outputs.outputs) == 1
     original_row = original_outputs.outputs[0]
-    instance = engine.sampling.tasks[0]
     rewritten_text = "not the expected answer"
-    rewritten_score = float(
-        env_exact_match_score(
-            env=env_spec(engine.experiment.env_name),
-            generation=rewritten_text,
-            gold=instance.gold,
-            evaluation_procedure_config_hash=(
-                engine.experiment.generation_graph.procedure_config_hash
-            ),
-        ).value
-    )
+    rewritten_score = 0.0
     rewritten_outputs = original_outputs.model_copy(
         update={
             "outputs": (
@@ -343,9 +331,9 @@ def test_prebind_and_restart_reject_coherent_rewritten_output_graph(
         cast(Jsonable, rewritten_aggregate.record_content()),
     )
     assert rewritten_aggregate_ref == rewritten_aggregate.record_ref()
-    rewritten_reward = reward_from_internal_aggregate(
+    rewritten_reward = reward_from_primary_score(
         engine.experiment.reward_policy,
-        env_exact_match_value=rewritten_aggregate.aggregation_output.value,
+        primary_score=rewritten_aggregate.aggregation_output.value,
         evidence_refs=(rewritten_aggregate_ref,),
     )
     rewritten_reward_ref = reward_reference(rewritten_reward)
@@ -566,12 +554,13 @@ def test_prebind_and_restart_reject_rewritten_failure_evidence(
 def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "failed-row.sqlite"))
 
-    def one_success_one_failure(request: InternalRowRequest) -> ProcessJob:
+    def one_success_one_failure(request: DirectRowRequest) -> ProcessJob:
         outcome = (
-            _successful_internal_outcome(request)
+            _successful_direct_outcome(request)
             if request.sample_index == 0
-            else InternalRowOutcome(
-                score=None,
+            else DirectRowOutcome(
+                submission_score=None,
+                output_text=None,
                 row_state=ExecutedRowState.FAILED,
                 executed_component_steps=(),
                 failure_code="provider_unavailable",
@@ -580,7 +569,7 @@ def test_service_accepts_complete_matrix_with_a_failed_row(tmp_path) -> None:
         )
         return ProcessJob(
             entrypoint="tests.envs.process_workers:return_payload",
-            payload=InternalRowResult(
+            payload=DirectRowResult(
                 request_hash=request.request_hash,
                 outcome=outcome,
             ).model_dump(mode="json"),
@@ -667,7 +656,7 @@ def test_restart_rejects_unresolvable_provider_execution_policy(
                 ),
             )
 
-    def reject_submission(_request: InternalRowRequest) -> ProcessJob:
+    def reject_submission(_request: DirectRowRequest) -> ProcessJob:
         raise AssertionError("replay must not create a process job")
 
     restart_store = ObjectStore(SqliteBackend(database))
@@ -759,7 +748,7 @@ def test_restart_rejects_result_attested_under_another_provider_policy(
     ).resolve_evaluation_intent(intent)
     assert resolution.outcome is IntentOutcome.COMPLETED
 
-    def reject_submission(_request: InternalRowRequest) -> ProcessJob:
+    def reject_submission(_request: DirectRowRequest) -> ProcessJob:
         raise AssertionError("replay must not create a process job")
 
     restart_store = ObjectStore(SqliteBackend(database))
@@ -1433,12 +1422,12 @@ def test_expired_claim_retries_after_resolver_crash(
     database = tmp_path / "claim-retry.sqlite"
     now = [100.0]
     delegated = process_row_job_factory(
-        "tests.envs.process_workers:drive_internal_success"
+        "tests.envs.process_workers:drive_d1_success"
     )
-    submitted: list[InternalRowRequest] = []
+    submitted: list[DirectRowRequest] = []
     evaluation_attempts: list[EvaluationRequest] = []
 
-    def record_submission(request: InternalRowRequest) -> ProcessJob:
+    def record_submission(request: DirectRowRequest) -> ProcessJob:
         submitted.append(request)
         return delegated(request)
 

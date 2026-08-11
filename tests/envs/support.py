@@ -21,8 +21,7 @@ from whetstone.envs.code_comp.dataset import (
     CodeCompTaskInstance,
     ed1_instance_from_task,
 )
-from whetstone.envs.factory import EnvExperiment, build_env_experiment
-from whetstone.envs.registry import env_spec
+from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.sampling import EnvSplitSampling
 from whetstone.execution.fanout import ProcessJob
 from whetstone.experiment.binding import (
@@ -34,42 +33,26 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 API_KEY_ENV = "OPENROUTER_API_KEY"
 TEST_MODEL = "openai/gpt-5-nano"
-_TINY_SPLIT = (2, 2, 2)
-TINY_SPLIT_FIT_CEILING = sum(_TINY_SPLIT)
 
 ReplyFn = Callable[[str], str]
 RowPayloadFn = Callable[[Instance, int, int], BaseModel | JsonValue]
 
 
-def tiny_split_fits(env, n: int) -> bool:
-    pool = env.generate_pool(n_per_stratum=n)
-    if not env.stratified_split:
-        return len(pool) >= sum(_TINY_SPLIT)
-    n_strata = len(pool.strata)
-    per_stratum_max = sum(-(-part // n_strata) for part in _TINY_SPLIT)
-    return n >= per_stratum_max
-
-
-def tiny_experiment(env_name: str) -> EnvExperiment:
-    env = env_spec(env_name)
-    attempted_sizes: list[int] = []
-    for n in range(1, TINY_SPLIT_FIT_CEILING + 1):
-        attempted_sizes.append(n)
-        if tiny_split_fits(env, n):
-            break
-    else:
-        raise AssertionError(
-            f"{env_name} could not fit split {_TINY_SPLIT} by independently "
-            f"derived n_per_stratum ceiling {TINY_SPLIT_FIT_CEILING}; "
-            f"attempted_sizes={attempted_sizes}; "
-            f"final_attempted_size={attempted_sizes[-1]}"
-        )
-    return build_env_experiment(
-        env_name,
-        model=TEST_MODEL,
-        pool_n_per_stratum=n,
-        split_sizes=_TINY_SPLIT,
-        num_samples=2,
+def non_code_comp_experiment() -> EnvExperiment:
+    """An EnvExperiment that is not a code_comp typed experiment."""
+    base = code_comp_direct_experiment(
+        task_count=2,
+        internal_n=1,
+        official_n=1,
+    )
+    return EnvExperiment(
+        env_name="legacy",
+        generation_graph=base.generation_graph,
+        initial_candidate=base.initial_candidate,
+        ceiling_candidate=base.ceiling_candidate,
+        eval_configs=base.eval_configs,
+        reward_policy=base.reward_policy,
+        completeness_policy=base.completeness_policy,
     )
 
 
@@ -90,28 +73,14 @@ def row_job_factory(
             EncDecRowRequest,
             EncDecRowResult,
         )
-        from whetstone.evaluation.drivers.internal import (
-            InternalRowOutcome,
-            InternalRowRequest,
-            InternalRowResult,
-        )
 
-        if not isinstance(
-            request, InternalRowRequest | DirectRowRequest | EncDecRowRequest
-        ):
+        if not isinstance(request, DirectRowRequest | EncDecRowRequest):
             raise TypeError(f"unsupported row request {type(request)!r}")
         instance = request.instance.to_instance()
         sample_index = request.sample_index
         drive_ordinal = request.drive_ordinal
         outcome = payload_for(instance, sample_index, drive_ordinal)
-        if isinstance(request, InternalRowRequest):
-            if not isinstance(outcome, InternalRowOutcome):
-                raise TypeError("internal request requires InternalRowOutcome")
-            envelope = InternalRowResult(
-                request_hash=request.request_hash,
-                outcome=outcome,
-            )
-        elif isinstance(request, DirectRowRequest):
+        if isinstance(request, DirectRowRequest):
             if not isinstance(
                 outcome, DirectRowOutcome | DirectGeneratedRowOutcome
             ):
@@ -145,64 +114,6 @@ def process_row_job_factory(
         return ProcessJob(
             entrypoint=entrypoint,
             payload=request.model_dump(mode="json"),
-        )
-
-    return build
-
-
-def in_process_internal_row_job_factory(
-    reply_for: ReplyFn | None = None,
-) -> Callable[[BaseModel], ProcessJob]:
-    """Drive the real internal row adapter in-process and return its payload.
-
-    The row still travels the engine's exact ProcessJob seam, but the work
-    happens here rather than in a spawned worker, so the test stays fast while
-    the evidence it produces is real.
-    """
-    from whetstone.envs.procedure import env_procedure_config
-    from whetstone.evaluation.drivers.internal import (
-        InternalRowRequest,
-        InternalRowResult,
-        drive_internal_row,
-    )
-
-    def build(request: BaseModel) -> ProcessJob:
-        if not isinstance(request, InternalRowRequest):
-            raise TypeError(f"unsupported row request {type(request)!r}")
-        instance = request.instance.to_instance()
-        env = env_spec(request.env_name)
-        if (
-            env_procedure_config(env).config_hash
-            != request.procedure_config_hash
-        ):
-            raise ValueError("row procedure identity is not canonical")
-        answer = (
-            reply_for(instance.gold)
-            if reply_for is not None
-            else instance.gold
-        )
-        outcome = drive_internal_row(
-            env,
-            candidate=request.candidate,
-            instance=instance,
-            provider_call_config=request.provider_call_config,
-            execution_policy=request.execution_policy,
-            transport=FakeTransport(constant_reply(answer)),
-            procedure_config_hash=request.procedure_config_hash,
-            logical_call_id=request.logical_call_id,
-            sample_index=request.sample_index,
-            drive_ordinal=request.drive_ordinal,
-            cache=None,
-            cache_phase=request.cache_phase,
-            cache_unit=request.cache_unit,
-            render_guard=request.render_guard,
-        )
-        return ProcessJob(
-            entrypoint="tests.envs.process_workers:return_payload",
-            payload=InternalRowResult(
-                request_hash=request.request_hash,
-                outcome=outcome,
-            ).model_dump(mode="json"),
         )
 
     return build
@@ -311,3 +222,99 @@ def synthetic_code_comp_tasks(
         )
         tasks.append(ed1_instance_from_task(task))
     return tuple(tasks)
+
+
+def code_comp_direct_experiment(
+    *,
+    num_samples: int = 1,
+    task_count: int = 3,
+    internal_n: int = 1,
+    official_n: int = 1,
+    model: str = TEST_MODEL,
+) -> EnvExperiment:
+    from whetstone.envs.code_comp import (
+        CodeCompMode,
+        build_code_comp_experiment,
+    )
+
+    return build_code_comp_experiment(
+        CodeCompMode.DIRECT,
+        tasks=synthetic_code_comp_tasks(task_count),
+        internal_n=internal_n,
+        official_n=official_n,
+        num_samples=num_samples,
+        model=model,
+    )
+
+
+def in_process_direct_row_job_factory(
+    reply_for: ReplyFn | None = None,
+) -> Callable[[BaseModel], ProcessJob]:
+    """Drive the real D1 row adapter in-process and return its payload."""
+    from functools import partial
+
+    from tests.execution.fake_python import local_python_executor
+    from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+    from whetstone.envs.code_comp.modes.direct import build_direct_experiment
+    from whetstone.envs.code_comp.scoring import score_code_comp_submission
+    from whetstone.evaluation.drivers.code_comp.direct import (
+        DirectRowRequest,
+        DirectRowResult,
+        drive_direct_row,
+    )
+
+    def build(request: BaseModel) -> ProcessJob:
+        if not isinstance(request, DirectRowRequest):
+            raise TypeError(f"unsupported row request {type(request)!r}")
+        instance = request.instance.to_instance()
+        task = request.humaneval_task.to_task()
+        experiment = build_direct_experiment(
+            input_arm=request.input_arm,
+            rename_token=request.rename_token,
+            tasks=(
+                CodeCompTaskInstance(
+                    instance=instance,
+                    humaneval_task=task,
+                ),
+            ),
+            internal_n=1,
+            official_n=1,
+            num_samples=1,
+        )
+        if (
+            experiment.generation_graph.procedure_config_hash
+            != request.procedure_config_hash
+        ):
+            raise ValueError("D1 row procedure identity is not canonical")
+        answer = (
+            reply_for(task.ground_truth_code)
+            if reply_for is not None
+            else task.ground_truth_code
+        )
+        outcome = drive_direct_row(
+            experiment=experiment,
+            candidate_body=request.candidate_body,
+            instance=instance,
+            provider_call_config=request.provider_call_config,
+            execution_policy=request.execution_policy,
+            transport=FakeTransport(constant_reply(answer)),
+            scorer=partial(
+                score_code_comp_submission,
+                executor=local_python_executor(),
+            ),
+            logical_call_id=request.logical_call_id,
+            sample_index=request.sample_index,
+            drive_ordinal=request.drive_ordinal,
+            cache=None,
+            cache_phase=request.cache_phase,
+            cache_unit=request.cache_unit,
+        )
+        return ProcessJob(
+            entrypoint="tests.envs.process_workers:return_payload",
+            payload=DirectRowResult(
+                request_hash=request.request_hash,
+                outcome=outcome,
+            ).model_dump(mode="json"),
+        )
+
+    return build

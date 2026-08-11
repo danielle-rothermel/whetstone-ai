@@ -26,7 +26,7 @@ from tests.optimization.support import (
 from whetstone.coordination.evaluation_service import EngineEvaluationService
 from whetstone.core.effects.models import ReplayPolicy
 from whetstone.core.identity import TypedRef
-from whetstone.evaluation.drivers.internal import InternalRowRequest
+from whetstone.evaluation.drivers.code_comp.direct import DirectRowRequest
 from whetstone.evaluation.schema import (
     EvaluationEvidence,
     EvaluationOutputsRecord,
@@ -47,9 +47,9 @@ def test_service_rejects_provider_policy_mismatch_before_execution(
     tmp_path,
 ) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "service-policy.sqlite"))
-    submitted: list[InternalRowRequest] = []
+    submitted: list[DirectRowRequest] = []
 
-    def reject_submission(request: InternalRowRequest) -> ProcessJob:
+    def reject_submission(request: DirectRowRequest) -> ProcessJob:
         submitted.append(request)
         raise AssertionError("invalid binding must not create a process job")
 
@@ -89,9 +89,9 @@ def test_service_rejects_provider_policy_mismatch_before_execution(
 
 def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "reject.sqlite"))
-    submitted: list[InternalRowRequest] = []
+    submitted: list[DirectRowRequest] = []
 
-    def record_submission(request: InternalRowRequest) -> ProcessJob:
+    def record_submission(request: DirectRowRequest) -> ProcessJob:
         submitted.append(request)
         raise AssertionError("invalid candidate must not create a process job")
 
@@ -100,10 +100,12 @@ def test_invalid_intent_rejects_without_provider_spend(tmp_path) -> None:
         store=store,
         row_job_factory=record_submission,
     )
+    from whetstone.envs.code_comp.constants import MUTATION_FIELD
+
     invalid = Candidate(
         candidate_id="invalid",
         base_ref=engine.experiment.initial_candidate.base_ref,
-        payload={"user_prompt_template": "Use {private_gold}."},
+        payload={MUTATION_FIELD: "Use {input_code}."},
     )
     intent = _intent(
         engine,
@@ -127,11 +129,11 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
     database = tmp_path / "restart.sqlite"
     store = ObjectStore(SqliteBackend(database))
     delegated = process_row_job_factory(
-        "tests.envs.process_workers:drive_internal_success"
+        "tests.envs.process_workers:drive_d1_success"
     )
-    submitted: list[InternalRowRequest] = []
+    submitted: list[DirectRowRequest] = []
 
-    def record_submission(request: InternalRowRequest) -> ProcessJob:
+    def record_submission(request: DirectRowRequest) -> ProcessJob:
         submitted.append(request)
         return delegated(request)
 
@@ -169,7 +171,7 @@ def test_resolution_and_prompt_results_replay_after_restart(tmp_path) -> None:
 
     fresh_store = ObjectStore(SqliteBackend(database))
 
-    def reject_submission(_request: InternalRowRequest) -> ProcessJob:
+    def reject_submission(_request: DirectRowRequest) -> ProcessJob:
         raise AssertionError("durable resolution must replay")
 
     fresh_engine = _engine(
@@ -229,11 +231,18 @@ def test_concrete_evaluation_service_reaches_harness_boundary(
         def invoke(self, request, handles) -> AdapterOutput:
             assert handles == ()
             base = request.candidates[0]
-            template = str(base.payload["user_prompt_template"])
+            from whetstone.envs.code_comp.constants import MUTATION_FIELD
+
+            template = str(base.payload[MUTATION_FIELD])
             proposed = proposed_candidate(
                 base,
                 "harness-evaluation",
                 text=f"{template}\n\nBe precise.",
+            )
+            proposed = Candidate(
+                candidate_id=proposed.candidate_id,
+                base_ref=proposed.base_ref,
+                payload={MUTATION_FIELD: proposed.payload[MUTATION_FIELD]},
             )
             intent = make_intent(
                 proposed,
@@ -254,8 +263,8 @@ def test_concrete_evaluation_service_reaches_harness_boundary(
     engine = _engine(tmp_path, store=store)
     service = EngineEvaluationService(store=store, engine=engine)
     render_contract = python_format_contract(
-        available_fields=("question", "query"),
-        required_fields=("question", "query"),
+        available_fields=("input_code",),
+        required_fields=(),
     )
     run = proposal_run(
         reward_policy=engine.experiment.reward_policy,

@@ -20,7 +20,10 @@ from whetstone.envs.code_comp.constants import (
     ENCODER_BODY_B,
     MUTATION_FIELD,
 )
-from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+from whetstone.envs.code_comp.dataset import (
+    CodeCompTaskInstance,
+    code_comp_task_hash,
+)
 from whetstone.envs.code_comp.experiment import EncDecExperiment
 from whetstone.envs.code_comp.generation_graph.encdec import (
     build_encoder_provider_call_config,
@@ -111,7 +114,7 @@ def _code_comp_split(
         dataset_revision=dataset_revision,
         split_role=split_role,
         tasks=tasks,
-        task_hash_of=lambda instance: str(instance.id),
+        task_hash_of=code_comp_task_hash,
         num_samples=num_samples,
         procedure=procedure,
         aggregation=aggregation,

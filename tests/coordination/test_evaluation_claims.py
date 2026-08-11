@@ -5,7 +5,7 @@ from dr_store import ObjectStore, SqliteBackend
 
 from tests.evaluation.support import _engine, _intent
 from whetstone.coordination.evaluation_service import EngineEvaluationService
-from whetstone.evaluation.drivers.internal import InternalRowRequest
+from whetstone.evaluation.drivers.code_comp.direct import DirectRowRequest
 from whetstone.execution.fanout import ProcessJob
 
 
@@ -17,7 +17,7 @@ def test_expired_owner_cannot_renew_after_new_generation_claims(
     first_store = ObjectStore(SqliteBackend(database))
     second_store = ObjectStore(SqliteBackend(database))
 
-    def reject_submission(_request: InternalRowRequest) -> ProcessJob:
+    def reject_submission(_request: DirectRowRequest) -> ProcessJob:
         raise AssertionError("claim arbitration must not create process jobs")
 
     first_engine = _engine(

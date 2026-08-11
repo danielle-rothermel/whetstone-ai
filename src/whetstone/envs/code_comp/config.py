@@ -9,6 +9,8 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    field_serializer,
+    field_validator,
     model_validator,
 )
 
@@ -19,7 +21,11 @@ from whetstone.envs.code_comp.constants import (
     CODE_COMP_DEFAULT_BUDGET_RATIO,
     CODE_COMP_ENV_NAME,
 )
-from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+from whetstone.envs.code_comp.dataset import (
+    CodeCompTaskInstance,
+    code_comp_task_instance_from_json,
+    code_comp_task_instance_to_json,
+)
 from whetstone.envs.code_comp.generation_graph.direct import (
     DIRECT_DEFAULT_RENAME_TOKEN,
     DIRECT_INPUT_ARMS,
@@ -117,6 +123,30 @@ class CodeCompPoolConfig(BaseModel):
     snapshot_path: Path | None = None
     limit: int | None = Field(default=None, ge=1)
     tasks: tuple[CodeCompTaskInstance, ...] | None = None
+
+    @field_validator("tasks", mode="before")
+    @classmethod
+    def _deserialize_tasks(cls, value: object) -> object:
+        if value is None or isinstance(value, tuple):
+            return value
+        if isinstance(value, list):
+            return tuple(
+                code_comp_task_instance_from_json(
+                    cast("dict[str, Any] | CodeCompTaskInstance", item)
+                )
+                for item in value
+            )
+        raise TypeError(
+            f"tasks must be a sequence or null, got {type(value)!r}"
+        )
+
+    @field_serializer("tasks", when_used="json")
+    def _serialize_tasks(
+        self, tasks: tuple[CodeCompTaskInstance, ...] | None
+    ) -> list[dict[str, Any]] | None:
+        if tasks is None:
+            return None
+        return [code_comp_task_instance_to_json(task) for task in tasks]
 
 
 class CodeCompSplitConfig(BaseModel):

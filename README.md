@@ -17,7 +17,10 @@ these areas:
   into immutable configurations.
 - **[Environments and sampling](src/whetstone/envs/)** assemble task pools,
   internal and official splits, generation graphs, and reward policies for
-  code-generation and encoder-decoder experiments.
+  code-generation and encoder-decoder experiments. HumanEval code-compression
+  work is configured through `CodeCompExperimentConfig` and built with
+  `build_code_comp_experiment()`; legacy QA env names remain only for
+  negative-control tests until their sources are removed.
 - **[Provider interaction](src/whetstone/provider/)** classifies transport
   outcomes, applies bounded semantic retry policy, and retains the exact
   evidence for every completed attempt.
@@ -149,6 +152,28 @@ class Completeness(StrEnum):
     SKIP = "skip"
 ```
 
+Code-compression experiments share `env=code_comp` and select a mode with
+`CodeCompMode` (`direct`, `encdec`, or `encdec_mutant`). One typed config
+object assembles the pool, split, sampling plan, model routes, and mode
+settings; callers build durable experiments from it rather than passing flat
+constructor kwargs.
+
+```python
+from whetstone.envs.code_comp import CodeCompMode, build_code_comp_experiment
+from whetstone.envs.code_comp.config import default_code_comp_config
+
+config = default_code_comp_config(
+    CodeCompMode.ENCDEC,
+    pool={"tasks": tasks},
+    split={"internal_n": 32, "official_n": 100},
+)
+experiment = config.build_experiment()
+```
+
+Subprocess optimizers and MCP evaluation servers reconstruct engines through
+`CodeCompEvaluationRuntimeConfig`, which round-trips the same config identity
+and refuses a mismatched Eval Config hash.
+
 ## [Provider interaction](src/whetstone/provider/)
 
 Provider contracts separate raw invocation evidence from Whetstone's semantic
@@ -230,6 +255,10 @@ class PromptResultCache:
 
 The canonical engine turns one immutable request into a durable evidence graph
 whose rows, traces, aggregates, and optional reward all address exact records.
+`EvaluationEngine` accepts code_comp experiments only and dispatches row work
+through the direct or encoder-decoder drivers (`DirectRowRequest` /
+`EncDecRowRequest`); the retired generic internal row driver is no longer
+supported.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -427,18 +456,17 @@ uv run pre-commit install
 The authoritative unit lane is serial:
 
 ```bash
-uv run pytest tests/ -q \
-  --ignore=tests/pathways \
-  -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention"
+uv run pytest tests/ -q
 ```
+
+Default collection skips ``slow`` tests (integration lanes and ``tests/pathways/``).
+Opt in with ``-m slow``, ``-m pathway``, or ``./scripts/ci/*-pathway.sh``.
 
 For a faster local iteration loop, the same selection can use a fixed four
 workers with load balancing:
 
 ```bash
-uv run pytest tests/ -q \
-  -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention" \
-  -n 4 --dist=load
+uv run pytest tests/ -q -n 4 --dist=load
 ```
 
 The parallel command is a local convenience, not the CI default. Keep the

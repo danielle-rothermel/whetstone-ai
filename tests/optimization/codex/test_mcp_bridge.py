@@ -13,6 +13,7 @@ from tests.optimization.codex.support import (
     stack,
 )
 from whetstone.core.identity import TerminalFailure
+from whetstone.envs.code_comp.constants import MUTATION_FIELD
 from whetstone.envs.factory import EnvExperiment
 from whetstone.optimization.codex.mcp_bridge import EvaluateCandidateServer
 from whetstone.optimization.tools.contracts import (
@@ -32,7 +33,7 @@ def _arguments(
     model_route: str = MODEL_ROUTE,
     task_ids: list[str] | None = None,
 ) -> dict[str, object]:
-    template = codex.base.payload["user_prompt_template"]
+    template = codex.base.payload[MUTATION_FIELD]
     assert isinstance(template, str)
     arguments: dict[str, object] = {
         "call_id": call_id,

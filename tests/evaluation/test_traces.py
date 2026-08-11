@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.evaluation.drivers.internal import InternalRowOutcome
+from whetstone.evaluation.drivers.code_comp.direct import DirectRowOutcome
 from whetstone.evaluation.traces import (
     MAX_EXECUTED_COMPONENT_FIELDS,
     MAX_EXECUTED_COMPONENT_JSON_BYTES,
@@ -281,8 +281,8 @@ def test_executed_component_trace_partial_round_trip_preserves_order(
 
 def test_successful_row_cannot_omit_its_declared_trace() -> None:
     with pytest.raises(ValueError, match="requires its trace"):
-        InternalRowOutcome(
-            score=1.0,
+        DirectRowOutcome(
+            submission_score=1.0,
             row_state=ExecutedRowState.SUCCESS,
             executed_component_steps=(),
             output_text=None,
