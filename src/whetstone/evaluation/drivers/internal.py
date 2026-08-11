@@ -26,6 +26,7 @@ from whetstone_envs.core import Instance
 
 from whetstone.core.identity import IdentityHash
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.generation_graph import (
     LLM_NODE_ID,
@@ -123,6 +124,7 @@ class RolloutOutput:
     #: and for a no-budget ed1 frame.
     max_budget: int | None = None
     over_budget: bool | None = None
+    code_submission_result: CodeSubmissionResult | None = None
 
     @property
     def failed(self) -> bool:

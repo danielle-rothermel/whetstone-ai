@@ -560,3 +560,22 @@ def test_format_failure_precedes_failed_prediction_skip() -> None:
             without_failure_batch,
             ["alpha"],
         )
+
+
+def test_reflective_dataset_falls_back_without_component_traces() -> None:
+    trajectory = GepaTrajectoryProjection(
+        data_id=data_instance(0).data_id,
+        inputs={"question": "2+2?"},
+        generated_outputs={"test_results": [{"case_id": "case_0"}]},
+        feedback="score=0 with case detail",
+        prediction_failed=True,
+        component_records={},
+    )
+    adapter = _adapter(_FakeBroker())
+    reflective = adapter.make_reflective_dataset(
+        {"alpha": "alpha-0", "beta": "beta-0"},
+        _evaluation_batch(trajectory),
+        ["alpha"],
+    )
+
+    assert reflective["alpha"][0]["Feedback"] == "score=0 with case detail"

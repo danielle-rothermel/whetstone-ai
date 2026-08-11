@@ -625,12 +625,13 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
                 provider_error=None,
                 max_budget=100,
                 over_budget=False,
+                code_submission_result=None,
             ),
         ),
     )
 
     assert record.record_content() == {
-        "schema_version": 3,
+        "schema_version": 4,
         "candidate": candidate_ref.model_dump(mode="json"),
         "evaluation_binding": binding.model_dump(mode="json"),
         "evaluation_role": "internal",
@@ -658,6 +659,7 @@ def test_evaluation_outputs_wire_contract_is_exact(tmp_path) -> None:
                 "provider_error": None,
                 "max_budget": 100,
                 "over_budget": False,
+                "code_submission_result": None,
             }
         ],
     }
@@ -684,19 +686,19 @@ def test_component_trace_and_evidence_versions_are_exact(tmp_path) -> None:
         "whetstone.evaluation_component_traces"
     )
     assert EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION == 2
-    assert EVALUATION_OUTPUTS_SCHEMA_VERSION == 3
+    assert EVALUATION_OUTPUTS_SCHEMA_VERSION == 4
     assert EVALUATION_EVIDENCE_SCHEMA_VERSION == 3
     assert traces.schema_version == 2
-    assert outputs.schema_version == 3
+    assert outputs.schema_version == 4
     assert evidence.schema_version == 3
     assert evidence.component_traces_ref.content_hash == (
         "bf842459a3a5e772bc6889862c16948524c60ef7a8ac514ba14fd3da374e16ea"
     )
     assert evidence.outputs_ref.content_hash == (
-        "bafc35e0b9cf2aa3a638ac162fe6146f8f404e63b12964a4ab725182d8a79088"
+        "fc277176e9bd7c168732e73577fa7a78a10076673c6980a5fcd4a57a3aecc7c6"
     )
     assert evaluated.evidence_ref.content_hash == (
-        "b70a185c295d03ce26b142bab0c056ece7cf49aaab1e9677c22de5a38de87a62"
+        "8080365649c85f8c5cd2a266abeb4d2ee0314cf0b08e7d3e33c928ad7bc4d1f7"
     )
     with pytest.raises(ValueError, match="address the exact record"):
         EvaluationComponentTracesRef(

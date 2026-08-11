@@ -306,6 +306,9 @@ class WhetstoneGepaAdapter:
                         if not trace.format_failure
                     ]
                 if not trace_instances:
+                    if trajectory.component_records.get(component_name):
+                        continue
+                    items.append(trajectory.reflective_record(component_name))
                     continue
                 selected = next(
                     (

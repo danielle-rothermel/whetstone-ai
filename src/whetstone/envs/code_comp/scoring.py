@@ -12,11 +12,8 @@ from dr_code.caching import CheckpointedExecutionCache
 from dr_code.humaneval import (
     HUMANEVAL_SCORING_PROFILE_ID,
     HUMANEVAL_SCORING_PROFILE_VERSION,
-    HarnessFailure,
     HumanEvalSubmissionRequest,
-    HumanEvalSubmissionScore,
     HumanEvalTask,
-    SubmissionOutcome,
     score_humaneval_submission,
     score_humaneval_submissions_batch,
 )
@@ -30,6 +27,13 @@ from dr_exec import (
 from dr_serialize import IdentityDocument
 from dr_store import SqliteRecordCache
 
+from whetstone.envs.code_comp.submission_result import (
+    CodeScore,
+    CodeSubmissionResult,
+    HumanEvalSubmissionResult,
+    project_humaneval_submission_result,
+    project_submission_score,
+)
 from whetstone.evaluation.preview.preflight import ScoringPreflight
 
 #: The parser contract for decoder submissions. The profile id and version are
@@ -44,14 +48,14 @@ class _PreflightTask(Protocol):
     def humaneval_task(self) -> HumanEvalTask: ...
 
 
-def _one_preflight_score(
-    scores: Sequence[CodeScore], *, context: str
-) -> CodeScore:
-    if len(scores) != 1:
+def _one_preflight_result(
+    results: Sequence[CodeSubmissionResult], *, context: str
+) -> CodeSubmissionResult:
+    if len(results) != 1:
         raise ValueError(
-            f"{context} returned {len(scores)} scores, expected 1"
+            f"{context} returned {len(results)} results, expected 1"
         )
-    return scores[0]
+    return results[0]
 
 
 def run_encdec_scoring_preflight(
@@ -59,7 +63,7 @@ def run_encdec_scoring_preflight(
     batch_scorer: CodeBatchScorer,
 ) -> ScoringPreflight:
     task = tasks[0].humaneval_task
-    score = _one_preflight_score(
+    result = _one_preflight_result(
         batch_scorer(
             (
                 CodeScoringInput(
@@ -70,57 +74,19 @@ def run_encdec_scoring_preflight(
         ),
         context="runtime preflight",
     )
-    result = ScoringPreflight(
+    score = result.score
+    preflight = ScoringPreflight(
         task_id=task.task_id,
         passed=score.passed,
         infrastructure_unknown=score.infrastructure_unknown,
         outcome=score.outcome,
     )
-    if result.infrastructure_unknown or not result.passed:
+    if preflight.infrastructure_unknown or not preflight.passed:
         raise RuntimeError(
             "HumanEval ground-truth runtime preflight did not pass: "
-            f"{result.outcome}"
+            f"{preflight.outcome}"
         )
-    return result
-
-
-@dataclass(frozen=True, slots=True)
-class CodeScore:
-    """The ed1 correctness outcome for one decoder submission.
-
-    ``passed`` is the natural typed boolean projection of dr-code's
-    :class:`SubmissionOutcome`: it is true exactly for ``PASSED``.
-    ``infrastructure_unknown`` is true only for dr-code's typed
-    :class:`HarnessFailure`. Every :class:`CompletedScore` retains its
-    definitive zero/one projection, including candidate timeouts and
-    incomplete candidate coverage. ``outcome`` retains the dr-code label.
-
-    ED1M extends the projection with ``fidelity_to_mutant``, the fractional
-    reward-bearing row value (fraction of inputs matching the mutant).
-    ``attractor_pull`` is the reported contamination measurement (fraction of
-    discriminating inputs that snapped to canonical), never a reward. Both are
-    ``None`` for ED1/D1, whose HumanEval Submission Score is ``float(passed)``.
-    """
-
-    passed: bool
-    infrastructure_unknown: bool
-    outcome: str
-    fidelity_to_mutant: float | None = None
-    attractor_pull: float | None = None
-
-    @property
-    def row_value(self) -> float:
-        """The environment's primary row metric value.
-
-        ED1M returns fractional ``fidelity_to_mutant``. ED1/D1 return the
-        HumanEval Submission Score, the 0.0/1.0 numeric projection of
-        ``passed``.
-        """
-        return (
-            self.fidelity_to_mutant
-            if self.fidelity_to_mutant is not None
-            else float(self.passed)
-        )
+    return preflight
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +107,7 @@ class CodeBatchScorer(Protocol):
         inputs: Sequence[CodeScoringInput],
         *,
         max_wall_seconds: float | None = None,
-    ) -> Sequence[CodeScore]: ...
+    ) -> Sequence[CodeSubmissionResult]: ...
 
 
 class _DeadlineExecutor:
@@ -203,8 +169,7 @@ class CheckpointedCodeBatchScorer:
 
     dr-code owns request planning, execution-key derivation, restoration, and
     checkpoint scheduling. Whetstone supplies the runtime identity and cache
-    lifecycle, then projects the ordered HumanEval results into ``CodeScore``.
-    The batch adapter and cache are supplied by the pinned dr-code dependency.
+    lifecycle, then projects ordered HumanEval results into submission results.
     """
 
     def __init__(
@@ -251,7 +216,7 @@ class CheckpointedCodeBatchScorer:
         inputs: Sequence[CodeScoringInput],
         *,
         max_wall_seconds: float | None = None,
-    ) -> tuple[CodeScore, ...]:
+    ) -> tuple[CodeSubmissionResult, ...]:
         cache = self._cache
         if cache is None:
             raise RuntimeError("checkpointed code batch scorer is not open")
@@ -284,7 +249,7 @@ class CheckpointedCodeBatchScorer:
         ):
             raise BatchScoringDeadlineExceeded
         projected = tuple(
-            _project_submission_score(result) for result in results
+            project_humaneval_submission_result(result) for result in results
         )
         if len(projected) != len(inputs):
             raise ValueError(
@@ -305,37 +270,14 @@ class CheckpointedCodeBatchScorer:
             store.close()
 
 
-def _project_submission_score(result: HumanEvalSubmissionScore) -> CodeScore:
-    if isinstance(result, HarnessFailure):
-        return CodeScore(
-            passed=False,
-            infrastructure_unknown=True,
-            outcome=result.kind,
-        )
-    outcome = result.outcome
-    return CodeScore(
-        passed=outcome is SubmissionOutcome.PASSED,
-        infrastructure_unknown=False,
-        outcome=str(outcome),
-    )
-
-
 def score_code_comp_submission(
     *,
     raw_submission: str,
     task: HumanEvalTask,
     executor: Executor,
-) -> CodeScore:
-    """Score one decoder submission -> :class:`CodeScore`.
+) -> HumanEvalSubmissionResult:
+    """Score one decoder submission into a HumanEval submission result."""
 
-    Delegates to dr-code's ``score_humaneval_submission`` (preprocessing +
-    subprocess test run) and projects its typed outcome onto the ed1
-    correctness
-    invariant: ``PASSED`` -> passed; a typed harness failure -> infrastructure
-    unknown (the generation fails); every completed outcome (tests failed,
-    candidate timeout, incomplete candidate coverage, extraction failed, no
-    top-level functions, ...) -> definitive fail (score 0).
-    """
     result = score_humaneval_submission(
         raw_submission=raw_submission,
         task=task,
@@ -343,7 +285,11 @@ def score_code_comp_submission(
         scoring_profile_version=CODE_COMP_SCORING_PROFILE_VERSION,
         executor=executor,
     )
-    return _project_submission_score(result)
+    return project_humaneval_submission_result(result)
+
+
+# Backward-compatible alias used by tests and legacy imports.
+_project_submission_score = project_submission_score
 
 
 __all__ = [
@@ -355,6 +301,11 @@ __all__ = [
     "CodeBatchScorer",
     "CodeScore",
     "CodeScoringInput",
+    "CodeSubmissionResult",
+    "HumanEvalSubmissionResult",
+    "_project_submission_score",
+    "project_humaneval_submission_result",
+    "project_submission_score",
     "run_encdec_scoring_preflight",
     "score_code_comp_submission",
 ]

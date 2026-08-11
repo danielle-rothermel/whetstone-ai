@@ -18,6 +18,8 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
+    field_serializer,
+    field_validator,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -39,8 +41,12 @@ from whetstone.envs.code_comp.reward.blended import reward_from_primary_score
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeBatchScorer,
-    CodeScore,
     CodeScoringInput,
+)
+from whetstone.envs.code_comp.submission_result import (
+    CodeSubmissionResult,
+    submission_result_from_record,
+    submission_result_to_record,
 )
 from whetstone.envs.generation_graph import LLM_NODE_ID
 from whetstone.envs.sampling import (
@@ -123,6 +129,7 @@ class DirectRowOutcome(BaseModel):
         extra="forbid",
         allow_inf_nan=False,
         strict=True,
+        arbitrary_types_allowed=True,
     )
 
     submission_score: float | None
@@ -147,6 +154,23 @@ class DirectRowOutcome(BaseModel):
     cache_source_unit: str | None = None
     cache_source_call_id: str | None = None
     cache_source_at: str | None = None
+    code_submission_result: CodeSubmissionResult | None = None
+
+    @field_validator("code_submission_result", mode="before")
+    @classmethod
+    def _coerce_code_submission_result(
+        cls, value: object
+    ) -> CodeSubmissionResult | None:
+        if value is None or isinstance(value, CodeSubmissionResult):
+            return value
+        return submission_result_from_record(value)
+
+    @field_serializer("code_submission_result", when_used="json")
+    def _serialize_code_submission_result(
+        self, value: CodeSubmissionResult | None
+    ) -> dict[str, object] | None:
+        record = submission_result_to_record(value)
+        return None if record is None else record.model_dump(mode="json")
 
     @model_validator(mode="after")
     def _valid_outcome(self) -> DirectRowOutcome:
@@ -368,7 +392,7 @@ def drive_direct_row(
     provider_call_config: ProviderCallConfig,
     execution_policy: ProviderExecutionPolicy,
     transport: TransportCall,
-    scorer: Callable[..., CodeScore] | None,
+    scorer: Callable[..., CodeSubmissionResult] | None,
     logical_call_id: str,
     sample_index: int,
     drive_ordinal: int,
@@ -443,8 +467,10 @@ def drive_direct_row(
             cache_source_call_id=marks.cache_source_call_id,
             cache_source_at=marks.cache_source_at,
         )
-    code_score = scorer(raw_submission=output_text, task=score_task)
-    if code_score.infrastructure_unknown:
+    submission = scorer(raw_submission=output_text, task=score_task)
+    if not isinstance(submission, CodeSubmissionResult):
+        raise TypeError("D1 scorer returned an unsupported result")
+    if submission.score.infrastructure_unknown:
         return DirectRowOutcome(
             submission_score=None,
             output_text=output_text,
@@ -462,9 +488,10 @@ def drive_direct_row(
             cache_source_unit=marks.cache_source_unit,
             cache_source_call_id=marks.cache_source_call_id,
             cache_source_at=marks.cache_source_at,
+            code_submission_result=submission,
         )
     return DirectRowOutcome(
-        submission_score=code_score.row_value,
+        submission_score=submission.score.row_value,
         output_text=output_text,
         row_state=ExecutedRowState.SUCCESS,
         executed_component_steps=executed_component_steps,
@@ -479,6 +506,7 @@ def drive_direct_row(
         cache_source_unit=marks.cache_source_unit,
         cache_source_call_id=marks.cache_source_call_id,
         cache_source_at=marks.cache_source_at,
+        code_submission_result=submission,
     )
 
 
@@ -520,9 +548,9 @@ def _should_redrive(outcome: DirectRowOutcome) -> bool:
 
 def _finish_generated_row(
     outcome: DirectGeneratedRowOutcome,
-    score: CodeScore,
+    submission: CodeSubmissionResult,
 ) -> DirectRowOutcome:
-    if score.infrastructure_unknown:
+    if submission.score.infrastructure_unknown:
         return DirectRowOutcome(
             submission_score=None,
             output_text=outcome.output_text,
@@ -540,9 +568,10 @@ def _finish_generated_row(
             cache_source_unit=outcome.cache_source_unit,
             cache_source_call_id=outcome.cache_source_call_id,
             cache_source_at=outcome.cache_source_at,
+            code_submission_result=submission,
         )
     return DirectRowOutcome(
-        submission_score=score.row_value,
+        submission_score=submission.score.row_value,
         output_text=outcome.output_text,
         row_state=ExecutedRowState.SUCCESS,
         executed_component_steps=outcome.executed_component_steps,
@@ -557,6 +586,7 @@ def _finish_generated_row(
         cache_source_unit=outcome.cache_source_unit,
         cache_source_call_id=outcome.cache_source_call_id,
         cache_source_at=outcome.cache_source_at,
+        code_submission_result=submission,
     )
 
 
@@ -886,13 +916,13 @@ def run_direct_eval(
                 raise ValueError(
                     "D1 batch scorer returned the wrong result count"
                 )
-            for key, score in zip(generated_keys, scores, strict=True):
+            for key, submission in zip(generated_keys, scores, strict=True):
                 generated = driven[key]
                 if not isinstance(generated, DirectGeneratedRowOutcome):
                     raise AssertionError(
                         "generated D1 row changed before scoring"
                     )
-                outcome = _finish_generated_row(generated, score)
+                outcome = _finish_generated_row(generated, submission)
                 driven[key] = outcome
                 request = completed_requests[key]
                 _persist(
@@ -939,6 +969,7 @@ def run_direct_eval(
                     failure_code=outcome.failure_code,
                     finish_reason=outcome.finish_reason,
                     provider_error=outcome.provider_error,
+                    code_submission_result=outcome.code_submission_result,
                 )
             )
         submission_rows.append((task_id, task_submission_rows))

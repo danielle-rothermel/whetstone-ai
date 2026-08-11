@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from typing import Any, cast
 
 from dr_store import ObjectStore
 from pydantic import (
@@ -21,6 +21,7 @@ from whetstone.core.identity import (
 from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.engine import EvaluationEngine
 from whetstone.evaluation.schema import (
+    EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
     EvaluationEvidence,
 )
@@ -324,6 +325,175 @@ class CanonicalGepaCandidateAssembler:
         )
 
 
+_GEPA_FEEDBACK_CASE_CAP = 5
+
+
+def _parse_submission_score_record(
+    submission_result: object,
+) -> dict[str, object] | None:
+    if not isinstance(submission_result, dict):
+        return None
+    score = submission_result.get("score")
+    if not isinstance(score, dict):
+        return None
+    return cast(dict[str, object], score)
+
+
+def _gepa_prediction_failed(
+    *,
+    failure_code: object,
+    submission_result: object,
+) -> bool:
+    if type(failure_code) is str and bool(failure_code):
+        return True
+    score = _parse_submission_score_record(submission_result)
+    if score is None:
+        return False
+    if (
+        score.get("passed") is False
+        and score.get("infrastructure_unknown") is not True
+    ):
+        return True
+    return False
+
+
+def _gepa_feedback(*, score: float, submission_result: object) -> str:
+    base = f"This trajectory got a score of {score}."
+    if not isinstance(submission_result, dict):
+        return base
+    score_record = _parse_submission_score_record(submission_result)
+    if score_record is None:
+        return base
+    if score_record.get("passed") is True:
+        return base
+    outcome = score_record.get("outcome")
+    summaries: list[str] = []
+    kind = submission_result.get("kind")
+    if kind == "humaneval":
+        cases = submission_result.get("cases")
+        if isinstance(cases, list):
+            for case in cases:
+                if (
+                    not isinstance(case, dict)
+                    or case.get("status") == "passed"
+                ):
+                    continue
+                actual = case.get("actual_output_repr") or case.get(
+                    "message", "?"
+                )
+                summaries.append(
+                    f"{case.get('case_id', '?')}: expected "
+                    f"{case.get('expected_output_repr', '?')} got {actual}"
+                )
+    elif kind == "mutant":
+        input_results = submission_result.get("input_results")
+        if isinstance(input_results, list):
+            for item in input_results:
+                if (
+                    not isinstance(item, dict)
+                    or item.get("matched_mutant") is True
+                ):
+                    continue
+                summaries.append(
+                    f"input {item.get('input_index', '?')} "
+                    f"({item.get('input_repr', '?')}): expected mutant "
+                    f"{item.get('expected_mutant_repr', '?')} got "
+                    f"{item.get('actual_output_repr', '?')}"
+                )
+    if summaries:
+        shown = summaries[:_GEPA_FEEDBACK_CASE_CAP]
+        overflow = len(summaries) - len(shown)
+        detail = "; ".join(shown)
+        if overflow > 0:
+            detail += f"; ... and {overflow} more failed case(s)"
+        return f"{base} Failed cases: {detail}."
+    if isinstance(outcome, str) and outcome:
+        return f"{base} Outcome: {outcome}."
+    return base
+
+
+def _gepa_generated_outputs(
+    *,
+    output_text: object,
+    failure_code: object,
+    submission_result: object,
+) -> dict[str, object]:
+    generated: dict[str, object] = {
+        "output_text": output_text,
+        "failure_code": failure_code,
+    }
+    if not isinstance(submission_result, dict):
+        return generated
+    kind = submission_result.get("kind")
+    if kind == "humaneval":
+        cases = submission_result.get("cases")
+        if isinstance(cases, list):
+            generated["test_results"] = [
+                {
+                    "case_id": case.get("case_id"),
+                    "status": case.get("status"),
+                    "expected": case.get("expected_output_repr"),
+                    "actual": case.get("actual_output_repr"),
+                    "message": case.get("message"),
+                }
+                for case in cases
+                if isinstance(case, dict)
+            ]
+    elif kind == "mutant":
+        input_results = submission_result.get("input_results")
+        if isinstance(input_results, list):
+            generated["test_results"] = [
+                {
+                    "input_index": item.get("input_index"),
+                    "matched_mutant": item.get("matched_mutant"),
+                    "expected_mutant": item.get("expected_mutant_repr"),
+                    "actual": item.get("actual_output_repr"),
+                }
+                for item in input_results
+                if isinstance(item, dict)
+            ]
+    return generated
+
+
+def _load_component_trace_index(
+    store: ObjectStore,
+    output_record: dict[str, object],
+) -> dict[tuple[str, int], tuple[dict[str, object], ...]]:
+    ref_raw = output_record.get("component_traces_ref")
+    if not isinstance(ref_raw, dict):
+        return {}
+    trace_ref = TypedRef.model_validate(ref_raw)
+    if trace_ref.schema_name != EVALUATION_COMPONENT_TRACES_SCHEMA:
+        raise ValueError("GEPA component traces ref has the wrong schema")
+    trace_content = store.get(trace_ref.reference)
+    if not isinstance(trace_content, dict):
+        raise ValueError("GEPA component traces record must be an object")
+    rows = trace_content.get("rows")
+    if not isinstance(rows, list):
+        raise ValueError("GEPA component traces must list rows")
+    index: dict[tuple[str, int], tuple[dict[str, object], ...]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError("GEPA component trace row must be an object")
+        task_hash = row.get("task_hash")
+        sample_index = row.get("sample_index")
+        trace_payload = row.get("executed_component_trace")
+        if (
+            type(task_hash) is not str
+            or type(sample_index) is not int
+            or not isinstance(trace_payload, dict)
+        ):
+            raise ValueError("GEPA component trace row is malformed")
+        steps = trace_payload.get("executed_component_steps")
+        if not isinstance(steps, list):
+            raise ValueError("GEPA component trace steps must be a list")
+        index[(task_hash, sample_index)] = cast(
+            tuple[dict[str, object], ...],
+            tuple(step for step in steps if isinstance(step, dict)),
+        )
+    return index
+
+
 class CanonicalGepaEvaluationAuthority:
     """Project canonical EvaluationService evidence into GEPA row effects."""
 
@@ -595,6 +765,10 @@ class CanonicalGepaEvaluationAuthority:
                 else ()
             ),
         )
+        trace_index = _load_component_trace_index(
+            self._store,
+            cast(dict[str, object], output_record),
+        )
         rows = tuple(
             self._project_row(
                 request=request,
@@ -603,6 +777,13 @@ class CanonicalGepaEvaluationAuthority:
                 score=float(evidence.per_task_values[index]),
                 evidence_refs=common_refs,
                 candidate_id=candidate.record.candidate_id,
+                trace_steps=trace_index.get(
+                    (
+                        cast(dict[str, object], raw).get("task_hash"),
+                        cast(dict[str, object], raw).get("sample_index"),
+                    ),
+                    (),
+                ),
             )
             for index, raw in enumerate(raw_rows)
         )
@@ -621,6 +802,7 @@ class CanonicalGepaEvaluationAuthority:
         score: float,
         evidence_refs: tuple[TypedRef, ...],
         candidate_id: str,
+        trace_steps: tuple[dict[str, object], ...] = (),
     ) -> GepaEvaluationRow:
         if not isinstance(raw, dict):
             raise ValueError("GEPA evaluation output row must be an object")
@@ -645,6 +827,11 @@ class CanonicalGepaEvaluationAuthority:
                 "GEPA evaluation output row order/identity drifted"
             )
         failed = type(failure_code) is str and bool(failure_code)
+        submission_result = raw.get("code_submission_result")
+        prediction_failed = _gepa_prediction_failed(
+            failure_code=failure_code,
+            submission_result=submission_result,
+        )
         failure_ref = None
         row_evidence_refs = evidence_refs
         if failed:
@@ -671,17 +858,17 @@ class CanonicalGepaEvaluationAuthority:
             str,
             list[GepaComponentTraceProjection],
         ] = defaultdict(list)
-        raw_traces = raw.get("component_trace_steps", [])
-        if not isinstance(raw_traces, list):
-            raise ValueError("GEPA component traces must be an ordered list")
-        feedback = f"This trajectory got a score of {score}."
-        for trace in raw_traces:
-            if not isinstance(trace, dict):
-                raise ValueError("GEPA component trace must be an object")
+        feedback = _gepa_feedback(
+            score=score, submission_result=submission_result
+        )
+        candidate_components = {
+            component.name for component in request.candidate
+        }
+        for trace in trace_steps:
             component_id = trace.get("component_id")
-            if component_id not in {
-                component.name for component in request.candidate
-            }:
+            if not isinstance(component_id, str):
+                raise ValueError("GEPA trace names an unknown component")
+            if component_id not in candidate_components:
                 raise ValueError("GEPA trace names an unknown component")
             component_records[component_id].append(
                 GepaComponentTraceProjection(
@@ -718,15 +905,17 @@ class CanonicalGepaEvaluationAuthority:
             GepaTrajectoryProjection(
                 data_id=data.data_id,
                 inputs=data_record["prompt_inputs"],
-                generated_outputs=(
-                    {"output_text": output_text, "failure_code": failure_code}
+                generated_outputs=_gepa_generated_outputs(
+                    output_text=output_text,
+                    failure_code=failure_code,
+                    submission_result=submission_result,
                 ),
                 feedback=feedback,
                 component_records={
                     name: tuple(records)
                     for name, records in component_records.items()
                 },
-                prediction_failed=failed,
+                prediction_failed=prediction_failed,
                 module_score=score,
                 source_refs=row_evidence_refs,
             )

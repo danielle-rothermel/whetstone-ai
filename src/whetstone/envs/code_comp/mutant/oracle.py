@@ -34,9 +34,12 @@ class _OutcomeKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class _InputOutcome:
+class MutantInputOutcome:
     kind: _OutcomeKind
     output_repr: str
+
+
+_InputOutcome = MutantInputOutcome
 
 
 class _WireOutcome(BaseModel):
@@ -173,6 +176,35 @@ def score_mutant_reconstruction(
 ) -> MutantScore:
     """Dual-score one reconstruction against an authenticated mutant."""
 
+    score, _outcomes = _score_mutant_reconstruction_with_outcomes(
+        reconstruction=reconstruction,
+        mutant=mutant,
+        executor=executor,
+    )
+    return score
+
+
+def score_mutant_reconstruction_with_outcomes(
+    *,
+    reconstruction: str,
+    mutant: MutantRecord,
+    executor: Executor,
+) -> tuple[MutantScore, tuple[MutantInputOutcome, ...]]:
+    """Dual-score one reconstruction and retain per-input oracle outcomes."""
+
+    return _score_mutant_reconstruction_with_outcomes(
+        reconstruction=reconstruction,
+        mutant=mutant,
+        executor=executor,
+    )
+
+
+def _score_mutant_reconstruction_with_outcomes(
+    *,
+    reconstruction: str,
+    mutant: MutantRecord,
+    executor: Executor,
+) -> tuple[MutantScore, tuple[MutantInputOutcome, ...]]:
     distinct = frozenset(mutant.distinct_input_indices)
     total = len(mutant.input_reprs)
     try:
@@ -184,14 +216,17 @@ def score_mutant_reconstruction(
             executor=executor,
         )
     except _OracleError:
-        return MutantScore(
-            fidelity_to_mutant=None,
-            attractor_pull=None,
-            matched_mutant=0,
-            matched_canonical_on_distinct=0,
-            total_inputs=total,
-            distinct_inputs=len(distinct),
-            infrastructure_unknown=True,
+        return (
+            MutantScore(
+                fidelity_to_mutant=None,
+                attractor_pull=None,
+                matched_mutant=0,
+                matched_canonical_on_distinct=0,
+                total_inputs=total,
+                distinct_inputs=len(distinct),
+                infrastructure_unknown=True,
+            ),
+            (),
         )
 
     observed = tuple(
@@ -207,16 +242,19 @@ def score_mutant_reconstruction(
             matched_mutant += 1
         if index in distinct and outcome == mutant.canonical_expected[index]:
             matched_canonical += 1
-    return MutantScore(
-        fidelity_to_mutant=(matched_mutant / total if total else None),
-        attractor_pull=(
-            matched_canonical / len(distinct) if distinct else None
+    return (
+        MutantScore(
+            fidelity_to_mutant=(matched_mutant / total if total else None),
+            attractor_pull=(
+                matched_canonical / len(distinct) if distinct else None
+            ),
+            matched_mutant=matched_mutant,
+            matched_canonical_on_distinct=matched_canonical,
+            total_inputs=total,
+            distinct_inputs=len(distinct),
+            infrastructure_unknown=False,
         ),
-        matched_mutant=matched_mutant,
-        matched_canonical_on_distinct=matched_canonical,
-        total_inputs=total,
-        distinct_inputs=len(distinct),
-        infrastructure_unknown=False,
+        outcomes,
     )
 
 
@@ -307,4 +345,9 @@ def _parse_outcomes(
     )
 
 
-__all__ = ["MutantScore", "score_mutant_reconstruction"]
+__all__ = [
+    "MutantInputOutcome",
+    "MutantScore",
+    "score_mutant_reconstruction",
+    "score_mutant_reconstruction_with_outcomes",
+]

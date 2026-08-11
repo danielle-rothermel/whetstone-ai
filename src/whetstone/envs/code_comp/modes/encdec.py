@@ -36,7 +36,7 @@ from whetstone.envs.code_comp.reward.blended import (
     build_code_comp_blended_reward_policy,
 )
 from whetstone.envs.code_comp.runtime import EncDecScoringRuntimeSummary
-from whetstone.envs.code_comp.scoring import CodeScore
+from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.generation_graph import env_candidate_base_ref
 from whetstone.envs.sampling import (
@@ -169,13 +169,13 @@ class EncDecExperiment(EnvExperiment):
     #: compression term carries the pressure instead.
     budget_ratio: float | None = CODE_COMP_DEFAULT_BUDGET_RATIO
     dataset_revision: str = CODE_COMP_DATASET_REVISION
-    #: The injectable code scorer (raw_submission, task) -> CodeScore. The
-    #: scorer is INJECTED by the caller that drives rows; the production
-    #: injection is
+    #: The injectable code scorer (raw_submission, task) ->
+    #: CodeSubmissionResult. The scorer is INJECTED by the caller that drives
+    #: rows; the production injection is
     #: :func:`whetstone.envs.code_comp.scoring.score_code_comp_submission`,
     #: which runs candidate code through the caller's explicit dr-exec
     #: executor.
-    scorer: Callable[..., CodeScore] | None = None
+    scorer: Callable[..., CodeSubmissionResult] | None = None
     #: ED1 always uses this per-task blend for internal selection and the
     #: official comparison vector; primary score + compression are still
     #: reported separately. The optional type is required only because ED1M
@@ -201,7 +201,7 @@ def build_encdec_experiment(
         _ED1_CANONICAL_PROVIDER_CALL_CONFIG
     ),
     budget_ratio: float | None = CODE_COMP_DEFAULT_BUDGET_RATIO,
-    scorer: Callable[..., CodeScore] | None = None,
+    scorer: Callable[..., CodeSubmissionResult] | None = None,
     snapshot_path: Path | None = None,
     limit: int | None = None,
     internal_n: int | None = None,

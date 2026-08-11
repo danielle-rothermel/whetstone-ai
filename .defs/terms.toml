@@ -298,3 +298,45 @@ exported_symbols = [
     "whetstone.optimization.copro.code_comp.encdec_copro_proposal_contract",
 ]
 categories = ["optimization", "experiment identity"]
+
+[[terms]]
+name = "code submission result"
+definition = """
+The canonical batch-scoring return type for code_comp modes: a reward-facing \
+CodeScore plus mode-specific attribution (HumanEval cases or mutant input \
+results). Persisted on evaluation output rows for evidence and GEPA reflection."""
+exported_symbols = [
+    "whetstone.envs.code_comp.submission_result.CodeSubmissionResult",
+    "whetstone.evaluation.schema.CodeSubmissionResultRecord",
+]
+categories = ["evaluation", "experiment identity"]
+
+[[terms]]
+name = "code case result"
+definition = """
+One HumanEval test-case outcome projected from dr-code into Whetstone-owned \
+evidence without exposing dr-code types above the scoring boundary."""
+exported_symbols = ["whetstone.envs.code_comp.submission_result.CodeCaseResult"]
+categories = ["evaluation"]
+
+[[terms]]
+name = "human eval submission result"
+definition = """
+A CodeSubmissionResult extension carrying the HumanEval suite outcome and \
+per-case rows for the best extracted function."""
+exported_symbols = [
+    "whetstone.envs.code_comp.submission_result.HumanEvalSubmissionResult",
+    "whetstone.evaluation.schema.HumanEvalSubmissionResultRecord",
+]
+categories = ["evaluation"]
+
+[[terms]]
+name = "mutant submission result"
+definition = """
+A CodeSubmissionResult extension carrying mutant-oracle fidelity and \
+per-input matched-mutant attribution."""
+exported_symbols = [
+    "whetstone.envs.code_comp.submission_result.MutantSubmissionResult",
+    "whetstone.evaluation.schema.MutantSubmissionResultRecord",
+]
+categories = ["evaluation"]

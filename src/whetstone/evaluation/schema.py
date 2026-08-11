@@ -37,7 +37,7 @@ from whetstone.experiment.reward import RewardRef
 EVALUATION_COMPONENT_TRACES_SCHEMA = "whetstone.evaluation_component_traces"
 EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION = 2
 EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
-EVALUATION_OUTPUTS_SCHEMA_VERSION = 3
+EVALUATION_OUTPUTS_SCHEMA_VERSION = 4
 EVALUATION_EVIDENCE_SCHEMA_VERSION = 3
 
 
@@ -61,6 +61,80 @@ class CacheEvidence(BaseModel):
     partial_row_count: StrictInt = 0
     cache_hit_count: StrictInt = 0
     source_call_ids: tuple[str, ...] = ()
+
+
+class CodeScoreRecord(BaseModel):
+    """Persisted reward-facing scalar for one code submission."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    passed: StrictBool
+    infrastructure_unknown: StrictBool
+    outcome: StrictStr
+    fidelity_to_mutant: StrictFloat | None = None
+    attractor_pull: StrictFloat | None = None
+
+
+class CodeCaseResultRecord(BaseModel):
+    """Persisted HumanEval per-case outcome."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_id: StrictStr
+    status: StrictStr
+    message: StrictStr
+    input_repr: StrictStr
+    expected_output_repr: StrictStr
+    actual_output_repr: StrictStr
+
+
+class MutantInputResultRecord(BaseModel):
+    """Persisted mutant-oracle per-input outcome."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_index: StrictInt
+    input_repr: StrictStr
+    expected_mutant_repr: StrictStr
+    expected_canonical_repr: StrictStr
+    actual_kind: StrictStr
+    actual_output_repr: StrictStr
+    matched_mutant: StrictBool
+    matched_canonical: StrictBool
+    is_distinct: StrictBool
+
+
+class HumanEvalSubmissionResultRecord(BaseModel):
+    """Persisted HumanEval submission result with per-case detail."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["humaneval"] = "humaneval"
+    score: CodeScoreRecord
+    outcome: StrictStr
+    function_names: tuple[StrictStr, ...]
+    best_function_name: StrictStr | None
+    total_cases: StrictInt
+    cases: tuple[CodeCaseResultRecord, ...] = ()
+
+
+class MutantSubmissionResultRecord(BaseModel):
+    """Persisted mutant-oracle submission result with per-input detail."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["mutant"] = "mutant"
+    score: CodeScoreRecord
+    outcome: StrictStr
+    function_names: tuple[StrictStr, ...]
+    best_function_name: StrictStr | None
+    total_cases: StrictInt
+    input_results: tuple[MutantInputResultRecord, ...] = ()
+
+
+CodeSubmissionResultRecord = (
+    HumanEvalSubmissionResultRecord | MutantSubmissionResultRecord
+)
 
 
 class EvaluationOutputRow(BaseModel):
@@ -88,6 +162,7 @@ class EvaluationOutputRow(BaseModel):
     provider_error: ImmutableJsonObject | None
     max_budget: StrictInt | None
     over_budget: StrictBool | None
+    code_submission_result: CodeSubmissionResultRecord | None = None
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationOutputRow:
@@ -264,7 +339,7 @@ class EvaluationOutputsRecord(BaseModel):
         allow_inf_nan=False,
     )
 
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     evaluation_role: EvaluationRole
@@ -466,6 +541,9 @@ __all__ = [
     "EVALUATION_OUTPUTS_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA_VERSION",
     "CacheEvidence",
+    "CodeCaseResultRecord",
+    "CodeScoreRecord",
+    "CodeSubmissionResultRecord",
     "EvaluationComponentTraceRow",
     "EvaluationComponentTraces",
     "EvaluationComponentTracesRef",
@@ -475,5 +553,8 @@ __all__ = [
     "EvaluationFailureEvidenceRef",
     "EvaluationOutputRow",
     "EvaluationOutputsRecord",
+    "HumanEvalSubmissionResultRecord",
+    "MutantInputResultRecord",
+    "MutantSubmissionResultRecord",
     "RowAccounting",
 ]

@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
+from dr_exec import Executor
 from dr_providers import ProviderCallConfig
 from whetstone_envs.core import Instance
 
@@ -19,14 +21,20 @@ from whetstone.envs.code_comp.modes.encdec import (
     encdec_initial_candidate,
 )
 from whetstone.envs.code_comp.mutant.dataset import MutantRecord, load_dataset
-from whetstone.envs.code_comp.mutant.oracle import MutantScore
+from whetstone.envs.code_comp.mutant.oracle import (
+    score_mutant_reconstruction_with_outcomes,
+)
 from whetstone.envs.code_comp.procedure import build_code_eval_procedure_config
 from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.reward.blended import (
     BoundedCompressionMetricConfig,
     build_code_comp_blended_reward_policy,
 )
-from whetstone.envs.code_comp.scoring import CodeScore
+from whetstone.envs.code_comp.submission_result import (
+    CodeSubmissionResult,
+    MutantSubmissionResult,
+    project_mutant_submission_result,
+)
 from whetstone.envs.factory import EnvEvalConfigs
 from whetstone.envs.sampling import Completeness
 from whetstone.experiment.reward import (
@@ -120,42 +128,43 @@ class MutantExperiment(EncDecExperiment):
     mutants: dict[str, MutantRecord] = field(default_factory=dict)
 
 
+def score_mutant_submission(
+    *,
+    reconstruction: str,
+    mutant: MutantRecord,
+    executor: object,
+) -> MutantSubmissionResult:
+    """Score one reconstruction and retain per-input oracle outcomes."""
+
+    score, outcomes = score_mutant_reconstruction_with_outcomes(
+        reconstruction=reconstruction,
+        mutant=mutant,
+        executor=cast(Executor, executor),
+    )
+    return project_mutant_submission_result(
+        score=score,
+        mutant=mutant,
+        outcomes=outcomes,
+    )
+
+
 def score_mutant_row(
     experiment: MutantExperiment,
     instance: Instance,
     reconstruction: str,
     scorer: Callable[..., object],
-) -> CodeScore:
-    """Score one ed1m reconstruction via the instance's mutant dual oracle.
+) -> MutantSubmissionResult:
+    """Score one ed1m reconstruction via the instance's mutant dual oracle."""
 
-    Returns a :class:`CodeScore` whose ``fidelity_to_mutant`` (fractional,
-    rewarded) + ``attractor_pull`` (reported) come from the per-input oracle.
-    An infrastructure-unknown oracle failure fails the row (never scores 0),
-    matching the ed1 invariant.
-    """
     mutant = experiment.mutants.get(str(instance.id))
     if mutant is None:  # pragma: no cover - guarded by construction
         raise KeyError(
             f"ed1m instance {instance.id!r} has no mutant in the map"
         )
-    score = scorer(reconstruction=reconstruction, mutant=mutant)
-    if isinstance(score, CodeScore):
-        return score
-    if not isinstance(score, MutantScore):
+    result = scorer(reconstruction=reconstruction, mutant=mutant)
+    if not isinstance(result, MutantSubmissionResult):
         raise TypeError("ED1M scorer returned an unsupported result")
-    if score.infrastructure_unknown or score.fidelity_to_mutant is None:
-        return CodeScore(
-            passed=False,
-            infrastructure_unknown=True,
-            outcome="mutant_oracle_infrastructure_unknown",
-        )
-    return CodeScore(
-        passed=score.fidelity_to_mutant >= 1.0,
-        infrastructure_unknown=False,
-        outcome="mutant_scored",
-        fidelity_to_mutant=score.fidelity_to_mutant,
-        attractor_pull=score.attractor_pull,
-    )
+    return result
 
 
 def build_mutant_experiment(
@@ -173,7 +182,7 @@ def build_mutant_experiment(
     num_samples: int = 3,
     exclude_mutant_ids: frozenset[str] | None = None,
     blend_config: BoundedCompressionMetricConfig | None = None,
-    scorer: Callable[..., CodeScore] | None = None,
+    scorer: Callable[..., CodeSubmissionResult] | None = None,
 ) -> MutantExperiment:
     """Build the ed1m experiment (mutant enc-dec + dual scoring).
 
@@ -280,4 +289,5 @@ __all__ = [
     "build_mutant_procedure_config",
     "build_mutant_reward_policy",
     "score_mutant_row",
+    "score_mutant_submission",
 ]

@@ -23,7 +23,11 @@ from whetstone.envs.code_comp.runtime import (
     CodeCompRuntimeProbe,
     EncDecScoringRuntimeSummary,
 )
-from whetstone.envs.code_comp.scoring import CodeScore, CodeScoringInput
+from whetstone.envs.code_comp.scoring import CodeScoringInput
+from whetstone.envs.code_comp.submission_result import (
+    CodeScore,
+    HumanEvalSubmissionResult,
+)
 from whetstone.evaluation.analysis.power import PowerConfig
 from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.execution.partials import PartialLog
@@ -38,17 +42,27 @@ def _score(
     inputs: Sequence[CodeScoringInput],
     *,
     max_wall_seconds: float | None = None,
-) -> tuple[CodeScore, ...]:
+) -> tuple[HumanEvalSubmissionResult, ...]:
     del max_wall_seconds
     return tuple(
-        CodeScore(
-            passed="return None" not in item.raw_submission,
-            infrastructure_unknown=False,
+        HumanEvalSubmissionResult(
+            score=CodeScore(
+                passed="return None" not in item.raw_submission,
+                infrastructure_unknown=False,
+                outcome=(
+                    "passed"
+                    if "return None" not in item.raw_submission
+                    else "tests_failed"
+                ),
+            ),
             outcome=(
                 "passed"
                 if "return None" not in item.raw_submission
                 else "tests_failed"
             ),
+            function_names=(),
+            best_function_name=None,
+            total_cases=0,
         )
         for item in inputs
     )

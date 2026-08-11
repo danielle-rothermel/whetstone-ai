@@ -21,6 +21,9 @@ from whetstone.envs.code_comp.mutation_surface import (
 )
 from whetstone.envs.code_comp.registry import CodeCompMode, code_comp_mode_for
 from whetstone.envs.code_comp.scoring import CodeBatchScorer
+from whetstone.envs.code_comp.submission_result import (
+    submission_result_to_record,
+)
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.generation_graph import (
     render_prompt,
@@ -427,6 +430,9 @@ class EvaluationEngine:
                     provider_error=output.provider_error,
                     max_budget=output.max_budget,
                     over_budget=output.over_budget,
+                    code_submission_result=submission_result_to_record(
+                        output.code_submission_result
+                    ),
                 )
             )
         return (

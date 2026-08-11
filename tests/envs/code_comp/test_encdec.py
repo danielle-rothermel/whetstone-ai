@@ -58,10 +58,13 @@ from whetstone.envs.code_comp.reward.blended import (
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CheckpointedCodeBatchScorer,
-    CodeScore,
     CodeScoringInput,
     _project_submission_score,
     score_code_comp_submission,
+)
+from whetstone.envs.code_comp.submission_result import (
+    CodeScore,
+    HumanEvalSubmissionResult,
 )
 from whetstone.envs.reward import CandidateEvaluationFailure
 from whetstone.envs.sampling import Completeness
@@ -176,10 +179,16 @@ def test_coordinator_scores_generated_ed1_rows_in_one_batch() -> None:
         assert max_wall_seconds is None
         batch_sizes.append(len(inputs))
         return tuple(
-            CodeScore(
-                passed=True,
-                infrastructure_unknown=False,
+            HumanEvalSubmissionResult(
+                score=CodeScore(
+                    passed=True,
+                    infrastructure_unknown=False,
+                    outcome="passed",
+                ),
                 outcome="passed",
+                function_names=(),
+                best_function_name=None,
+                total_cases=0,
             )
             for _item in inputs
         )
@@ -233,7 +242,15 @@ def test_checkpointed_batch_scorer_owns_one_cache_lifecycle(
         del executor, execution_cache
         events.append(f"score:{len(requests)}")
         return tuple(
-            SimpleNamespace(outcome=SubmissionOutcome.PASSED)
+            SimpleNamespace(
+                outcome=SubmissionOutcome.PASSED,
+                evaluation=SimpleNamespace(
+                    function_names=[],
+                    best_function_name=None,
+                    total_cases=0,
+                    results=[],
+                ),
+            )
             for _request in requests
         )
 
@@ -261,7 +278,7 @@ def test_checkpointed_batch_scorer_owns_one_cache_lifecycle(
             )
         )
 
-    assert [score.row_value for score in scores] == [1.0, 1.0]
+    assert [score.score.row_value for score in scores] == [1.0, 1.0]
     assert events == [
         "store:execution-cache.sqlite3",
         "cache",
@@ -308,8 +325,8 @@ def test_checkpointed_batch_scorer_restores_execution_without_reexecuting(
     ) as scorer:
         restored_scores = scorer((scoring_input,))
 
-    assert [score.row_value for score in first_scores] == [1.0, 1.0]
-    assert [score.row_value for score in restored_scores] == [1.0]
+    assert [score.score.row_value for score in first_scores] == [1.0, 1.0]
+    assert [score.score.row_value for score in restored_scores] == [1.0]
     assert unexpected_calls == []
 
 
@@ -471,8 +488,8 @@ def test_humaneval_scoring_canonical_passes_wrong_fails(
         task=task,
         executor=code_executor,
     )
-    assert good.passed and not good.infrastructure_unknown
-    assert not bad.passed and not bad.infrastructure_unknown
+    assert good.score.passed and not good.score.infrastructure_unknown
+    assert not bad.score.passed and not bad.score.infrastructure_unknown
 
 
 @pytest.mark.parametrize(
@@ -495,8 +512,8 @@ def test_humaneval_scoring_completed_rejections_are_definitive(
         executor=code_executor,
     )
 
-    assert score.outcome == expected_outcome
-    assert score.infrastructure_unknown is False
+    assert score.score.outcome == expected_outcome
+    assert score.score.infrastructure_unknown is False
 
 
 def test_humaneval_scoring_projects_harness_failure() -> None:
@@ -511,8 +528,8 @@ def test_humaneval_scoring_projects_harness_failure() -> None:
         executor=FakeExecutor(responder=unavailable),
     )
 
-    assert harness_failure.outcome == "harness_failure"
-    assert harness_failure.infrastructure_unknown is True
+    assert harness_failure.score.outcome == "harness_failure"
+    assert harness_failure.score.infrastructure_unknown is True
 
 
 @pytest.mark.parametrize(

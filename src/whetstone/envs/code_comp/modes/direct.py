@@ -29,7 +29,7 @@ from whetstone.envs.code_comp.registry import (
     CodeCompMode,
     code_comp_identity_prefix,
 )
-from whetstone.envs.code_comp.scoring import CodeScore
+from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.generation_graph import env_candidate_base_ref
 from whetstone.envs.sampling import (
@@ -150,7 +150,7 @@ class DirectExperiment(EnvExperiment):
     input_arm: str = "original"
     rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN
     dataset_revision: str = ""
-    scorer: Callable[..., CodeScore] | None = None
+    scorer: Callable[..., CodeSubmissionResult] | None = None
     humaneval_by_id: dict[str, HumanEvalTask] = field(default_factory=dict)
 
     def humaneval_for(self, instance: Instance) -> HumanEvalTask:
@@ -163,7 +163,7 @@ def build_direct_experiment(
     model: str = CODE_COMP_CANONICAL_MODEL,
     input_arm: str = "original",
     rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN,
-    scorer: Callable[..., CodeScore] | None = None,
+    scorer: Callable[..., CodeSubmissionResult] | None = None,
     snapshot_path: Path | None = None,
     limit: int | None = None,
     internal_n: int | None = None,

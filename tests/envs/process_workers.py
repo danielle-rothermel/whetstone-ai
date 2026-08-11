@@ -139,9 +139,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         EncDecExperiment,
         build_encdec_experiment,
     )
-    from whetstone.envs.code_comp.mutant.oracle import (
-        score_mutant_reconstruction,
-    )
+    from whetstone.envs.code_comp.modes.mutant import score_mutant_submission
     from whetstone.envs.code_comp.scoring import score_code_comp_submission
     from whetstone.evaluation.drivers.code_comp.encdec import (
         EncDecRowRequest,
@@ -238,7 +236,7 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
 
     scorer = partial(
         (
-            score_mutant_reconstruction
+            score_mutant_submission
             if mutant is not None
             else score_code_comp_submission
         ),

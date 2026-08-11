@@ -18,6 +18,8 @@ from pydantic import (
     ConfigDict,
     JsonValue,
     PrivateAttr,
+    field_serializer,
+    field_validator,
     model_validator,
 )
 from whetstone_envs.core import Instance
@@ -47,8 +49,12 @@ from whetstone.envs.code_comp.reward.blended import (
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
     CodeBatchScorer,
-    CodeScore,
     CodeScoringInput,
+)
+from whetstone.envs.code_comp.submission_result import (
+    CodeSubmissionResult,
+    submission_result_from_record,
+    submission_result_to_record,
 )
 from whetstone.envs.sampling import (
     EnvSplitSampling,
@@ -263,6 +269,7 @@ class EncDecRowOutcome(BaseModel):
         extra="forbid",
         allow_inf_nan=False,
         strict=True,
+        arbitrary_types_allowed=True,
     )
 
     primary_value: float | None
@@ -309,6 +316,23 @@ class EncDecRowOutcome(BaseModel):
     #: hit (the row's primary provenance), else ``None``.
     cache_hit: bool = False
     cache_provenance: CacheProvenance | None = None
+    code_submission_result: CodeSubmissionResult | None = None
+
+    @field_validator("code_submission_result", mode="before")
+    @classmethod
+    def _coerce_code_submission_result(
+        cls, value: object
+    ) -> CodeSubmissionResult | None:
+        if value is None or isinstance(value, CodeSubmissionResult):
+            return value
+        return submission_result_from_record(value)
+
+    @field_serializer("code_submission_result", when_used="json")
+    def _serialize_code_submission_result(
+        self, value: CodeSubmissionResult | None
+    ) -> dict[str, object] | None:
+        record = submission_result_to_record(value)
+        return None if record is None else record.model_dump(mode="json")
 
     @model_validator(mode="after")
     def _valid_outcome(self) -> EncDecRowOutcome:
@@ -766,8 +790,8 @@ def drive_encdec_row(
     # fails the row (never scored 0). ed1 scores the HumanEval test suite; ed1m
     # scores the mutant's per-input oracle (fidelity + attractor). Compression
     # (encoder output) is always computed (it does not depend on the sandbox).
-    code_score = _score_row(experiment, instance, decoder_text, scorer)
-    if code_score.infrastructure_unknown:
+    submission = _score_row(experiment, instance, decoder_text, scorer)
+    if submission.score.infrastructure_unknown:
         return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
@@ -786,15 +810,16 @@ def drive_encdec_row(
             finish_reason=dec_tel.finish_reason,
             cache_hit=row_cache_hit,
             cache_provenance=row_cache_prov,
+            code_submission_result=submission,
         )
     return EncDecRowOutcome(
-        primary_value=code_score.row_value,
+        primary_value=submission.score.row_value,
         compression_value=compression,
         encoder_text=encoder_text,
         decoder_text=decoder_text,
         row_state=ExecutedRowState.SUCCESS,
         executed_component_steps=executed_component_steps,
-        attractor_pull=code_score.attractor_pull,
+        attractor_pull=submission.score.attractor_pull,
         prompt_tokens=tel.prompt_tokens,
         completion_tokens=tel.completion_tokens,
         total_tokens=tel.total_tokens,
@@ -805,6 +830,7 @@ def drive_encdec_row(
         finish_reason=dec_tel.finish_reason,
         cache_hit=row_cache_hit,
         cache_provenance=row_cache_prov,
+        code_submission_result=submission,
     )
 
 
@@ -813,7 +839,7 @@ def _score_row(
     instance: Instance,
     decoder_text: str,
     scorer: Callable[..., object],
-) -> CodeScore:
+) -> CodeSubmissionResult:
     """Score one reconstruction: ed1 HumanEval suite OR ed1m mutant oracle.
 
     ed1m (an ``MutantExperiment``) scores the decoder output against the
@@ -834,10 +860,10 @@ def _score_row(
             scorer,
         )
     task = humaneval_task_from_instance(instance)
-    score = scorer(raw_submission=decoder_text, task=task)
-    if not isinstance(score, CodeScore):
+    submission = scorer(raw_submission=decoder_text, task=task)
+    if not isinstance(submission, CodeSubmissionResult):
         raise TypeError("ED1 scorer returned an unsupported result")
-    return score
+    return submission
 
 
 def _encdec_partial_payload(outcome: EncDecRowOutcome) -> EncDecPartialPayload:
@@ -892,9 +918,9 @@ def _should_redrive(outcome: EncDecRowOutcome) -> bool:
 
 def _finish_generated_row(
     outcome: EncDecGeneratedRowOutcome,
-    score: CodeScore,
+    submission: CodeSubmissionResult,
 ) -> EncDecRowOutcome:
-    if score.infrastructure_unknown:
+    if submission.score.infrastructure_unknown:
         return EncDecRowOutcome(
             primary_value=None,
             compression_value=outcome.compression_value,
@@ -913,15 +939,16 @@ def _finish_generated_row(
             finish_reason=outcome.finish_reason,
             cache_hit=outcome.cache_hit,
             cache_provenance=outcome.cache_provenance,
+            code_submission_result=submission,
         )
     return EncDecRowOutcome(
-        primary_value=score.row_value,
+        primary_value=submission.score.row_value,
         compression_value=outcome.compression_value,
         encoder_text=outcome.encoder_text,
         decoder_text=outcome.decoder_text,
         row_state=ExecutedRowState.SUCCESS,
         executed_component_steps=outcome.executed_component_steps,
-        attractor_pull=score.attractor_pull,
+        attractor_pull=submission.score.attractor_pull,
         prompt_tokens=outcome.prompt_tokens,
         completion_tokens=outcome.completion_tokens,
         total_tokens=outcome.total_tokens,
@@ -932,6 +959,7 @@ def _finish_generated_row(
         finish_reason=outcome.finish_reason,
         cache_hit=outcome.cache_hit,
         cache_provenance=outcome.cache_provenance,
+        code_submission_result=submission,
     )
 
 
@@ -1342,13 +1370,13 @@ def run_encdec_eval(
                 raise ValueError(
                     "ED1 batch scorer returned the wrong result count"
                 )
-            for key, score in zip(generated_keys, scores, strict=True):
+            for key, submission in zip(generated_keys, scores, strict=True):
                 generated = driven[key]
                 if not isinstance(generated, EncDecGeneratedRowOutcome):
                     raise AssertionError(
                         "generated ED1 row changed before scoring"
                     )
-                outcome = _finish_generated_row(generated, score)
+                outcome = _finish_generated_row(generated, submission)
                 driven[key] = outcome
                 request = completed_requests[key]
                 _persist(
@@ -1433,6 +1461,7 @@ def run_encdec_eval(
                     provider_error=outcome.provider_error,
                     max_budget=outcome.max_budget,
                     over_budget=outcome.over_budget,
+                    code_submission_result=outcome.code_submission_result,
                 )
             )
         primary_rows.append((task_id, task_primary_rows))

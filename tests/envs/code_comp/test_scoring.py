@@ -6,26 +6,36 @@ import pytest
 
 from tests.envs.support import synthetic_code_comp_tasks
 from whetstone.envs.code_comp.scoring import (
-    CodeScore,
     CodeScoringInput,
     run_encdec_scoring_preflight,
 )
+from whetstone.envs.code_comp.submission_result import (
+    CodeScore,
+    HumanEvalSubmissionResult,
+)
+
+
+def _passing_result() -> HumanEvalSubmissionResult:
+    return HumanEvalSubmissionResult(
+        score=CodeScore(
+            passed=True,
+            infrastructure_unknown=False,
+            outcome="passed",
+        ),
+        outcome="passed",
+        function_names=(),
+        best_function_name=None,
+        total_cases=0,
+    )
 
 
 def _score(
     inputs: Sequence[CodeScoringInput],
     *,
     max_wall_seconds: float | None = None,
-) -> tuple[CodeScore, ...]:
+) -> tuple[HumanEvalSubmissionResult, ...]:
     del max_wall_seconds
-    return tuple(
-        CodeScore(
-            passed=True,
-            infrastructure_unknown=False,
-            outcome="passed",
-        )
-        for _ in inputs
-    )
+    return tuple(_passing_result() for _ in inputs)
 
 
 def test_run_encdec_scoring_preflight_passes_for_ground_truth() -> None:
@@ -43,13 +53,19 @@ def test_run_encdec_scoring_preflight_rejects_failed_score() -> None:
         inputs: Sequence[CodeScoringInput],
         *,
         max_wall_seconds: float | None = None,
-    ) -> tuple[CodeScore, ...]:
+    ) -> tuple[HumanEvalSubmissionResult, ...]:
         del max_wall_seconds
         return (
-            CodeScore(
-                passed=False,
-                infrastructure_unknown=False,
+            HumanEvalSubmissionResult(
+                score=CodeScore(
+                    passed=False,
+                    infrastructure_unknown=False,
+                    outcome="tests_failed",
+                ),
                 outcome="tests_failed",
+                function_names=(),
+                best_function_name=None,
+                total_cases=0,
             ),
         )
 

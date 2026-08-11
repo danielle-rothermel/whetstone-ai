@@ -32,7 +32,10 @@ from whetstone.envs.code_comp.mutation_surface import (
 )
 from whetstone.envs.code_comp.scoring import (
     BatchScoringDeadlineExceeded,
+)
+from whetstone.envs.code_comp.submission_result import (
     CodeScore,
+    HumanEvalSubmissionResult,
 )
 from whetstone.envs.generation_graph import LLM_NODE_ID
 from whetstone.envs.input_transform import (
@@ -110,10 +113,16 @@ def test_coordinator_scores_generated_d1_rows_in_one_batch() -> None:
         assert max_wall_seconds is None
         batch_sizes.append(len(inputs))
         return tuple(
-            CodeScore(
-                passed=True,
-                infrastructure_unknown=False,
+            HumanEvalSubmissionResult(
+                score=CodeScore(
+                    passed=True,
+                    infrastructure_unknown=False,
+                    outcome="passed",
+                ),
                 outcome="passed",
+                function_names=(),
+                best_function_name=None,
+                total_cases=0,
             )
             for _item in inputs
         )
