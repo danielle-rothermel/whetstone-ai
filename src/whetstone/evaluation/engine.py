@@ -25,7 +25,7 @@ from whetstone.envs.rollout_definition import (
     validate_candidate_prompt,
 )
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
-from whetstone.evaluation.code.aggregate import ROLLOUT_AGGREGATE_SCHEMA
+from whetstone.evaluation.aggregate import ROLLOUT_AGGREGATE_SCHEMA
 from whetstone.evaluation.drivers.ed1 import (
     Ed1RowJobFactory,
     run_ed1_eval,

@@ -9,6 +9,7 @@ from pydantic import JsonValue
 
 import whetstone.evaluation.code as code_eval
 from tests.envs.support import tiny_experiment
+from tests.evaluation.code.support import FULL_HASH
 from whetstone.core.identity import typed_ref_for_record
 from whetstone.evaluation import (
     AggregationConfig,
@@ -26,7 +27,9 @@ from whetstone.evaluation import (
     SelectionRule,
     TaskSet,
 )
-from whetstone.evaluation.code import (
+from whetstone.evaluation.aggregate import (
+    ROLLOUT_AGGREGATE_SCHEMA,
+    SKIP_TOLERANCE_VARIABLE,
     CompletenessPolicy,
     EvaluationMatrixPlan,
     RolloutAggregate,
@@ -36,12 +39,6 @@ from whetstone.evaluation.code import (
     aggregation_definition,
     unweighted_task_mean,
 )
-from whetstone.evaluation.code.aggregate import (
-    ROLLOUT_AGGREGATE_SCHEMA,
-    SKIP_TOLERANCE_VARIABLE,
-)
-
-from .support import FULL_HASH
 
 CTX = "c" * 64
 AGGREGATE_NAME = "custom_scalar_quality"

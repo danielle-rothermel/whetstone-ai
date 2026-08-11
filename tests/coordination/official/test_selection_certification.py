@@ -21,7 +21,7 @@ from whetstone.coordination.official.selection import (
     select_official,
 )
 from whetstone.core.identity import TypedRef
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     RolloutAggregate,
     RowValue,
     TaskRows,

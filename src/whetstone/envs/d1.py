@@ -36,7 +36,7 @@ from whetstone.envs.task_selection import (
     TaskSplitRoles,
     resolve_manifest_split,
 )
-from whetstone.evaluation.code.aggregate import aggregation_definition
+from whetstone.evaluation.aggregate import aggregation_definition
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.graph.nodes import (
     eval_node_definition,

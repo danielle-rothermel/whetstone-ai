@@ -83,7 +83,7 @@ name = "rollout aggregate"
 definition = """
 A provenance-bearing aggregate over an explicit planned task-and-repeat matrix \
 whose present, missing, failed, and invalid rows are completely accounted for."""
-exported_symbols = ["whetstone.evaluation.code.aggregate.RolloutAggregate"]
+exported_symbols = ["whetstone.evaluation.aggregate.RolloutAggregate"]
 categories = ["evaluation", "aggregation"]
 part_of = ["evaluation evidence"]
 

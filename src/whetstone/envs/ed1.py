@@ -47,7 +47,7 @@ from whetstone.evaluation import (
     PreprocessingDefinition,
     identity_hash_for,
 )
-from whetstone.evaluation.code.aggregate import aggregation_definition
+from whetstone.evaluation.aggregate import aggregation_definition
 from whetstone.experiment.candidate import (
     Candidate,
     TemplateRenderContract,

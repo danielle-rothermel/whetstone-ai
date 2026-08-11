@@ -14,7 +14,7 @@ from whetstone.envs.registry import env_spec
 from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
 from whetstone.envs.sampling import validate_evaluation_role_for_split
 from whetstone.evaluation import AggregationOutput
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     ROLLOUT_AGGREGATE_SCHEMA,
     RolloutAggregate,
     RowValue,

@@ -19,7 +19,7 @@ from whetstone.evaluation import (
     SamplingDefinition,
     TaskSet,
 )
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     CompletenessPolicy,
     EvaluationMatrixPlan,
     RowPolicy,

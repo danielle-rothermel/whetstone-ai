@@ -18,7 +18,7 @@ from whetstone.envs.sampling import (
     EnvEvalConfigs,
     build_eval_configs,
 )
-from whetstone.evaluation.code.aggregate import CompletenessPolicy
+from whetstone.evaluation.aggregate import CompletenessPolicy
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.reward import RewardPolicy
 

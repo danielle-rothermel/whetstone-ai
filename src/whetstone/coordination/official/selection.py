@@ -28,7 +28,7 @@ from whetstone.experiment.objectives import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from whetstone.evaluation.code.aggregate import RolloutAggregate
+    from whetstone.evaluation.aggregate import RolloutAggregate
 
 __all__ = [
     "IncompleteEvidenceError",

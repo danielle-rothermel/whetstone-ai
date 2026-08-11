@@ -46,7 +46,7 @@ from whetstone.core.roles import EvaluationRole
 from whetstone.envs.oracle_operator import env_exact_match_score
 from whetstone.envs.registry import env_spec
 from whetstone.envs.reward import reward_from_internal_aggregate
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     ROLLOUT_AGGREGATE_SCHEMA,
     RowValue,
     TaskRows,

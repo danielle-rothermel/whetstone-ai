@@ -49,7 +49,7 @@ from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
 )
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     RolloutAggregate,
     RowValue,
     TaskRows,

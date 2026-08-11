@@ -10,7 +10,7 @@ from whetstone.evaluation import (
     SamplingDefinition,
     TaskSet,
 )
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     SKIP_TOLERANCE_VARIABLE,
     CompletenessPolicy,
     EvaluationMatrixPlan,
