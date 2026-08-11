@@ -286,14 +286,16 @@ def test_oracle_failure_is_infrastructure_unknown() -> None:
 def test_build_uses_content_and_dataset_identities(
     mutant_dataset_dir: Path,
 ) -> None:
-    from whetstone.envs.code_comp.modes.encdec import (
-        BoundedCompressionMetricConfig,
-        build_encdec_procedure_config,
-    )
     from whetstone.envs.code_comp.modes.mutant import (
         MutantExperiment,
         build_mutant_experiment,
         build_mutant_procedure_config,
+    )
+    from whetstone.envs.code_comp.procedure import (
+        build_encdec_procedure_config,
+    )
+    from whetstone.envs.code_comp.reward.blended import (
+        BoundedCompressionMetricConfig,
     )
 
     loaded = load_dataset(mutant_dataset_dir)
@@ -324,12 +326,12 @@ def test_build_uses_content_and_dataset_identities(
         loaded.manifest.dataset_hash
     )
     assert experiment.blend_config is not None
-    from whetstone.envs.code_comp.modes.encdec import (
-        build_code_comp_blended_reward_policy,
-    )
     from whetstone.envs.code_comp.modes.mutant import (
         CODE_COMP_ENV_NAME,
         build_mutant_reward_policy,
+    )
+    from whetstone.envs.code_comp.reward.blended import (
+        build_code_comp_blended_reward_policy,
     )
 
     assert experiment.reward_policy == build_code_comp_blended_reward_policy(

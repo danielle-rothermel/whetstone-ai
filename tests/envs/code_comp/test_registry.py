@@ -9,13 +9,16 @@ from tests.envs.code_comp.test_mutant import _mutant_record
 from tests.envs.support import synthetic_code_comp_tasks
 from whetstone.envs.code_comp import (
     CodeCompMode,
-    DirectExperiment,
-    EncDecExperiment,
     build_code_comp_experiment,
     build_direct_experiment,
     build_encdec_experiment,
     build_mutant_experiment,
     code_comp_mode_for,
+)
+from whetstone.envs.code_comp.experiment import (
+    DirectExperiment,
+    EncDecExperiment,
+    MutantExperiment,
 )
 from whetstone.envs.code_comp.mutant.dataset import (
     FamilyCount,
@@ -69,7 +72,8 @@ def test_registry_direct_matches_legacy_builder() -> None:
         internal_n=1,
         official_n=1,
     )
-    assert type(unified) is type(legacy)
+    assert isinstance(unified, DirectExperiment)
+    assert isinstance(legacy, DirectExperiment)
     assert unified.env_name == legacy.env_name
     assert unified.input_arm == legacy.input_arm
 
@@ -83,7 +87,8 @@ def test_registry_encdec_matches_legacy_builder() -> None:
         internal_n=1,
         official_n=1,
     )
-    assert type(unified) is type(legacy)
+    assert isinstance(unified, EncDecExperiment)
+    assert isinstance(legacy, EncDecExperiment)
     assert unified.env_name == legacy.env_name
     assert unified.budget_ratio == legacy.budget_ratio
 
@@ -102,7 +107,8 @@ def test_registry_mutant_matches_legacy_builder(
         internal_n=1,
         official_n=1,
     )
-    assert type(unified) is type(legacy)
+    assert isinstance(unified, MutantExperiment)
+    assert isinstance(legacy, MutantExperiment)
     assert unified.env_name == legacy.env_name
 
 

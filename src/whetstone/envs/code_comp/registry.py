@@ -1,69 +1,63 @@
 from __future__ import annotations
 
-from enum import UNIQUE, StrEnum, verify
 from typing import Any
 
+from whetstone.envs.code_comp.config import (
+    CodeCompExperimentConfig,
+    default_code_comp_config,
+)
 from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
+from whetstone.envs.code_comp.experiment import (
+    CodeCompExperiment,
+    DirectExperiment,
+    EncDecExperiment,
+    MutantExperiment,
+)
+from whetstone.envs.code_comp.mode import (
+    CodeCompMode,
+    code_comp_identity_prefix,
+)
 from whetstone.envs.factory import EnvExperiment
 
 __all__ = [
     "CODE_COMP_ENV_NAME",
     "CodeCompMode",
     "build_code_comp_experiment",
+    "build_code_comp_experiment_from_mode",
     "code_comp_identity_prefix",
     "code_comp_mode_for",
 ]
 
 
-@verify(UNIQUE)
-class CodeCompMode(StrEnum):
-    """HumanEval code-compression experiment modes."""
-
-    DIRECT = "direct"
-    ENCDEC = "encdec"
-    ENCDEC_MUTANT = "encdec_mutant"
-
-
-def code_comp_identity_prefix(mode: CodeCompMode) -> str:
-    """Return the identity namespace prefix for one code_comp mode."""
-    return f"whetstone.code_comp.{mode.value}"
-
-
 def build_code_comp_experiment(
+    first: CodeCompExperimentConfig | CodeCompMode,
+    /,
+    **kwargs: Any,
+) -> CodeCompExperiment:
+    """Build one code-compression experiment from config or legacy kwargs."""
+    if isinstance(first, CodeCompExperimentConfig):
+        if kwargs:
+            raise TypeError(
+                "build_code_comp_experiment(config) accepts no extra kwargs"
+            )
+        return first.build_experiment()
+    return build_code_comp_experiment_from_mode(first, **kwargs)
+
+
+def build_code_comp_experiment_from_mode(
     mode: CodeCompMode,
     /,
     **kwargs: Any,
-) -> EnvExperiment:
-    """Build one code-compression experiment for the selected mode."""
-
-    if mode is CodeCompMode.DIRECT:
-        from whetstone.envs.code_comp.modes.direct import (
-            build_direct_experiment,
-        )
-
-        return build_direct_experiment(**kwargs)
-    if mode is CodeCompMode.ENCDEC:
-        from whetstone.envs.code_comp.modes.encdec import (
-            build_encdec_experiment,
-        )
-
-        return build_encdec_experiment(**kwargs)
-    if mode is CodeCompMode.ENCDEC_MUTANT:
-        from whetstone.envs.code_comp.modes.mutant import (
-            build_mutant_experiment,
-        )
-
-        return build_mutant_experiment(**kwargs)
-    raise ValueError(f"unsupported code_comp mode {mode!r}")
+) -> CodeCompExperiment:
+    """Legacy kwargs entrypoint; prefer the config-first builder."""
+    scorer = kwargs.pop("scorer", None)
+    return default_code_comp_config(mode, **kwargs).build_experiment(
+        scorer=scorer
+    )
 
 
 def code_comp_mode_for(experiment: EnvExperiment) -> CodeCompMode:
     """Resolve the mode for one built code-compression experiment."""
-
-    from whetstone.envs.code_comp.modes.direct import DirectExperiment
-    from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
-    from whetstone.envs.code_comp.modes.mutant import MutantExperiment
-
     if isinstance(experiment, MutantExperiment):
         return CodeCompMode.ENCDEC_MUTANT
     if isinstance(experiment, EncDecExperiment):

@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import keyword
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
-from dr_code.humaneval import HumanEvalTask
 from whetstone_envs.core import Instance
 
+from whetstone.envs.code_comp.candidates import env_candidate_base_ref
+from whetstone.envs.code_comp.config import default_code_comp_config
 from whetstone.envs.code_comp.constants import (
     CODE_COMP_DATASET_REVISION,
     CODE_COMP_ENV_NAME,
     CODE_COMP_SUBMISSION_SCORE_NAME,
     MUTATION_FIELD,
 )
-from whetstone.envs.code_comp.dataset import CodeCompTaskInstance, load_tasks
+from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+from whetstone.envs.code_comp.experiment import DirectExperiment
 from whetstone.envs.code_comp.generation_graph.direct import (
     DIRECT_DEFAULT_RENAME_TOKEN,
     DIRECT_INPUT_ARMS,
@@ -24,17 +26,14 @@ from whetstone.envs.code_comp.generation_graph.direct import (
     direct_graph_definition,
     render_direct_frame,
 )
-from whetstone.envs.code_comp.procedure import build_encdec_procedure_config
-from whetstone.envs.code_comp.registry import (
+from whetstone.envs.code_comp.mode import (
     CodeCompMode,
     code_comp_identity_prefix,
 )
+from whetstone.envs.code_comp.procedure import build_encdec_procedure_config
 from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
-from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.generation_graph import env_candidate_base_ref
 from whetstone.envs.sampling import (
     Completeness,
-    EnvEvalConfigs,
     EnvSplitSampling,
     derive_split_sampling,
 )
@@ -45,10 +44,7 @@ from whetstone.experiment.reward import (
     RewardPolicy,
     RewardTerm,
 )
-from whetstone.experiment.task_selection import (
-    TaskSplitRoles,
-    resolve_manifest_split,
-)
+from whetstone.experiment.task_selection import TaskSplitRoles
 
 CODE_COMP_CANONICAL_MODEL = "deepseek/deepseek-v4-flash"
 
@@ -143,21 +139,6 @@ def _direct_split(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class DirectExperiment(EnvExperiment):
-    """An ``EnvExperiment`` for the d1 direct-generation env."""
-
-    input_arm: str = "original"
-    rename_token: str = DIRECT_DEFAULT_RENAME_TOKEN
-    dataset_revision: str = ""
-    scorer: Callable[..., CodeSubmissionResult] | None = None
-    humaneval_by_id: dict[str, HumanEvalTask] = field(default_factory=dict)
-
-    def humaneval_for(self, instance: Instance) -> HumanEvalTask:
-        """The parsed HumanEval task for one d1 Instance."""
-        return self.humaneval_by_id[str(instance.id)]
-
-
 def build_direct_experiment(
     *,
     model: str = CODE_COMP_CANONICAL_MODEL,
@@ -186,93 +167,31 @@ def build_direct_experiment(
             f"d1 rename_token {rename_token!r} is not a valid, "
             "non-keyword Python identifier"
         )
-    pool = (
-        tasks
-        if tasks is not None
-        else load_tasks(snapshot_path=snapshot_path, limit=limit)
+    config = default_code_comp_config(
+        CodeCompMode.DIRECT,
+        direct={
+            "model": model,
+            "input_arm": input_arm,
+            "rename_token": rename_token,
+        },
+        pool={
+            "tasks": tasks,
+            "snapshot_path": snapshot_path,
+            "limit": limit,
+        },
+        split={
+            "internal_n": internal_n,
+            "official_n": official_n,
+            "split_manifest": split_manifest,
+            "exclude_task_ids": exclude_task_ids or frozenset(),
+        },
+        sampling={
+            "completeness": completeness,
+            "max_skip_fraction": max_skip_fraction,
+            "num_samples": num_samples,
+        },
     )
-    if exclude_task_ids:
-        pool = tuple(
-            t for t in pool if str(t.instance.id) not in exclude_task_ids
-        )
-    if not pool:
-        raise ValueError("d1 task pool is empty")
-    procedure = build_direct_procedure_config()
-    generation_graph = build_direct_generation_graph(
-        model=model,
-        procedure_config_hash=procedure.config_hash,
-        input_arm=input_arm,
-        rename_token=rename_token,
-    )
-    humaneval_by_id = {str(t.instance.id): t.humaneval_task for t in pool}
-    manifest_tag: str | None = None
-    if split_manifest is not None:
-        resolved = resolve_manifest_split(
-            roles=split_manifest,
-            items=pool,
-            id_of=lambda t: str(t.instance.id),
-            official_n=official_n,
-        )
-        internal_instances = tuple(t.instance for t in resolved.internal)
-        official_tasks = tuple(t.instance for t in resolved.official)
-        manifest_tag = resolved.manifest_tag
-        if resolved.official_capped:
-            print(f"[d1] {resolved.official_capped}")
-    else:
-        all_instances = tuple(t.instance for t in pool)
-        n = len(all_instances)
-        i_n = internal_n if internal_n is not None else min(max(1, n // 2), n)
-        internal_instances = all_instances[:i_n]
-        rest = all_instances[i_n:]
-        o_n = official_n if official_n is not None else len(rest)
-        official_tasks = rest[:o_n] if rest else internal_instances[: o_n or n]
-        if not official_tasks:
-            official_tasks = internal_instances
-    internal_split = _direct_split(
-        split_role="internal_eval",
-        tasks=internal_instances,
-        procedure=procedure,
-        completeness=completeness,
-        max_skip_fraction=max_skip_fraction,
-        num_samples=num_samples,
-        input_arm=input_arm,
-        rename_token=rename_token,
-        manifest_tag=manifest_tag,
-    )
-    official_split = _direct_split(
-        split_role="official",
-        tasks=official_tasks,
-        procedure=procedure,
-        completeness=completeness,
-        max_skip_fraction=max_skip_fraction,
-        num_samples=num_samples,
-        input_arm=input_arm,
-        rename_token=rename_token,
-        manifest_tag=manifest_tag,
-    )
-    eval_configs = EnvEvalConfigs(
-        env_name=CODE_COMP_ENV_NAME,
-        procedure_config_hash=procedure.config_hash,
-        internal=internal_split,
-        official=official_split,
-        held_out_task_hashes=(),
-    )
-    return DirectExperiment(
-        env_name=CODE_COMP_ENV_NAME,
-        generation_graph=generation_graph,  # type: ignore[arg-type]
-        initial_candidate=direct_initial_candidate(),
-        ceiling_candidate=direct_ceiling_candidate(),
-        eval_configs=eval_configs,
-        reward_policy=build_direct_reward_policy(),
-        completeness_policy=completeness.to_policy(
-            max_skip_fraction=max_skip_fraction
-        ),
-        input_arm=input_arm,
-        rename_token=rename_token,
-        dataset_revision=CODE_COMP_DATASET_REVISION,
-        scorer=scorer,
-        humaneval_by_id=humaneval_by_id,
-    )
+    return cast(DirectExperiment, config.build_experiment(scorer=scorer))
 
 
 def build_direct_procedure_config():
