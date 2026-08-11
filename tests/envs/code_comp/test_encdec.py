@@ -446,6 +446,19 @@ def test_encdec_graph_and_output_affecting_identity() -> None:
     assert base.provider_call_config.definition.route.model == (
         CODE_COMP_CANONICAL_MODEL
     )
+    dual = build_encdec_generation_graph(
+        CODE_COMP_ENV_NAME,
+        encoder_call_config=build_encoder_provider_call_config(
+            CODE_COMP_CANONICAL_MODEL
+        ),
+        decoder_call_config=build_encoder_provider_call_config(
+            "openai/gpt-5-nano"
+        ),
+        procedure_config_hash="a" * 64,
+        budget_ratio=0.5,
+    )
+    assert dual.graph_hash != base.graph_hash
+    assert dual.encoder_call_config != dual.decoder_call_config
 
 
 def test_ed1_experiment_preserves_the_exact_provider_call_config() -> None:

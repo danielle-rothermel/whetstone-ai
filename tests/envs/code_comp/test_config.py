@@ -206,3 +206,42 @@ def test_config_rejects_cross_mode_settings() -> None:
             direct=DirectModeSettings(),
             encdec=EncDecModeSettings(),
         )
+
+
+def test_compression_level_affects_procedure_hash() -> None:
+    base = default_code_comp_config(CodeCompMode.ENCDEC)
+    custom = default_code_comp_config(
+        CodeCompMode.ENCDEC,
+        compression={"level": 9},
+    )
+    assert base.build_procedure_config().config_hash != (
+        custom.build_procedure_config().config_hash
+    )
+
+
+def test_distinct_decoder_route_affects_graph_hash() -> None:
+    tasks = synthetic_code_comp_tasks(1)
+    shared = default_code_comp_config(
+        CodeCompMode.ENCDEC,
+        pool={"tasks": tasks},
+    )
+    split = default_code_comp_config(
+        CodeCompMode.ENCDEC,
+        pool={"tasks": tasks},
+        models=CodeCompModelRoutesConfig(
+            encoder=CodeCompModelRouteConfig(model="openai/test-a"),
+            decoder=CodeCompModelRouteConfig(model="openai/test-b"),
+        ),
+    )
+    procedure_hash = shared.build_procedure_config().config_hash
+    shared_graph = shared.build_generation_graph(
+        procedure_config_hash=procedure_hash
+    )
+    split_graph = split.build_generation_graph(
+        procedure_config_hash=procedure_hash
+    )
+    assert shared_graph.graph_hash != split_graph.graph_hash
+    assert (
+        split_graph.encoder_call_config.identity_hash
+        != split_graph.decoder_call_config.identity_hash
+    )

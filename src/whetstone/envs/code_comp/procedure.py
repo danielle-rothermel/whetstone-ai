@@ -29,8 +29,15 @@ def build_code_eval_procedure_config(
     primary_metric_name: str,
     primary_metric_settings: tuple[tuple[str, str], ...],
     zero_denominator: str = "not_applicable",
+    compression_algorithm: str = "zstd",
+    compression_level: int = 19,
+    compression_reference: str = "task.gt_code_wo_comments",
 ) -> EvaluationProcedureConfig:
     """Build one enc-dec code-eval procedure with a concrete primary metric."""
+    if compression_algorithm != "zstd":
+        raise ValueError(
+            f"unsupported compression algorithm {compression_algorithm!r}"
+        )
     definition = MetricExtractionDefinition(
         definition_id=f"whetstone.{env_name}.code_eval",
         version=DEFINITION_VERSION,
@@ -44,8 +51,8 @@ def build_code_eval_procedure_config(
                 metric="whetstone.code_comp.compression_ratio",
                 on="description",
                 settings=(
-                    ("zstd_level", "19"),
-                    ("reference", "task.gt_code_wo_comments"),
+                    ("zstd_level", str(compression_level)),
+                    ("reference", compression_reference),
                 ),
             ),
         ),
@@ -73,7 +80,10 @@ def build_code_eval_procedure_config(
 
 
 def build_encdec_procedure_config(
-    *, zero_denominator: str = "not_applicable"
+    *,
+    zero_denominator: str = "not_applicable",
+    compression_level: int = 19,
+    compression_reference: str = "task.gt_code_wo_comments",
 ) -> EvaluationProcedureConfig:
     """The canonical ED1 HumanEval-submission evaluation procedure."""
     return build_code_eval_procedure_config(
@@ -89,6 +99,8 @@ def build_encdec_procedure_config(
             ("completed_outcome_projection", "definitive_score"),
         ),
         zero_denominator=zero_denominator,
+        compression_level=compression_level,
+        compression_reference=compression_reference,
     )
 
 

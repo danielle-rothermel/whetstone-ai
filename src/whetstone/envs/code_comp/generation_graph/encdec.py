@@ -42,8 +42,8 @@ class EncDecGenerationGraph:
     """The enc-dec Generation Graph graph + the config references it binds.
 
     ``definition`` is the native three-node :class:`GraphDefinition`;
-    ``provider_call_config`` is the shared encoder/decoder route (its Identity
-    Hash is BOTH LLM nodes' static Variable). ``budget_ratio`` is the
+    ``encoder_call_config`` and ``decoder_call_config`` are the exact provider
+    routes for each LLM node (they may differ). ``budget_ratio`` is the
     identity-bearing Character Budget ratio (a distinct ratio is a distinct
     ``graph_hash``). ``procedure_config_hash`` is the code-eval Evaluation
     Procedure Config identity the Eval Node carries.
@@ -51,13 +51,19 @@ class EncDecGenerationGraph:
 
     env_name: str
     definition: GraphDefinition
-    provider_call_config: ProviderCallConfig
+    encoder_call_config: ProviderCallConfig
+    decoder_call_config: ProviderCallConfig
     procedure_config_hash: str
     #: The Character Budget ratio, or ``None`` for the no-budget frame, which
     #: has no budget clause or MAX_BUDGET. A ``None`` budget yields a
     #: DISTINCT ``graph_hash`` from any ratio (identity-folded).
     budget_ratio: float | None
     graph_config: GraphConfig
+
+    @property
+    def provider_call_config(self) -> ProviderCallConfig:
+        """Backward-compatible alias for the encoder route."""
+        return self.encoder_call_config
 
     @property
     def graph_hash(self) -> str:
@@ -116,20 +122,22 @@ _NO_BUDGET_IDENTITY = "no_budget"
 
 def build_encdec_graph_config(
     *,
-    provider_call_config_hash: str,
+    encoder_call_config_hash: str,
+    decoder_call_config_hash: str | None = None,
     evaluation_procedure_config_hash: str,
     budget_ratio: float | None,
 ) -> GraphConfig:
     """Materialize the enc-dec Graph Config binding both routes + the budget.
 
-    BOTH LLM Call Nodes carry the SAME Provider Call Config reference (encoder
-    ==
-    decoder route); the ENCODER additionally carries the Character Budget
+    Encoder and decoder LLM Call Nodes may carry distinct Provider Call Config
+    references; when ``decoder_call_config_hash`` is omitted the encoder hash
+    is reused. The ENCODER additionally carries the Character Budget
     ``ratio`` Variable, so a distinct ``budget_ratio`` yields a distinct
     ``graph_hash``. ``budget_ratio=None`` binds the NO-BUDGET sentinel (a
     distinct graph). The Eval Node carries the code-eval Procedure reference.
     """
     definition = encdec_graph_definition()
+    decoder_hash = decoder_call_config_hash or encoder_call_config_hash
     budget_identity = (
         _NO_BUDGET_IDENTITY
         if budget_ratio is None
@@ -138,12 +146,12 @@ def build_encdec_graph_config(
     assignments = {
         ENCODER_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
-            provider_call_config_hash=provider_call_config_hash,
+            provider_call_config_hash=encoder_call_config_hash,
             character_budget_rule=budget_identity,
         ),
         DECODER_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
-            provider_call_config_hash=provider_call_config_hash,
+            provider_call_config_hash=decoder_hash,
         ),
         EVAL_NODE_ID: eval_variable_assignment(
             evaluation_procedure_config_schema=(
@@ -160,27 +168,47 @@ def build_encdec_graph_config(
 def build_encdec_generation_graph(
     env_name: str,
     *,
-    provider_call_config: ProviderCallConfig,
+    provider_call_config: ProviderCallConfig | None = None,
+    encoder_call_config: ProviderCallConfig | None = None,
+    decoder_call_config: ProviderCallConfig | None = None,
     procedure_config_hash: str,
     budget_ratio: float | None,
 ) -> EncDecGenerationGraph:
-    """Build the enc-dec Generation Graph for one exact provider route.
+    """Build the enc-dec Generation Graph for one or two provider routes.
 
-    Wires the shared encoder/decoder Provider Call Config across both LLM
-    nodes, the Character Budget ``ratio`` onto the encoder, and the code-eval
-    Evaluation Procedure Config onto the terminal Eval Node. Provider lane,
-    protocol, model, and generation controls therefore fold into graph
-    identity through the exact Config.
+    Wires encoder and decoder Provider Call Configs onto their LLM nodes, the
+    Character Budget ``ratio`` onto the encoder, and the code-eval Evaluation
+    Procedure Config onto the terminal Eval Node. Provider lane, protocol,
+    model, and generation controls therefore fold into graph identity through
+    the exact Configs.
     """
+    if provider_call_config is not None:
+        if encoder_call_config is not None or decoder_call_config is not None:
+            raise ValueError(
+                "provider_call_config is mutually exclusive with "
+                "encoder_call_config and decoder_call_config"
+            )
+        encoder_call_config = provider_call_config
+    if encoder_call_config is None:
+        raise ValueError(
+            "encoder_call_config or provider_call_config required"
+        )
+    decoder = decoder_call_config or encoder_call_config
     graph_config = build_encdec_graph_config(
-        provider_call_config_hash=provider_call_config.identity_hash,
+        encoder_call_config_hash=encoder_call_config.identity_hash,
+        decoder_call_config_hash=(
+            None
+            if decoder.identity_hash == encoder_call_config.identity_hash
+            else decoder.identity_hash
+        ),
         evaluation_procedure_config_hash=procedure_config_hash,
         budget_ratio=budget_ratio,
     )
     return EncDecGenerationGraph(
         env_name=env_name,
         definition=encdec_graph_definition(),
-        provider_call_config=provider_call_config,
+        encoder_call_config=encoder_call_config,
+        decoder_call_config=decoder,
         procedure_config_hash=procedure_config_hash,
         budget_ratio=budget_ratio,
         graph_config=graph_config,

@@ -27,6 +27,9 @@ from whetstone.envs.code_comp.generation_graph.direct import (
 from whetstone.envs.code_comp.generation_graph.encdec import (
     build_encoder_provider_call_config,
 )
+from whetstone.envs.code_comp.procedure import (
+    build_encdec_procedure_config,
+)
 from whetstone.envs.code_comp.registry import CodeCompMode
 from whetstone.envs.code_comp.reward.blended import (
     CODE_COMP_DEFAULT_BLEND_CONFIG,
@@ -35,6 +38,7 @@ from whetstone.envs.code_comp.reward.blended import (
 from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
 from whetstone.envs.factory import EnvExperiment
 from whetstone.envs.sampling import Completeness
+from whetstone.evaluation import EvaluationProcedureConfig
 from whetstone.experiment.task_selection import TaskSplitRoles
 
 CODE_COMP_EXPERIMENT_CONFIG_SCHEMA = "whetstone.code_comp.experiment_config"
@@ -285,6 +289,55 @@ class CodeCompExperimentConfig(BaseModel):
                 ),
             }
         return payload
+
+    def build_procedure_config(self) -> EvaluationProcedureConfig:
+        """Materialize the evaluation procedure for this config's mode."""
+        if self.mode is CodeCompMode.ENCDEC_MUTANT:
+            from whetstone.envs.code_comp.modes.mutant import (
+                build_mutant_procedure_config,
+            )
+
+            return build_mutant_procedure_config()
+        return build_encdec_procedure_config(
+            compression_level=self.compression.level,
+        )
+
+    def build_generation_graph(
+        self,
+        *,
+        procedure_config_hash: str,
+    ):
+        """Materialize the encdec generation graph for encdec-family modes."""
+        from whetstone.envs.code_comp.generation_graph.encdec import (
+            build_encdec_generation_graph,
+        )
+
+        if self.mode is CodeCompMode.DIRECT:
+            from whetstone.envs.code_comp.generation_graph.direct import (
+                build_direct_generation_graph,
+            )
+
+            assert self.direct is not None
+            return build_direct_generation_graph(
+                model=self.direct.model,
+                procedure_config_hash=procedure_config_hash,
+                input_arm=self.direct.input_arm,
+                rename_token=self.direct.rename_token,
+            )
+        budget_ratio: float | None
+        if self.mode is CodeCompMode.ENCDEC:
+            assert self.encdec is not None
+            budget_ratio = self.encdec.budget_ratio
+        else:
+            assert self.mutant is not None
+            budget_ratio = self.mutant.budget_ratio
+        return build_encdec_generation_graph(
+            CODE_COMP_ENV_NAME,
+            encoder_call_config=self.models.encoder_call_config(),
+            decoder_call_config=self.models.decoder_call_config(),
+            procedure_config_hash=procedure_config_hash,
+            budget_ratio=budget_ratio,
+        )
 
     def build_experiment(
         self,
