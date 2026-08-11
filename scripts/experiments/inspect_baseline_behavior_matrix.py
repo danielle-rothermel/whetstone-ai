@@ -21,9 +21,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from whetstone.envs.ed1_blended import blended_reward, compression_score
 from whetstone.evaluation.code.scoring import (
     compressed_description_length_bytes,
+)
+from whetstone.evaluation.metrics.blended import (
+    blended_reward,
+    compression_score,
 )
 from whetstone.execution.call_support import call_telemetry
 from whetstone.execution.partials import PartialLog

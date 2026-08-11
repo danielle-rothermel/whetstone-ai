@@ -26,7 +26,6 @@ from whetstone.envs.ed1 import (
     Ed1Instance,
     load_ed1_tasks,
 )
-from whetstone.envs.ed1_blended import compression_score
 from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
 from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
 from whetstone.envs.task_selection import (
@@ -35,6 +34,7 @@ from whetstone.envs.task_selection import (
     TaskSplitRole,
     load_task_split_manifest,
 )
+from whetstone.evaluation.metrics.blended import compression_score
 from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
 from whetstone.optimization.codex.proposer import (
     CodexCliProposerConfig,

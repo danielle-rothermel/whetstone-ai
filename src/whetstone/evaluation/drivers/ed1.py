@@ -35,7 +35,6 @@ from whetstone.envs.ed1 import (
     reward_from_primary_score,
     validate_ed1_body,
 )
-from whetstone.envs.ed1_blended import blend_per_task
 from whetstone.envs.ed1_scoring import (
     BatchScoringDeadlineExceeded,
     CodeBatchScorer,
@@ -71,6 +70,7 @@ from whetstone.evaluation.drivers.internal import (
     remaining_phase_wall_seconds,
     start_phase_deadline,
 )
+from whetstone.evaluation.metrics.blended import blend_per_task
 from whetstone.evaluation.traces import (
     ExecutedComponentStep,
     ExecutedRowState,
