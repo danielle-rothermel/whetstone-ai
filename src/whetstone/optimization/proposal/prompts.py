@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.optimization.copro.ed1_contract import Ed1CoproProposalContract
 from whetstone.optimization.proposal.proposer import ProposalRequest
 
 COPRO_PROPOSAL_PROMPT_SCHEMA_VERSION = 2
@@ -25,29 +27,35 @@ COPRO_HISTORY_ROLE = (
 )
 
 
-def copro_proposal_prompt(request: ProposalRequest) -> str:
-    """Build Whetstone-native seed/history prompts with DSPy prompt topology.
-
-    ED1 COPRO optimizes only the encoder instruction. The exact immutable
-    encoder frame, fixed decoder, and body-only response rule are repeated in
-    every seed and history request so all proposer transports receive the same
-    semantic contract.
-    """
-
+def _instruction_contract_record(
+    request: ProposalRequest,
+) -> Mapping[str, Any]:
     raw_contract = request.context.get(COPRO_INSTRUCTION_CONTRACT_KEY)
     if not isinstance(raw_contract, ImmutableJsonObject):
         raise ValueError("COPRO proposal requires an instruction contract")
-    contract = Ed1CoproProposalContract.model_validate(raw_contract.to_json())
+    return raw_contract.to_json()
+
+
+def copro_proposal_prompt(request: ProposalRequest) -> str:
+    """Build Whetstone-native seed/history prompts with DSPy prompt topology.
+
+    COPRO optimizes one mutable instruction region. The exact immutable frame,
+    fixed decoder, and body-only response rule are repeated in every seed and
+    history request so all proposer transports receive the same semantic
+    contract.
+    """
+
+    contract = _instruction_contract_record(request)
     contract_lines = [
-        f"Optimization target: {contract.target_name}",
-        f"Task context: {contract.task_context}",
-        f"Budget mode: {contract.budget_mode}",
+        f"Optimization target: {contract['target_name']}",
+        f"Task context: {contract['task_context']}",
+        f"Budget mode: {contract['budget_mode']}",
         "Immutable encoder frame ({body} is the only mutable region):",
-        contract.encoder_frame,
+        contract["encoder_frame"],
         "Fixed decoder template:",
-        contract.decoder_template,
+        contract["decoder_template"],
         "Output contract:",
-        contract.output_rule,
+        contract["output_rule"],
     ]
 
     if request.proposal_mode == "seed_proposal":
