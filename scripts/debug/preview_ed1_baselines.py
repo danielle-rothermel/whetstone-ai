@@ -16,6 +16,10 @@ from rich.table import Table
 from rich.text import Text
 
 from whetstone.envs.ed1 import ED1_CANONICAL_MODEL, Ed1Instance, load_ed1_tasks
+from whetstone.envs.ed1_preview import (
+    ED1_SCORING_PREFLIGHT_TASK_ID,
+    Ed1ScoringRuntimeSummary,
+)
 from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
 from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
 from whetstone.envs.task_pools import (
@@ -35,10 +39,6 @@ from whetstone.optimization.copro.ed1_baseline_preview import (
     Ed1BaselinePreviewTranscript,
     Ed1BaselineSweepTranscript,
     run_ed1_baseline_sweep,
-)
-from whetstone.optimization.copro.ed1_scoring_preview import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
-    Ed1ScoringRuntimeSummary,
 )
 from whetstone.optimization.copro.ed1_task_model import (
     Ed1TaskModelConfig,

@@ -26,6 +26,10 @@ from whetstone.envs.ed1 import (
     Ed1Instance,
     load_ed1_tasks,
 )
+from whetstone.envs.ed1_preview import (
+    ED1_SCORING_PREFLIGHT_TASK_ID,
+    Ed1ScoringRuntimeSummary,
+)
 from whetstone.envs.ed1_runtime import build_ed1_scoring_runtime
 from whetstone.envs.ed1_scoring import CheckpointedCodeBatchScorer
 from whetstone.envs.task_pools import select_role_for_env
@@ -49,14 +53,12 @@ from whetstone.optimization.copro.ed1_dry_run import (
     Ed1CoproSweepRanges,
 )
 from whetstone.optimization.copro.ed1_scoring_preview import (
-    ED1_SCORING_PREFLIGHT_TASK_ID,
     Ed1CoproCandidateProgress,
     Ed1CoproRoundFailure,
     Ed1CoproScoredRound,
     Ed1CoproScoringPoint,
     Ed1CoproScoringTranscript,
     Ed1ScoredCandidate,
-    Ed1ScoringRuntimeSummary,
     run_ed1_copro_scoring_preview,
 )
 from whetstone.optimization.copro.ed1_scoring_preview_worker import (

@@ -7,6 +7,7 @@ import pytest
 from dr_store import MemoryBackend, ObjectStore
 
 from tests.envs.support import execution_policy, synthetic_ed1_tasks
+from whetstone.envs.ed1_preview import Ed1ScoringRuntimeSummary
 from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
 from whetstone.envs.ed1_scoring import CodeScore, CodeScoringInput
 from whetstone.envs.encdec_rollout import build_encoder_provider_call_config
@@ -21,9 +22,6 @@ from whetstone.optimization.copro.ed1_baseline_preview import (
     Ed1BaselinePreviewTranscript,
     run_ed1_baseline_preview,
     run_ed1_baseline_sweep,
-)
-from whetstone.optimization.copro.ed1_scoring_preview import (
-    Ed1ScoringRuntimeSummary,
 )
 from whetstone.optimization.copro.ed1_task_model import (
     Ed1TaskModelConfig,

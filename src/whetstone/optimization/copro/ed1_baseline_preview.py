@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable
 
 from dr_store import ObjectStore
@@ -12,6 +11,12 @@ from whetstone.envs.ed1 import (
     build_ed1_experiment,
 )
 from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
+from whetstone.envs.ed1_preview import (
+    Ed1ScoringPreflight,
+    Ed1ScoringRuntimeSummary,
+    ed1_environment_fingerprint,
+    run_ed1_scoring_preflight,
+)
 from whetstone.envs.ed1_scoring import CodeBatchScorer
 from whetstone.evaluation.analysis.calibration import run_anchor_calibration
 from whetstone.evaluation.analysis.power import PowerConfig, PowerResult
@@ -20,6 +25,11 @@ from whetstone.evaluation.analysis.statistics import (
     BootstrapCI,
 )
 from whetstone.evaluation.engine import EngineEvaluation, EvaluationEngine
+from whetstone.evaluation.preview.binding import preview_evaluation_binding
+from whetstone.evaluation.preview.persisted import (
+    load_component_traces,
+    load_evaluation_outputs,
+)
 from whetstone.evaluation.schema import (
     EvaluationComponentTraces,
     EvaluationEvidence,
@@ -29,12 +39,6 @@ from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.task_selection import TaskRoleSelection
-from whetstone.optimization.copro.ed1_scoring_preview import (
-    Ed1ScoringPreflight,
-    Ed1ScoringRuntimeSummary,
-    ed1_preview_evaluation_binding,
-    run_ed1_scoring_preflight,
-)
 from whetstone.optimization.copro.ed1_task_model import (
     Ed1TaskModelConfig,
     ed1_task_model_row_job,
@@ -89,26 +93,6 @@ class Ed1BaselineSweepTranscript(BaseModel):
     previews: tuple[Ed1BaselinePreviewTranscript, ...]
 
 
-def _load_outputs(
-    store: ObjectStore,
-    evidence: EvaluationEvidence,
-) -> EvaluationOutputsRecord:
-    raw = store.get(evidence.outputs_ref.reference)
-    if raw is None:
-        raise RuntimeError("persisted baseline outputs are missing")
-    return EvaluationOutputsRecord.model_validate(raw)
-
-
-def _load_component_traces(
-    store: ObjectStore,
-    evidence: EvaluationEvidence,
-) -> EvaluationComponentTraces:
-    raw = store.get(evidence.component_traces_ref.reference)
-    if raw is None:
-        raise RuntimeError("persisted baseline component traces are missing")
-    return EvaluationComponentTraces.model_validate_json(json.dumps(raw))
-
-
 def _selected_tasks(
     tasks: tuple[Ed1Instance, ...],
     task_ids: tuple[str, ...],
@@ -137,8 +121,8 @@ def _arm(
         label=label,
         instruction=instruction,
         evidence=evaluated.evidence,
-        outputs=_load_outputs(store, evaluated.evidence),
-        component_traces=_load_component_traces(store, evaluated.evidence),
+        outputs=load_evaluation_outputs(store, evaluated.evidence),
+        component_traces=load_component_traces(store, evaluated.evidence),
     )
 
 
@@ -209,11 +193,13 @@ def run_ed1_baseline_preview(
         prompt_cache=prompt_cache,
         batch_scorer=batch_scorer,
     )
-    binding = ed1_preview_evaluation_binding(
+    binding = preview_evaluation_binding(
         engine,
-        runtime,
         campaign="ed1-baseline-preview",
-        task_model_kind=task_model.kind.value,
+        provenance_note=(
+            f"{task_model.kind.value}-generation-real-humaneval-scoring"
+        ),
+        environment_fingerprint=ed1_environment_fingerprint(runtime),
     )
     calibration = run_anchor_calibration(
         engine=engine,

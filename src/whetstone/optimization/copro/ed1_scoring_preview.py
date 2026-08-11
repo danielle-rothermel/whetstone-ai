@@ -1,54 +1,45 @@
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr
 
-from whetstone.core.identity import TypedRef
-from whetstone.core.roles import EvaluationRole
 from whetstone.envs.ed1 import (
     ED1_DEFAULT_BLEND_CONFIG,
     Ed1Instance,
     build_ed1_experiment,
 )
-from whetstone.envs.ed1_blended import (
-    BoundedCompressionMetricConfig,
+from whetstone.envs.ed1_blended import BoundedCompressionMetricConfig
+from whetstone.envs.ed1_preview import (
+    Ed1ScoringPreflight,
+    Ed1ScoringRuntimeSummary,
+    ed1_environment_fingerprint,
+    run_ed1_scoring_preflight,
 )
-from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
-from whetstone.envs.ed1_scoring import (
-    CodeBatchScorer,
-    CodeScore,
-    CodeScoringInput,
+from whetstone.envs.ed1_scoring import CodeBatchScorer
+from whetstone.evaluation.engine import EvaluationEngine
+from whetstone.evaluation.preview.binding import preview_evaluation_binding
+from whetstone.evaluation.preview.persisted import (
+    load_aggregate_value,
+    load_component_traces,
+    load_evaluation_outputs,
 )
-from whetstone.evaluation import AggregationOutput
-from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
+from whetstone.evaluation.preview.resolution import evaluate_and_resolve
 from whetstone.evaluation.schema import (
     EvaluationComponentTraces,
     EvaluationEvidence,
     EvaluationOutputsRecord,
 )
-from whetstone.experiment.binding import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    EvaluationBinding,
-    ExecutionEnvironmentFingerprint,
-)
+from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import (
     Candidate,
     CandidateRef,
     candidate_reference,
 )
 from whetstone.experiment.task_selection import TaskRoleSelection
-from whetstone.optimization.contracts import (
-    INTENT_RESOLUTION_SCHEMA_VERSION,
-    EvaluationIntent,
-    IntentOutcome,
-    IntentResolution,
-    ResolutionClass,
-    ResolutionDetail,
-)
+from whetstone.optimization.contracts import IntentResolution
 from whetstone.optimization.copro.adapter import (
     CoproAttempt,
     CoproDriver,
@@ -71,30 +62,6 @@ from whetstone.optimization.proposal.proposer import (
     ProposerRouteConfig,
     ProposerTransport,
 )
-
-ED1_SCORING_PREFLIGHT_TASK_ID = "HumanEval/0"
-
-
-class Ed1ScoringRuntimeSummary(BaseModel):
-    """Runtime identity displayed and persisted with a scoring preview."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    evaluation_python: StrictStr
-    dr_code_version: StrictStr
-    runtime_identity_hash: StrictStr
-    probe: Ed1RuntimeProbe
-
-
-class Ed1ScoringPreflight(BaseModel):
-    """Ground-truth check completed before candidate evaluation."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    task_id: StrictStr
-    passed: bool
-    infrastructure_unknown: bool
-    outcome: StrictStr
 
 
 class Ed1ScoredCandidate(BaseModel):
@@ -170,98 +137,6 @@ class Ed1CoproRoundFailure(RuntimeError):
         super().__init__(attempt.terminal_failure or "COPRO proposal failed")
 
 
-def _one_score(scores: Sequence[CodeScore], *, context: str) -> CodeScore:
-    if len(scores) != 1:
-        raise ValueError(
-            f"{context} returned {len(scores)} scores, expected 1"
-        )
-    return scores[0]
-
-
-def run_ed1_scoring_preflight(
-    tasks: tuple[Ed1Instance, ...],
-    batch_scorer: CodeBatchScorer,
-) -> Ed1ScoringPreflight:
-    task = tasks[0].humaneval_task
-    score = _one_score(
-        batch_scorer(
-            (
-                CodeScoringInput(
-                    raw_submission=task.ground_truth_code,
-                    task=task,
-                ),
-            )
-        ),
-        context="runtime preflight",
-    )
-    result = Ed1ScoringPreflight(
-        task_id=task.task_id,
-        passed=score.passed,
-        infrastructure_unknown=score.infrastructure_unknown,
-        outcome=score.outcome,
-    )
-    if result.infrastructure_unknown or not result.passed:
-        raise RuntimeError(
-            "HumanEval ground-truth runtime preflight did not pass: "
-            f"{result.outcome}"
-        )
-    return result
-
-
-def _load_outputs(
-    store: ObjectStore, evidence: EvaluationEvidence
-) -> EvaluationOutputsRecord:
-    raw = store.get(evidence.outputs_ref.reference)
-    if raw is None:
-        raise RuntimeError("persisted evaluation outputs are missing")
-    return EvaluationOutputsRecord.model_validate(raw)
-
-
-def _load_component_traces(
-    store: ObjectStore, evidence: EvaluationEvidence
-) -> EvaluationComponentTraces:
-    raw = store.get(evidence.component_traces_ref.reference)
-    if raw is None:
-        raise RuntimeError("persisted component traces are missing")
-    return EvaluationComponentTraces.model_validate_json(json.dumps(raw))
-
-
-def _load_aggregate_value(
-    store: ObjectStore, reference: TypedRef
-) -> float | None:
-    raw = store.get(reference.reference)
-    if not isinstance(raw, dict):
-        raise RuntimeError("persisted rollout aggregate is missing")
-    output = AggregationOutput.model_validate(raw.get("aggregation_output"))
-    return output.value
-
-
-def ed1_preview_evaluation_binding(
-    engine: EvaluationEngine,
-    runtime: Ed1ScoringRuntimeSummary,
-    *,
-    campaign: str,
-    task_model_kind: str,
-) -> EvaluationBinding:
-    return EvaluationBinding(
-        schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
-        eval_config=engine.eval_config_ref,
-        role=EvaluationRole.INTERNAL,
-        campaign=campaign,
-        provider_execution_policy_ref=(engine.provider_execution_policy_ref),
-        environment_fingerprint=ExecutionEnvironmentFingerprint(
-            dependency_versions=(
-                ("dr-code", runtime.dr_code_version),
-                ("numpy", runtime.probe.numpy_version),
-            ),
-            runtime_identity=runtime.runtime_identity_hash,
-        ),
-        provenance_note=(
-            f"{task_model_kind}-generation-real-humaneval-scoring"
-        ),
-    )
-
-
 def _candidate_sequence(
     preview: Ed1CoproRoundPreview,
 ) -> tuple[Candidate, ...]:
@@ -273,7 +148,7 @@ def _candidate_sequence(
     return candidates
 
 
-def _score_candidate(
+def _build_ed1_scored_candidate(
     *,
     store: ObjectStore,
     engine: EvaluationEngine,
@@ -284,12 +159,16 @@ def _score_candidate(
     round_index: int,
     occurrence_ordinal: int,
 ) -> Ed1ScoredCandidate:
-    request = EvaluationRequest(
-        candidate=candidate,
-        evaluation_binding=binding,
+    evaluated, resolution = evaluate_and_resolve(
+        engine,
+        binding,
+        candidate,
         purpose=purpose,
+        run_id=run_id,
+        step_index=round_index,
+        occurrence_ordinal=occurrence_ordinal,
+        message="measured by the ED1 scoring preview",
     )
-    evaluated = engine.evaluate(request)
     reward_ref = evaluated.evidence.reward_ref
     if reward_ref is None:
         raise RuntimeError("internal ED1 evaluation returned no Reward")
@@ -297,32 +176,6 @@ def _score_candidate(
         raise RuntimeError(
             "ED1 blended Reward must cite primary and compression aggregates"
         )
-    intent = EvaluationIntent(
-        intent_id=(
-            f"{run_id}:{round_index}:{occurrence_ordinal}:"
-            f"{evaluated.evidence.candidate.identity_hash}"
-        ),
-        candidate=evaluated.evidence.candidate,
-        target_eval_config=binding.eval_config,
-        evaluation_binding=binding,
-        purpose=purpose,
-        run_id=run_id,
-        step_index=round_index,
-        expected_reward_policy_hash=reward_ref.record.reward_policy_hash,
-    )
-    resolution = IntentResolution(
-        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-        intent=intent,
-        outcome=IntentOutcome.COMPLETED,
-        detail=ResolutionDetail(
-            classification=ResolutionClass.MEASURED,
-            message="measured by the ED1 scoring preview",
-        ),
-        evaluation_result_ref=evaluated.evidence_ref,
-        reward_evidence_refs=reward_ref.record.evidence_refs,
-        resolved_eval_config=binding.eval_config,
-        reward_ref=reward_ref,
-    )
     attempt = CoproAttempt.from_resolution(
         occurrence_ordinal=occurrence_ordinal,
         round_index=round_index,
@@ -335,12 +188,12 @@ def _score_candidate(
         occurrence_ordinal=occurrence_ordinal,
         candidate=evaluated.evidence.candidate,
         evidence=evaluated.evidence,
-        outputs=_load_outputs(store, evaluated.evidence),
-        component_traces=_load_component_traces(store, evaluated.evidence),
-        primary_value=_load_aggregate_value(
+        outputs=load_evaluation_outputs(store, evaluated.evidence),
+        component_traces=load_component_traces(store, evaluated.evidence),
+        primary_value=load_aggregate_value(
             store, reward_ref.record.evidence_refs[0]
         ),
-        compression_value=_load_aggregate_value(
+        compression_value=load_aggregate_value(
             store, reward_ref.record.evidence_refs[1]
         ),
         resolution=resolution,
@@ -409,11 +262,13 @@ def run_ed1_copro_scoring_preview(
             concurrency=concurrency,
             batch_scorer=batch_scorer,
         )
-        binding = ed1_preview_evaluation_binding(
+        binding = preview_evaluation_binding(
             engine,
-            runtime,
             campaign="copro-scoring-preview",
-            task_model_kind=task_model.kind.value,
+            provenance_note=(
+                f"{task_model.kind.value}-generation-real-humaneval-scoring"
+            ),
+            environment_fingerprint=ed1_environment_fingerprint(runtime),
         )
         lifecycle = CoproDriver(settings.copro)
         state = lifecycle.initial_state(experiment.initial_candidate)
@@ -451,7 +306,7 @@ def run_ed1_copro_scoring_preview(
                             result=None,
                         )
                     )
-                evaluated = _score_candidate(
+                evaluated = _build_ed1_scored_candidate(
                     store=store,
                     engine=engine,
                     binding=binding,
@@ -507,16 +362,11 @@ def run_ed1_copro_scoring_preview(
 
 
 __all__ = [
-    "ED1_SCORING_PREFLIGHT_TASK_ID",
     "Ed1CoproCandidateProgress",
     "Ed1CoproRoundFailure",
     "Ed1CoproScoredRound",
     "Ed1CoproScoringPoint",
     "Ed1CoproScoringTranscript",
     "Ed1ScoredCandidate",
-    "Ed1ScoringPreflight",
-    "Ed1ScoringRuntimeSummary",
-    "ed1_preview_evaluation_binding",
     "run_ed1_copro_scoring_preview",
-    "run_ed1_scoring_preflight",
 ]

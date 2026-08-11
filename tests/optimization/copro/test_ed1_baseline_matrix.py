@@ -7,6 +7,7 @@ import pytest
 from dr_providers import ProviderKind, ReasoningEffort
 from pydantic import ValidationError
 
+from whetstone.envs.ed1_preview import Ed1ScoringRuntimeSummary
 from whetstone.envs.ed1_runtime import Ed1RuntimeProbe
 from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
@@ -29,9 +30,6 @@ from whetstone.optimization.copro.ed1_baseline_matrix import (
     map_openai_credential,
     parse_args,
     raise_open_file_limit,
-)
-from whetstone.optimization.copro.ed1_scoring_preview import (
-    Ed1ScoringRuntimeSummary,
 )
 
 _EXPECTED_TASK_IDS = (
