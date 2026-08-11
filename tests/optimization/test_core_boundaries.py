@@ -24,7 +24,8 @@ def _package_directories(root: Path) -> set[str]:
 
 def test_source_and_test_trees_share_functional_packages() -> None:
     assert _package_directories(Path("src/whetstone")) == FUNCTIONAL_PACKAGES
-    assert _package_directories(Path("tests")) == FUNCTIONAL_PACKAGES
+    test_packages = _package_directories(Path("tests")) - {"pathways"}
+    assert test_packages == FUNCTIONAL_PACKAGES
 
 
 def test_optimization_root_contains_only_shared_contracts() -> None:

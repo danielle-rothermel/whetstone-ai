@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Preview code-comp baselines with rich output.
+
+Automated pytest coverage for the same flow lives in
+``scripts/ci/preview-anchor-pathway.sh``.
+"""
+
 from __future__ import annotations
 
 import argparse

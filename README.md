@@ -398,10 +398,24 @@ Run the complete local gate before committing or pushing:
 ```
 
 For faster iteration while editing, run the fast subset (unit tests excluding slow
-integration, runner, and preview buckets):
+integration and pathway lanes):
 
 ```bash
 ./scripts/test-fast.sh
+```
+
+End-to-end pathway lanes live under `tests/pathways/` and run via dedicated scripts:
+
+```bash
+./scripts/ci/pathways.sh
+./scripts/ci/runner-cell-pathway.sh
+./scripts/ci/evaluation-restart-pathway.sh
+./scripts/ci/fanout-containment-pathway.sh
+./scripts/ci/prompt-cache-pathway.sh
+./scripts/ci/preview-anchor-pathway.sh
+./scripts/ci/sqlite-time-pathway.sh
+./scripts/ci/sqlite-contention-pathway.sh
+./scripts/ci/gepa-dbos-pathway.sh
 ```
 
 Install the same gate for both Git hooks with:
@@ -414,6 +428,7 @@ The authoritative unit lane is serial:
 
 ```bash
 uv run pytest tests/ -q \
+  --ignore=tests/pathways \
   -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention"
 ```
 

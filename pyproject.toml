@@ -66,6 +66,7 @@ markers = [
     "postgres_integration: exercises live PostgreSQL and DBOS behavior",
     "sqlite_time_integration: exercises SQLite behavior against real elapsed time",
     "sqlite_contention: exercises SQLite behavior under concurrent access",
+    "pathway: end-to-end lane exercised only via scripts/ci/*-pathway.sh; lives under tests/pathways/",
 ]
 
 [tool.pyright]

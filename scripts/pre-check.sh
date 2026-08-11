@@ -10,4 +10,5 @@ uv sync --locked --group dev
 # Specific tests own this fast gate through the precheck marker; exhaustive
 # and integration coverage remains in the CI lanes.
 uv run pytest -q -n auto \
+  --ignore=tests/pathways \
   -m "precheck and not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention"

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import sys
 import types
 from pathlib import Path
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar
 
 import pytest
 from dr_store import ObjectStore, SqliteBackend
@@ -32,7 +31,6 @@ from whetstone.optimization.gepa.contracts import (
     GepaCandidateComponent,
     GepaEffectRecorder,
     GepaEffectSlot,
-    GepaEvaluationEffectRequest,
     GepaProposalEffectRequest,
     GepaProposalEffectResult,
 )
@@ -419,7 +417,6 @@ _FULL_PROPOSAL_SHAPE = [
     "workflow:_proposal_provider_workflow",
     "step:_logical_proposal_step",
 ]
-
 _REPLAYED_PROPOSAL_SHAPE = ["workflow:_gepa_proposal_effect_workflow"]
 
 
@@ -502,97 +499,3 @@ def test_parent_replay_always_consumes_stable_child_operation(
         _operation_shape(_NestedReplayDbos.events) == _REPLAYED_PROPOSAL_SHAPE
     )
     assert _NestedReplayDbos.retries_allowed == [False]
-
-
-@pytest.mark.skipif(
-    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
-    reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
-)
-@pytest.mark.parametrize("effect_kind", ["evaluate", "propose"])
-@pytest.mark.postgres_integration
-def test_real_dbos_child_checkpoint_survives_outer_bind_crash(
-    tmp_path,
-    effect_kind: Literal["evaluate", "propose"],
-) -> None:
-    from uuid import uuid4
-
-    from dbos import DBOS, DBOSConfig
-
-    from whetstone.optimization.gepa.effect_runtime import (
-        DbosGepaEffectBroker,
-        register_gepa_evaluation_authority,
-        register_gepa_proposal_authority,
-    )
-
-    suffix = uuid4().hex[:10]
-    database_url = os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
-    config: DBOSConfig = {
-        "name": f"gepa-effect-{suffix}",
-        "system_database_url": database_url,
-        "application_database_url": database_url,
-        "application_version": f"gepa-effect-{suffix}",
-        "run_admin_server": False,
-        "use_listen_notify": False,
-    }
-    DBOS(config=config)
-    if effect_kind == "evaluate":
-        request = evaluation_request()
-    else:
-        request = _proposal_request()
-    context = request.slot.context.model_copy(
-        update={"run_id": f"gepa:real-dbos:{suffix}"}
-    )
-    authority_hash = typed_ref_for_record(
-        "test.gepa.real_authority",
-        {"suffix": suffix},
-    ).content_hash
-    authority_binding = request.authority.model_copy(
-        update={"authority_identity_hash": authority_hash}
-    )
-    request = request.model_copy(
-        update={
-            "slot": request.slot.model_copy(update={"context": context}),
-            "authority": authority_binding,
-        }
-    )
-    if effect_kind == "evaluate":
-        result = evaluation_result(
-            GepaEvaluationEffectRequest.model_validate(request)
-        )
-    else:
-        result = _proposal_result(
-            GepaProposalEffectRequest.model_validate(request)
-        )
-    authority = _DurableAuthority(authority_hash, result)
-    if effect_kind == "evaluate":
-        register_gepa_evaluation_authority(authority_hash, authority)
-    else:
-        register_gepa_proposal_authority(authority_hash, authority)
-    database = tmp_path / f"real-dbos-{effect_kind}-effect.sqlite"
-    store = ObjectStore(SqliteBackend(database))
-    first = DbosGepaEffectBroker(store)
-    recorder_method = (
-        "record_evaluation_result"
-        if effect_kind == "evaluate"
-        else "record_proposal_result"
-    )
-    original_record = getattr(first._recorder, recorder_method)
-
-    def crash_before_bind(*_args, **_kwargs):
-        raise RuntimeError("injected crash before outer result bind")
-
-    setattr(first._recorder, recorder_method, crash_before_bind)
-    try:
-        DBOS.launch()
-        with pytest.raises(RuntimeError, match="before outer result bind"):
-            getattr(first, effect_kind)(request)
-        assert authority.calls == 1
-        setattr(first._recorder, recorder_method, original_record)
-        replay = getattr(
-            DbosGepaEffectBroker(ObjectStore(SqliteBackend(database))),
-            effect_kind,
-        )(request)
-        assert replay == result
-        assert authority.calls == 1
-    finally:
-        DBOS.destroy()

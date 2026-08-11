@@ -9,7 +9,6 @@ and a completed cell that never constructs a DBOS runtime at all.
 from __future__ import annotations
 
 import inspect
-import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -28,7 +27,6 @@ from whetstone.optimization.proposal.proposer import (
     ProviderProposerTransport,
 )
 from whetstone.runner import cli as cli_module
-from whetstone.runner.cell import run_cell
 from whetstone.runner.cli import (
     DBOS_SYSTEM_DATABASE_URL_ENV,
     RunnerLaunch,
@@ -36,7 +34,6 @@ from whetstone.runner.cli import (
     load_task_split_manifest,
     run_cell_command,
 )
-from whetstone.runner.ledger import Ledger
 from whetstone.runner.startup import register_runtime
 
 
@@ -211,25 +208,6 @@ def test_the_runner_has_exactly_one_registration_site() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_completed_cell_never_constructs_a_dbos_runtime(
-    tmp_path: Path,
-) -> None:
-    """The short-circuit runs before any runtime or credits work."""
-    first = run_cell(cell_config(tmp_path))
-    assert first.record.is_completed()
-
-    launch = RunnerLaunch(cell=cell_config(tmp_path), transport=_transport())
-    outcome = run_cell_command(
-        launch,
-        # A URL that could never open proves the runtime was never built.
-        system_database_url="postgresql://invalid:1/nonexistent",
-        environ={},
-    )
-
-    assert outcome.skipped
-    assert outcome.record == first.record
-
-
 def test_default_system_database_is_per_cell_and_stable(
     tmp_path: Path,
 ) -> None:
@@ -304,50 +282,6 @@ def test_the_flag_and_env_var_resolve_the_system_database(
 
 class _LaunchReached(Exception):
     """Raised once the lifecycle reached ``DBOS.launch()``."""
-
-
-# --------------------------------------------------------------------------
-# Read-only commands
-# --------------------------------------------------------------------------
-
-
-def test_status_prints_every_validated_ledger_line(tmp_path: Path) -> None:
-    outcome = run_cell(cell_config(tmp_path))
-    result = CliRunner().invoke(
-        app, ["status", "--root", str(tmp_path / "ledger")]
-    )
-
-    assert result.exit_code == 0
-    records = json.loads(result.stdout)
-    assert [record["cell_id"] for record in records] == [
-        outcome.record.cell_id
-    ]
-
-
-def test_refinalize_reports_an_unchanged_correct_line(tmp_path: Path) -> None:
-    outcome = run_cell(cell_config(tmp_path))
-    result = CliRunner().invoke(
-        app,
-        [
-            "refinalize",
-            "--root",
-            str(tmp_path / "ledger"),
-            "--optimizer",
-            "identity",
-            "--env",
-            outcome.record.env,
-            "--attempt",
-            "0",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["changed"] is False
-    assert payload["record"]["cell_id"] == outcome.record.cell_id
-    assert Ledger(tmp_path / "ledger").load()[-1].status == (
-        outcome.record.status
-    )
 
 
 def test_factory_path_must_name_a_callable(tmp_path: Path) -> None:

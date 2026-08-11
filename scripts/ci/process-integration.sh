@@ -14,7 +14,6 @@ uv run pytest \
   tests/execution/test_partials.py \
   tests/execution/test_prompt_cache.py \
   tests/optimization/gepa/test_upstream_oracle.py \
-  tests/optimization/test_sqlite_contention_fork.py \
   tests/optimization/tools/test_contracts.py \
   tests/optimization/tools/test_evaluator.py \
   tests/optimization/tools/test_facade.py \
