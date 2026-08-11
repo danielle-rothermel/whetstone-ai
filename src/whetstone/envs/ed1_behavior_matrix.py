@@ -1,19 +1,14 @@
 from __future__ import annotations
 
-import argparse
-import fcntl
 import hashlib
 import os
-import resource
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
-from enum import UNIQUE, StrEnum, verify
+from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
-from uuid import uuid4
 
 from dr_providers import ReasoningEffort
 from dr_store import ObjectStore, SqliteBackend
@@ -52,16 +47,20 @@ from whetstone.evaluation.drivers.ed1_row_jobs import (
 )
 from whetstone.evaluation.preview.anchor import BaselinePreviewTranscript
 from whetstone.evaluation.schema import RowAccounting
-from whetstone.execution._file_lock import (
-    fsync_parent_directory,
-    open_private_regular_file,
-)
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitRole,
     load_task_split_manifest,
+)
+from whetstone.optimization.validation.matrix import (
+    BehaviorMatrixHooks,
+    MatrixTreatmentBase,
+    atomic_write_model,
+    map_openai_credential,
+    raise_open_file_limit,
+    run_behavior_matrix,
 )
 from whetstone.runner.routes import (
     ProviderRoute,
@@ -87,18 +86,17 @@ EXCLUDED_TASK_IDS = (
     "HumanEval/149",
     "HumanEval/162",
 )
-DEFAULT_TASK_MANIFEST = Path(__file__).with_name(
-    "humaneval_copro_challenge_v1.json"
+DEFAULT_TASK_MANIFEST = (
+    Path(__file__).resolve().parents[1]
+    / "experiment"
+    / "task_selection"
+    / "humaneval_copro_challenge_v1.json"
 )
 
 
-class Ed1BaselineMatrixTreatmentPlan(BaseModel):
+class Ed1BehaviorMatrixTreatmentPlan(MatrixTreatmentBase):
     """One exact model-by-budget treatment and its durable location."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    treatment_id: StrictStr
-    directory: StrictStr
     lane: StrictStr
     model: StrictStr
     provider_call_config_hash: StrictStr
@@ -109,7 +107,7 @@ class Ed1BaselineMatrixTreatmentPlan(BaseModel):
     planned_provider_calls: StrictInt
 
     @model_validator(mode="after")
-    def _validate_treatment(self) -> Ed1BaselineMatrixTreatmentPlan:
+    def _validate_treatment(self) -> Ed1BehaviorMatrixTreatmentPlan:
         if not self.treatment_id or not self.directory:
             raise ValueError("treatment ID and directory must be non-empty")
         if self.planned_rows < 1 or self.planned_provider_calls < 1:
@@ -135,7 +133,7 @@ class Ed1BaselineMatrixTreatmentPlan(BaseModel):
         return self
 
 
-class Ed1BaselineMatrixPlan(BaseModel):
+class Ed1BehaviorMatrixPlan(BaseModel):
     """Exact, restart-comparable plan persisted before provider calls."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -157,10 +155,10 @@ class Ed1BaselineMatrixPlan(BaseModel):
     pool_ceiling: StrictInt
     procedure_config_hash: StrictStr
     runtime: Ed1ScoringRuntimeSummary
-    treatments: tuple[Ed1BaselineMatrixTreatmentPlan, ...]
+    treatments: tuple[Ed1BehaviorMatrixTreatmentPlan, ...]
 
     @model_validator(mode="after")
-    def _validate_plan(self) -> Ed1BaselineMatrixPlan:
+    def _validate_plan(self) -> Ed1BehaviorMatrixPlan:
         if not self.task_ids or self.task_selection.task_ids != self.task_ids:
             raise ValueError("matrix task selection must match its task IDs")
         if self.repeats < 1 or self.concurrency < 1:
@@ -182,58 +180,11 @@ class Ed1BaselineMatrixPlan(BaseModel):
         return self
 
 
-@verify(UNIQUE)
-class TreatmentState(StrEnum):
-    """Durably logged matrix lifecycle states."""
-
-    RUN_STARTED = "run_started"
-    TREATMENT_STARTED = "treatment_started"
-    TREATMENT_SKIPPED = "treatment_skipped"
-    TREATMENT_COMPLETED = "treatment_completed"
-    TREATMENT_FAILED = "treatment_failed"
-    RUN_COMPLETED = "run_completed"
-
-
-class Ed1BaselineTreatmentStatus(BaseModel):
-    """One flushed process-log event with optional terminal row accounting."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: Literal[1] = MATRIX_SCHEMA_VERSION
-    timestamp: StrictStr
-    elapsed_seconds: float
-    state: TreatmentState
-    treatment_id: StrictStr | None = None
-    baseline_rows: RowAccounting | None = None
-    comparison_rows: RowAccounting | None = None
-    failure_type: StrictStr | None = None
-
-    @model_validator(mode="after")
-    def _validate_status(self) -> Ed1BaselineTreatmentStatus:
-        treatment_state = self.state not in {
-            TreatmentState.RUN_STARTED,
-            TreatmentState.RUN_COMPLETED,
-        }
-        if treatment_state != (self.treatment_id is not None):
-            raise ValueError(
-                "treatment lifecycle states require a treatment ID"
-            )
-        terminal_success = self.state in {
-            TreatmentState.TREATMENT_SKIPPED,
-            TreatmentState.TREATMENT_COMPLETED,
-        }
-        has_rows = (
-            self.baseline_rows is not None and self.comparison_rows is not None
-        )
-        if terminal_success != has_rows:
-            raise ValueError(
-                "successful terminal states require both row accounts"
-            )
-        if (self.state is TreatmentState.TREATMENT_FAILED) != (
-            self.failure_type is not None
-        ):
-            raise ValueError("only failed treatments carry a failure type")
-        return self
+@dataclass(frozen=True, slots=True)
+class _Ed1MatrixShared:
+    tasks: tuple[Ed1Instance, ...]
+    preflight_task: Ed1Instance
+    scorer: CheckpointedCodeBatchScorer
 
 
 def _provider_route(
@@ -304,14 +255,14 @@ def build_matrix_plan(
     task_selection: TaskRoleSelection,
     concurrency: int,
     runtime: Ed1ScoringRuntimeSummary,
-) -> Ed1BaselineMatrixPlan:
+) -> Ed1BehaviorMatrixPlan:
     """Build the exact immutable plan for a full matrix or four-model smoke."""
 
     task_ids = task_selection.task_ids
     budget_ratios = (None,) if mode == "smoke" else FULL_BUDGET_RATIOS
     repeats = 1 if mode == "smoke" else 3
     rows = len(task_ids) * repeats * 2
-    treatments: list[Ed1BaselineMatrixTreatmentPlan] = []
+    treatments: list[Ed1BehaviorMatrixTreatmentPlan] = []
     ordinal = 0
     for route in baseline_provider_routes():
         for budget_ratio in budget_ratios:
@@ -321,7 +272,7 @@ def build_matrix_plan(
                 f"budget-{_budget_label(budget_ratio)}"
             )
             treatments.append(
-                Ed1BaselineMatrixTreatmentPlan(
+                Ed1BehaviorMatrixTreatmentPlan(
                     treatment_id=treatment_id,
                     directory=treatment_id,
                     lane=route.lane,
@@ -341,7 +292,7 @@ def build_matrix_plan(
         if mode == "smoke"
         else task_selection.eligible_pool_count or len(task_ids)
     )
-    return Ed1BaselineMatrixPlan(
+    return Ed1BehaviorMatrixPlan(
         mode=mode,
         evaluation_python=str(evaluation_python),
         evaluation_python_sha256=_sha256_file(evaluation_python),
@@ -370,114 +321,6 @@ def _sha256_file(path: Path) -> str:
         while block := source.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _atomic_write_model(path: Path, model: BaseModel) -> None:
-    body = model.model_dump_json(indent=2) + "\n"
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    descriptor: int | None = None
-    try:
-        descriptor = open_private_regular_file(
-            temporary,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        )
-        with os.fdopen(descriptor, "w", encoding="utf-8") as destination:
-            descriptor = None
-            destination.write(body)
-            destination.flush()
-            os.fsync(destination.fileno())
-        os.replace(temporary, path)
-        fsync_parent_directory(path)
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if temporary.exists():
-            temporary.unlink()
-
-
-def _prepare_manifest(
-    plan: Ed1BaselineMatrixPlan,
-    *,
-    path: Path,
-    resume: bool,
-) -> None:
-    if resume:
-        try:
-            existing = Ed1BaselineMatrixPlan.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
-        except (OSError, ValidationError) as exc:
-            raise RuntimeError(
-                "--resume requires a valid existing run-manifest.json"
-            ) from exc
-        if existing != plan:
-            raise RuntimeError(
-                "refusing unsafe resume: current plan does not exactly match "
-                "run-manifest.json"
-            )
-        return
-    if path.exists():
-        raise RuntimeError(
-            "output already contains run-manifest.json; use --resume with the "
-            "exact same plan or choose a new output directory"
-        )
-    _atomic_write_model(path, plan)
-
-
-def _append_status(path: Path, status: Ed1BaselineTreatmentStatus) -> None:
-    body = status.model_dump_json() + "\n"
-    with path.open("a", encoding="utf-8") as destination:
-        destination.write(body)
-        destination.flush()
-        os.fsync(destination.fileno())
-
-
-@contextmanager
-def _run_lock(path: Path) -> Iterator[None]:
-    descriptor = open_private_regular_file(
-        path,
-        os.O_RDWR | os.O_CREAT,
-    )
-    try:
-        try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise RuntimeError(
-                f"another behavior-matrix process holds {path}"
-            ) from exc
-        yield
-    finally:
-        fcntl.flock(descriptor, fcntl.LOCK_UN)
-        os.close(descriptor)
-
-
-def raise_open_file_limit(concurrency: int) -> int:
-    """Raise RLIMIT_NOFILE to the matrix fanout requirement and return it."""
-
-    if concurrency < 1:
-        raise ValueError("concurrency must be positive")
-    required = max(4096, concurrency * 64)
-    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if soft >= required:
-        return required
-    if hard != resource.RLIM_INFINITY and hard < required:
-        raise RuntimeError(
-            f"open-file hard limit {hard} is below required limit {required}"
-        )
-    resource.setrlimit(resource.RLIMIT_NOFILE, (required, hard))
-    return required
-
-
-def map_openai_credential(
-    environment: dict[str, str] | os._Environ[str],
-) -> None:
-    """Expose the mise OpenAI credential only when runtime naming is absent."""
-
-    if (
-        "OPENAI_API_KEY" not in environment
-        and "MARIMO_OPENAI_API_KEY" in environment
-    ):
-        environment["OPENAI_API_KEY"] = environment["MARIMO_OPENAI_API_KEY"]
 
 
 def _tasks_by_id(
@@ -520,8 +363,8 @@ def _select_tasks(
 def _validate_result(
     transcript: BaselinePreviewTranscript,
     *,
-    plan: Ed1BaselineMatrixPlan,
-    treatment: Ed1BaselineMatrixTreatmentPlan,
+    plan: Ed1BehaviorMatrixPlan,
+    treatment: Ed1BehaviorMatrixTreatmentPlan,
 ) -> None:
     baseline_binding = transcript.baseline.evidence.evaluation_binding
     comparison_binding = transcript.ceiling.evidence.evaluation_binding
@@ -573,8 +416,8 @@ def _validate_result(
 def _load_valid_result(
     path: Path,
     *,
-    plan: Ed1BaselineMatrixPlan,
-    treatment: Ed1BaselineMatrixTreatmentPlan,
+    plan: Ed1BehaviorMatrixPlan,
+    treatment: Ed1BehaviorMatrixTreatmentPlan,
 ) -> BaselinePreviewTranscript | None:
     if not path.exists():
         return None
@@ -604,7 +447,77 @@ def _row_summary(transcript: BaselinePreviewTranscript) -> str:
     )
 
 
-def run_baseline_behavior_matrix(
+def _status_row_accounts(
+    transcript: BaselinePreviewTranscript,
+) -> tuple[RowAccounting, RowAccounting]:
+    return (
+        transcript.baseline.evidence.row_accounting,
+        transcript.ceiling.evidence.row_accounting,
+    )
+
+
+def _build_hooks(
+    *,
+    shared: _Ed1MatrixShared,
+) -> BehaviorMatrixHooks[
+    Ed1BehaviorMatrixPlan,
+    Ed1BehaviorMatrixTreatmentPlan,
+    BaselinePreviewTranscript,
+    _Ed1MatrixShared,
+]:
+    @contextmanager
+    def shared_context(
+        _output_dir: Path, _plan: Ed1BehaviorMatrixPlan
+    ) -> Iterator[_Ed1MatrixShared]:
+        yield shared
+
+    def execute_treatment(
+        treatment: Ed1BehaviorMatrixTreatmentPlan,
+        plan: Ed1BehaviorMatrixPlan,
+        matrix_shared: _Ed1MatrixShared,
+        log: Callable[[str], None],
+    ) -> BaselinePreviewTranscript:
+        treatment_dir = Path(plan.output_dir) / treatment.directory
+        return run_ed1_anchor_baseline_preview(
+            store=ObjectStore(
+                SqliteBackend(treatment_dir / "objects.sqlite3")
+            ),
+            tasks=matrix_shared.tasks,
+            task_ids=plan.task_ids,
+            task_selection=plan.task_selection,
+            preflight_task=matrix_shared.preflight_task,
+            pool_ceiling=plan.pool_ceiling,
+            task_model=treatment.task_model,
+            batch_scorer=matrix_shared.scorer,
+            runtime=plan.runtime,
+            budget_ratio=treatment.budget_ratio,
+            concurrency=plan.concurrency,
+            repeats=plan.repeats,
+            partial_log=PartialLog(treatment_dir / "partial-log"),
+            prompt_cache=PromptResultCache(treatment_dir / "prompt-cache"),
+            log=log,
+        )
+
+    return BehaviorMatrixHooks(
+        shared_context=shared_context,
+        execute_treatment=execute_treatment,
+        validate_result=lambda result, plan, treatment: _validate_result(
+            result,
+            plan=plan,
+            treatment=treatment,
+        ),
+        load_valid_result=lambda path, plan, treatment: _load_valid_result(
+            path,
+            plan=plan,
+            treatment=treatment,
+        ),
+        persist_result=lambda path, result: atomic_write_model(path, result),
+        row_summary=_row_summary,
+        status_row_accounts=_status_row_accounts,
+    )
+
+
+def run_ed1_baseline_behavior_matrix(
     *,
     evaluation_python: Path,
     snapshot_path: Path,
@@ -613,7 +526,7 @@ def run_baseline_behavior_matrix(
     resume: bool = False,
     concurrency: int = DEFAULT_CONCURRENCY,
     smoke: bool = False,
-) -> Ed1BaselineMatrixPlan:
+) -> Ed1BehaviorMatrixPlan:
     """Run or exactly resume the fixed ED1 baseline behavior matrix."""
 
     launched_at = perf_counter()
@@ -635,7 +548,6 @@ def run_baseline_behavior_matrix(
         )
     map_openai_credential(os.environ)
     required_files = raise_open_file_limit(concurrency)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     def progress(message: str) -> None:
         elapsed = perf_counter() - launched_at
@@ -645,221 +557,47 @@ def run_baseline_behavior_matrix(
         f"open-file soft limit prepared (required={required_files}); "
         f"output={output_dir}"
     )
-    with _run_lock(output_dir / ".run.lock"):
-        manifest_path = output_dir / "run-manifest.json"
-        if resume and not manifest_path.is_file():
-            raise RuntimeError(
-                "--resume requires an existing run-manifest.json"
-            )
-        if not resume:
-            unexpected = tuple(
-                path.name
-                for path in output_dir.iterdir()
-                if path.name != ".run.lock"
-            )
-            if unexpected:
-                raise RuntimeError(
-                    "refusing to start in a non-empty output directory: "
-                    + ", ".join(sorted(unexpected))
-                )
-        tasks, selection, preflight_task = _select_tasks(
-            manifest_path=task_manifest_path,
-            snapshot_path=snapshot_path,
-            smoke=smoke,
-        )
-        runtime = build_ed1_scoring_runtime(
-            runtime_executable=evaluation_python,
-            record_root=output_dir / "code-execution-records",
-        )
-        runtime_summary = Ed1ScoringRuntimeSummary(
+    tasks, selection, preflight_task = _select_tasks(
+        manifest_path=task_manifest_path,
+        snapshot_path=snapshot_path,
+        smoke=smoke,
+    )
+    runtime = build_ed1_scoring_runtime(
+        runtime_executable=evaluation_python,
+        record_root=output_dir / "code-execution-records",
+    )
+    plan = build_matrix_plan(
+        mode="smoke" if smoke else "full",
+        evaluation_python=evaluation_python,
+        snapshot_path=snapshot_path,
+        task_manifest_path=task_manifest_path,
+        output_dir=output_dir,
+        task_selection=selection,
+        concurrency=concurrency,
+        runtime=Ed1ScoringRuntimeSummary(
             evaluation_python=runtime.probe.python_executable,
             dr_code_version=version("dr-code"),
             runtime_identity_hash=runtime.runtime_identity_hash,
             probe=runtime.probe,
+        ),
+    )
+    with CheckpointedCodeBatchScorer(
+        output_dir / "code-scoring-cache.sqlite3",
+        runtime_identity=runtime.runtime_identity,
+        executor=runtime.executor,
+    ) as scorer:
+        matrix_shared = _Ed1MatrixShared(
+            tasks=tasks,
+            preflight_task=preflight_task,
+            scorer=scorer,
         )
-        plan = build_matrix_plan(
-            mode="smoke" if smoke else "full",
-            evaluation_python=evaluation_python,
-            snapshot_path=snapshot_path,
-            task_manifest_path=task_manifest_path,
+        return run_behavior_matrix(
+            plan=plan,
             output_dir=output_dir,
-            task_selection=selection,
-            concurrency=concurrency,
-            runtime=runtime_summary,
+            resume=resume,
+            hooks=_build_hooks(shared=matrix_shared),
+            progress=progress,
         )
-        _prepare_manifest(plan, path=manifest_path, resume=resume)
-        process_log = output_dir / "process-log.jsonl"
-
-        def status(
-            state: TreatmentState,
-            *,
-            treatment_id: str | None = None,
-            transcript: BaselinePreviewTranscript | None = None,
-            failure_type: str | None = None,
-        ) -> None:
-            _append_status(
-                process_log,
-                Ed1BaselineTreatmentStatus(
-                    timestamp=datetime.now(UTC).isoformat(),
-                    elapsed_seconds=perf_counter() - launched_at,
-                    state=state,
-                    treatment_id=treatment_id,
-                    baseline_rows=(
-                        None
-                        if transcript is None
-                        else transcript.baseline.evidence.row_accounting
-                    ),
-                    comparison_rows=(
-                        None
-                        if transcript is None
-                        else transcript.ceiling.evidence.row_accounting
-                    ),
-                    failure_type=failure_type,
-                ),
-            )
-
-        status(TreatmentState.RUN_STARTED)
-        progress(
-            f"manifest ready; treatments={len(plan.treatments)}, "
-            f"tasks={len(plan.task_ids)}, repeats={plan.repeats}"
-        )
-        with CheckpointedCodeBatchScorer(
-            output_dir / "code-scoring-cache.sqlite3",
-            runtime_identity=runtime.runtime_identity,
-            executor=runtime.executor,
-        ) as scorer:
-            for index, treatment in enumerate(plan.treatments, start=1):
-                treatment_dir = output_dir / treatment.directory
-                treatment_dir.mkdir(parents=True, exist_ok=True)
-                result_path = treatment_dir / "result.json"
-                existing = (
-                    _load_valid_result(
-                        result_path,
-                        plan=plan,
-                        treatment=treatment,
-                    )
-                    if resume
-                    else None
-                )
-                if existing is not None:
-                    status(
-                        TreatmentState.TREATMENT_SKIPPED,
-                        treatment_id=treatment.treatment_id,
-                        transcript=existing,
-                    )
-                    progress(
-                        f"[{index}/{len(plan.treatments)}] skipped valid "
-                        f"{treatment.treatment_id}: {_row_summary(existing)}"
-                    )
-                    continue
-                status(
-                    TreatmentState.TREATMENT_STARTED,
-                    treatment_id=treatment.treatment_id,
-                )
-                progress(
-                    f"[{index}/{len(plan.treatments)}] starting "
-                    f"{treatment.treatment_id} "
-                    f"(rows={treatment.planned_rows}, "
-                    f"provider_calls={treatment.planned_provider_calls})"
-                )
-
-                def treatment_progress(
-                    message: str,
-                    treatment_id: str = treatment.treatment_id,
-                ) -> None:
-                    progress(f"{treatment_id}: {message}")
-
-                try:
-                    transcript = run_ed1_anchor_baseline_preview(
-                        store=ObjectStore(
-                            SqliteBackend(treatment_dir / "objects.sqlite3")
-                        ),
-                        tasks=tasks,
-                        task_ids=plan.task_ids,
-                        task_selection=plan.task_selection,
-                        preflight_task=preflight_task,
-                        pool_ceiling=plan.pool_ceiling,
-                        task_model=treatment.task_model,
-                        batch_scorer=scorer,
-                        runtime=plan.runtime,
-                        budget_ratio=treatment.budget_ratio,
-                        concurrency=plan.concurrency,
-                        repeats=plan.repeats,
-                        partial_log=PartialLog(treatment_dir / "partial-log"),
-                        prompt_cache=PromptResultCache(
-                            treatment_dir / "prompt-cache"
-                        ),
-                        log=treatment_progress,
-                    )
-                    _validate_result(
-                        transcript,
-                        plan=plan,
-                        treatment=treatment,
-                    )
-                    _atomic_write_model(result_path, transcript)
-                except BaseException as exc:
-                    status(
-                        TreatmentState.TREATMENT_FAILED,
-                        treatment_id=treatment.treatment_id,
-                        failure_type=type(exc).__name__,
-                    )
-                    progress(
-                        f"[{index}/{len(plan.treatments)}] failed "
-                        f"{treatment.treatment_id} ({type(exc).__name__})"
-                    )
-                    raise
-                status(
-                    TreatmentState.TREATMENT_COMPLETED,
-                    treatment_id=treatment.treatment_id,
-                    transcript=transcript,
-                )
-                progress(
-                    f"[{index}/{len(plan.treatments)}] completed "
-                    f"{treatment.treatment_id}: {_row_summary(transcript)}"
-                )
-        status(TreatmentState.RUN_COMPLETED)
-        progress("baseline behavior matrix completed")
-        return plan
-
-
-def _positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed < 1:
-        raise argparse.ArgumentTypeError("must be positive")
-    return parsed
-
-
-def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Run the fixed ED1 baseline behavior matrix."
-    )
-    parser.add_argument("--evaluation-python", required=True, type=Path)
-    parser.add_argument("--snapshot-path", required=True, type=Path)
-    parser.add_argument("--output-dir", required=True, type=Path)
-    parser.add_argument("--resume", action="store_true")
-    parser.add_argument(
-        "--concurrency",
-        type=_positive_int,
-        default=DEFAULT_CONCURRENCY,
-    )
-    parser.add_argument(
-        "--smoke",
-        action="store_true",
-        help="run all four routes on one task, one repeat, unbudgeted",
-    )
-    return parser.parse_args(argv)
-
-
-def main(argv: list[str] | None = None) -> None:
-    args = parse_args(argv)
-    run_baseline_behavior_matrix(
-        evaluation_python=args.evaluation_python,
-        snapshot_path=args.snapshot_path,
-        output_dir=args.output_dir,
-        resume=args.resume,
-        concurrency=args.concurrency,
-        smoke=args.smoke,
-    )
 
 
 __all__ = [
@@ -867,15 +605,9 @@ __all__ = [
     "DEFAULT_TASK_MANIFEST",
     "EXCLUDED_TASK_IDS",
     "FULL_BUDGET_RATIOS",
-    "Ed1BaselineMatrixPlan",
-    "Ed1BaselineMatrixTreatmentPlan",
-    "Ed1BaselineTreatmentStatus",
-    "TreatmentState",
+    "Ed1BehaviorMatrixPlan",
+    "Ed1BehaviorMatrixTreatmentPlan",
     "baseline_provider_routes",
     "build_matrix_plan",
-    "main",
-    "map_openai_credential",
-    "parse_args",
-    "raise_open_file_limit",
-    "run_baseline_behavior_matrix",
+    "run_ed1_baseline_behavior_matrix",
 ]

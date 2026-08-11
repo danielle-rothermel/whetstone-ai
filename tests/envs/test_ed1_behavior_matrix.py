@@ -1,12 +1,23 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 from pathlib import Path
 from typing import Literal
 
 import pytest
 from dr_providers import ProviderKind, ReasoningEffort
-from pydantic import ValidationError
 
+from whetstone.envs import ed1_behavior_matrix as matrix
+from whetstone.envs.ed1_behavior_matrix import (
+    EXCLUDED_TASK_IDS,
+    FULL_BUDGET_RATIOS,
+    Ed1BehaviorMatrixPlan,
+    baseline_provider_routes,
+    build_matrix_plan,
+    map_openai_credential,
+    run_ed1_baseline_behavior_matrix,
+)
 from whetstone.envs.ed1_runtime import (
     Ed1RuntimeProbe,
     Ed1ScoringRuntimeSummary,
@@ -14,25 +25,12 @@ from whetstone.envs.ed1_runtime import (
 from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
 )
-from whetstone.evaluation.schema import RowAccounting
 from whetstone.experiment.task_selection import (
     TaskRoleSelection,
     TaskSplitRole,
     load_task_split_manifest,
 )
-from whetstone.optimization.copro import ed1_baseline_matrix as matrix
-from whetstone.optimization.copro.ed1_baseline_matrix import (
-    EXCLUDED_TASK_IDS,
-    FULL_BUDGET_RATIOS,
-    Ed1BaselineMatrixPlan,
-    Ed1BaselineTreatmentStatus,
-    TreatmentState,
-    baseline_provider_routes,
-    build_matrix_plan,
-    map_openai_credential,
-    parse_args,
-    raise_open_file_limit,
-)
+from whetstone.optimization.validation.matrix import prepare_manifest
 
 _EXPECTED_TASK_IDS = (
     "HumanEval/32",
@@ -45,6 +43,9 @@ _EXPECTED_TASK_IDS = (
     "HumanEval/120",
     "HumanEval/76",
     "HumanEval/55",
+)
+_MANIFEST = Path(__file__).resolve().parents[2] / (
+    "src/whetstone/experiment/task_selection/humaneval_copro_challenge_v1.json"
 )
 
 
@@ -81,7 +82,7 @@ def _plan(
     tmp_path: Path,
     *,
     mode: Literal["full", "smoke"] = "full",
-) -> Ed1BaselineMatrixPlan:
+) -> Ed1BehaviorMatrixPlan:
     evaluation_python = tmp_path / "python"
     snapshot = tmp_path / "snapshot.json"
     manifest = tmp_path / "tasks.json"
@@ -138,10 +139,7 @@ def test_provider_routes_are_the_exact_four_treatments() -> None:
 
 
 def test_frozen_manifest_selection_matches_declared_screen() -> None:
-    manifest = load_task_split_manifest(
-        Path(__file__).parents[3]
-        / "src/whetstone/optimization/copro/humaneval_copro_challenge_v1.json"
-    )
+    manifest = load_task_split_manifest(_MANIFEST)
 
     selection = select_lowest_historical_pass_rate_for_env(
         manifest,
@@ -202,62 +200,29 @@ def test_manifest_resume_requires_exact_plan_equality(tmp_path: Path) -> None:
     output.mkdir()
     path = output / "run-manifest.json"
 
-    matrix._prepare_manifest(plan, path=path, resume=False)
-    matrix._prepare_manifest(plan, path=path, resume=True)
+    prepare_manifest(
+        plan,
+        path=path,
+        resume=False,
+        plan_type=Ed1BehaviorMatrixPlan,
+    )
+    prepare_manifest(
+        plan,
+        path=path,
+        resume=True,
+        plan_type=Ed1BehaviorMatrixPlan,
+    )
 
-    restored = Ed1BaselineMatrixPlan.model_validate_json(path.read_text())
+    restored = Ed1BehaviorMatrixPlan.model_validate_json(path.read_text())
     assert restored == plan
     mismatched = plan.model_copy(update={"concurrency": 99})
     with pytest.raises(RuntimeError, match="does not exactly match"):
-        matrix._prepare_manifest(mismatched, path=path, resume=True)
-
-
-def test_process_log_status_is_typed_and_flushed(tmp_path: Path) -> None:
-    rows = RowAccounting(
-        planned=30,
-        present=29,
-        missing=0,
-        failed=1,
-        invalid=0,
-    )
-    status = Ed1BaselineTreatmentStatus(
-        timestamp="2026-08-08T12:00:00+00:00",
-        elapsed_seconds=1.25,
-        state=TreatmentState.TREATMENT_COMPLETED,
-        treatment_id="treatment-1",
-        baseline_rows=rows,
-        comparison_rows=rows,
-    )
-    path = tmp_path / "process-log.jsonl"
-
-    matrix._append_status(path, status)
-
-    assert (
-        Ed1BaselineTreatmentStatus.model_validate_json(path.read_text())
-        == status
-    )
-    with pytest.raises(ValidationError, match="both row accounts"):
-        Ed1BaselineTreatmentStatus(
-            timestamp="2026-08-08T12:00:00+00:00",
-            elapsed_seconds=1.25,
-            state=TreatmentState.TREATMENT_COMPLETED,
-            treatment_id="treatment-1",
+        prepare_manifest(
+            mismatched,
+            path=path,
+            resume=True,
+            plan_type=Ed1BehaviorMatrixPlan,
         )
-
-
-def test_open_file_limit_uses_the_concurrency_requirement(monkeypatch) -> None:
-    updated: list[tuple[int, int]] = []
-    monkeypatch.setattr(
-        matrix.resource, "getrlimit", lambda _kind: (1024, 10_000)
-    )
-    monkeypatch.setattr(
-        matrix.resource,
-        "setrlimit",
-        lambda _kind, limits: updated.append(limits),
-    )
-
-    assert raise_open_file_limit(100) == 6_400
-    assert updated == [(6_400, 10_000)]
 
 
 def test_openai_credential_mapping_never_overwrites_runtime_name() -> None:
@@ -273,8 +238,91 @@ def test_openai_credential_mapping_never_overwrites_runtime_name() -> None:
     assert environment["OPENAI_API_KEY"] == "runtime-secret"
 
 
+def test_run_ed1_baseline_behavior_matrix_delegates_to_generic_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evaluation_python = tmp_path / "python"
+    snapshot = tmp_path / "snapshot.json"
+    manifest = tmp_path / "tasks.json"
+    output = tmp_path / "output"
+    for path in (evaluation_python, snapshot, manifest):
+        path.write_bytes(b"x")
+    monkeypatch.setenv("DR_CODE_DISPOSABLE_WORKER", "1")
+
+    plan = _plan(tmp_path, mode="smoke")
+    captured: dict[str, dict[str, object]] = {}
+
+    class _FakeRuntime:
+        runtime_identity_hash = "a" * 64
+        runtime_identity = object()
+        executor = object()
+        probe = _runtime(evaluation_python).probe
+
+    class _FakeScorer:
+        def __enter__(self) -> _FakeScorer:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_run_behavior_matrix(**kwargs: object) -> Ed1BehaviorMatrixPlan:
+        captured["kwargs"] = kwargs
+        return plan
+
+    monkeypatch.setattr(
+        matrix,
+        "_select_tasks",
+        lambda **_kwargs: ((), _selection(("HumanEval/32",)), object()),
+    )
+    monkeypatch.setattr(
+        matrix,
+        "build_ed1_scoring_runtime",
+        lambda **_kwargs: _FakeRuntime(),
+    )
+    monkeypatch.setattr(matrix, "build_matrix_plan", lambda **_kwargs: plan)
+    monkeypatch.setattr(
+        matrix,
+        "run_behavior_matrix",
+        fake_run_behavior_matrix,
+    )
+    monkeypatch.setattr(matrix, "raise_open_file_limit", lambda _c: 4096)
+    monkeypatch.setattr(matrix, "map_openai_credential", lambda _e: None)
+    monkeypatch.setattr(
+        matrix,
+        "CheckpointedCodeBatchScorer",
+        lambda *_args, **_kwargs: _FakeScorer(),
+    )
+
+    result = run_ed1_baseline_behavior_matrix(
+        evaluation_python=evaluation_python,
+        snapshot_path=snapshot,
+        output_dir=output,
+        task_manifest_path=manifest,
+        smoke=True,
+        concurrency=1,
+    )
+
+    assert result == plan
+    assert captured["kwargs"]["plan"] == plan
+    assert captured["kwargs"]["output_dir"] == output
+
+
 def test_cli_requires_paths_and_exposes_resume_smoke_and_concurrency() -> None:
-    args = parse_args(
+    script = (
+        Path(__file__).parents[2]
+        / "scripts/experiments/run_baseline_behavior_matrix.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "test_run_baseline_behavior_matrix_cli",
+        script,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    args = module.parse_args(
         [
             "--evaluation-python",
             "/runtime/python",

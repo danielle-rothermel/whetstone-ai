@@ -15,9 +15,8 @@ from whetstone.experiment.task_selection import (
     parse_task_split_manifest,
 )
 
-_COPRO_MANIFEST = (
-    Path(__file__).parents[3]
-    / "src/whetstone/optimization/copro/humaneval_copro_challenge_v1.json"
+_COPRO_MANIFEST = Path(__file__).resolve().parents[3] / (
+    "src/whetstone/experiment/task_selection/humaneval_copro_challenge_v1.json"
 )
 
 
