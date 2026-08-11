@@ -657,123 +657,104 @@ def test_atomic_publication_fsyncs_entry_and_stats_directories(
 
 
 @pytest.mark.process_integration
-def test_restart_reconciles_kill_after_durable_entry_publication(
+@pytest.mark.parametrize(
+    "stage",
+    (
+        "after_publication",
+        "after_stats_write",
+        "after_applied_rename",
+    ),
+)
+def test_restart_reconciles_kill_after_crash_window(
     tmp_path: Path,
+    stage: str,
 ) -> None:
-    context = multiprocessing.get_context("spawn")
-    output = context.Queue()
-    process = context.Process(
-        target=execute_cache_worker,
-        args=(
-            str(tmp_path),
-            str(tmp_path / "invocations"),
-            0,
-            None,
-            output,
-        ),
-        kwargs={"crash_after_publication": True},
+    policy = s.build_execution_policy(max_attempts=1)
+    key = prompt_cache_key(cache_request(), policy, 0, 0)
+
+    if stage == "after_publication":
+        context = multiprocessing.get_context("spawn")
+        output = context.Queue()
+        process = context.Process(
+            target=execute_cache_worker,
+            args=(
+                str(tmp_path),
+                str(tmp_path / "invocations"),
+                0,
+                None,
+                output,
+            ),
+            kwargs={"crash_after_publication": True},
+        )
+        started = []
+        try:
+            process.start()
+            started.append(process)
+            process.join(timeout=20)
+            assert process.exitcode == 86
+        finally:
+            terminate_processes(started, timeout=20)
+
+        cache = PromptResultCache(root=tmp_path)
+        entry_path = cache._path_for(key)
+        pending_path = cache._pending_accounting_path_for(key)
+        assert entry_path.exists()
+        assert pending_path.exists()
+        assert not cache._stats_path.exists()
+
+        restarted = PromptResultCache(root=tmp_path)
+        assert restarted.counters() == {"hits": 0, "misses": 1, "stores": 1}
+        assert restarted.get_result(key) is not None
+        assert not pending_path.exists()
+        assert not cache._applied_accounting_path_for(key).exists()
+        return
+
+    crash_kwargs = (
+        {"crash_after_stats_write": True}
+        if stage == "after_stats_write"
+        else {"crash_after_applied_rename": True}
     )
-    started = []
-    try:
-        process.start()
-        started.append(process)
-        process.join(timeout=20)
-        assert process.exitcode == 86
-    finally:
-        terminate_processes(started, timeout=20)
-
-    cache = PromptResultCache(root=tmp_path)
-    key = prompt_cache_key(
-        cache_request(),
-        s.build_execution_policy(max_attempts=1),
-        0,
-        0,
-    )
-    entry_path = cache._path_for(key)
-    pending_path = cache._pending_accounting_path_for(key)
-    assert entry_path.exists()
-    assert pending_path.exists()
-    assert not cache._stats_path.exists()
-
-    restarted = PromptResultCache(root=tmp_path)
-    assert restarted.counters() == {"hits": 0, "misses": 1, "stores": 1}
-    assert restarted.get_result(key) is not None
-    assert not pending_path.exists()
-    assert not cache._applied_accounting_path_for(key).exists()
-
-
-@pytest.mark.process_integration
-def test_restart_reconciles_kill_after_stats_write_before_journal_rename(
-    tmp_path: Path,
-) -> None:
+    expected_exitcode = 88 if stage == "after_stats_write" else 89
     _run_expected_cache_crash(
         root=tmp_path,
-        expected_exitcode=88,
-        crash_after_stats_write=True,
+        expected_exitcode=expected_exitcode,
+        **crash_kwargs,
     )
 
     cache = PromptResultCache(root=tmp_path)
-    key = prompt_cache_key(
-        cache_request(),
-        s.build_execution_policy(max_attempts=1),
-        0,
-        0,
-    )
     pending_path = cache._pending_accounting_path_for(key)
     applied_path = cache._applied_accounting_path_for(key)
     stats = json.loads(cache._stats_path.read_text())
     assert cache._path_for(key).exists()
-    assert pending_path.exists()
-    assert not applied_path.exists()
     assert stats["hits"] == 0
     assert stats["misses"] == 1
     assert stats["stores"] == 1
     assert len(stats["inflight_publication_ids"]) == 1
 
-    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == {
-        "entry_readable": True,
-        "counters": {"hits": 0, "misses": 1, "stores": 1},
-        "inflight_publication_ids": [],
-        "pending_exists": False,
-        "applied_exists": False,
-    }
+    if stage == "after_stats_write":
+        assert pending_path.exists()
+        assert not applied_path.exists()
+        expected_recovery = {
+            "entry_readable": True,
+            "counters": {"hits": 0, "misses": 1, "stores": 1},
+            "inflight_publication_ids": [],
+            "pending_exists": False,
+            "applied_exists": False,
+        }
+    else:
+        assert not pending_path.exists()
+        assert applied_path.exists()
+        expected_recovery = {
+            "entry_readable": True,
+            "counters": {"hits": 0, "misses": 1, "stores": 1},
+            "inflight_publication_ids": [],
+            "pending_exists": False,
+            "applied_exists": False,
+        }
 
-
-@pytest.mark.process_integration
-def test_restart_reconciles_kill_after_applied_rename_before_cleanup(
-    tmp_path: Path,
-) -> None:
-    _run_expected_cache_crash(
-        root=tmp_path,
-        expected_exitcode=89,
-        crash_after_applied_rename=True,
+    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == (
+        expected_recovery
     )
-
-    cache = PromptResultCache(root=tmp_path)
-    key = prompt_cache_key(
-        cache_request(),
-        s.build_execution_policy(max_attempts=1),
-        0,
-        0,
-    )
-    pending_path = cache._pending_accounting_path_for(key)
-    applied_path = cache._applied_accounting_path_for(key)
-    stats = json.loads(cache._stats_path.read_text())
-    assert cache._path_for(key).exists()
-    assert not pending_path.exists()
-    assert applied_path.exists()
-    assert stats["hits"] == 0
-    assert stats["misses"] == 1
-    assert stats["stores"] == 1
-    assert len(stats["inflight_publication_ids"]) == 1
-
-    assert _recover_cache_in_fresh_process(root=tmp_path, key=key) == {
-        "entry_readable": True,
-        "counters": {"hits": 0, "misses": 1, "stores": 1},
-        "inflight_publication_ids": [],
-        "pending_exists": False,
-        "applied_exists": False,
-    }
 
 
 @pytest.mark.process_integration

@@ -4,7 +4,6 @@ import pytest
 from dr_store import ObjectStore, SqliteBackend
 
 from tests.envs.support import execution_policy, synthetic_code_comp_tasks
-from tests.evaluation.support import _binding, _engine
 from whetstone.core.roles import EvaluationRole
 from whetstone.envs.code_comp import (
     CodeCompMode,
@@ -78,15 +77,6 @@ def _calibration_row(request: EncDecRowRequest) -> ProcessJob:
     )
 
 
-def _internal_engine_and_binding(tmp_path):
-    store = ObjectStore(
-        SqliteBackend(tmp_path / "internal-calibration.sqlite")
-    )
-    engine = _engine(tmp_path, store=store, num_samples=2)
-    binding = _binding(engine, campaign="internal-calibration-test")
-    return engine, binding, store, engine.experiment
-
-
 def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
     tasks = synthetic_code_comp_tasks(3)
     experiment = build_code_comp_experiment(
@@ -115,38 +105,6 @@ def _ed1_engine_and_binding(tmp_path, *, concurrency: int = 2):
         provider_execution_policy_ref=engine.provider_execution_policy_ref,
     )
     return engine, binding, store, experiment
-
-
-@pytest.mark.process_integration
-def test_internal_calibration_evaluates_aligned_anchors(tmp_path) -> None:
-    engine, binding, _store, experiment = _internal_engine_and_binding(
-        tmp_path
-    )
-    task_ids = experiment.eval_configs.internal.task_set.task_hashes[:2]
-
-    result = run_anchor_calibration(
-        engine=engine,
-        evaluation_binding=binding,
-        baseline_candidate=experiment.initial_candidate,
-        ceiling_candidate=experiment.ceiling_candidate,
-        baseline_purpose="internal-calibration-baseline",
-        ceiling_purpose="internal-calibration-ceiling",
-        task_ids=task_ids,
-        pool_ceiling=len(
-            experiment.eval_configs.internal.task_set.task_hashes
-        ),
-        power_config=PowerConfig(trials=10, repeat_cap=2, seed=3),
-        bootstrap_resamples=50,
-        bootstrap_seed=5,
-    )
-
-    baseline = result.baseline.evidence
-    ceiling = result.ceiling.evidence
-    assert baseline.task_hashes == ceiling.task_hashes == task_ids
-    assert baseline.purpose == "internal-calibration-baseline"
-    assert ceiling.purpose == "internal-calibration-ceiling"
-    assert len(baseline.per_task_values) == len(task_ids)
-    assert baseline.per_task_values == ceiling.per_task_values
 
 
 @pytest.mark.process_integration

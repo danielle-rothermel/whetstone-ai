@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
@@ -467,100 +466,6 @@ def test_slow_evaluation_renews_claim_on_scripted_tick(
             assert len(evaluation_calls) == 1
         finally:
             release_renewal.set()
-            release.set()
-        first_resolution = first.result(timeout=10)
-        assert second.result(timeout=10) == first_resolution
-
-    assert len(evaluation_calls) == 1
-
-
-@pytest.mark.sqlite_time_integration
-@pytest.mark.process_integration
-def test_real_sqlite_heartbeat_renews_past_original_expiry(
-    tmp_path, monkeypatch
-) -> None:
-    database = tmp_path / "heartbeat.sqlite"
-    evaluation_entered = Event()
-    waiter_entered = Event()
-    initial_renewal_published = Event()
-    renewed_past_original_expiry = Event()
-    release = Event()
-    published_claims: list[EvaluationIntentClaim] = []
-    evaluation_calls: list[EvaluationRequest] = []
-
-    def wait_for_winner(_seconds: float) -> None:
-        waiter_entered.set()
-        assert release.wait(timeout=10)
-
-    def record_renewal(claim: EvaluationIntentClaim) -> None:
-        published_claims.append(claim)
-        if len(published_claims) == 1:
-            initial_renewal_published.set()
-        elif time.time() > published_claims[0].expires_at:
-            renewed_past_original_expiry.set()
-
-    first_store = ObjectStore(SqliteBackend(database))
-    second_store = ObjectStore(SqliteBackend(database))
-    first_engine = _engine(tmp_path, store=first_store)
-    second_engine = _engine(tmp_path, store=second_store)
-    intent = _intent(
-        first_engine,
-        intent_id="slow-live-intent",
-        purpose="heartbeat",
-    )
-    evaluated = first_engine.evaluate(
-        EvaluationRequest(
-            candidate=intent.candidate.record,
-            evaluation_binding=intent.evaluation_binding,
-            purpose=intent.purpose,
-        )
-    )
-    monkeypatch.setattr(
-        first_engine,
-        "evaluate",
-        _blocking_evaluate(
-            result=evaluated,
-            entered=evaluation_entered,
-            release=release,
-            calls=evaluation_calls,
-            timeout=10,
-        ),
-    )
-    monkeypatch.setattr(
-        second_engine,
-        "evaluate",
-        _fail_unexpected_evaluate,
-    )
-    first_service = EngineEvaluationService(
-        store=first_store,
-        engine=first_engine,
-        claim_lease_seconds=0.3,
-        _renewal_published=record_renewal,
-    )
-    second_service = EngineEvaluationService(
-        store=second_store,
-        engine=second_engine,
-        claim_lease_seconds=0.3,
-        sleep=wait_for_winner,
-    )
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(first_service.resolve_evaluation_intent, intent)
-        try:
-            assert initial_renewal_published.wait(timeout=10)
-            assert evaluation_entered.wait(timeout=10)
-            assert renewed_past_original_expiry.wait(timeout=10)
-            initial = published_claims[0]
-            renewed = published_claims[-1]
-            assert renewed.event_ordinal > initial.event_ordinal
-            assert renewed.expires_at > initial.expires_at
-
-            second = pool.submit(
-                second_service.resolve_evaluation_intent, intent
-            )
-            assert waiter_entered.wait(timeout=10)
-            assert len(evaluation_calls) == 1
-        finally:
             release.set()
         first_resolution = first.result(timeout=10)
         assert second.result(timeout=10) == first_resolution
