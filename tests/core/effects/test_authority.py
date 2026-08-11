@@ -4,7 +4,7 @@ import inspect
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Condition, Event, Lock, Thread
+from threading import Event, Thread
 
 import pytest
 from pydantic import ValidationError
@@ -15,8 +15,10 @@ from tests.core.effects.authority_support import (
     _LEASE_DURATION,
     _NOW,
     _acquire,
+    _FakeClock,
     _request,
     _result_ref,
+    _ScriptedRenewalWait,
 )
 from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
 from whetstone.core.effects.authority import (
@@ -31,63 +33,6 @@ from whetstone.core.effects.authority import (
     TerminalOutcome,
 )
 from whetstone.core.identity import NonEmptyId, TypedRef
-
-
-class _FakeClock:
-    def __init__(self, now: datetime = _NOW) -> None:
-        self._now = now
-        self._lock = Lock()
-
-    def __call__(self) -> datetime:
-        with self._lock:
-            return self._now
-
-    def advance(self, duration: timedelta) -> None:
-        with self._lock:
-            self._now += duration
-
-
-class _ScriptedRenewalWait:
-    def __init__(self) -> None:
-        self._condition = Condition()
-        self._requested_intervals: list[float] = []
-        self._releases = 0
-
-    def wait(self, interval_seconds: float, stop: Event) -> bool:
-        with self._condition:
-            self._requested_intervals.append(interval_seconds)
-            self._condition.notify_all()
-            ready = self._condition.wait_for(
-                lambda: stop.is_set() or self._releases > 0,
-                timeout=2,
-            )
-            if not ready:
-                raise TimeoutError("test did not script the next renewal wait")
-            if stop.is_set():
-                return True
-            self._releases -= 1
-            return False
-
-    def wake(self) -> None:
-        with self._condition:
-            self._condition.notify_all()
-
-    def await_request_count(self, count: int) -> tuple[float, ...]:
-        with self._condition:
-            observed = self._condition.wait_for(
-                lambda: len(self._requested_intervals) >= count,
-                timeout=2,
-            )
-            if not observed:
-                raise AssertionError(
-                    f"renewer did not request {count} scripted waits"
-                )
-            return tuple(self._requested_intervals)
-
-    def release_one(self) -> None:
-        with self._condition:
-            self._releases += 1
-            self._condition.notify_all()
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +123,24 @@ def backend_fixture(
     return _Backend(EffectAuthority.sqlite(database), None, database)
 
 
+@pytest.fixture(
+    name="timed_backend",
+    params=(
+        "memory",
+        pytest.param("sqlite", marks=pytest.mark.sqlite_time_integration),
+    ),
+)
+def timed_backend_fixture(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+) -> _Backend:
+    if request.param == "memory":
+        clock = _FakeClock()
+        return _Backend(EffectAuthority.memory(clock=clock), clock, None)
+    database = tmp_path / "timed-authority.sqlite"
+    return _Backend(EffectAuthority.sqlite(database), None, database)
+
+
 def test_public_transitions_expose_duration_but_no_process_time() -> None:
     assert list(inspect.signature(EffectAuthority.acquire).parameters) == [
         "self",
@@ -249,30 +212,29 @@ def test_same_attempt_replays_but_same_owner_new_attempt_is_busy(
     assert competing.busy_expires_at == first.lease.expires_at
 
 
-@pytest.mark.sqlite_time_integration
 def test_renew_and_takeover_share_backend_authority_time(
-    backend: _Backend,
+    timed_backend: _Backend,
 ) -> None:
     request = _request()
-    first = _acquire(backend.authority, request)
+    first = _acquire(timed_backend.authority, request)
     assert first.lease is not None
 
-    backend.advance_past(first.lease.expires_at - _LEASE_DURATION)
-    renewed = backend.authority.renew(
+    timed_backend.advance_past(first.lease.expires_at - _LEASE_DURATION)
+    renewed = timed_backend.authority.renew(
         first.lease,
         lease_duration=_LEASE_DURATION,
     )
     assert renewed.fence == first.lease.fence
     assert renewed.expires_at > first.lease.expires_at
     with pytest.raises(StaleLeaseError):
-        backend.authority.renew(
+        timed_backend.authority.renew(
             first.lease,
             lease_duration=_LEASE_DURATION,
         )
 
-    backend.advance_past(renewed.expires_at)
+    timed_backend.advance_past(renewed.expires_at)
     takeover = _acquire(
-        backend.authority,
+        timed_backend.authority,
         request,
         owner="worker-2",
         attempt="attempt-2",
@@ -288,17 +250,16 @@ def test_renew_and_takeover_share_backend_authority_time(
     "policy",
     (ReplayPolicy.IDEMPOTENT, ReplayPolicy.DURABLE_WORKFLOW),
 )
-@pytest.mark.sqlite_time_integration
 def test_stale_attempt_cannot_terminalize_after_takeover(
-    backend: _Backend,
+    timed_backend: _Backend,
     policy: ReplayPolicy,
 ) -> None:
     request = _request(policy=policy)
-    first = _acquire(backend.authority, request)
+    first = _acquire(timed_backend.authority, request)
     assert first.lease is not None
-    backend.advance_past(first.lease.expires_at)
+    timed_backend.advance_past(first.lease.expires_at)
     takeover = _acquire(
-        backend.authority,
+        timed_backend.authority,
         request,
         owner="worker-2",
         attempt="attempt-2",
@@ -306,11 +267,11 @@ def test_stale_attempt_cannot_terminalize_after_takeover(
     assert takeover.lease is not None
 
     with pytest.raises(StaleLeaseError):
-        backend.authority.succeed(
+        timed_backend.authority.succeed(
             first.lease,
             result_ref=_result_ref("first"),
         )
-    terminal = backend.authority.succeed(
+    terminal = timed_backend.authority.succeed(
         takeover.lease,
         result_ref=_result_ref("second"),
     )
@@ -318,17 +279,16 @@ def test_stale_attempt_cannot_terminalize_after_takeover(
     assert terminal.result_ref == _result_ref("second")
 
 
-@pytest.mark.sqlite_time_integration
 def test_no_redrive_expiry_becomes_immutable_recovery_required(
-    backend: _Backend,
+    timed_backend: _Backend,
 ) -> None:
     request = _request(policy=ReplayPolicy.NO_REDRIVE)
-    first = _acquire(backend.authority, request)
+    first = _acquire(timed_backend.authority, request)
     assert first.lease is not None
-    backend.advance_past(first.lease.expires_at)
+    timed_backend.advance_past(first.lease.expires_at)
 
     recovered = _acquire(
-        backend.authority,
+        timed_backend.authority,
         request,
         owner="worker-2",
         attempt="attempt-2",
@@ -341,14 +301,14 @@ def test_no_redrive_expiry_becomes_immutable_recovery_required(
     assert recovered.terminal.failure.details["attempt_id"] == "attempt-1"
 
     replay = _acquire(
-        backend.authority,
+        timed_backend.authority,
         request,
         owner="worker-3",
         attempt="attempt-3",
     )
     assert replay == recovered
     with pytest.raises(TerminalConflictError):
-        backend.authority.succeed(
+        timed_backend.authority.succeed(
             first.lease,
             result_ref=_result_ref("late"),
         )

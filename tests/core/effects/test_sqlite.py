@@ -286,7 +286,6 @@ def test_sqlite_rejects_submillisecond_lease_durations(
         )
 
 
-@pytest.mark.sqlite_time_integration
 def test_sqlite_maintenance_terminalization_surfaces_renewal_loss(
     tmp_path: Path,
 ) -> None:

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Real SQLite strftime('now') smokes only; renewal logic uses scripted clocks elsewhere.
 uv sync --locked --group dev
 uv run pytest \
   tests/core/effects/test_authority.py \
