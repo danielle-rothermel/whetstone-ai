@@ -50,6 +50,10 @@ from whetstone.evaluation.engine import (
     EvaluationEngine,
     EvaluationRequest,
 )
+from whetstone.evaluation.evidence_validation import (
+    _compression_ratio_from_encoder,
+)
+from whetstone.evaluation.metrics.blended import blend_per_task
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
@@ -342,7 +346,24 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
                 executed_component_steps=(encode_step, decode_step),
                 output_text=combined_output,
             )
-            rewritten = replace(result, outputs=(output, *result.outputs[1:]))
+            compression_ratio = _compression_ratio_from_encoder(
+                encoder_text,
+                instance.prompt_inputs["input_code"],
+            )
+            per_task_compression = (compression_ratio,)
+            blend_config = experiment.blend_config
+            assert blend_config is not None
+            per_task_scores = blend_per_task(
+                result.per_task_primary,
+                per_task_compression,
+                blend_config,
+            )
+            rewritten = replace(
+                result,
+                outputs=(output, *result.outputs[1:]),
+                per_task_scores=per_task_scores,
+                per_task_compression=per_task_compression,
+            )
         else:
             if run_count == 1:
                 output = replace(
