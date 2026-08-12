@@ -112,7 +112,8 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
 
 #: Per-env default completeness tolerance. A missing entry is the strict,
 #: untolerant default -- propagate with ``max_skip_fraction`` 0.0 -- so any
-#: missing or failed row makes the official arm incomplete. The tolerance is
+#: missing or failed row makes the official evaluation incomplete. The
+#: tolerance is
 #: identity-bearing: a tolerant cell has a distinct ``eval_config_hash`` from a
 #: strict one. Value: ``(missing_data, fraction)``.
 COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {

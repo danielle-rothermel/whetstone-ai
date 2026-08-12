@@ -107,7 +107,8 @@ def run_anchor_calibration(
 
     Callers must supply per-task values suitable for :func:`analyze_power`
     (typically bounded observations in ``[0, 1]``). The returned paired
-    bootstrap is empirical over the aligned per-task vectors from both arms.
+    bootstrap is empirical over the aligned per-task vectors from both
+    anchor configs.
     """
     experiment = engine.experiment
     if evaluation_binding.role is not EvaluationRole.INTERNAL:

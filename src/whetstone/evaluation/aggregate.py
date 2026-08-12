@@ -50,7 +50,8 @@ class CompletenessPolicy:
     is the DECLARED completeness tolerance: under ``SKIP`` the aggregate is
     only certified when the fraction of skipped (missing + failed + invalid)
     rows over the complete planned matrix is at or below this bound; beyond it
-    the aggregate is forced ``MISSING_DATA`` (an incomplete arm), never a value
+    the aggregate is forced ``MISSING_DATA`` (an incomplete evaluation),
+    never a value
     reduced over an out-of-tolerance matrix. Under ``PROPAGATE`` the bound is
     inert (any skipped row already makes the aggregate missing).
 
@@ -423,8 +424,9 @@ def enforce_skip_tolerance(
     Under ``SKIP`` the reduction happily certifies a value over the
     surviving rows no matter how many were skipped; the DECLARED completeness
     tolerance bounds that. When the skipped fraction exceeds
-    ``max_skip_fraction`` the arm is out of tolerance and its scalar is set to
-    ``None`` (``MISSING_DATA``) so the incomplete-arm guard fires — the skipped
+    ``max_skip_fraction`` the evaluation is out of tolerance and its scalar
+    is set to ``None`` (``MISSING_DATA``) so the incomplete-evaluation guard
+    fires — the skipped
     rows are still recorded as explicit counts on the aggregate. Within the
     bound the reduced value stands unchanged.
     """

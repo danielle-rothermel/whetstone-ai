@@ -1,5 +1,5 @@
 __all__ = [
-    "AnchorArmPreview",
+    "AnchorConfigPreview",
     "BaselinePreviewTranscript",
     "BaselineSweepTranscript",
     "PreviewMetadata",
@@ -18,7 +18,7 @@ __all__ = [
 ]
 
 _MODULE_EXPORTS = {
-    "AnchorArmPreview": "whetstone.evaluation.preview.anchor",
+    "AnchorConfigPreview": "whetstone.evaluation.preview.anchor",
     "BaselinePreviewTranscript": "whetstone.evaluation.preview.anchor",
     "BaselineSweepTranscript": "whetstone.evaluation.preview.anchor",
     "run_baseline_preview": "whetstone.evaluation.preview.anchor",

@@ -134,7 +134,8 @@ class ViewerStepSummary(BaseModel):
 
 
 class ViewerEvaluationSummary(BaseModel):
-    """One official arm's evidence, summarized without reinterpretation."""
+    """One official candidate's evidence, summarized without
+    reinterpretation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 

@@ -5,9 +5,10 @@ A cell is one optimizer against one environment at one attempt, identified by
 that line is the resumability record: a completed cell is skipped rather than
 re-run, so relaunching a wave is safe and cheap.
 
-**What a cell measures.** Three official arms, all evaluated through the same
+**What a cell measures.** Three official candidates, all evaluated through
+the same
 official Eval Config so their scores are comparable: ``baseline`` (the naive
-starting candidate), ``ceiling`` (the reference upper arm, optional), and
+starting candidate), ``ceiling`` (the reference upper candidate, optional), and
 ``best`` (the candidate the optimizer terminally proposed). The verdict is
 read off ``delta_ci95``, the paired best-minus-naive bootstrap interval; the
 Eval-row headroom gate is ``headroom_ci95``, the paired ceiling-minus-naive
@@ -16,8 +17,9 @@ interval.
 **Order is the safety property.** Every paid boundary is preceded by a
 durable spend checkpoint, so a process that dies mid-cell leaves evidence of
 what it had already spent, and a resumed run enforces the same stop loss rather
-than starting its budget accounting over. Official arms are bound in the
-ObjectStore before they are paid for, so an arm can never be silently re-run
+than starting its budget accounting over. Official candidates are bound in
+the ObjectStore before they are paid for, so an official candidate can
+never be silently re-run
 under different inputs: a changed binding is a conflict, not a new evaluation.
 
 **Terminal artifacts, in a deliberate order.** The immutable viewer directory
@@ -107,23 +109,27 @@ from whetstone.runner.viewer_projection import build_viewer_cell_projection
 
 __all__ = [
     "CELL_RUN_CONTROL_SCHEMA",
-    "OFFICIAL_ARM_ADMISSION_SCHEMA",
-    "OFFICIAL_ARM_BINDING_SCHEMA",
+    "OFFICIAL_CANDIDATE_ADMISSION_SCHEMA",
+    "OFFICIAL_CANDIDATE_BINDING_SCHEMA",
     "CellBaselineFailure",
     "CellConfig",
     "CellError",
     "CellOutcome",
     "CellRunControl",
-    "OfficialArmBinding",
+    "OfficialCandidateBinding",
     "bind_cell_launch",
     "prepare_cell_launch",
     "run_cell",
 ]
 
 #: Persisted-format contract: the ObjectStore binding schemas that make an
-#: official arm and a cell's control immutable once bound.
-OFFICIAL_ARM_BINDING_SCHEMA = "whetstone.runner.official_arm_binding"
-OFFICIAL_ARM_ADMISSION_SCHEMA = "whetstone.runner.official_arm_admission"
+#: official candidate and a cell's control immutable once bound.
+OFFICIAL_CANDIDATE_BINDING_SCHEMA = (
+    "whetstone.runner.official_candidate_binding"
+)
+OFFICIAL_CANDIDATE_ADMISSION_SCHEMA = (
+    "whetstone.runner.official_candidate_admission"
+)
 CELL_RUN_CONTROL_SCHEMA = "whetstone.runner.cell_run_control"
 
 #: Fixed bootstrap seeds. The intervals are derived reporting numbers, so
@@ -143,13 +149,13 @@ class CellBaselineFailure(CellError):
     """The official baseline could not produce a reportable aggregate."""
 
 
-class OfficialArmBinding(BaseModel):
-    """The exact official-arm request, bound before its paid evaluation."""
+class OfficialCandidateBinding(BaseModel):
+    """The exact official-candidate request, bound before payment."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     cell_id: StrictStr
-    arm: StrictStr
+    candidate_label: StrictStr
     candidate: CandidateRef
     eval_config: EvalConfigRef
     context_id: StrictStr
@@ -356,35 +362,49 @@ def _check_cell_start(config: CellConfig, initial: SpendRecord | None) -> None:
     )
 
 
-def _arm_binding(
-    config: CellConfig, *, arm: str, candidate: Candidate, purpose: str
-) -> OfficialArmBinding:
-    return OfficialArmBinding(
+def _candidate_binding(
+    config: CellConfig,
+    *,
+    candidate_label: str,
+    candidate: Candidate,
+    purpose: str,
+) -> OfficialCandidateBinding:
+    return OfficialCandidateBinding(
         cell_id=config.cell_id,
-        arm=arm,
+        candidate_label=candidate_label,
         candidate=candidate_reference(candidate),
         eval_config=config.official_engine.eval_config_ref,
-        context_id=f"{config.cell_id}:official:{arm}",
+        context_id=f"{config.cell_id}:official:{candidate_label}",
         purpose=purpose,
     )
 
 
-def _bind_official_arm(
-    config: CellConfig, *, arm: str, candidate: Candidate, purpose: str
-) -> OfficialArmBinding:
-    """Bind one official arm immutably before it is ever paid for."""
-    binding = _arm_binding(
-        config, arm=arm, candidate=candidate, purpose=purpose
+def _bind_official_candidate(
+    config: CellConfig,
+    *,
+    candidate_label: str,
+    candidate: Candidate,
+    purpose: str,
+) -> OfficialCandidateBinding:
+    """Bind one official candidate immutably before it is ever paid for."""
+    binding = _candidate_binding(
+        config,
+        candidate_label=candidate_label,
+        candidate=candidate,
+        purpose=purpose,
     )
     reference, _ = config.store.put(
-        OFFICIAL_ARM_BINDING_SCHEMA, binding.record_content()
+        OFFICIAL_CANDIDATE_BINDING_SCHEMA, binding.record_content()
     )
-    key = f"{OFFICIAL_ARM_BINDING_SCHEMA}:{config.cell_id}#{arm}"
+    key = (
+        f"{OFFICIAL_CANDIDATE_BINDING_SCHEMA}:{config.cell_id}"
+        f"#{candidate_label}"
+    )
     try:
         config.store.bind(key, reference)
     except BindingConflictError as conflict:
         raise CellError(
-            f"official arm {arm!r} is already bound to "
+            f"official candidate {candidate_label!r} is already bound to "
             f"{conflict.existing.content_hash}; refusing "
             f"{reference.content_hash}"
         ) from conflict
@@ -392,11 +412,18 @@ def _bind_official_arm(
 
 
 def _evaluate_official(
-    config: CellConfig, *, arm: str, candidate: Candidate, purpose: str
+    config: CellConfig,
+    *,
+    candidate_label: str,
+    candidate: Candidate,
+    purpose: str,
 ) -> EngineEvaluation:
-    """Resolve one official arm's intent and check it against its binding."""
-    binding = _arm_binding(
-        config, arm=arm, candidate=candidate, purpose=purpose
+    """Resolve one official candidate's intent against its binding."""
+    binding = _candidate_binding(
+        config,
+        candidate_label=candidate_label,
+        candidate=candidate,
+        purpose=purpose,
     )
     resolution = EngineEvaluationService(
         store=config.store, engine=config.official_engine
@@ -414,11 +441,14 @@ def _evaluate_official(
     reference = resolution.evaluation_result_ref
     if resolution.outcome is not IntentOutcome.COMPLETED or reference is None:
         raise CellError(
-            f"official arm {arm!r} did not produce canonical evidence: "
+            f"official candidate {candidate_label!r} did not produce "
+            "canonical evidence: "
             f"{resolution.detail.message}"
         )
     if reference.schema_name != EVALUATION_EVIDENCE_SCHEMA:
-        raise CellError(f"official arm {arm!r} resolved to non-evidence")
+        raise CellError(
+            f"official candidate {candidate_label!r} resolved to non-evidence"
+        )
     evidence = EvaluationEvidence.model_validate(
         config.store.get(reference.reference)
     )
@@ -429,7 +459,8 @@ def _evaluate_official(
         or evidence.purpose != purpose
     ):
         raise CellError(
-            f"official arm {arm!r} evidence does not match its binding"
+            f"official candidate {candidate_label!r} evidence does not "
+            "match its binding"
         )
     if evidence.reward_ref is not None:
         raise CellError("an official evaluation must not produce a Reward")
@@ -470,16 +501,16 @@ def _bind_cell_run_control(config: CellConfig) -> None:
             f"{conflict.existing.content_hash}; refusing "
             f"{reference.content_hash}"
         ) from conflict
-    _bind_official_arm(
+    _bind_official_candidate(
         config,
-        arm="baseline",
+        candidate_label="baseline",
         candidate=config.baseline,
         purpose="official_baseline",
     )
     if config.ceiling is not None:
-        _bind_official_arm(
+        _bind_official_candidate(
             config,
-            arm="ceiling",
+            candidate_label="ceiling",
             candidate=config.ceiling,
             purpose="official_ceiling",
         )
@@ -582,32 +613,40 @@ def _official_anchor_record(
             f"route model {expected_task_model!r}"
         )
     aligned_count = len(expected_task_hashes)
-    for arm, evaluated in (("baseline", baseline), ("ceiling", ceiling)):
+    for candidate_label, evaluated in (
+        ("baseline", baseline),
+        ("ceiling", ceiling),
+    ):
         evidence = evaluated.evidence
         if evidence.task_hashes != expected_task_hashes:
             raise CellError(
-                f"official {arm} task_hashes do not match sampling order"
+                f"official {candidate_label} task_hashes do not match "
+                "sampling order"
             )
         if evidence.num_samples != sampling.sample_plan.num_samples:
             raise CellError(
-                f"official {arm} num_samples does not match sampling"
+                f"official {candidate_label} num_samples does not match "
+                "sampling"
             )
         if evidence.graph_hash != expected_graph_hash:
             raise CellError(
-                f"official {arm} graph_hash does not match the "
+                f"official {candidate_label} graph_hash does not match the "
                 "generation graph definition"
             )
         if (
             evidence.aggregate_status != "ok"
             or evidence.aggregate_value is None
         ):
-            raise CellError(f"official {arm} aggregate is not reportable")
+            raise CellError(
+                f"official {candidate_label} aggregate is not reportable"
+            )
         if (
             len(evidence.per_task_values) != aligned_count
             or len(evidence.per_task_counts) != aligned_count
         ):
             raise CellError(
-                f"official {arm} per-task values/counts do not align with "
+                f"official {candidate_label} per-task values/counts do "
+                "not align with "
                 "sampling"
             )
     baseline_score = _reportable_score(baseline)
@@ -726,15 +765,15 @@ def run_cell(config: CellConfig) -> CellOutcome:
             max(0.0, initial_remaining - remaining)
         )
 
-    def evaluate_arm(
-        arm: str, candidate: Candidate, purpose: str
+    def evaluate_official_candidate(
+        candidate_label: str, candidate: Candidate, purpose: str
     ) -> EngineEvaluation:
         admission_id = compute_identity_hash(
-            schema=OFFICIAL_ARM_ADMISSION_SCHEMA,
-            schema_version=1,
+            schema=OFFICIAL_CANDIDATE_ADMISSION_SCHEMA,
+            schema_version=2,
             payload={
                 "cell_id": config.cell_id,
-                "arm": arm,
+                "candidate_label": candidate_label,
                 "candidate": candidate_reference(candidate).model_dump(
                     mode="json"
                 ),
@@ -748,9 +787,14 @@ def run_cell(config: CellConfig) -> CellOutcome:
                 ),
             },
         )
-        checkpoint_spend(f"official:{arm}", admission_id=admission_id)
+        checkpoint_spend(
+            f"official:{candidate_label}", admission_id=admission_id
+        )
         return _evaluate_official(
-            config, arm=arm, candidate=candidate, purpose=purpose
+            config,
+            candidate_label=candidate_label,
+            candidate=candidate,
+            purpose=purpose,
         )
 
     def close_invocation() -> CreditsSnapshot | None:
@@ -770,7 +814,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
         return snapshot
 
     try:
-        baseline = evaluate_arm(
+        baseline = evaluate_official_candidate(
             "baseline", config.baseline, "official_baseline"
         )
         if _reportable_score(baseline) is None:
@@ -778,18 +822,20 @@ def run_cell(config: CellConfig) -> CellOutcome:
                 "official baseline aggregate is incomplete"
             )
         ceiling = (
-            evaluate_arm("ceiling", config.ceiling, "official_ceiling")
+            evaluate_official_candidate(
+                "ceiling", config.ceiling, "official_ceiling"
+            )
             if config.ceiling is not None
             else None
         )
         checkpoint_spend(
             "optimization",
             admission_id=compute_identity_hash(
-                schema=OFFICIAL_ARM_ADMISSION_SCHEMA,
-                schema_version=1,
+                schema=OFFICIAL_CANDIDATE_ADMISSION_SCHEMA,
+                schema_version=2,
                 payload={
                     "cell_id": config.cell_id,
-                    "arm": "optimization",
+                    "candidate_label": "optimization",
                     "control": config.controller.control.identity_hash(),
                 },
             ),
@@ -800,7 +846,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
             result.proposals[0].candidate.record if result.proposals else None
         )
         best = (
-            evaluate_arm("best", selected, "official_best")
+            evaluate_official_candidate("best", selected, "official_best")
             if selected is not None
             else None
         )
