@@ -16,10 +16,10 @@ from whetstone.core.effects.authority import (
     ReplayPolicy,
 )
 from whetstone.core.identity import (
-    OpaqueKey,
     TerminalFailure,
     TypedRef,
     compute_identity_hash,
+    compute_prefixed_identity_key,
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
@@ -559,14 +559,12 @@ class OptimizationHarness(OptimizationRunStore):
             "step_request_ref": request_ref.model_dump(mode="json"),
             "adapter_key": str(request.adapter_key),
         }
-        semantic_key_hash = compute_identity_hash(
-            schema=ADAPTER_EFFECT_KEY_SCHEMA,
-            schema_version=ADAPTER_EFFECT_KEY_SCHEMA_VERSION,
-            payload=payload,
-        )
         return EffectRequest(
-            semantic_key=OpaqueKey(
-                f"{ADAPTER_EFFECT_KEY_PREFIX}{semantic_key_hash}"
+            semantic_key=compute_prefixed_identity_key(
+                schema=ADAPTER_EFFECT_KEY_SCHEMA,
+                schema_version=ADAPTER_EFFECT_KEY_SCHEMA_VERSION,
+                prefix=ADAPTER_EFFECT_KEY_PREFIX,
+                payload=payload,
             ),
             request_hash=compute_identity_hash(
                 schema=ADAPTER_EFFECT_SCHEMA,
@@ -909,14 +907,12 @@ class OptimizationHarness(OptimizationRunStore):
             ).record_ref.model_dump(mode="json"),
             "intent_id": intent.intent_id,
         }
-        semantic_key_hash = compute_identity_hash(
-            schema=INTENT_EFFECT_KEY_SCHEMA,
-            schema_version=INTENT_EFFECT_KEY_SCHEMA_VERSION,
-            payload=key_payload,
-        )
         return EffectRequest(
-            semantic_key=OpaqueKey(
-                f"{INTENT_EFFECT_KEY_PREFIX}{semantic_key_hash}"
+            semantic_key=compute_prefixed_identity_key(
+                schema=INTENT_EFFECT_KEY_SCHEMA,
+                schema_version=INTENT_EFFECT_KEY_SCHEMA_VERSION,
+                prefix=INTENT_EFFECT_KEY_PREFIX,
+                payload=key_payload,
             ),
             request_hash=compute_identity_hash(
                 schema=INTENT_EFFECT_SCHEMA,

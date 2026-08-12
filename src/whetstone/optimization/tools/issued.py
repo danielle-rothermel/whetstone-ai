@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from whetstone.core.identity import (
     NonNegativeInt,
     TypedRef,
-    compute_identity_hash,
+    compute_prefixed_identity_key,
     typed_ref_for_record,
 )
 from whetstone.optimization.contracts import (
@@ -126,15 +126,15 @@ def _issued_tool_call_binding_key(
     # Persisted-format contract: schema, version, prefix, and payload keys are
     # pinned by golden tests. Never derive these payload keys from model
     # fields.
-    digest = compute_identity_hash(
+    return compute_prefixed_identity_key(
         schema=ISSUED_TOOL_CALL_KEY_SCHEMA,
         schema_version=ISSUED_TOOL_CALL_KEY_SCHEMA_VERSION,
+        prefix=ISSUED_TOOL_CALL_KEY_PREFIX,
         payload={
             "step_request_ref": request.record_ref.model_dump(mode="json"),
             "call_id": call_id,
         },
     )
-    return f"{ISSUED_TOOL_CALL_KEY_PREFIX}{digest}"
 
 
 def _issued_tool_call_slot_binding_key(
@@ -142,31 +142,31 @@ def _issued_tool_call_slot_binding_key(
     ordinal: int,
 ) -> str:
     # Persisted-format contract; literals are pinned by golden tests.
-    digest = compute_identity_hash(
+    return compute_prefixed_identity_key(
         schema=ISSUED_TOOL_CALL_SLOT_KEY_SCHEMA,
         schema_version=ISSUED_TOOL_CALL_SLOT_KEY_SCHEMA_VERSION,
+        prefix=ISSUED_TOOL_CALL_SLOT_KEY_PREFIX,
         payload={
             "step_request_ref": request.record_ref.model_dump(mode="json"),
             "ordinal": ordinal,
         },
     )
-    return f"{ISSUED_TOOL_CALL_SLOT_KEY_PREFIX}{digest}"
 
 
 def _issued_tool_call_terminal_binding_key(
     claim: _IssuedToolCallClaimRef,
 ) -> str:
     # Persisted-format contract; literals are pinned by golden tests.
-    digest = compute_identity_hash(
+    return compute_prefixed_identity_key(
         schema=ISSUED_TOOL_CALL_TERMINAL_KEY_SCHEMA,
         schema_version=ISSUED_TOOL_CALL_TERMINAL_KEY_SCHEMA_VERSION,
+        prefix=ISSUED_TOOL_CALL_TERMINAL_KEY_PREFIX,
         payload={
             "issued_tool_call_claim_ref": claim.record_ref.model_dump(
                 mode="json"
             ),
         },
     )
-    return f"{ISSUED_TOOL_CALL_TERMINAL_KEY_PREFIX}{digest}"
 
 
 class _IssuedToolCallLedger:

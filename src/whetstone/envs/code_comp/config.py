@@ -44,6 +44,11 @@ from whetstone.envs.code_comp.reward.blended import (
 from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
 from whetstone.envs.sampling import Completeness
 from whetstone.evaluation import EvaluationProcedureConfig
+from whetstone.experiment.config_layers import (
+    ExperimentConfigLayer,
+    experiment_config_layer_hash,
+    layered_experiment_config_payload,
+)
 from whetstone.experiment.task_selection import TaskSplitRoles
 
 if TYPE_CHECKING:
@@ -52,8 +57,12 @@ if TYPE_CHECKING:
 
     from whetstone.envs.code_comp.experiment import CodeCompExperiment
 
+# Persisted-format contract: schema, version, layer names, and payload keys
+# are pinned by golden tests. Never derive these payload keys from model
+# fields. Version 2 replaced the flat v1 identity payload with the canonical
+# layered payload (see ``layer_payloads``).
 CODE_COMP_EXPERIMENT_CONFIG_SCHEMA = "whetstone.code_comp.experiment_config"
-CODE_COMP_EXPERIMENT_CONFIG_SCHEMA_VERSION = 1
+CODE_COMP_EXPERIMENT_CONFIG_SCHEMA_VERSION = 2
 
 
 class CompressionOperatorConfig(BaseModel):
@@ -254,66 +263,48 @@ class CodeCompExperimentConfig(BaseModel):
         return self
 
     def identity_hash(self) -> IdentityHash:
+        """The experiment_config_hash: the layered canonical identity.
+
+        Derived through :func:`compute_identity_hash` over the layered
+        payload (layer name -> layer hash); every input that can change an
+        evaluation output lives in exactly one named layer (the G1 closure
+        invariant).
+        """
         return compute_identity_hash(
             schema=CODE_COMP_EXPERIMENT_CONFIG_SCHEMA,
             schema_version=CODE_COMP_EXPERIMENT_CONFIG_SCHEMA_VERSION,
-            payload=self._identity_payload(),
+            payload=layered_experiment_config_payload(self.layer_payloads()),
         )
 
-    def _identity_payload(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "mode": self.mode.value,
-            "models": {
-                "encoder": self.models.encoder.identity_payload(),
-                "decoder": (
-                    self.models.decoder.identity_payload()
-                    if self.models.decoder is not None
-                    else None
-                ),
-            },
-            "compression": self.compression.model_dump(mode="json"),
-            "pool": {
-                "snapshot_path": (
-                    str(self.pool.snapshot_path)
-                    if self.pool.snapshot_path is not None
-                    else None
-                ),
-                "limit": self.pool.limit,
-                "task_ids": (
-                    [str(t.instance.id) for t in self.pool.tasks]
-                    if self.pool.tasks is not None
-                    else None
-                ),
-            },
-            "split": {
-                "internal_n": self.split.internal_n,
-                "official_n": self.split.official_n,
-                "split_manifest": (
-                    {
-                        "pool_key": self.split.split_manifest.pool_key,
-                        "train_ids": list(self.split.split_manifest.train_ids),
-                        "val_ids": list(self.split.split_manifest.val_ids),
-                        "test_ids": list(self.split.split_manifest.test_ids),
-                        "content_hash": self.split.split_manifest.content_hash,
-                    }
-                    if self.split.split_manifest is not None
-                    else None
-                ),
-                "exclude_task_ids": sorted(self.split.exclude_task_ids),
-            },
-            "sampling": self.sampling.model_dump(mode="json"),
-        }
+    def layer_payloads(self) -> dict[ExperimentConfigLayer, dict[str, Any]]:
+        """The exact named layer sub-payloads of this config's identity.
+
+        Mapping onto the retired flat v1 payload:
+
+        - ``graph`` (the graph_hash root): v1 ``mode`` plus the mode
+          settings (``direct`` / ``encdec`` / ``mutant``) from which the
+          generation graph and evaluation procedure are built.
+        - ``candidate_binding``: new in v2 — the mode-derived initial and
+          ceiling candidate identities (previously outside the config hash).
+        - ``comp``: v1 ``compression``.
+        - ``profiles``: v1 ``sampling``.
+        - ``provider_policy``: v1 ``models``.
+        - ``splits``: v1 ``pool`` and ``split``.
+        """
+        # Persisted-format contract: layer names and payload keys are pinned
+        # by per-layer golden tests. Never derive them from model fields.
+        graph: dict[str, Any] = {"mode": self.mode.value}
         if self.direct is not None:
-            payload["direct"] = self.direct.model_dump(mode="json")
+            graph["direct"] = self.direct.model_dump(mode="json")
         if self.encdec is not None:
-            payload["encdec"] = {
+            graph["encdec"] = {
                 "budget_ratio": self.encdec.budget_ratio,
                 "blend_config": self.encdec.blend_config.model_dump(
                     mode="json"
                 ),
             }
         if self.mutant is not None:
-            payload["mutant"] = {
+            graph["mutant"] = {
                 "artifact_dir": str(self.mutant.artifact_dir),
                 "exclude_mutant_ids": sorted(self.mutant.exclude_mutant_ids),
                 "budget_ratio": self.mutant.budget_ratio,
@@ -323,7 +314,92 @@ class CodeCompExperimentConfig(BaseModel):
                     else None
                 ),
             }
-        return payload
+        return {
+            ExperimentConfigLayer.GRAPH: graph,
+            ExperimentConfigLayer.CANDIDATE_BINDING: (
+                self._candidate_binding_payload()
+            ),
+            ExperimentConfigLayer.COMP: self.compression.model_dump(
+                mode="json"
+            ),
+            ExperimentConfigLayer.PROFILES: self.sampling.model_dump(
+                mode="json"
+            ),
+            ExperimentConfigLayer.PROVIDER_POLICY: {
+                "encoder": self.models.encoder.identity_payload(),
+                "decoder": (
+                    self.models.decoder.identity_payload()
+                    if self.models.decoder is not None
+                    else None
+                ),
+            },
+            ExperimentConfigLayer.SPLITS: {
+                "pool": {
+                    "snapshot_path": (
+                        str(self.pool.snapshot_path)
+                        if self.pool.snapshot_path is not None
+                        else None
+                    ),
+                    "limit": self.pool.limit,
+                    "task_ids": (
+                        [str(t.instance.id) for t in self.pool.tasks]
+                        if self.pool.tasks is not None
+                        else None
+                    ),
+                },
+                "split": {
+                    "internal_n": self.split.internal_n,
+                    "official_n": self.split.official_n,
+                    "split_manifest": (
+                        {
+                            "pool_key": self.split.split_manifest.pool_key,
+                            "train_ids": list(
+                                self.split.split_manifest.train_ids
+                            ),
+                            "val_ids": list(self.split.split_manifest.val_ids),
+                            "test_ids": list(
+                                self.split.split_manifest.test_ids
+                            ),
+                            "content_hash": (
+                                self.split.split_manifest.content_hash
+                            ),
+                        }
+                        if self.split.split_manifest is not None
+                        else None
+                    ),
+                    "exclude_task_ids": sorted(self.split.exclude_task_ids),
+                },
+            },
+        }
+
+    def layer_hashes(self) -> dict[ExperimentConfigLayer, IdentityHash]:
+        """Each named layer's Identity Hash (for review and golden tests)."""
+        return {
+            layer: experiment_config_layer_hash(layer, payload)
+            for layer, payload in self.layer_payloads().items()
+        }
+
+    def _candidate_binding_payload(self) -> dict[str, str]:
+        if self.mode is CodeCompMode.DIRECT:
+            from whetstone.envs.code_comp.modes.direct import (
+                direct_ceiling_candidate,
+                direct_initial_candidate,
+            )
+
+            initial = direct_initial_candidate()
+            ceiling = direct_ceiling_candidate()
+        else:
+            from whetstone.envs.code_comp.modes.encdec import (
+                encdec_ceiling_candidate,
+                encdec_initial_candidate,
+            )
+
+            initial = encdec_initial_candidate()
+            ceiling = encdec_ceiling_candidate()
+        return {
+            "initial_candidate_hash": str(initial.identity_hash()),
+            "ceiling_candidate_hash": str(ceiling.identity_hash()),
+        }
 
     def build_procedure_config(self) -> EvaluationProcedureConfig:
         """Materialize the evaluation procedure for this config's mode."""

@@ -20,6 +20,7 @@ from whetstone.core.identity import (
     OpaqueKey,
     TypedRef,
     compute_identity_hash,
+    compute_prefixed_identity_key,
 )
 from whetstone.optimization.tools.contracts import (
     GLOBAL_CAPACITY_SCOPE_ID,
@@ -93,9 +94,10 @@ def tool_effect_request(call: ToolCall) -> EffectRequest:
     )
     # Persisted-format contract: schema, version, prefix, and payload keys are
     # pinned by golden tests. Field names must never be derived from models.
-    semantic_key_hash = compute_identity_hash(
+    semantic_key = compute_prefixed_identity_key(
         schema=_TOOL_EFFECT_KEY_SCHEMA,
         schema_version=_TOOL_EFFECT_KEY_SCHEMA_VERSION,
+        prefix=_TOOL_EFFECT_KEY_PREFIX,
         payload={
             "store_namespace_key": exact.store_namespace_key,
             "call_id": exact.call_id,
@@ -111,9 +113,7 @@ def tool_effect_request(call: ToolCall) -> EffectRequest:
         "capacity_scope_id": exact.capacity_scope_id,
     }
     return EffectRequest(
-        semantic_key=OpaqueKey(
-            f"{_TOOL_EFFECT_KEY_PREFIX}{semantic_key_hash}"
-        ),
+        semantic_key=semantic_key,
         request_hash=compute_identity_hash(
             schema=_TOOL_EFFECT_SCHEMA,
             schema_version=_TOOL_EFFECT_SCHEMA_VERSION,
