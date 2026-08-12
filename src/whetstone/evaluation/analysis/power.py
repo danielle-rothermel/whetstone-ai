@@ -180,7 +180,8 @@ def analyze_power(
 ) -> PowerResult:
     """Run the closed-form paired 2-D (n x s) power analysis over the anchors.
 
-    ``naive_per_task`` / ``ceiling_per_task`` are the anchor arms' per-task
+    ``naive_per_task`` / ``ceiling_per_task`` are the anchor configs'
+    per-task
     mean 0/1 vectors (aligned by task, measured at ``anchor_samples`` samples
     per task). ``pool_ceiling`` is the available task-pool size (the hard
     ``n`` ceiling). Returns a :class:`PowerResult` with the variance

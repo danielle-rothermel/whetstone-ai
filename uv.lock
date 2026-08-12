@@ -483,15 +483,15 @@ wheels = [
 
 [[package]]
 name = "dr-graph"
-version = "0.1.2"
+version = "0.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8d/3b/08fd40793260d32e9fb7474ddddd3af87f6ae61611bb99d0006420ba67af/dr_graph-0.1.2.tar.gz", hash = "sha256:bf74d24287b5545ed9a5af04fba26e3aa6b6704909bc477acd3577657200ee1e", size = 20283, upload-time = "2026-08-06T06:55:07.838Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/06/7fdfe11ab6a9d9813fd160623bdc387833193897d30350ed481bc1f925c2/dr_graph-0.1.3.tar.gz", hash = "sha256:8b9bbe63c26f36cfadca6f4e74557b9209b6a1a33f5c310b4d16308d22a08fb3", size = 23378, upload-time = "2026-08-11T21:07:33.691Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cd/b0/4d1fc6f3e3c79c6a9aa68bd4863b4838ecf69c04a48b06f26727a30d904f/dr_graph-0.1.2-py3-none-any.whl", hash = "sha256:e4dbad8b5fa086f769846f3df1e0ce22aadd40bc3e48e4b2640ef2c1185cea04", size = 36124, upload-time = "2026-08-06T06:55:06.511Z" },
+    { url = "https://files.pythonhosted.org/packages/b7/96/76e22d9a733a7e6a7043aee6c5db1393138e6c638333ddcb65d3b87d3760/dr_graph-0.1.3-py3-none-any.whl", hash = "sha256:9409c89882a444b52fc710b16657b515664d4e8601312b698314f6415b8ff603", size = 39536, upload-time = "2026-08-11T21:07:32.303Z" },
 ]
 
 [[package]]
@@ -2250,7 +2250,7 @@ requires-dist = [
     { name = "dbos", specifier = ">=2.25.0" },
     { name = "dr-code", specifier = "==0.1.4" },
     { name = "dr-exec", specifier = "==0.1.5" },
-    { name = "dr-graph", specifier = "==0.1.2" },
+    { name = "dr-graph", specifier = "==0.1.3" },
     { name = "dr-providers", specifier = "==0.2.2" },
     { name = "dr-serialize", specifier = "==0.1.2" },
     { name = "dr-store", specifier = "==0.1.5" },

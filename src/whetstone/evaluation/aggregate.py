@@ -50,7 +50,8 @@ class CompletenessPolicy:
     is the DECLARED completeness tolerance: under ``SKIP`` the aggregate is
     only certified when the fraction of skipped (missing + failed + invalid)
     rows over the complete planned matrix is at or below this bound; beyond it
-    the aggregate is forced ``MISSING_DATA`` (an incomplete arm), never a value
+    the aggregate is forced ``MISSING_DATA`` (an incomplete evaluation),
+    never a value
     reduced over an out-of-tolerance matrix. Under ``PROPAGATE`` the bound is
     inert (any skipped row already makes the aggregate missing).
 
@@ -188,7 +189,7 @@ class RowValue:
 
     #: The measured numeric value, when the row produced one.
     value: float | None = None
-    #: The row's Rollout failed (for example, an exhausted provider or
+    #: The row's generation failed (for example, an exhausted provider or
     #: execution-infrastructure failure).
     failed: bool = False
     #: The planned row is absent from the observed matrix.
@@ -423,8 +424,9 @@ def enforce_skip_tolerance(
     Under ``SKIP`` the reduction happily certifies a value over the
     surviving rows no matter how many were skipped; the DECLARED completeness
     tolerance bounds that. When the skipped fraction exceeds
-    ``max_skip_fraction`` the arm is out of tolerance and its scalar is set to
-    ``None`` (``MISSING_DATA``) so the incomplete-arm guard fires — the skipped
+    ``max_skip_fraction`` the evaluation is out of tolerance and its scalar
+    is set to ``None`` (``MISSING_DATA``) so the incomplete-evaluation guard
+    fires — the skipped
     rows are still recorded as explicit counts on the aggregate. Within the
     bound the reduced value stands unchanged.
     """
@@ -475,20 +477,20 @@ def unweighted_task_mean(
     num_samples = plan.sample_plan.num_samples
     planned_task_hashes = plan.sample_plan.task_hashes
 
-    observed_by_identity: dict[str, TaskRows] = {}
+    observed_by_task_hash: dict[str, TaskRows] = {}
     for task in task_rows:
-        if task.task_hash in observed_by_identity:
+        if task.task_hash in observed_by_task_hash:
             raise ValueError(
                 f"duplicate observed task identity: {task.task_hash}"
             )
-        observed_by_identity[task.task_hash] = task
-    extra_identities = set(observed_by_identity) - set(planned_task_hashes)
-    if extra_identities:
-        extras = ", ".join(sorted(extra_identities))
+        observed_by_task_hash[task.task_hash] = task
+    extra_task_hashes = set(observed_by_task_hash) - set(planned_task_hashes)
+    if extra_task_hashes:
+        extras = ", ".join(sorted(extra_task_hashes))
         raise ValueError(f"observed unplanned task identities: {extras}")
 
     reconciled = tuple(
-        observed_by_identity.get(
+        observed_by_task_hash.get(
             task_hash,
             TaskRows(task_hash=task_hash, rows=()),
         )

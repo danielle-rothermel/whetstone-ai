@@ -278,7 +278,7 @@ def test_ed1_bootstrap_uses_exact_encoder_step_not_decoder_or_display(
     assert selected.inputs == {"prompt": "encoder prompt"}
     assert selected.outputs == {"provider_generation": "exact encoder output"}
     assert "different decoded display" not in str(selected.model_dump())
-    assert result.source_output_identity == (
+    assert result.source_output_hash == (
         "60fab16f5948734b962f4b365a884b3ead527bd3777b2f15095dda261a7f2d73"
     )
 
@@ -436,7 +436,7 @@ def test_bootstrap_failure_uses_exact_failure_ref_without_reward(
     assert result.score is None
     assert result.trace_steps == ()
     assert resolution.evaluation_result_ref is not None
-    assert result.source_generation_identity == (
+    assert result.source_generation_hash == (
         resolution.evaluation_result_ref.content_hash
     )
 

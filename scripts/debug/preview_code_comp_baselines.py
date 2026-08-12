@@ -49,7 +49,7 @@ from whetstone.evaluation.analysis.power import (
     PowerConfig,
 )
 from whetstone.evaluation.preview.anchor import (
-    AnchorArmPreview,
+    AnchorConfigPreview,
     BaselinePreviewTranscript,
     BaselineSweepTranscript,
 )
@@ -292,7 +292,7 @@ def _step_text(step, field: str) -> str:
     return value
 
 
-def _render_arm(console: Console, arm: AnchorArmPreview) -> None:
+def _render_anchor_config(console: Console, arm: AnchorConfigPreview) -> None:
     console.rule(f"[bold blue]{arm.label}")
     console.print(Panel(Text(arm.instruction), title="Encoder instruction"))
     reward = arm.evidence.reward_ref
@@ -361,8 +361,8 @@ def _render_preview(
     )
     console.print(Panel(config, title="Exact preview configuration"))
 
-    _render_arm(console, transcript.baseline)
-    _render_arm(console, transcript.ceiling)
+    _render_anchor_config(console, transcript.baseline)
+    _render_anchor_config(console, transcript.ceiling)
 
     ci = transcript.paired_delta_ci
     power = transcript.power

@@ -344,11 +344,11 @@ def _validate_components(
     programs: set[tuple[str, str]] = set()
     canonical_records: dict[str, tuple[object, ...]] = {}
     for record in records:
-        expected_identity = identity_hash_for(
+        expected_hash = identity_hash_for(
             schema=_RECORD_SCHEMA,
             payload=record.model_dump(mode="json", exclude={"content_hash"}),
         )
-        if record.content_hash != expected_identity:
+        if record.content_hash != expected_hash:
             raise DatasetValidationError(
                 f"record content identity mismatch: {record.task_id}"
             )

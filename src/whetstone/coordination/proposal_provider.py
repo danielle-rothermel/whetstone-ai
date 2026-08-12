@@ -86,12 +86,12 @@ class _ProposalTransportRegistry:
                 raise ProposalProviderError(
                     "proposal transport is not registered before DBOS launch"
                 ) from None
-            current_identity = transport.durability_identity_hash
+            current_hash = transport.durability_identity_hash
             require_full_hash(
-                current_identity,
+                current_hash,
                 field="transport_durability_identity_hash",
             )
-            if current_identity != registry_key:
+            if current_hash != registry_key:
                 raise ProposalProviderError(
                     "registered proposal transport durability identity changed"
                 )
@@ -128,7 +128,7 @@ def _proposal_policy_identity_payload(
     }
 
 
-def _proposal_policy_identity(registry_key: str) -> str:
+def _proposal_policy_hash(registry_key: str) -> str:
     return compute_identity_hash(
         schema=PROPOSAL_DBOS_POLICY_SCHEMA,
         schema_version=PROPOSAL_DBOS_POLICY_VERSION,
@@ -156,7 +156,7 @@ def _proposal_workflow_identity_payload(
     }
 
 
-def _proposal_workflow_identity(
+def _proposal_workflow_hash(
     *,
     registry_key: str,
     policy_identity_hash: str,
@@ -204,19 +204,19 @@ def _proposal_provider_workflow(
         raise ProposalProviderError(
             "proposal child workflow body cannot execute inside a DBOS step"
         )
-    expected_policy_identity = _proposal_policy_identity(registry_key)
-    if policy_identity_hash != expected_policy_identity:
+    expected_policy_hash = _proposal_policy_hash(registry_key)
+    if policy_identity_hash != expected_policy_hash:
         raise ProposalProviderError(
             "proposal child workflow policy identity is inconsistent"
         )
-    expected_workflow_identity = _proposal_workflow_identity(
+    expected_workflow_hash = _proposal_workflow_hash(
         registry_key=registry_key,
         policy_identity_hash=policy_identity_hash,
         config=config,
         request=request,
         count=count,
     )
-    if DBOS.workflow_id != expected_workflow_identity:
+    if DBOS.workflow_id != expected_workflow_hash:
         raise ProposalProviderError(
             "proposal child workflow has the wrong semantic identity"
         )
@@ -260,17 +260,17 @@ class _DbosProposalExecution(NamedTuple):
             )
         if not isinstance(config, ProposerConfig | CodexCliProposerConfig):
             raise TypeError("unsupported durable proposer config")
-        policy_identity_hash = _proposal_policy_identity(
+        policy_identity_hash = _proposal_policy_hash(
             self.transport_registry_key
         )
-        workflow_identity = _proposal_workflow_identity(
+        workflow_hash = _proposal_workflow_hash(
             registry_key=self.transport_registry_key,
             policy_identity_hash=policy_identity_hash,
             config=config,
             request=request,
             count=count,
         )
-        with SetWorkflowID(workflow_identity):
+        with SetWorkflowID(workflow_hash):
             handle = DBOS.start_workflow(
                 _proposal_provider_workflow,
                 self.transport_registry_key,
@@ -293,9 +293,7 @@ def DbosProposalExecutor(
     return _durable_proposal_executor(
         durability_contract=ProposalExecutorDurabilityContract(
             recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
-            policy_identity_hash=_proposal_policy_identity(
-                transport_registry_key
-            ),
+            policy_identity_hash=_proposal_policy_hash(transport_registry_key),
         ),
         execute=execution,
     )

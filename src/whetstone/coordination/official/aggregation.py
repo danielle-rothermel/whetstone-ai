@@ -46,8 +46,9 @@ class MissingPlannedKeysError(ValueError):
     def __init__(self, missing: Sequence[str]) -> None:
         self.missing = tuple(missing)
         super().__init__(
-            f"{len(self.missing)} planned Rollout Execution Key(s) have no "
-            "bound ordinary Rollout Result under the strict official policy: "
+            f"{len(self.missing)} planned Generation Execution Key(s) "
+            "have no bound ordinary Generation Result under the strict "
+            "official policy: "
             f"{list(self.missing)}"
         )
 
@@ -111,8 +112,9 @@ def account_planned_keys(
 ) -> OfficialAggregationAccount:
     """Account for every planned key under the configured failure policy.
 
-    ``planned_keys`` is the complete planned set of canonical Rollout Execution
-    Key strings; ``resolve`` maps one such key to its bound ordinary Rollout
+    ``planned_keys`` is the complete planned set of canonical Generation
+    Execution Key strings; ``resolve`` maps one such key to its bound
+    ordinary Generation
     Result Object Reference (or ``None`` when unbound). Every planned key
     produces exactly one :class:`PlannedKeyResult`; a missing key is recorded
     as an explicit missing row, never dropped.

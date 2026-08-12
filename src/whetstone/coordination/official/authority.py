@@ -149,7 +149,7 @@ class EvaluationAuthority:
         revisions: Sequence[RecordRevision] = (),
         source_revisions: Sequence[tuple[str, str]] = (),
         dependency_lock: Sequence[tuple[str, str]] = (),
-        environment_identity: str | None = None,
+        environment_label: str | None = None,
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
     ) -> OfficialEvaluationRecord:
@@ -158,7 +158,7 @@ class EvaluationAuthority:
         Refuses internal-role evidence (relabeling refusal). Computes the
         completeness decision from the planned/present accounting so no planned
         key is silently dropped, and certifies only when the evaluation is
-        complete. The referenced ordinary Rollout Results become official by
+        complete. The referenced ordinary Generation Results become official by
         this certification; they are not copied or relabeled.
         """
         self._require_official_binding(evaluation_binding)
@@ -188,7 +188,7 @@ class EvaluationAuthority:
             revisions=tuple(revisions),
             source_revisions=tuple(source_revisions),
             dependency_lock=tuple(dependency_lock),
-            environment_identity=environment_identity,
+            environment_label=environment_label,
             provenance_note=provenance_note,
             provenance_ordinal=provenance_ordinal,
         )
@@ -206,7 +206,7 @@ class EvaluationAuthority:
         selection_policy: str,
         source_revisions: Sequence[tuple[str, str]],
         dependency_lock: Sequence[tuple[str, str]],
-        environment_identity: str,
+        environment_label: str,
         selected_record_mapping: SelectedRecordMapping,
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
@@ -225,7 +225,7 @@ class EvaluationAuthority:
             selection_policy=selection_policy,
             source_revisions=tuple(source_revisions),
             dependency_lock=tuple(dependency_lock),
-            environment_identity=environment_identity,
+            environment_label=environment_label,
             selected_record_mapping=selected_record_mapping,
             provenance_note=provenance_note,
             provenance_ordinal=provenance_ordinal,

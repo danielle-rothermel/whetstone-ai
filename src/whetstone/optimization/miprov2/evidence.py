@@ -147,7 +147,7 @@ class Miprov2IntentContext(BaseModel):
         if not self.task_batch_hashes:
             raise ValueError("intent context task batch cannot be empty")
         for identity in self.task_batch_hashes:
-            require_full_hash(identity, field="task_batch_identity")
+            require_full_hash(identity, field="task_batch_hash")
         request = self.eval_config_binding.request
         expected_purpose = {
             "bootstrap": "bootstrap",
@@ -341,7 +341,7 @@ def _row_accounting(evidence: EvaluationEvidence) -> Miprov2RowAccounting:
     )
 
 
-def _selected_step_identity(step: _ExecutedComponentStep) -> str:
+def _selected_step_hash(step: _ExecutedComponentStep) -> str:
     return compute_identity_hash(
         schema=MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA,
         schema_version=MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA_VERSION,
@@ -638,10 +638,10 @@ class Miprov2EvidenceResolver:
         assert context.bootstrap_attempt is not None
         return BootstrapGenerationResult(
             attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-            source_generation_identity=resolved.evidence_ref.content_hash,
-            source_trace_identity=resolved.component_traces_ref.content_hash,
-            source_output_identity=_selected_step_identity(selected),
-            source_score_identity=resolved.reward_ref.record_ref.content_hash,
+            source_generation_hash=resolved.evidence_ref.content_hash,
+            source_trace_hash=resolved.component_traces_ref.content_hash,
+            source_output_hash=_selected_step_hash(selected),
+            source_score_hash=resolved.reward_ref.record_ref.content_hash,
             metric_present=True,
             score=resolved.reward_ref.record.value,
             trace_steps=(
@@ -700,10 +700,10 @@ class Miprov2EvidenceResolver:
         evidence_hash = failure_ref.content_hash
         return BootstrapGenerationResult(
             attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-            source_generation_identity=evidence_hash,
-            source_trace_identity=evidence_hash,
-            source_output_identity=evidence_hash,
-            source_score_identity=evidence_hash,
+            source_generation_hash=evidence_hash,
+            source_trace_hash=evidence_hash,
+            source_output_hash=evidence_hash,
+            source_score_hash=evidence_hash,
             metric_present=False,
             score=None,
             error=resolution.detail.message,

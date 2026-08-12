@@ -64,13 +64,13 @@ def test_bootstrap_acceptance_matches_dspy_threshold_truthiness(
     )
 
 
-def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
+def test_acceptance_hash_binds_all_source_evidence_and_decision() -> None:
     acceptance = BootstrapAcceptance(
         source_task_hash=_identity("task-1"),
-        source_generation_identity=_identity("generation-1"),
-        source_trace_identity=_identity("trace-1"),
-        source_output_identity=_identity("output-1"),
-        source_score_identity=_identity("score-1"),
+        source_generation_hash=_identity("generation-1"),
+        source_trace_hash=_identity("trace-1"),
+        source_output_hash=_identity("output-1"),
+        source_score_hash=_identity("score-1"),
         metric_present=True,
         score=0.75,
         metric_threshold=0.5,
@@ -79,20 +79,20 @@ def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
 
     assert acceptance.identity_payload() == {
         "source_task_hash": _identity("task-1"),
-        "source_generation_identity": _identity("generation-1"),
-        "source_trace_identity": _identity("trace-1"),
-        "source_output_identity": _identity("output-1"),
-        "source_score_identity": _identity("score-1"),
+        "source_generation_hash": _identity("generation-1"),
+        "source_trace_hash": _identity("trace-1"),
+        "source_output_hash": _identity("output-1"),
+        "source_score_hash": _identity("score-1"),
         "metric_present": True,
         "score": 0.75,
         "metric_threshold": 0.5,
         "accepted": True,
     }
     assert acceptance.identity_hash() == (
-        "3db91c8745079e47b131422958602d340ae51041f5e5e9cf2ad27a76c5804799"
+        "5a50b929157ada0750a19d833ac68d7ddcae8f0d854ae60ba66f6aca909b4807"
     )
     changed = acceptance.model_copy(
-        update={"source_output_identity": _identity("output-2")}
+        update={"source_output_hash": _identity("output-2")}
     )
     assert changed.identity_hash() != acceptance.identity_hash()
 
@@ -101,10 +101,10 @@ def test_acceptance_rejects_a_decision_that_disagrees_with_rule() -> None:
     with pytest.raises(ValidationError, match="threshold rule"):
         BootstrapAcceptance(
             source_task_hash=_identity("task-1"),
-            source_generation_identity=_identity("generation-1"),
-            source_trace_identity=_identity("trace-1"),
-            source_output_identity=_identity("output-1"),
-            source_score_identity=_identity("score-1"),
+            source_generation_hash=_identity("generation-1"),
+            source_trace_hash=_identity("trace-1"),
+            source_output_hash=_identity("output-1"),
+            source_score_hash=_identity("score-1"),
             metric_present=True,
             score=0.1,
             metric_threshold=0.5,
@@ -205,8 +205,8 @@ def test_labeled_demo_adapts_to_component_without_fake_generation_data() -> (
     assert demo.inputs == {"draft": "d"}
     assert demo.outputs == {"answer": "a"}
     assert demo.source_task_hash == _identity("task-1")
-    assert demo.source_generation_identity == demo.source_trace_identity
-    assert demo.source_trace_identity == demo.source_output_identity
+    assert demo.source_generation_hash == demo.source_trace_hash
+    assert demo.source_trace_hash == demo.source_output_hash
     assert len(demo.acceptance_identity_hash) == 64
 
 
@@ -218,10 +218,10 @@ def _bootstrapped_demo(**overrides: object):
         "outputs": {"answer": "a"},
         "augmented": True,
         "source_task_hash": _identity("task"),
-        "source_generation_identity": _identity("generation"),
-        "source_trace_identity": _identity("trace"),
-        "source_output_identity": _identity("output"),
-        "source_score_identity": _identity("score"),
+        "source_generation_hash": _identity("generation"),
+        "source_trace_hash": _identity("trace"),
+        "source_output_hash": _identity("output"),
+        "source_score_hash": _identity("score"),
         "source_trace_index": 0,
         "score": 1.0,
         "acceptance_identity_hash": _identity("acceptance"),
@@ -289,10 +289,10 @@ def test_non_finite_metric_values_are_rejected_at_construction(
     with pytest.raises(ValidationError):
         BootstrapAcceptance(
             source_task_hash=_identity("task"),
-            source_generation_identity=_identity("generation"),
-            source_trace_identity=_identity("trace"),
-            source_output_identity=_identity("output"),
-            source_score_identity=_identity("score"),
+            source_generation_hash=_identity("generation"),
+            source_trace_hash=_identity("trace"),
+            source_output_hash=_identity("output"),
+            source_score_hash=_identity("score"),
             metric_present=True,
             score=bad,
             metric_threshold=None,
@@ -301,10 +301,10 @@ def test_non_finite_metric_values_are_rejected_at_construction(
     with pytest.raises(ValidationError):
         BootstrapAcceptance(
             source_task_hash=_identity("task"),
-            source_generation_identity=_identity("generation"),
-            source_trace_identity=_identity("trace"),
-            source_output_identity=_identity("output"),
-            source_score_identity=_identity("score"),
+            source_generation_hash=_identity("generation"),
+            source_trace_hash=_identity("trace"),
+            source_output_hash=_identity("output"),
+            source_score_hash=_identity("score"),
             metric_present=True,
             score=1.0,
             metric_threshold=bad,
@@ -358,10 +358,10 @@ def test_component_demo_set_is_component_ordered_and_identity_bearing() -> (
         "task-1"
     )
     assert demo_set.demos_for("first")[0].identity_hash() == (
-        "8ae6d18873b535c63ccc0b9d6ddbc4d4c04edb6f7dc38187d2b5ce7dd3c4599e"
+        "e3066ada2a184098a2a8be82cf2811b7ca8b667cd34308f066f3a7ba4d45b51a"
     )
     assert demo_set.identity_hash() == (
-        "c260b17e063449a8ce5c42919508bcb7c90e0fa2438c6502ab79a47b9039b568"
+        "affbc6d23291c84d1526147e087fcebf85e9c8e527fc6c6707028f3504a96808"
     )
     with pytest.raises(KeyError):
         demo_set.demos_for("missing")

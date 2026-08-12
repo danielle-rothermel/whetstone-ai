@@ -121,7 +121,7 @@ class DefinitionRef(_FrozenModel):
     identity_hash: str
 
 
-def _definition_identity(
+def _definition_config_hash(
     *,
     schema: str,
     definition_id: str,
@@ -179,7 +179,7 @@ class SamplingDefinition(_FrozenModel):
     )
 
     def identity_hash(self) -> str:
-        return _definition_identity(
+        return _definition_config_hash(
             schema=SCHEMA_SAMPLING_DEFINITION,
             definition_id=self.definition_id,
             version=self.version,
@@ -265,7 +265,7 @@ class PreprocessingDefinition(_FrozenModel):
         return self
 
     def identity_hash(self) -> str:
-        return _definition_identity(
+        return _definition_config_hash(
             schema=SCHEMA_PREPROCESSING_DEFINITION,
             definition_id=self.definition_id,
             version=self.version,
@@ -411,7 +411,7 @@ class MetricExtractionDefinition(_FrozenModel):
         return self
 
     def identity_hash(self) -> str:
-        return _definition_identity(
+        return _definition_config_hash(
             schema=SCHEMA_METRIC_EXTRACTION_DEFINITION,
             definition_id=self.definition_id,
             version=self.version,
@@ -502,7 +502,7 @@ class EvaluationProcedureDefinition(_FrozenModel):
     )
 
     def identity_hash(self) -> str:
-        return _definition_identity(
+        return _definition_config_hash(
             schema=SCHEMA_EVALUATION_PROCEDURE_DEFINITION,
             definition_id=self.definition_id,
             version=self.version,
@@ -587,7 +587,7 @@ class AggregationDefinition(_FrozenModel):
     )
 
     def identity_hash(self) -> str:
-        return _definition_identity(
+        return _definition_config_hash(
             schema=SCHEMA_AGGREGATION_DEFINITION,
             definition_id=self.definition_id,
             version=self.version,
@@ -652,7 +652,7 @@ class EvalDefinition(_FrozenModel):
     )
 
     def identity_hash(self) -> str:
-        return _definition_identity(
+        return _definition_config_hash(
             schema=SCHEMA_EVAL_DEFINITION,
             definition_id=self.definition_id,
             version=self.version,

@@ -58,7 +58,7 @@ __all__ = [
     "ViewerCandidate",
     "ViewerCellProjection",
     "ViewerEvaluationSummary",
-    "ViewerRolloutRow",
+    "ViewerGenerationRow",
     "ViewerStepSummary",
     "build_viewer_cell_projection",
 ]
@@ -134,7 +134,8 @@ class ViewerStepSummary(BaseModel):
 
 
 class ViewerEvaluationSummary(BaseModel):
-    """One official arm's evidence, summarized without reinterpretation."""
+    """One official candidate's evidence, summarized without
+    reinterpretation."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
@@ -175,7 +176,7 @@ class ViewerEvaluationSummary(BaseModel):
         return self
 
 
-class ViewerRolloutRow(BaseModel):
+class ViewerGenerationRow(BaseModel):
     """One evaluation output row with explicit semantic task identity."""
 
     model_config = ConfigDict(
@@ -208,7 +209,7 @@ class ViewerRolloutRow(BaseModel):
     over_budget: StrictBool | None = None
 
     @model_validator(mode="after")
-    def _validate_row(self) -> ViewerRolloutRow:
+    def _validate_row(self) -> ViewerGenerationRow:
         require_full_hash(
             self.candidate_identity_hash, field="candidate_identity_hash"
         )
@@ -319,7 +320,7 @@ def _generation_rows(
     cell_id: str,
     evaluation: EngineEvaluation,
     store: ObjectStore,
-) -> tuple[ViewerRolloutRow, ...]:
+) -> tuple[ViewerGenerationRow, ...]:
     evidence: EvaluationEvidence = evaluation.evidence
     record = EvaluationOutputsRecord.model_validate(
         store.get(evidence.outputs_ref.reference)
@@ -327,12 +328,12 @@ def _generation_rows(
     candidate = evidence.candidate
     if record.candidate != candidate:
         raise ValueError("evaluation outputs belong to another candidate")
-    rows: list[ViewerRolloutRow] = []
+    rows: list[ViewerGenerationRow] = []
     for row in record.outputs:
         if row.candidate_id != candidate.record.candidate_id:
             raise ValueError("evaluation output row candidate is inconsistent")
         rows.append(
-            ViewerRolloutRow(
+            ViewerGenerationRow(
                 cell_id=cell_id,
                 evidence_ref=evaluation.evidence_ref,
                 candidate_id=row.candidate_id,
@@ -418,7 +419,7 @@ def build_viewer_cell_projection(
     if result.run.record.run_id != cell_id:
         raise ValueError("optimization result does not belong to this cell")
     steps = _step_summaries(result)
-    rows: list[ViewerRolloutRow] = []
+    rows: list[ViewerGenerationRow] = []
     summaries: list[ViewerEvaluationSummary] = []
     for evaluation in official_evaluations:
         summaries.append(_evaluation_summary(evaluation))

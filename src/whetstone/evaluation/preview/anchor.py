@@ -31,7 +31,7 @@ from whetstone.experiment.task_selection import TaskRoleSelection
 from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 __all__ = [
-    "AnchorArmPreview",
+    "AnchorConfigPreview",
     "BaselinePreviewTranscript",
     "BaselineSweepTranscript",
     "PreviewMetadata",
@@ -49,26 +49,26 @@ def _calibration_task_hashes(
     hashes = engine.sampling.task_set.task_hashes
     if set(task_ids).issubset(hashes):
         return task_ids
-    by_instance = {
-        str(instance.id): task_hash
-        for instance, task_hash in zip(
+    by_task_id = {
+        str(task.id): task_hash
+        for task, task_hash in zip(
             engine.sampling.tasks,
             hashes,
             strict=True,
         )
     }
     unknown = tuple(
-        task_id for task_id in task_ids if task_id not in by_instance
+        task_id for task_id in task_ids if task_id not in by_task_id
     )
     if unknown:
         raise ValueError(
             f"baseline preview task IDs are unknown to sampling: {unknown!r}"
         )
-    return tuple(by_instance[task_id] for task_id in task_ids)
+    return tuple(by_task_id[task_id] for task_id in task_ids)
 
 
-class AnchorArmPreview(BaseModel):
-    """One anchor arm with its exact evaluation and rendered row evidence."""
+class AnchorConfigPreview(BaseModel):
+    """One anchor config with its exact evaluation and rendered rows."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -92,8 +92,8 @@ class BaselinePreviewTranscript(BaseModel):
     preflight: ScoringPreflight
     metadata: PreviewMetadata
     evaluation_binding: EvaluationBinding
-    baseline: AnchorArmPreview
-    ceiling: AnchorArmPreview
+    baseline: AnchorConfigPreview
+    ceiling: AnchorConfigPreview
     paired_delta_ci: BootstrapCI
     power: PowerResult
 
@@ -109,16 +109,16 @@ class BaselineSweepTranscript(BaseModel):
     previews: tuple[BaselinePreviewTranscript, ...]
 
 
-def _arm(
+def _anchor_config_preview(
     *,
     label: str,
     store: ObjectStore,
     evaluated: EngineEvaluation,
-) -> AnchorArmPreview:
+) -> AnchorConfigPreview:
     instruction = evaluated.evidence.candidate.record.payload[MUTATION_FIELD]
     if not isinstance(instruction, str):
         raise ValueError("baseline anchor instruction must be text")
-    return AnchorArmPreview(
+    return AnchorConfigPreview(
         label=label,
         instruction=instruction,
         evidence=evaluated.evidence,
@@ -199,12 +199,12 @@ def run_baseline_preview(
         preflight=preflight,
         metadata=metadata,
         evaluation_binding=calibration.evaluation_binding,
-        baseline=_arm(
+        baseline=_anchor_config_preview(
             label=baseline_log_label,
             store=store,
             evaluated=calibration.baseline,
         ),
-        ceiling=_arm(
+        ceiling=_anchor_config_preview(
             label=ceiling_log_label,
             store=store,
             evaluated=calibration.ceiling,

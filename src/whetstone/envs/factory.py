@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from dr_graph import GraphConfig
 from dr_providers import ProviderCallConfig
 
 from whetstone.envs.sampling import EnvEvalConfigs
@@ -16,6 +17,9 @@ class GenerationGraphLike(Protocol):
 
     @property
     def graph_hash(self) -> str: ...
+
+    @property
+    def graph_config(self) -> GraphConfig: ...
 
     @property
     def provider_call_config(self) -> ProviderCallConfig: ...

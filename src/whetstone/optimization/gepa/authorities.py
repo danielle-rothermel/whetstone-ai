@@ -165,23 +165,23 @@ class GepaDataRegistry:
         engine: EvaluationEngine,
     ) -> GepaDataRegistry:
         task_ids = tuple(engine.sampling.task_set.task_hashes)
-        instances = tuple(engine.sampling.tasks)
-        if len(task_ids) != len(instances):
+        tasks = tuple(engine.sampling.tasks)
+        if len(task_ids) != len(tasks):
             raise ValueError(
-                "GEPA engine task identities and instances do not align"
+                "GEPA engine task identities and tasks do not align"
             )
         entries: list[GepaDataInstance] = []
-        for index, (task_hash, instance) in enumerate(
-            zip(task_ids, instances, strict=True)
+        for index, (task_hash, task) in enumerate(
+            zip(task_ids, tasks, strict=True)
         ):
-            prompt_inputs = getattr(instance, "prompt_inputs", None)
-            instance_id = getattr(instance, "id", None)
+            prompt_inputs = getattr(task, "prompt_inputs", None)
+            task_id = getattr(task, "id", None)
             if not isinstance(prompt_inputs, dict) or not isinstance(
-                instance_id,
+                task_id,
                 str,
             ):
                 raise ValueError(
-                    "GEPA engine instance lacks canonical public inputs"
+                    "GEPA engine task lacks canonical public inputs"
                 )
             prompt_input_items: list[tuple[str, str]] = []
             for name, value in prompt_inputs.items():
@@ -193,7 +193,7 @@ class GepaDataRegistry:
             ordered_prompt_inputs = dict(sorted(prompt_input_items))
             record = _GepaDataRecord(
                 task_hash=task_hash,
-                task_id=instance_id,
+                task_id=task_id,
                 prompt_inputs=ordered_prompt_inputs,
             )
             ref, _ = store.put(
@@ -305,7 +305,7 @@ class CanonicalGepaCandidateAssembler:
         payload = dict(self._base_candidate.record.payload)
         for field in self._fields:
             payload[field.candidate_field] = values[field.component_name]
-        candidate_identity = compute_identity_hash(
+        candidate_hash = compute_identity_hash(
             schema="whetstone.gepa.native_candidate",
             schema_version=1,
             payload={
@@ -318,7 +318,7 @@ class CanonicalGepaCandidateAssembler:
         )
         return candidate_reference(
             Candidate(
-                candidate_id=f"gepa-{candidate_identity[:24]}",
+                candidate_id=f"gepa-{candidate_hash[:24]}",
                 base_ref=self._base_candidate.record.base_ref,
                 payload=payload,
             )
@@ -988,7 +988,7 @@ class CanonicalGepaProposalAuthority:
         self._prompt_services = prompt_services
         self._transport = transport
         self._proposal_executor = proposal_executor
-        transport_identity = compute_identity_hash(
+        transport_hash = compute_identity_hash(
             schema="whetstone.gepa.proposer_transport",
             schema_version=1,
             payload={
@@ -1008,7 +1008,7 @@ class CanonicalGepaProposalAuthority:
             schema_version=GEPA_PROPOSAL_AUTHORITY_SCHEMA_VERSION,
             payload={
                 "control_identity_hash": control.identity_hash(),
-                "transport_identity_hash": transport_identity,
+                "transport_identity_hash": transport_hash,
                 "prompt_binding_identity_hash": (
                     control.prompt_binding_identity_hash
                 ),
@@ -1019,7 +1019,7 @@ class CanonicalGepaProposalAuthority:
         )
         self._binding = GepaProposalAuthorityBinding(
             authority_identity_hash=authority_hash,
-            proposer_transport_identity_hash=transport_identity,
+            proposer_transport_identity_hash=transport_hash,
             prompt_binding_identity_hash=control.prompt_binding_identity_hash,
             execution_policy_identity_hash=(
                 control.proposal_execution_policy_hash

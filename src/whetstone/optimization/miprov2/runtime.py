@@ -171,7 +171,7 @@ Miprov2EffectKind = Literal[
 ]
 
 
-def _instruction_identity(instruction: str) -> str:
+def _instruction_hash(instruction: str) -> str:
     return compute_identity_hash(
         schema="whetstone.miprov2_instruction",
         schema_version=1,
@@ -233,7 +233,7 @@ class Miprov2EvaluationEffect(BaseModel):
         if not self.task_batch_hashes:
             raise ValueError("evaluation task batch cannot be empty")
         for task_hash in self.task_batch_hashes:
-            require_full_hash(task_hash, field="task_batch_identity")
+            require_full_hash(task_hash, field="task_batch_hash")
         if self.purpose == "miprov2_sample" and self.suggestion is None:
             raise ValueError(
                 "sample evaluation requires its Optuna suggestion"
@@ -746,7 +746,7 @@ class Miprov2State(BaseModel):
             raise ValueError(
                 "MIPROv2 run render contract conflicts with control"
             )
-        if self.input_data_identity_hash != _input_data_identity(
+        if self.input_data_identity_hash != _input_data_hash(
             control=self.control,
             labeled_trainset=self.labeled_trainset,
             proposal_components=self.proposal_components,
@@ -1244,7 +1244,7 @@ class Miprov2DriverPlan(BaseModel):
         return self
 
 
-def _input_data_identity(
+def _input_data_hash(
     *,
     control: Miprov2Control,
     labeled_trainset: tuple[LabeledTaskDemo, ...],
@@ -1502,12 +1502,12 @@ def _ordered_labeled_for_plan(
     state: Miprov2State,
     plan: FewshotCandidatePlan,
 ) -> tuple[LabeledTaskDemo, ...]:
-    by_identity = {
+    by_task_hash = {
         item.source_task_hash: item for item in state.labeled_trainset
     }
     try:
         return tuple(
-            by_identity[identity] for identity in plan.trainset_task_hashes
+            by_task_hash[identity] for identity in plan.trainset_task_hashes
         )
     except KeyError as exc:
         raise ValueError(
@@ -2044,9 +2044,7 @@ def _materialize_bootstrap_teacher(
                 "component_id": spec.component_id,
                 "instruction_index": component_index,
                 "instruction": instruction,
-                "instruction_identity_hash": _instruction_identity(
-                    instruction
-                ),
+                "instruction_identity_hash": _instruction_hash(instruction),
                 "demo_index": component_index if examples else None,
                 "demo_set": examples or None,
                 "demo_identity_hash": (
@@ -2125,7 +2123,7 @@ def _miprov2_candidate_rendering(
     if demo_candidates is not None and not demo_candidates:
         raise ValueError("demo candidate pool cannot be empty")
     instruction_hashes = tuple(
-        tuple(_instruction_identity(item) for item in pool)
+        tuple(_instruction_hash(item) for item in pool)
         for pool in instruction_pools
     )
     demo_hashes = (
@@ -2182,7 +2180,7 @@ def _miprov2_candidate_rendering(
                 component_id=spec.component_id,
                 instruction_index=instruction_index,
                 instruction=instruction,
-                instruction_identity_hash=_instruction_identity(instruction),
+                instruction_identity_hash=_instruction_hash(instruction),
                 demo_index=demo_index,
                 demo_set=demo_set,
                 demo_identity_hash=demo_hash,
@@ -2249,7 +2247,7 @@ class Miprov2Driver:
             proposal_components=proposal_components,
             proposal_trainset=proposal_trainset,
             component_field_order=component_field_order,
-            input_data_identity_hash=_input_data_identity(
+            input_data_identity_hash=_input_data_hash(
                 control=control,
                 labeled_trainset=labeled_trainset,
                 proposal_components=proposal_components,
@@ -2428,8 +2426,8 @@ class Miprov2Driver:
         effect = state.pending_evaluation
         if effect is None:
             raise ValueError("no evaluation is pending")
-        effect_identity = effect.identity_hash()
-        self._require_new_effect(state, effect_identity)
+        effect_hash = effect.identity_hash()
+        self._require_new_effect(state, effect_hash)
         evaluation = resolved.evaluation
         if (
             resolved.context.effect_identity_hash,
@@ -2440,7 +2438,7 @@ class Miprov2Driver:
             evaluation.eval_config,
             evaluation.reward_policy_hash,
         ) != (
-            effect_identity,
+            effect_hash,
             effect.run_id,
             effect.purpose,
             effect.candidate.identity_hash(),
@@ -2462,7 +2460,7 @@ class Miprov2Driver:
             *state.completed_effects,
             Miprov2CompletedEffect(
                 kind="evaluations",
-                identity_hash=effect_identity,
+                identity_hash=effect_hash,
                 task_rows=resolved.row_accounting.planned,
             ),
         )
@@ -2960,7 +2958,7 @@ class Miprov2Driver:
 
     def _space(self, state: Miprov2State) -> Miprov2ParameterSpace:
         instructions = tuple(
-            tuple(_instruction_identity(item) for item in pool)
+            tuple(_instruction_hash(item) for item in pool)
             for pool in state.instruction_pools
         )
         demos = state.study_demo_candidates
@@ -2987,14 +2985,14 @@ class Miprov2Driver:
         self,
         state: Miprov2State,
         params: TrialParams,
-        combination_identity: str,
+        combination_hash: str,
     ) -> Miprov2CandidateAssemblyBinding:
         rendering = _miprov2_candidate_rendering(
             control=state.control,
             instruction_pools=state.instruction_pools,
             demo_candidates=state.study_demo_candidates,
             params=params,
-            categorical_combination_identity_hash=combination_identity,
+            categorical_combination_identity_hash=combination_hash,
         )
         candidate = candidate_from_components(
             base=state.control.base_candidate,
@@ -3013,7 +3011,7 @@ class Miprov2Driver:
         )
         return Miprov2CandidateAssemblyBinding(
             params=params,
-            categorical_combination_identity_hash=combination_identity,
+            categorical_combination_identity_hash=combination_hash,
             candidate=candidate_reference(candidate),
             program_identity_hash=program_identity_hash,
             rendering=rendering,
@@ -3031,12 +3029,13 @@ class Miprov2Driver:
         state: Miprov2State,
         plan: FewshotCandidatePlan,
     ) -> tuple[LabeledTaskDemo, ...]:
-        by_identity = {
+        by_task_hash = {
             task.source_task_hash: task for task in state.labeled_trainset
         }
         try:
             return tuple(
-                by_identity[identity] for identity in plan.trainset_task_hashes
+                by_task_hash[identity]
+                for identity in plan.trainset_task_hashes
             )
         except KeyError as exc:
             raise ValueError(

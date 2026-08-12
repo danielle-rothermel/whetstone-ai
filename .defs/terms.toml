@@ -151,7 +151,7 @@ categories = ["generation", "sampling"]
 name = "raw_ir"
 definition = """
 The encoder's intermediate representation before optional compression: lossless \
-text describing or encoding the task ground-truth code. In encdec rollouts, \
+text describing or encoding the task ground-truth code. In encdec generations, \
 realized as the encoder step's provider generation text."""
 exported_symbols = [
     "whetstone.evaluation.drivers.code_comp.EncDecGeneratedRowOutcome",
@@ -174,7 +174,7 @@ categories = ["generation", "evaluation"]
 [[terms]]
 name = "comp_ir"
 definition = """
-The losslessly compressed form of raw_ir. In encdec rollouts, measured at \
+The losslessly compressed form of raw_ir. In encdec generations, measured at \
 evaluation time from encoder output bytes; not emitted as a separate graph-node \
 output."""
 categories = ["generation", "evaluation"]
@@ -183,7 +183,7 @@ part_of = ["generation graph"]
 [[terms]]
 name = "generation output"
 definition = """
-The final generated output from a generation graph run. In encdec rollouts, \
+The final generated output from a generation graph run. In encdec generations, \
 the decoder step's provider generation submitted for correctness scoring."""
 exported_symbols = [
     "whetstone.experiment.graph.nodes.PROVIDER_GENERATION_OUTPUT_FIELD",

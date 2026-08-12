@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from whetstone.evaluation.aggregate import Aggregate, TaskRows
-from whetstone.evaluation.drivers.row_common import RolloutOutput
+from whetstone.evaluation.drivers.row_common import GenerationRowOutput
 from whetstone.experiment.reward import Reward
 
 
@@ -15,7 +15,7 @@ class InternalEvalResult:
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
-    outputs: tuple[RolloutOutput, ...]
+    outputs: tuple[GenerationRowOutput, ...]
     supplemental_aggregates: tuple[Aggregate, ...] = ()
     request_identities: frozenset[str] = frozenset()
     concurrency_halved: bool = False

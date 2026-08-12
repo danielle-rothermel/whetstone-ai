@@ -24,7 +24,7 @@ from whetstone.core.identity import (
 MIPROV2_ACCEPTANCE_SCHEMA = "whetstone.miprov2_bootstrap_acceptance"
 MIPROV2_COMPONENT_DEMO_SCHEMA = "whetstone.miprov2_component_demo"
 MIPROV2_COMPONENT_DEMO_SET_SCHEMA = "whetstone.miprov2_component_demo_set"
-MIPROV2_DEMO_SCHEMA_VERSION = 1
+MIPROV2_DEMO_SCHEMA_VERSION = 2
 
 type MetricValue = StrictBool | FiniteFloat
 
@@ -85,10 +85,10 @@ class BootstrapAcceptance(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_task_hash: StrictStr
-    source_generation_identity: StrictStr
-    source_trace_identity: StrictStr
-    source_output_identity: StrictStr
-    source_score_identity: StrictStr
+    source_generation_hash: StrictStr
+    source_trace_hash: StrictStr
+    source_output_hash: StrictStr
+    source_score_hash: StrictStr
     metric_present: StrictBool
     score: MetricValue | None
     metric_threshold: FiniteFloat | None
@@ -98,10 +98,10 @@ class BootstrapAcceptance(BaseModel):
     def _validate_decision(self) -> BootstrapAcceptance:
         for field in (
             "source_task_hash",
-            "source_generation_identity",
-            "source_trace_identity",
-            "source_output_identity",
-            "source_score_identity",
+            "source_generation_hash",
+            "source_trace_hash",
+            "source_output_hash",
+            "source_score_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
         if self.metric_present and self.score is None:
@@ -119,10 +119,10 @@ class BootstrapAcceptance(BaseModel):
     def identity_payload(self) -> dict[str, Any]:
         return {
             "source_task_hash": self.source_task_hash,
-            "source_generation_identity": self.source_generation_identity,
-            "source_trace_identity": self.source_trace_identity,
-            "source_output_identity": self.source_output_identity,
-            "source_score_identity": self.source_score_identity,
+            "source_generation_hash": self.source_generation_hash,
+            "source_trace_hash": self.source_trace_hash,
+            "source_output_hash": self.source_output_hash,
+            "source_score_hash": self.source_score_hash,
             "metric_present": self.metric_present,
             "score": self.score,
             "metric_threshold": self.metric_threshold,
@@ -229,10 +229,10 @@ class ComponentDemo(BaseModel):
     augmented: StrictBool
 
     source_task_hash: StrictStr
-    source_generation_identity: StrictStr
-    source_trace_identity: StrictStr
-    source_output_identity: StrictStr
-    source_score_identity: StrictStr
+    source_generation_hash: StrictStr
+    source_trace_hash: StrictStr
+    source_output_hash: StrictStr
+    source_score_hash: StrictStr
     source_trace_index: StrictInt | None
     score: MetricValue | None
     acceptance_identity_hash: StrictStr
@@ -266,10 +266,10 @@ class ComponentDemo(BaseModel):
             raise ValueError("component_id must be non-empty")
         for field in (
             "source_task_hash",
-            "source_generation_identity",
-            "source_trace_identity",
-            "source_output_identity",
-            "source_score_identity",
+            "source_generation_hash",
+            "source_trace_hash",
+            "source_output_hash",
+            "source_score_hash",
             "acceptance_identity_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
@@ -300,10 +300,10 @@ class ComponentDemo(BaseModel):
             "outputs": self.outputs.to_json(),
             "augmented": self.augmented,
             "source_task_hash": self.source_task_hash,
-            "source_generation_identity": self.source_generation_identity,
-            "source_trace_identity": self.source_trace_identity,
-            "source_output_identity": self.source_output_identity,
-            "source_score_identity": self.source_score_identity,
+            "source_generation_hash": self.source_generation_hash,
+            "source_trace_hash": self.source_trace_hash,
+            "source_output_hash": self.source_output_hash,
+            "source_score_hash": self.source_score_hash,
             "source_trace_index": self.source_trace_index,
             "score": self.score,
             "acceptance_identity_hash": self.acceptance_identity_hash,
@@ -383,7 +383,7 @@ class LabeledTaskDemo(BaseModel):
             raise ValueError(f"labeled task has no component {component_id!r}")
         inputs = self.inputs_for(component_id)
         outputs = self.outputs_for(component_id)
-        source_identity = compute_identity_hash(
+        source_hash = compute_identity_hash(
             schema="whetstone.miprov2_labeled_demo_source",
             schema_version=MIPROV2_DEMO_SCHEMA_VERSION,
             payload={
@@ -393,12 +393,12 @@ class LabeledTaskDemo(BaseModel):
                 "outputs": outputs,
             },
         )
-        acceptance_identity = compute_identity_hash(
+        acceptance_hash = compute_identity_hash(
             schema=MIPROV2_ACCEPTANCE_SCHEMA,
             schema_version=MIPROV2_DEMO_SCHEMA_VERSION,
             payload={
                 "source_kind": DemoSourceKind.LABELED,
-                "source_identity": source_identity,
+                "source_hash": source_hash,
                 "accepted": True,
             },
         )
@@ -409,13 +409,13 @@ class LabeledTaskDemo(BaseModel):
             outputs=outputs,
             augmented=False,
             source_task_hash=self.source_task_hash,
-            source_generation_identity=source_identity,
-            source_trace_identity=source_identity,
-            source_output_identity=source_identity,
-            source_score_identity=source_identity,
+            source_generation_hash=source_hash,
+            source_trace_hash=source_hash,
+            source_output_hash=source_hash,
+            source_score_hash=source_hash,
             source_trace_index=None,
             score=None,
-            acceptance_identity_hash=acceptance_identity,
+            acceptance_identity_hash=acceptance_hash,
         )
 
 

@@ -139,7 +139,7 @@ def derive_split_sampling(
     """Derive one exact sampling and EvalConfig contract."""
     if num_samples < 1:
         raise ValueError(f"num_samples must be at least 1; got {num_samples}")
-    task_hashes = tuple(task_hash_of(instance) for instance in tasks)
+    task_hashes = tuple(task_hash_of(task) for task in tasks)
     task_set = TaskSet(
         manifest_id=f"{namespace}.{split_role}",
         version=_DEFINITION_VERSION,

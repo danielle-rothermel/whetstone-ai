@@ -26,15 +26,16 @@ __all__ = [
 ]
 
 # dr-store record schemas (Content Hash addressing; no Identity Hash).
-OFFICIAL_EVALUATION_RECORD_SCHEMA = "whetstone.official_evaluation_record"
-OFFICIAL_PLOT_MANIFEST_SCHEMA = "whetstone.official_plot_manifest"
+OFFICIAL_EVALUATION_RECORD_SCHEMA = "whetstone.official_evaluation_record/v2"
+OFFICIAL_PLOT_MANIFEST_SCHEMA = "whetstone.official_plot_manifest/v2"
 
 
 class PlannedKeyResult(BaseModel):
-    """One planned Rollout Execution Key and its ordinary Result reference.
+    """One planned Generation Execution Key and its ordinary Result reference.
 
-    ``planned_key`` is the canonical Rollout Execution Key string the official
-    aggregation planned. ``result_ref`` is the ordinary Rollout Result Object
+    ``planned_key`` is the canonical Generation Execution Key string the
+    official aggregation planned. ``result_ref`` is the ordinary Generation
+    Result Object
     Reference (plus Content Hash) that satisfied it, or ``None`` when the row
     is missing — a missing planned row is recorded here explicitly and stays
     visible; it is never dropped.
@@ -60,7 +61,8 @@ class CompletenessDecision(BaseModel):
     """The explicit completeness + certification decision for one record.
 
     ``complete`` is true only when every planned key has a bound ordinary
-    Rollout Result; ``certified`` is the authority's decision to certify. The
+    Generation Result; ``certified`` is the authority's decision to
+    certify. The
     counts make the accounting auditable — planned, present, and missing rows
     are all visible so no planned key is silently dropped.
     """
@@ -118,7 +120,7 @@ class RecordRevision(BaseModel):
 
 
 class OfficialEvaluationRecord(BaseModel):
-    """Immutable authority-issued certification of ordinary Rollout Results.
+    """Immutable authority-issued certification of ordinary Generation Results.
 
     Names the official Evaluation Binding and exact Eval Config, the planned
     keys with their ordinary Result references + Content Hashes, the complete
@@ -127,7 +129,8 @@ class OfficialEvaluationRecord(BaseModel):
     MANDATORY ordered selected-record -> graph -> keys -> aggregate mapping.
 
     It introduces no distinct result role or type: the referenced ordinary
-    Rollout Results become official by being certified here, not by relabeling.
+    Generation Results become official by being certified here, not by
+    relabeling.
     Record-local typed provenance fields only; no universal Provenance class.
     """
 
@@ -139,7 +142,7 @@ class OfficialEvaluationRecord(BaseModel):
     evaluation_binding_id: StrictStr
     eval_config: EvalConfigRef
 
-    # Planned Rollout Execution Keys with their ordinary Result references.
+    # Planned Generation Execution Keys with their ordinary Result references.
     planned_results: tuple[PlannedKeyResult, ...]
 
     # Complete aggregate references (one per admitted graph).
@@ -161,7 +164,7 @@ class OfficialEvaluationRecord(BaseModel):
     # Record-local typed provenance fields.
     source_revisions: tuple[tuple[str, str], ...] = ()
     dependency_lock: tuple[tuple[str, str], ...] = ()
-    environment_identity: StrictStr | None = None
+    environment_label: StrictStr | None = None
     provenance_note: StrictStr | None = None
     provenance_ordinal: StrictInt | None = None
 
@@ -267,7 +270,7 @@ class OfficialPlotManifest(BaseModel):
     selection_policy: StrictStr
     source_revisions: tuple[tuple[str, str], ...]
     dependency_lock: tuple[tuple[str, str], ...]
-    environment_identity: StrictStr
+    environment_label: StrictStr
     selected_record_mapping: SelectedRecordMapping
     provenance_note: StrictStr | None = None
     provenance_ordinal: StrictInt | None = None
@@ -286,8 +289,8 @@ class OfficialPlotManifest(BaseModel):
             )
         if not self.selection_policy:
             raise ValueError("selection_policy must be non-empty")
-        if not self.environment_identity:
-            raise ValueError("environment_identity must be non-empty")
+        if not self.environment_label:
+            raise ValueError("environment_label must be non-empty")
         # The manifest's aggregate refs MUST cover every aggregate the ordered
         # mapping attributes, so a published plot cannot omit a curve slot.
         declared = set(self.aggregate_refs)

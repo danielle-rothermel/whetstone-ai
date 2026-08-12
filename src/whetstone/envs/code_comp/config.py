@@ -480,12 +480,12 @@ class CodeCompExperimentConfig(BaseModel):
 
             assert self.direct is not None
             pool, humaneval_by_id = self._load_direct_pool()
-            internal_instances, official_tasks, manifest_tag = (
-                self._resolve_split(pool)
+            internal_tasks, official_tasks, manifest_tag = self._resolve_split(
+                pool
             )
             internal_split = _direct_split(
                 split_role="internal_eval",
-                tasks=internal_instances,
+                tasks=internal_tasks,
                 procedure=procedure,
                 completeness=self.sampling.completeness,
                 max_skip_fraction=self.sampling.max_skip_fraction,
@@ -539,13 +539,13 @@ class CodeCompExperimentConfig(BaseModel):
 
             assert self.encdec is not None
             pool = self._load_task_pool()
-            internal_instances, official_tasks, manifest_tag = (
-                self._resolve_split(pool)
+            internal_tasks, official_tasks, manifest_tag = self._resolve_split(
+                pool
             )
             internal_split = _code_comp_split(
                 dataset_revision=CODE_COMP_DATASET_REVISION,
                 split_role="internal_eval",
-                tasks=internal_instances,
+                tasks=internal_tasks,
                 procedure=procedure,
                 completeness=self.sampling.completeness,
                 max_skip_fraction=self.sampling.max_skip_fraction,
@@ -616,29 +616,29 @@ class CodeCompExperimentConfig(BaseModel):
             )
         if not records:
             raise ValueError("ed1m mutant pool is empty")
-        all_instances = tuple(_mutant_to_instance(m) for m in records)
+        all_tasks = tuple(_mutant_to_instance(m) for m in records)
         mutant_map = {m.content_hash: m for m in records}
-        n = len(all_instances)
+        n = len(all_tasks)
         i_n = (
             self.split.internal_n
             if self.split.internal_n is not None
             else min(max(1, n // 2), n)
         )
-        internal_instances = all_instances[:i_n]
-        rest = all_instances[i_n:]
+        internal_tasks = all_tasks[:i_n]
+        rest = all_tasks[i_n:]
         o_n = (
             self.split.official_n
             if self.split.official_n is not None
             else len(rest)
         )
-        official_tasks = rest[:o_n] if rest else internal_instances[: o_n or n]
+        official_tasks = rest[:o_n] if rest else internal_tasks[: o_n or n]
         if not official_tasks:
-            official_tasks = internal_instances
+            official_tasks = internal_tasks
         internal_split = _code_comp_split(
             env_name=CODE_COMP_ENV_NAME,
             dataset_revision=loaded.manifest.dataset_hash,
             split_role="internal_eval",
-            tasks=internal_instances,
+            tasks=internal_tasks,
             procedure=procedure,
             completeness=self.sampling.completeness,
             max_skip_fraction=self.sampling.max_skip_fraction,
@@ -728,30 +728,30 @@ class CodeCompExperimentConfig(BaseModel):
                 id_of=lambda t: str(t.instance.id),
                 official_n=self.split.official_n,
             )
-            internal_instances = tuple(t.instance for t in resolved.internal)
+            internal_tasks = tuple(t.instance for t in resolved.internal)
             official_tasks = tuple(t.instance for t in resolved.official)
             manifest_tag = resolved.manifest_tag
             if resolved.official_capped:
                 print(f"[code_comp] {resolved.official_capped}")
-            return internal_instances, official_tasks, manifest_tag
-        all_instances = tuple(t.instance for t in pool)
-        n = len(all_instances)
+            return internal_tasks, official_tasks, manifest_tag
+        all_tasks = tuple(t.instance for t in pool)
+        n = len(all_tasks)
         i_n = (
             self.split.internal_n
             if self.split.internal_n is not None
             else min(max(1, n // 2), n)
         )
-        internal_instances = all_instances[:i_n]
-        rest = all_instances[i_n:]
+        internal_tasks = all_tasks[:i_n]
+        rest = all_tasks[i_n:]
         o_n = (
             self.split.official_n
             if self.split.official_n is not None
             else len(rest)
         )
-        official_tasks = rest[:o_n] if rest else internal_instances[: o_n or n]
+        official_tasks = rest[:o_n] if rest else internal_tasks[: o_n or n]
         if not official_tasks:
-            official_tasks = internal_instances
-        return internal_instances, official_tasks, manifest_tag
+            official_tasks = internal_tasks
+        return internal_tasks, official_tasks, manifest_tag
 
     def _builder_kwargs(
         self,

@@ -61,7 +61,7 @@ def test_publish_plot_preserves_shared_graph_attribution() -> None:
         selection_policy="select_all/v1",
         source_revisions=(("whetstone", "rev-1"),),
         dependency_lock=(("dr-code", "1.0.0"),),
-        environment_identity="env-1",
+        environment_label="env-1",
         selected_record_mapping=mapping,
     )
     assert len(manifest.selected_record_mapping.entries) == 2
@@ -78,7 +78,7 @@ def test_manifest_is_immutable() -> None:
         selection_policy="select_all/v1",
         source_revisions=(),
         dependency_lock=(),
-        environment_identity="env-1",
+        environment_label="env-1",
         selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
     )
     with pytest.raises((TypeError, ValueError)):
@@ -95,7 +95,7 @@ def test_manifest_aggregate_refs_must_cover_mapping() -> None:
             selection_policy="select_all/v1",
             source_revisions=(),
             dependency_lock=(),
-            environment_identity="env-1",
+            environment_label="env-1",
             selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
         )
 
@@ -129,7 +129,7 @@ def test_official_manifest_persists_immutably() -> None:
         selection_policy="select_all/v1",
         source_revisions=(),
         dependency_lock=(),
-        environment_identity="env-1",
+        environment_label="env-1",
         selected_record_mapping=single_entry_mapping(planned_keys=("k0",)),
     )
     store = ObjectStore(MemoryBackend())

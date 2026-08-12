@@ -190,7 +190,7 @@ class ProviderCallResult(BaseModel):
             mode="json",
             include={"request_identity", "policy_identity"},
         )
-        expected_policy_identity = first_evidence_identities["policy_identity"]
+        expected_policy_document = first_evidence_identities["policy_identity"]
         for attempt in self.attempts:
             evidence_identities = attempt.evidence.model_dump(
                 mode="json",
@@ -203,7 +203,7 @@ class ProviderCallResult(BaseModel):
                 )
             if (
                 evidence_identities["policy_identity"]
-                != expected_policy_identity
+                != expected_policy_document
             ):
                 raise ValueError(
                     "every attempt evidence policy identity must agree"

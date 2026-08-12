@@ -168,7 +168,7 @@ class GepaDetailedResult(BaseModel):
         return self
 
 
-def _val_identity(control: GepaControl, upstream_id: object) -> str:
+def _val_task_hash(control: GepaControl, upstream_id: object) -> str:
     if type(upstream_id) is not int:
         raise ValueError(
             "canonical GEPA requires list-backed integer validation ids"
@@ -186,13 +186,13 @@ def _project_result(
 ) -> GepaDetailedResult:
     val_subscores = tuple(
         {
-            _val_identity(control, val_id): score
+            _val_task_hash(control, val_id): score
             for val_id, score in scores.items()
         }
         for scores in result.val_subscores
     )
     per_val_best = {
-        _val_identity(control, val_id): tuple(sorted(programs))
+        _val_task_hash(control, val_id): tuple(sorted(programs))
         for val_id, programs in (
             result.per_val_instance_best_candidates.items()
         )
@@ -200,7 +200,7 @@ def _project_result(
     best_outputs = None
     if result.best_outputs_valset is not None:
         best_outputs = {
-            _val_identity(control, val_id): tuple(outputs)
+            _val_task_hash(control, val_id): tuple(outputs)
             for val_id, outputs in result.best_outputs_valset.items()
         }
     objective_best = None

@@ -36,7 +36,7 @@ from whetstone.runner.budget import (
 )
 from whetstone.runner.cell import (
     CELL_RUN_CONTROL_SCHEMA,
-    OFFICIAL_ARM_BINDING_SCHEMA,
+    OFFICIAL_CANDIDATE_BINDING_SCHEMA,
     CellError,
     _check_cell_start,
     bind_cell_launch,
@@ -129,13 +129,16 @@ def test_completed_cell_is_skipped_without_rerunning(tmp_path: Path) -> None:
     assert [event["event"] for event in events] == ["attempt_skipped"]
 
 
-def test_official_arms_bind_before_they_are_paid_for(tmp_path: Path) -> None:
+def test_official_candidates_bind_before_they_are_paid_for(
+    tmp_path: Path,
+) -> None:
     config = cell_config(tmp_path)
     bind_cell_launch(config)
 
-    for arm in ("baseline", "ceiling"):
+    for candidate_label in ("baseline", "ceiling"):
         bound = config.store.resolve(
-            f"{OFFICIAL_ARM_BINDING_SCHEMA}:{config.cell_id}#{arm}"
+            f"{OFFICIAL_CANDIDATE_BINDING_SCHEMA}:{config.cell_id}"
+            f"#{candidate_label}"
         )
         assert bound is not None
     assert (
@@ -144,7 +147,9 @@ def test_official_arms_bind_before_they_are_paid_for(tmp_path: Path) -> None:
     )
 
 
-def test_rebinding_a_changed_official_arm_is_refused(tmp_path: Path) -> None:
+def test_rebinding_a_changed_official_candidate_is_refused(
+    tmp_path: Path,
+) -> None:
     store = make_store(tmp_path)
     ledger = Ledger(tmp_path / "ledger")
     first = cell_config(tmp_path, store=store, ledger=ledger)
@@ -197,8 +202,8 @@ def test_spend_checkpoints_precede_every_paid_boundary(
 
     assert phases[0] == "before"
     assert phases[-1] == "after"
-    for arm in ("baseline", "ceiling", "best"):
-        assert f"checkpoint:official:{arm}" in phases
+    for candidate_label in ("baseline", "ceiling", "best"):
+        assert f"checkpoint:official:{candidate_label}" in phases
     assert "checkpoint:optimization" in phases
     assert phases.index("checkpoint:official:baseline") < phases.index(
         "checkpoint:official:best"
@@ -435,7 +440,7 @@ def test_projection_bytes_match_their_recorded_hashes(tmp_path: Path) -> None:
         assert hashlib.sha256(body).hexdigest() == reference.sha256
 
 
-def test_projection_reports_every_official_arm(tmp_path: Path) -> None:
+def test_projection_reports_every_official_candidate(tmp_path: Path) -> None:
     outcome, publication, root = _published(tmp_path)
     projection = json.loads(
         (root / publication.projection.relative_path).read_text()

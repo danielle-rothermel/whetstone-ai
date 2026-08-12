@@ -57,7 +57,8 @@ def resample_indices(
     """The ``resamples`` task-index draws (with replacement) for ``n`` tasks.
 
     Deterministic given ``seed``. Paired intervals reuse ONE such index set
-    across both arms so the same tasks are resampled together; that is what
+    across both anchor configs so the same tasks are resampled together;
+    that is what
     makes a paired CI a paired CI (shared per-task variance cancels).
     """
     if n <= 0:
@@ -119,8 +120,9 @@ def bootstrap_paired_delta_ci(
     """Paired percentile-bootstrap CI for ``mean(b) - mean(a)`` over tasks.
 
     ``a_per_task`` and ``b_per_task`` are aligned per-task means (task ``i`` in
-    both arms). Each resample draws ONE task-index set (via
-    :func:`resample_indices`) and applies it to BOTH arms, so the shared
+    both anchor configs). Each resample draws ONE task-index set (via
+    :func:`resample_indices`) and applies it to BOTH anchor configs, so the
+    shared
     per-task variance cancels -- a genuine paired bootstrap. Deterministic
     given ``seed``.
     """

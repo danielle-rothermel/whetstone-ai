@@ -57,7 +57,7 @@ from whetstone.runner.viewer_projection import (
     VIEWER_GENERATION_ROW_SCHEMA,
     VIEWER_PROJECTION_SCHEMA,
     ViewerCellProjection,
-    ViewerRolloutRow,
+    ViewerGenerationRow,
     build_viewer_cell_projection,
 )
 
@@ -96,7 +96,7 @@ __all__ = [
     "SpendRecord",
     "StopLossError",
     "ViewerCellProjection",
-    "ViewerRolloutRow",
+    "ViewerGenerationRow",
     "bind_cell_launch",
     "build_viewer_cell_projection",
     "completeness_for_env",

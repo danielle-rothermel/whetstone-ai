@@ -296,16 +296,16 @@ class WhetstoneGepaAdapter:
             self._prompt_services.descriptor.component(component_name)
             items: list[dict[str, Any]] = []
             for trajectory in eval_batch.trajectories:
-                trace_instances = list(
+                trace_candidates = list(
                     trajectory.component_records.get(component_name, ())
                 )
                 if not self.add_format_failure_as_feedback:
-                    trace_instances = [
+                    trace_candidates = [
                         trace
-                        for trace in trace_instances
+                        for trace in trace_candidates
                         if not trace.format_failure
                     ]
-                if not trace_instances:
+                if not trace_candidates:
                     if trajectory.component_records.get(component_name):
                         continue
                     items.append(trajectory.reflective_record(component_name))
@@ -313,7 +313,7 @@ class WhetstoneGepaAdapter:
                 selected = next(
                     (
                         trace
-                        for trace in trace_instances
+                        for trace in trace_candidates
                         if trace.format_failure
                     ),
                     None,
@@ -321,7 +321,7 @@ class WhetstoneGepaAdapter:
                 if selected is None:
                     if trajectory.prediction_failed:
                         continue
-                    selected = self._rng.choice(trace_instances)
+                    selected = self._rng.choice(trace_candidates)
                 if (
                     selected.feedback_score is not None
                     and trajectory.module_score is not None
