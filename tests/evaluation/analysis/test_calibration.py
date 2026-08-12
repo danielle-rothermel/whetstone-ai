@@ -135,7 +135,7 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
         ceiling_log_label="hand-engineered comparison anchor",
         task_ids=task_ids,
         pool_ceiling=3,
-        power_config=PowerConfig(repeat_cap=3, trials=100, seed=17),
+        power_config=PowerConfig(sample_cap=3),
         bootstrap_resamples=200,
         bootstrap_seed=19,
     )
@@ -170,7 +170,7 @@ def test_calibration_evaluates_aligned_anchors_and_plans_power(
     assert result.paired_delta_ci.point == pytest.approx(passing_reward / 2)
     assert result.power.certified_headroom == pytest.approx(passing_reward / 2)
     assert result.power.pool_ceiling == 3
-    assert result.power.decomposition.anchor_repeats == 2
+    assert result.power.decomposition.anchor_samples == 2
     assert store.get(result.baseline.evidence_ref.reference)
     assert store.get(result.ceiling.evidence_ref.reference)
     for cited in baseline.reward_ref.record.evidence_refs:
@@ -192,7 +192,7 @@ def test_calibration_rejects_an_impossible_pool_before_evaluation(
             ceiling_purpose=_CALIBRATION_CEILING_PURPOSE,
             task_ids=("Synthetic/0", "Synthetic/1"),
             pool_ceiling=1,
-            power_config=PowerConfig(trials=1),
+            power_config=PowerConfig(sample_cap=2),
             bootstrap_resamples=1,
         )
 
@@ -214,7 +214,7 @@ def test_calibration_reports_each_paid_evaluation_boundary(tmp_path) -> None:
         ceiling_log_label="hand-engineered comparison anchor",
         task_ids=(task_hashes[0],),
         pool_ceiling=1,
-        power_config=PowerConfig(trials=1),
+        power_config=PowerConfig(sample_cap=2),
         bootstrap_resamples=1,
         log=messages.append,
     )

@@ -208,7 +208,7 @@ def run_anchor_calibration(
         naive_per_task=baseline.evidence.per_task_values,
         ceiling_per_task=ceiling.evidence.per_task_values,
         pool_ceiling=pool_ceiling,
-        anchor_repeats=repeats,
+        anchor_samples=repeats,
         config=power_config,
     )
     return AnchorCalibrationResult(

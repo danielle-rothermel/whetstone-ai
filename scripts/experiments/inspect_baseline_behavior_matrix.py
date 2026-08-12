@@ -829,8 +829,11 @@ def _treatment_summary(
         "paired_delta_ci": asdict(transcript.paired_delta_ci),
         "power": {
             "certified_headroom": transcript.power.certified_headroom,
+            "target_gap": transcript.power.target_gap,
+            "best_achievable_mdd": min(
+                point.mdd_at_target for point in transcript.power.surface
+            ),
             "decomposition": asdict(transcript.power.decomposition),
-            "recommendation": asdict(transcript.power.recommendation),
         },
     }
 
@@ -1168,20 +1171,17 @@ def _render(report: Mapping[str, Any], command: str, console: Console) -> None:
         table = Table(
             "treatment",
             "paired blend delta [95% CI]",
-            "powered target",
-            "tasks x repeats",
-            "achieved MDD",
+            "target gap",
+            "best achievable MDD",
         )
         for item in report["treatments"]:
             ci = item["paired_delta_ci"]
-            recommendation = item["power"]["recommendation"]
+            power = item["power"]
             table.add_row(
                 str(item["treatment_id"]),
                 f"{ci['point']:+.3f} [{ci['low']:+.3f}, {ci['high']:+.3f}]",
-                "yes" if recommendation["achievable"] else "no",
-                f"{recommendation['recommended_n_tasks']} x "
-                f"{recommendation['recommended_repeats']}",
-                f"{recommendation['achieved_mdd']:.3f}",
+                f"{power['target_gap']:.3f}",
+                f"{power['best_achievable_mdd']:.3f}",
             )
         console.print(table)
     if command in ("summary", "inventory"):

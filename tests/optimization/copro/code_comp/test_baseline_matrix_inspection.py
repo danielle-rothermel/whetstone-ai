@@ -119,7 +119,7 @@ def _transcript() -> BaselinePreviewTranscript:
         runtime=_runtime(),
         budget_ratio=0.5,
         num_samples=2,
-        power_config=PowerConfig(trials=1, repeat_cap=2),
+        power_config=PowerConfig(sample_cap=2),
         bootstrap_resamples=2,
     )
 
@@ -270,8 +270,15 @@ def test_inspection_validates_and_exports_complete_matrix_evidence(
     assert report["treatments"][0]["budget"]["compliance_available"] == 4
     treatment = report["treatments"][0]
     assert treatment["paired_delta_ci"] == asdict(transcript.paired_delta_ci)
-    assert treatment["power"]["recommendation"] == (
-        asdict(transcript.power.recommendation)
+    assert treatment["power"]["certified_headroom"] == (
+        transcript.power.certified_headroom
+    )
+    assert treatment["power"]["target_gap"] == transcript.power.target_gap
+    assert treatment["power"]["best_achievable_mdd"] == min(
+        point.mdd_at_target for point in transcript.power.surface
+    )
+    assert treatment["power"]["decomposition"] == (
+        asdict(transcript.power.decomposition)
     )
     assert len(report["paired_deltas"]) == 1
     assert report["paired_deltas"][0]["direction"] == ("HUMAN_BEST-BASELINE")

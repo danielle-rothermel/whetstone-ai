@@ -4,11 +4,9 @@ from whetstone.evaluation.analysis.calibration import (
 )
 from whetstone.evaluation.analysis.power import (
     DEFAULT_ALPHA,
-    DEFAULT_MDD_PLATEAU_EPSILON,
-    DEFAULT_REPEAT_CAP,
+    DEFAULT_SAMPLE_CAP,
     DEFAULT_TARGET_PROB,
     PowerConfig,
-    PowerRecommendation,
     PowerResult,
     PowerSurfacePoint,
     VarianceDecomposition,
@@ -26,14 +24,12 @@ from whetstone.evaluation.analysis.statistics import (
 
 __all__ = [
     "DEFAULT_ALPHA",
-    "DEFAULT_MDD_PLATEAU_EPSILON",
-    "DEFAULT_REPEAT_CAP",
     "DEFAULT_RESAMPLES",
+    "DEFAULT_SAMPLE_CAP",
     "DEFAULT_TARGET_PROB",
     "AnchorCalibrationResult",
     "BootstrapCI",
     "PowerConfig",
-    "PowerRecommendation",
     "PowerResult",
     "PowerSurfacePoint",
     "VarianceDecomposition",

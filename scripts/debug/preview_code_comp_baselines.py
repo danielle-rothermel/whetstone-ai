@@ -44,7 +44,10 @@ from whetstone.envs.task_pools import (
     select_lowest_historical_pass_rate_for_env,
     select_role_for_env,
 )
-from whetstone.evaluation.analysis.power import PowerConfig
+from whetstone.evaluation.analysis.power import (
+    DEFAULT_SAMPLE_CAP,
+    PowerConfig,
+)
 from whetstone.evaluation.preview.anchor import (
     AnchorArmPreview,
     BaselinePreviewTranscript,
@@ -149,8 +152,11 @@ def _parse_args() -> argparse.Namespace:
         default=10_000,
     )
     parser.add_argument("--bootstrap-seed", type=int, default=0)
-    parser.add_argument("--power-trials", type=_positive_int, default=4_000)
-    parser.add_argument("--power-repeat-cap", type=_positive_int, default=20)
+    parser.add_argument(
+        "--power-sample-cap",
+        type=_positive_int,
+        default=DEFAULT_SAMPLE_CAP,
+    )
     return parser.parse_args()
 
 
@@ -359,7 +365,8 @@ def _render_preview(
     _render_arm(console, transcript.ceiling)
 
     ci = transcript.paired_delta_ci
-    recommendation = transcript.power.recommendation
+    power = transcript.power
+    best_mdd = min(point.mdd_at_target for point in power.surface)
     analysis = Table(show_header=False, box=None, pad_edge=False)
     analysis.add_column("field", style="bold magenta")
     analysis.add_column("value")
@@ -369,20 +376,10 @@ def _render_preview(
         f"[{ci.low:.6f}, {ci.high:.6f}]",
     )
     analysis.add_row("bootstrap resamples", str(ci.resamples))
-    analysis.add_row("power target gap", f"{recommendation.target_gap:.6f}")
-    analysis.add_row("achievable", str(recommendation.achievable))
-    analysis.add_row(
-        "recommended tasks", str(recommendation.recommended_n_tasks)
-    )
-    analysis.add_row(
-        "recommended repeats", str(recommendation.recommended_repeats)
-    )
-    analysis.add_row(
-        "minimum detectable delta", f"{recommendation.achieved_mdd:.6f}"
-    )
-    analysis.add_row(
-        "noise verdict", transcript.power.decomposition.noise_verdict
-    )
+    analysis.add_row("certified headroom", f"{power.certified_headroom:.6f}")
+    analysis.add_row("power target gap", f"{power.target_gap:.6f}")
+    analysis.add_row("best achievable MDD on surface", f"{best_mdd:.6f}")
+    analysis.add_row("noise verdict", power.decomposition.noise_verdict)
     console.print(Panel(analysis, title="Paired signal and power estimate"))
 
 
@@ -577,8 +574,7 @@ def main() -> None:
             concurrency=args.concurrency,
             num_samples=args.repeats,
             power_config=PowerConfig(
-                repeat_cap=args.power_repeat_cap,
-                trials=args.power_trials,
+                sample_cap=args.power_sample_cap,
             ),
             bootstrap_resamples=args.bootstrap_resamples,
             bootstrap_seed=args.bootstrap_seed,
