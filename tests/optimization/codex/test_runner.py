@@ -49,7 +49,6 @@ from dr_exec import (
 )
 from dr_store import ObjectStore, SqliteBackend
 
-import whetstone.optimization.codex.runner as runner_module
 from tests.optimization.codex.support import (
     binding,
     engine,
@@ -307,18 +306,6 @@ def _subprocess_boundary(
         tool_store=tool_store,
         partial_log_path=partial_path,
     )
-
-
-@pytest.fixture
-def declared_seatbelt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Path:
-    sandbox_exec = tmp_path / "sandbox-exec"
-    sandbox_exec.touch()
-    monkeypatch.setattr(runner_module, "_MACOS_SANDBOX_EXEC", sandbox_exec)
-    monkeypatch.setattr(sys, "platform", "darwin")
-    return sandbox_exec
 
 
 def test_subprocess_declares_typed_execution_and_preserves_artifact_evidence(

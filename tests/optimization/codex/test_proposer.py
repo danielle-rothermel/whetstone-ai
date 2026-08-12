@@ -21,7 +21,9 @@ from whetstone.optimization.codex.proposer import (
 from whetstone.optimization.proposal.proposer import ProposalRequest
 
 
-def test_codex_cli_proposer_returns_exact_bodies_without_mcp() -> None:
+def test_codex_cli_proposer_returns_exact_bodies_without_mcp(
+    declared_seatbelt: Path,
+) -> None:
     def respond(job, _cancellation):
         argv = _codex_argv(job)
         args = argv[1:]
@@ -87,7 +89,9 @@ def test_codex_cli_proposer_returns_exact_bodies_without_mcp() -> None:
         }
 
 
-def test_codex_cli_proposer_preserves_raw_invalid_artifact_evidence() -> None:
+def test_codex_cli_proposer_preserves_raw_invalid_artifact_evidence(
+    declared_seatbelt: Path,
+) -> None:
     artifact = b'{"wrong":["visible body"]}'
     stdout = b'{"type":"item.completed"}\n\xff'
     stderr = b"exact diagnostic"
@@ -142,6 +146,7 @@ def test_codex_cli_proposer_preserves_raw_invalid_artifact_evidence() -> None:
 def test_codex_cli_proposer_stages_default_paid_plan_auth(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    declared_seatbelt: Path,
 ) -> None:
     source_home = tmp_path / ".codex"
     source_home.mkdir()
