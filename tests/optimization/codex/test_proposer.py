@@ -192,7 +192,11 @@ def test_codex_cli_proposer_stages_default_paid_plan_auth(
         context={"proposal_prompt": "Improve this instruction"},
     )
 
-    drafts = transport.draft(CodexCliProposerConfig(), request, 1)
+    drafts = transport.draft(
+        CodexCliProposerConfig(codex_binary="/usr/bin/true"),
+        request,
+        1,
+    )
 
     assert drafts[0].template == "Visible body"
 
