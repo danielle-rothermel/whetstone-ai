@@ -60,7 +60,7 @@ def _control(
     fields = {
         "run": exact_run,
         "initial_candidates": records,
-        "initial_budget": BudgetState(remaining={"rollouts": 10}),
+        "initial_budget": BudgetState(remaining={"generations": 10}),
         "step_kind": StepKind.IDENTITY,
         "adapter_replay_policy": adapter_replay_policy,
         "owner_id": "runner-test-owner",
@@ -168,7 +168,9 @@ def test_changed_initial_candidates_change_the_control_identity() -> None:
 
 def test_a_changed_budget_changes_the_control_identity() -> None:
     original = _control()
-    richer = _control(initial_budget=BudgetState(remaining={"rollouts": 99}))
+    richer = _control(
+        initial_budget=BudgetState(remaining={"generations": 99})
+    )
 
     assert richer.identity_hash() != original.identity_hash()
 
@@ -298,7 +300,7 @@ def test_a_single_step_run_terminalizes(tmp_path: Path) -> None:
 
     reference = controller.drive(
         controller.control.run_request(
-            controller_identity_hash=controller.runtime_identity_hash
+            controller_identity_hash=controller.runtime_hash
         )
     )
 
@@ -315,7 +317,7 @@ def test_a_multi_step_run_accumulates_every_step_result(
 
     reference = controller.drive(
         controller.control.run_request(
-            controller_identity_hash=controller.runtime_identity_hash
+            controller_identity_hash=controller.runtime_hash
         )
     )
 
@@ -333,7 +335,7 @@ def test_driving_the_same_run_twice_replays_rather_than_repaying(
     adapter = _ContinuingAdapter(continue_for=2)
     controller = _controller(tmp_path, adapter)
     request = controller.control.run_request(
-        controller_identity_hash=controller.runtime_identity_hash
+        controller_identity_hash=controller.runtime_hash
     )
 
     first = controller.drive(request)
@@ -352,7 +354,7 @@ def test_a_run_that_never_terminates_fails_loudly(tmp_path: Path) -> None:
     with pytest.raises(RunControlError, match="did not reach a terminal"):
         controller.drive(
             controller.control.run_request(
-                controller_identity_hash=controller.runtime_identity_hash
+                controller_identity_hash=controller.runtime_hash
             )
         )
 
@@ -367,9 +369,7 @@ def test_driving_a_request_for_another_run_is_refused(
 
     with pytest.raises(RunControlError, match="different run"):
         controller.drive(
-            other.run_request(
-                controller_identity_hash=controller.runtime_identity_hash
-            )
+            other.run_request(controller_identity_hash=controller.runtime_hash)
         )
 
 
@@ -378,7 +378,7 @@ def test_driving_a_drifted_control_identity_is_refused(
 ) -> None:
     controller = _controller(tmp_path, IdentityOptimizerAdapter())
     request = controller.control.run_request(
-        controller_identity_hash=controller.runtime_identity_hash
+        controller_identity_hash=controller.runtime_hash
     )
     drifted = request.model_copy(update={"control_identity_hash": "c" * 64})
 
@@ -391,9 +391,7 @@ def test_the_controller_identity_is_the_control_identity(
 ) -> None:
     controller = _controller(tmp_path, IdentityOptimizerAdapter())
 
-    assert controller.runtime_identity_hash == (
-        controller.control.identity_hash()
-    )
+    assert controller.runtime_hash == (controller.control.identity_hash())
 
 
 # --------------------------------------------------------------------------
@@ -480,7 +478,7 @@ def test_a_built_continuation_satisfies_the_harness_carry_forward(
 
     reference = controller.drive(
         controller.control.run_request(
-            controller_identity_hash=controller.runtime_identity_hash
+            controller_identity_hash=controller.runtime_hash
         )
     )
 

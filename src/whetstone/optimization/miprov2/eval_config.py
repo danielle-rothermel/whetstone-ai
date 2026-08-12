@@ -18,7 +18,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
-from whetstone.evaluation import RepeatPlan, SamplingConfig, TaskSet
+from whetstone.evaluation import SamplePlan, SamplingConfig, TaskSet
 from whetstone.evaluation.config import (
     SCHEMA_EVAL_CONFIG,
     SCHEMA_SAMPLING_CONFIG,
@@ -59,7 +59,7 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
     provider_parameters: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )
-    rollout_id: StrictInt | None = None
+    generation_id: StrictInt | None = None
     copy_task_model: StrictBool = False
 
     @model_validator(mode="after")
@@ -68,8 +68,8 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
             raise ValueError("num_threads must be positive when present")
         if self.max_errors <= 0:
             raise ValueError("max_errors must be positive")
-        if self.rollout_id is not None and self.rollout_id < 0:
-            raise ValueError("rollout_id cannot be negative")
+        if self.generation_id is not None and self.generation_id < 0:
+            raise ValueError("generation_id cannot be negative")
         for field in (
             "task_model_identity_hash",
             "provider_execution_policy_hash",
@@ -109,7 +109,7 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
                 self.provider_execution_policy_hash
             ),
             "provider_parameters": self.provider_parameters.to_json(),
-            "rollout_id": self.rollout_id,
+            "generation_id": self.generation_id,
             "copy_task_model": self.copy_task_model,
         }
 
@@ -152,12 +152,10 @@ def _require_canonical_eval_config(
             record.evaluation_procedure_config_hash,
         ),
         ("aggregation_config_hash", record.aggregation_config_hash),
-        ("config_identity_hash", record.config_identity_hash),
+        ("config_hash", record.config_hash),
     ):
         require_full_hash(value, field=f"{field}.{nested_field}")
-    if eval_config.identity_hash != _canonical_eval_config_identity(
-        eval_config
-    ):
+    if eval_config.config_hash != _canonical_eval_config_identity(eval_config):
         raise ValueError(f"{field} has a non-canonical Eval Config identity")
     expected_reference = eval_config_reference(record)
     if eval_config.record_ref != expected_reference.record_ref:
@@ -197,23 +195,23 @@ def derive_eval_config_reference(
         field="sampling_config.definition_ref.identity_hash",
     )
     require_full_hash(
-        sampling_config.config_identity_hash,
-        field="sampling_config.config_identity_hash",
+        sampling_config.config_hash,
+        field="sampling_config.config_hash",
     )
     expected_sampling_identity = _canonical_sampling_config_identity(
         sampling_config
     )
-    if sampling_config.config_identity_hash != expected_sampling_identity:
+    if sampling_config.config_hash != expected_sampling_identity:
         raise ValueError("sampling_config has a non-canonical identity")
     source = source_eval_config.record
     derived = source.model_copy(
         update={
-            "sampling_config_hash": sampling_config.config_identity_hash,
-            "config_identity_hash": identity_hash_for(
+            "sampling_config_hash": sampling_config.config_hash,
+            "config_hash": identity_hash_for(
                 schema=SCHEMA_EVAL_CONFIG,
                 payload={
                     "definition_identity": source.definition_ref.identity_hash,
-                    "sampling_config": sampling_config.config_identity_hash,
+                    "sampling_config": sampling_config.config_hash,
                     "evaluation_procedure_config": (
                         source.evaluation_procedure_config_hash
                     ),
@@ -235,8 +233,8 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
     purpose: Miprov2EvalPurpose
     effect_identity_hash: StrictStr
     execution_policy: Miprov2EvaluationExecutionPolicy
-    task_batch_identities: tuple[StrictStr, ...]
-    repeat_count: StrictInt = 1
+    task_batch_hashes: tuple[StrictStr, ...]
+    num_samples: StrictInt = 1
 
     @model_validator(mode="after")
     def _validate_request(self) -> Miprov2EvalConfigBindingRequest:
@@ -252,17 +250,15 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
             self.source_eval_config,
             field="source_eval_config",
         )
-        if not self.task_batch_identities or self.repeat_count <= 0:
+        if not self.task_batch_hashes or self.num_samples <= 0:
             raise ValueError(
                 "Eval Config derivation requires tasks and positive repeats"
             )
-        if len(set(self.task_batch_identities)) != len(
-            self.task_batch_identities
-        ):
+        if len(set(self.task_batch_hashes)) != len(self.task_batch_hashes):
             raise ValueError("Eval Config derivation tasks must be unique")
-        for task_identity in self.task_batch_identities:
+        for task_hash in self.task_batch_hashes:
             require_full_hash(
-                task_identity,
+                task_hash,
                 field="task_batch_identity",
             )
         return self
@@ -278,8 +274,8 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
             "purpose": self.purpose,
             "effect_identity_hash": self.effect_identity_hash,
             "execution_policy": self.execution_policy.identity_payload(),
-            "task_batch_identities": list(self.task_batch_identities),
-            "repeat_count": self.repeat_count,
+            "task_batch_hashes": list(self.task_batch_hashes),
+            "num_samples": self.num_samples,
         }
 
     def identity_hash(self) -> str:
@@ -297,38 +293,38 @@ class Miprov2EvalConfigBinding(BaseModel):
 
     request: Miprov2EvalConfigBindingRequest
     task_set: TaskSet
-    repeat_plan: RepeatPlan
+    sample_plan: SamplePlan
     sampling_config: SamplingConfig
     eval_config: EvalConfigRef
 
     @model_validator(mode="after")
     def _validate_binding(self) -> Miprov2EvalConfigBinding:
-        tasks = self.request.task_batch_identities
+        tasks = self.request.task_batch_hashes
         if (
-            self.task_set.task_identities != tasks
+            self.task_set.task_hashes != tasks
             or self.task_set.selection_rule is not None
         ):
             raise ValueError("bound Task Set has the wrong ordered tasks")
         if (
-            self.repeat_plan.task_identities != tasks
-            or self.repeat_plan.repeat_count != self.request.repeat_count
+            self.sample_plan.task_hashes != tasks
+            or self.sample_plan.num_samples != self.request.num_samples
         ):
-            raise ValueError("bound Repeat Plan conflicts with request")
+            raise ValueError("bound Sample Plan conflicts with request")
         task_set_identity = self.task_set.identity_hash()
-        repeat_plan_identity = self.repeat_plan.identity_hash()
+        sample_plan_identity = self.sample_plan.identity_hash()
         require_full_hash(task_set_identity, field="task_set.identity_hash")
         require_full_hash(
-            repeat_plan_identity,
-            field="repeat_plan.identity_hash",
+            sample_plan_identity,
+            field="sample_plan.identity_hash",
         )
         expected_assignment = (
             ("task_set_hash", task_set_identity),
-            ("repeat_plan_hash", repeat_plan_identity),
+            ("sample_plan_hash", sample_plan_identity),
         )
         if self.sampling_config.assignment != expected_assignment:
             raise ValueError(
                 "bound Sampling Config does not bind the exact ordered "
-                "Task Set and Repeat Plan"
+                "Task Set and Sample Plan"
             )
         require_full_hash(
             self.sampling_config.definition_ref.identity_hash,
@@ -337,10 +333,7 @@ class Miprov2EvalConfigBinding(BaseModel):
         expected_sampling_identity = _canonical_sampling_config_identity(
             self.sampling_config
         )
-        if (
-            self.sampling_config.config_identity_hash
-            != expected_sampling_identity
-        ):
+        if self.sampling_config.config_hash != expected_sampling_identity:
             raise ValueError("bound Sampling Config identity is not canonical")
         expected_eval_config = derive_eval_config_reference(
             self.request.source_eval_config,
@@ -358,7 +351,7 @@ class Miprov2EvalConfigBinding(BaseModel):
         return {
             "request": self.request.identity_payload(),
             "task_set": self.task_set.model_dump(mode="json"),
-            "repeat_plan": self.repeat_plan.model_dump(mode="json"),
+            "sample_plan": self.sample_plan.model_dump(mode="json"),
             "sampling_config": self.sampling_config.model_dump(mode="json"),
             "eval_config": self.eval_config.model_dump(mode="json"),
         }

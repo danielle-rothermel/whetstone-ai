@@ -95,7 +95,7 @@ def _case(tmp_path, *, replay_policy: ReplayPolicy):
     )
     budget = BudgetState(
         remaining={
-            "bootstrap_rollouts": 0,
+            "bootstrap_generations": 0,
             "proposal_calls": 2,
             "evaluations": 2,
             "task_rows": 6,
@@ -254,7 +254,7 @@ def test_underfunded_task_rows_fail_before_resolver_or_store_write(
             initial_state=state,
             initial_budget=BudgetState(
                 remaining={
-                    "bootstrap_rollouts": 0,
+                    "bootstrap_generations": 0,
                     "proposal_calls": 2,
                     "evaluations": 2,
                     "task_rows": 5,

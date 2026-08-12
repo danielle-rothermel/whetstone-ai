@@ -11,10 +11,10 @@ from dr_providers import (
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 __all__ = [
-    "Generation",
+    "ProviderGeneration",
     "ProviderSemanticFailure",
     "SemanticFailureClass",
-    "accept_generation",
+    "accept_provider_generation",
     "classify_outcome",
     "is_blank",
 ]
@@ -26,9 +26,9 @@ _TIMEOUT_STATUS_CODES = frozenset({408})
 class SemanticFailureClass(StrEnum):
     """Closed Whetstone semantic failure taxonomy.
 
-    Every Provider Transport Outcome that is not an accepted Generation maps to
-    exactly one of these values. The set is closed: retry policy keys on these
-    values and an exhausted loop always has one to report.
+    Every Provider Transport Outcome that is not an accepted provider
+    generation maps to exactly one of these values. The set is closed: retry
+    policy keys on these values and an exhausted loop always has one to report.
     """
 
     #: A Provider Transport Failure whose cause is a wire/connection-level
@@ -44,19 +44,20 @@ class SemanticFailureClass(StrEnum):
     #: (bad request, auth, model rejection): a clean provider "no".
     PROVIDER_REJECTION = "provider-rejection"
     #: A successful Provider Transport Response whose projected semantic text
-    #: is blank or whitespace-only — rejected as a Generation.
-    BLANK_GENERATION = "blank-generation"
+    #: is blank or whitespace-only — rejected as provider generation.
+    BLANK_PROVIDER_GENERATION = "blank-provider-generation"
     #: A transport failure with an unknown/unclassifiable transport class.
     MALFORMED_RESPONSE = "malformed-response"
 
 
-class Generation(BaseModel):
+class ProviderGeneration(BaseModel):
     """Accepted nonblank semantic text projected from a Transport Response.
 
-    A Generation is the LLM Call Node's primary output. It carries the exact
-    accepted ``text`` and retains the causal :class:`ProviderTransportResponse`
-    it was projected from as provenance (the full provider result). It is not a
-    transport response and not a Provider Call Result.
+    A provider generation is the LLM Call Node's primary output. It carries
+    the exact accepted ``text`` and retains the causal
+    :class:`ProviderTransportResponse` it was projected from as provenance
+    (the full provider result). It is not a transport response and not a
+    Provider Call Result.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -65,13 +66,13 @@ class Generation(BaseModel):
     response: ProviderTransportResponse
 
     def model_post_init(self, _context: object) -> None:
-        # A Generation is nonblank by construction; acceptance is the only
-        # constructor callers should use, but enforce the invariant here too.
+        # A provider generation is nonblank by construction; acceptance is the
+        # only constructor callers should use, but enforce the invariant too.
         if is_blank(self.text):
-            raise ValueError("Generation text must be nonblank")
+            raise ValueError("ProviderGeneration text must be nonblank")
         if self.text != self.response.text:
             raise ValueError(
-                "Generation text must equal its causal response text"
+                "ProviderGeneration text must equal its causal response text"
             )
 
 
@@ -90,7 +91,7 @@ class ProviderSemanticFailure(BaseModel):
     #: The causal transport failure, when the transport itself failed.
     transport_failure: ProviderTransportFailure | None = None
     #: The rejected transport response, when a response was returned but not
-    #: accepted as a Generation (blank or whitespace-only text).
+    #: accepted as a ProviderGeneration (blank or whitespace-only text).
     rejected_response: ProviderTransportResponse | None = None
 
     def model_post_init(self, _context: object) -> None:
@@ -129,34 +130,36 @@ def _classify_transport_failure(
     return SemanticFailureClass.MALFORMED_RESPONSE
 
 
-def accept_generation(
+def accept_provider_generation(
     response: ProviderTransportResponse,
-) -> Generation | ProviderSemanticFailure:
-    """Project a Generation from a Transport Response, or classify a failure.
+) -> ProviderGeneration | ProviderSemanticFailure:
+    """Project provider generation from a Transport Response, or classify
+    failure.
 
     Acceptance is nonblank semantic ``text``. A blank/whitespace-only text is
-    a ``BLANK_GENERATION`` failure retaining the rejected response.
+    a ``BLANK_PROVIDER_GENERATION`` failure retaining the rejected response.
     """
     if is_blank(response.text):
         return ProviderSemanticFailure(
-            failure_class=SemanticFailureClass.BLANK_GENERATION,
+            failure_class=SemanticFailureClass.BLANK_PROVIDER_GENERATION,
             message="provider returned a blank or whitespace-only generation",
             rejected_response=response,
         )
-    return Generation(text=response.text, response=response)
+    return ProviderGeneration(text=response.text, response=response)
 
 
 def classify_outcome(
     outcome: ProviderTransportOutcome,
-) -> Generation | ProviderSemanticFailure:
+) -> ProviderGeneration | ProviderSemanticFailure:
     """Deterministically classify any Provider Transport Outcome.
 
     Total over the closed transport-outcome union: a Provider Transport
-    Response projects a Generation (or a blank-generation failure); a Provider
+    Response projects provider generation (or blank-provider-generation
+    failure); a
     Transport Failure classifies to exactly one semantic failure class.
     """
     if isinstance(outcome, ProviderTransportResponse):
-        return accept_generation(outcome)
+        return accept_provider_generation(outcome)
     return ProviderSemanticFailure(
         failure_class=_classify_transport_failure(outcome),
         message=outcome.message,

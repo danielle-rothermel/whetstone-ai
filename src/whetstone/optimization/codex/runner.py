@@ -255,7 +255,7 @@ def build_codex_command(
     prompt: str,
     codex_binary: str,
     model: str,
-    mcp_env: dict[str, str],
+    mcp_env: dict[str, str] | None,
     output_schema_path: str,
     output_artifact_path: str,
     working_directory: str,
@@ -286,29 +286,31 @@ def build_codex_command(
         argv.extend(["--disable", feature])
     if model:
         argv.extend(["--model", model])
-    argv.extend(
-        [
-            "-c",
-            f"mcp_servers.whetstone.command={json.dumps(sys.executable)}",
-            "-c",
-            "mcp_servers.whetstone.args="
-            + json.dumps(["-m", "whetstone.optimization.codex.mcp_server"]),
-            # stdin is closed, so an approval prompt for the one evaluation
-            # tool would stall or cancel the measurement instead of asking.
-            # This server is the only sanctioned measurement path and is
-            # already bounded by the Tool Config capacity it enforces.
-            "-c",
-            "mcp_servers.whetstone.default_tools_approval_mode="
-            + json.dumps(_MCP_TOOLS_APPROVAL_MODE),
-        ]
-    )
-    for key, value in sorted(mcp_env.items()):
+    if mcp_env is not None:
         argv.extend(
             [
                 "-c",
-                f"mcp_servers.whetstone.env.{key}={json.dumps(value)}",
+                f"mcp_servers.whetstone.command={json.dumps(sys.executable)}",
+                "-c",
+                "mcp_servers.whetstone.args="
+                + json.dumps(
+                    ["-m", "whetstone.optimization.codex.mcp_server"]
+                ),
+                # stdin is closed, so an approval prompt for the one
+                # evaluation tool would stall instead of asking. The tool is
+                # already bounded by its Tool Config capacity.
+                "-c",
+                "mcp_servers.whetstone.default_tools_approval_mode="
+                + json.dumps(_MCP_TOOLS_APPROVAL_MODE),
             ]
         )
+        for key, value in sorted(mcp_env.items()):
+            argv.extend(
+                [
+                    "-c",
+                    f"mcp_servers.whetstone.env.{key}={json.dumps(value)}",
+                ]
+            )
     argv.append(prompt)
     return argv
 
@@ -361,6 +363,35 @@ def _retained_bytes(
     return stream.head + stream.tail
 
 
+@dataclass(frozen=True, slots=True)
+class CodexStructuredExecution:
+    """One schema-constrained Codex CLI result plus process evidence."""
+
+    artifact_bytes: bytes
+    stdout: bytes
+    stderr: str
+    isolation: dict[str, Any]
+
+
+class CodexStructuredExecutionFailure(OpaqueStepError):
+    """Failed execution with every process byte available to the caller."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stdout: bytes,
+        stderr: bytes,
+        artifact_bytes: bytes = b"",
+        isolation: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+        self.artifact_bytes = artifact_bytes
+        self.isolation = isolation or {}
+
+
 class SubprocessCodexRunner:
     """Adapt Codex to Whetstone through one injected typed executor.
 
@@ -373,9 +404,9 @@ class SubprocessCodexRunner:
         self,
         *,
         executor: Executor,
-        sqlite_path: str,
-        runtime_config: EvaluationRuntimeConfig,
-        reward_policy: RewardPolicy,
+        sqlite_path: str | None = None,
+        runtime_config: EvaluationRuntimeConfig | None = None,
+        reward_policy: RewardPolicy | None = None,
         codex_binary: str = "codex",
         model: str = "",
         timeout_seconds: float = 600.0,
@@ -384,17 +415,27 @@ class SubprocessCodexRunner:
             Callable[[OptimizationStepRequest], str] | None
         ) = None,
     ) -> None:
-        _require_absolute("sqlite_path", sqlite_path, optional=False)
-        _require_absolute(
-            "partial_log_path",
-            runtime_config.partial_log_path,
-            optional=True,
-        )
-        _require_absolute(
-            "prompt_cache_path",
-            runtime_config.prompt_cache_path,
-            optional=True,
-        )
+        mcp_values = (sqlite_path, runtime_config, reward_policy)
+        if any(value is not None for value in mcp_values) and not all(
+            value is not None for value in mcp_values
+        ):
+            raise ValueError(
+                "Codex MCP runner requires sqlite_path, runtime_config, and "
+                "reward_policy together"
+            )
+        if sqlite_path is not None:
+            _require_absolute("sqlite_path", sqlite_path, optional=False)
+        if runtime_config is not None:
+            _require_absolute(
+                "partial_log_path",
+                runtime_config.partial_log_path,
+                optional=True,
+            )
+            _require_absolute(
+                "prompt_cache_path",
+                runtime_config.prompt_cache_path,
+                optional=True,
+            )
         self._sqlite_path = sqlite_path
         self._executor = executor
         self._runtime = runtime_config
@@ -403,9 +444,20 @@ class SubprocessCodexRunner:
         self._model = model
         self._timeout = timeout_seconds
         self._prompt_builder = prompt_builder
-        source_environment = (
-            dict(os.environ) if environment is None else dict(environment)
-        )
+        if environment is None:
+            source_environment = dict(os.environ)
+            configured_home = source_environment.get("CODEX_HOME")
+            auth_source = (
+                Path(configured_home)
+                if configured_home is not None
+                else Path.home() / ".codex"
+            )
+        else:
+            source_environment = dict(environment)
+            configured_home = source_environment.get("CODEX_HOME")
+            auth_source = (
+                Path(configured_home) if configured_home is not None else None
+            )
         allowed = {
             "PATH",
             "CODEX_HOME",
@@ -416,17 +468,88 @@ class SubprocessCodexRunner:
             "HTTPS_PROXY",
             "ALL_PROXY",
             "NO_PROXY",
-            self._runtime.execution_policy.transport_policy.api_key_env,
         }
+        if self._runtime is not None:
+            allowed.add(
+                self._runtime.execution_policy.transport_policy.api_key_env
+            )
         self._environment = {
             key: value
             for key, value in source_environment.items()
             if key in allowed
         }
+        self._auth_source = auth_source
 
     def run(
         self, request: OptimizationStepRequest, handle: RuntimeToolHandle
     ) -> CodexRunResult:
+        if (
+            self._sqlite_path is None
+            or self._runtime is None
+            or self._reward_policy is None
+        ):
+            raise OpaqueStepError(
+                "Codex optimizer run requires its MCP runtime configuration"
+            )
+        schema = CodexOutputArtifact.model_json_schema()
+        run_id_schema = schema["properties"]["run_id"]
+        assert isinstance(run_id_schema, dict)
+        run_id_schema["const"] = request.run_id
+        prompt = (
+            _default_prompt(request, tool_name=handle.config.tool_name)
+            if self._prompt_builder is None
+            else self._prompt_builder(request)
+        )
+        execution = self._execute_structured(
+            prompt=prompt,
+            output_schema=schema,
+            mcp_env={
+                McpEnvironmentKey.SQLITE_PATH: self._sqlite_path,
+                McpEnvironmentKey.TOOL_CONFIG: handle.config.model_dump_json(),
+                McpEnvironmentKey.CAPACITY_BINDING: (
+                    handle.binding.model_dump_json()
+                ),
+                McpEnvironmentKey.RUNTIME_CONFIG: (
+                    self._runtime.model_dump_json()
+                ),
+                McpEnvironmentKey.REWARD_POLICY: (
+                    self._reward_policy.model_dump_json()
+                ),
+            },
+            stage_runtime=True,
+        )
+        artifact = _parse_output_artifact_bytes(
+            execution.artifact_bytes,
+            stdout=execution.stdout,
+            stderr=execution.stderr,
+            run_id=request.run_id,
+            isolation=execution.isolation,
+        )
+        return CodexRunResult(artifact=artifact)
+
+    def run_structured_prompt(
+        self,
+        *,
+        prompt: str,
+        output_schema: dict[str, Any],
+    ) -> CodexStructuredExecution:
+        """Run schema-constrained Codex without registering an MCP server."""
+
+        return self._execute_structured(
+            prompt=prompt,
+            output_schema=output_schema,
+            mcp_env=None,
+            stage_runtime=False,
+        )
+
+    def _execute_structured(
+        self,
+        *,
+        prompt: str,
+        output_schema: dict[str, Any],
+        mcp_env: dict[str, str] | None,
+        stage_runtime: bool,
+    ) -> CodexStructuredExecution:
         resolved_binary = shutil.which(
             self._binary, path=self._environment.get("PATH")
         )
@@ -438,57 +561,41 @@ class SubprocessCodexRunner:
             prefix="whetstone-codex-"
         ) as working_directory:
             root = Path(working_directory)
-            runtime_root = root / "runtime"
-            runtime_root.mkdir()
-            self._stage_runtime(runtime_root)
+            runtime_root: Path | None = None
+            if stage_runtime:
+                runtime_root = root / "runtime"
+                runtime_root.mkdir()
+                self._stage_runtime(runtime_root)
             codex_home = root / "codex-home"
             codex_home.mkdir()
             self._stage_auth(codex_home)
             isolated_environment = {
                 **self._environment,
                 "CODEX_HOME": str(codex_home),
-                "PYTHONPATH": str(runtime_root),
             }
+            exact_mcp_env = mcp_env
+            if runtime_root is not None:
+                isolated_environment["PYTHONPATH"] = str(runtime_root)
+                assert exact_mcp_env is not None
+                exact_mcp_env = {
+                    **exact_mcp_env,
+                    "PYTHONPATH": str(runtime_root),
+                }
             schema_path = root / "output-schema.json"
             artifact_path = root / "last-message.json"
-            schema = CodexOutputArtifact.model_json_schema()
-            run_id_schema = schema["properties"]["run_id"]
-            assert isinstance(run_id_schema, dict)
-            run_id_schema["const"] = request.run_id
             schema_path.write_text(
-                json.dumps(schema, sort_keys=True), encoding="utf-8"
-            )
-            prompt = (
-                _default_prompt(request, tool_name=handle.config.tool_name)
-                if self._prompt_builder is None
-                else self._prompt_builder(request)
+                json.dumps(output_schema, sort_keys=True), encoding="utf-8"
             )
             command = build_codex_command(
                 prompt=prompt,
                 codex_binary=resolved_binary,
                 model=self._model,
-                mcp_env={
-                    McpEnvironmentKey.SQLITE_PATH: self._sqlite_path,
-                    McpEnvironmentKey.TOOL_CONFIG: (
-                        handle.config.model_dump_json()
-                    ),
-                    McpEnvironmentKey.CAPACITY_BINDING: (
-                        handle.binding.model_dump_json()
-                    ),
-                    McpEnvironmentKey.RUNTIME_CONFIG: (
-                        self._runtime.model_dump_json()
-                    ),
-                    McpEnvironmentKey.REWARD_POLICY: (
-                        self._reward_policy.model_dump_json()
-                    ),
-                    "PYTHONPATH": str(runtime_root),
-                },
+                mcp_env=exact_mcp_env,
                 output_schema_path=str(schema_path),
                 output_artifact_path=str(artifact_path),
                 working_directory=working_directory,
             )
             profile_path = root / "codex.sb"
-            isolation = _MacOsProcessIsolation()
             direct_exec_command = [
                 sys.executable,
                 "-I",
@@ -497,14 +604,18 @@ class SubprocessCodexRunner:
                 working_directory,
                 *command,
             ]
-            sandbox_wrapped_command = isolation.wrap(
+            sandbox_wrapped_command = _MacOsProcessIsolation().wrap(
                 direct_exec_command,
                 profile_path=profile_path,
                 readable_paths=self._readable_runtime_paths(
                     resolved_binary=Path(resolved_binary),
                     runtime_root=runtime_root,
                 ),
-                writable_paths=self._writable_runtime_paths(root),
+                writable_paths=(
+                    self._writable_runtime_paths(root)
+                    if stage_runtime
+                    else (root.resolve(),)
+                ),
             )
             job = ExecutionJob(
                 job_id=JobId(uuid4()),
@@ -530,6 +641,11 @@ class SubprocessCodexRunner:
                 completed.result.payload_outputs.stderr,
                 stream_name="stderr",
             )
+            isolation = {
+                "strategy": "macos_sandbox_exec",
+                "profile": profile_path.read_text(encoding="utf-8"),
+                "denied_features": list(_CODEX_DENIED_FEATURES),
+            }
             outcome = completed.result.outcome
             if isinstance(outcome, BudgetExceededOutcome):
                 if outcome.axis is BudgetAxis.WALL_TIME:
@@ -539,48 +655,95 @@ class SubprocessCodexRunner:
                         output=stdout,
                         stderr=stderr_bytes,
                     )
-                raise OpaqueStepError(
-                    "Codex execution failed with an unexpected budget outcome"
+                raise CodexStructuredExecutionFailure(
+                    "Codex execution failed with an unexpected budget outcome",
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    isolation=isolation,
                 )
             if isinstance(outcome, SpawnAbsentOutcome | SpawnFailedOutcome):
-                raise OpaqueStepError("Codex process could not be spawned")
+                raise CodexStructuredExecutionFailure(
+                    "Codex process could not be spawned",
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    isolation=isolation,
+                )
             if isinstance(outcome, ExitedOutcome):
                 return_code = outcome.exit_code
             elif isinstance(outcome, SignaledOutcome):
                 return_code = -outcome.signal_number
             else:
-                raise OpaqueStepError(
-                    f"Codex execution failed with outcome {outcome.kind}"
+                raise CodexStructuredExecutionFailure(
+                    f"Codex execution failed with outcome {outcome.kind}",
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    isolation=isolation,
                 )
-            stderr = _decode_stderr(stderr_bytes)
+            try:
+                stderr = _decode_stderr(stderr_bytes)
+            except OpaqueStepError as exc:
+                raise CodexStructuredExecutionFailure(
+                    str(exc),
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    isolation=isolation,
+                ) from exc
             if return_code:
-                raise OpaqueStepError(
-                    f"Codex exited {return_code}: {stderr[-2000:]}"
+                try:
+                    artifact_bytes = (
+                        artifact_path.read_bytes()
+                        if artifact_path.is_file()
+                        else b""
+                    )
+                except OSError as exc:
+                    raise CodexStructuredExecutionFailure(
+                        "Codex final output artifact could not be read",
+                        stdout=stdout,
+                        stderr=stderr_bytes,
+                        isolation=isolation,
+                    ) from exc
+                raise CodexStructuredExecutionFailure(
+                    f"Codex exited {return_code}: {stderr[-2000:]}",
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    artifact_bytes=artifact_bytes,
+                    isolation=isolation,
                 )
-            artifact = _parse_output_artifact(
-                artifact_path,
+            if not artifact_path.is_file():
+                raise CodexStructuredExecutionFailure(
+                    "Codex produced no final output artifact",
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    isolation=isolation,
+                )
+            try:
+                artifact_bytes = artifact_path.read_bytes()
+            except OSError as exc:
+                raise CodexStructuredExecutionFailure(
+                    "Codex final output artifact could not be read",
+                    stdout=stdout,
+                    stderr=stderr_bytes,
+                    isolation=isolation,
+                ) from exc
+            return CodexStructuredExecution(
+                artifact_bytes=artifact_bytes,
                 stdout=stdout,
                 stderr=stderr,
-                run_id=request.run_id,
-                isolation={
-                    "strategy": "macos_sandbox_exec",
-                    "profile": profile_path.read_text(encoding="utf-8"),
-                    "denied_features": list(_CODEX_DENIED_FEATURES),
-                },
+                isolation=isolation,
             )
-        return CodexRunResult(artifact=artifact)
 
     def _stage_auth(self, destination: Path) -> None:
-        source_raw = self._environment.get("CODEX_HOME")
-        if source_raw is None:
+        source = self._auth_source
+        if source is None:
             return
-        source = Path(source_raw)
         for name in ("auth.json", ".credentials.json"):
             candidate = source / name
             if candidate.is_file():
                 shutil.copy2(candidate, destination / name)
 
     def _stage_runtime(self, destination: Path) -> None:
+        if self._runtime is None:
+            raise OpaqueStepError("Codex MCP runtime is not configured")
         package_root = Path(__file__).resolve().parents[2]
         shutil.copytree(
             package_root,
@@ -609,15 +772,16 @@ class SubprocessCodexRunner:
         self,
         *,
         resolved_binary: Path,
-        runtime_root: Path,
+        runtime_root: Path | None,
     ) -> tuple[Path, ...]:
         paths = {
             resolved_binary.resolve(),
             Path(sys.executable).resolve(),
             Path(sys.prefix).resolve(),
             Path(sys.base_prefix).resolve(),
-            runtime_root.resolve(),
         }
+        if runtime_root is not None:
+            paths.add(runtime_root.resolve())
         for key in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
             raw = self._environment.get(key)
             if raw:
@@ -625,6 +789,8 @@ class SubprocessCodexRunner:
         return tuple(sorted(paths, key=str))
 
     def _writable_runtime_paths(self, root: Path) -> tuple[Path, ...]:
+        if self._sqlite_path is None or self._runtime is None:
+            raise OpaqueStepError("Codex MCP runtime is not configured")
         state_paths = {root.resolve()}
         sqlite_path = Path(self._sqlite_path).resolve()
         if not sqlite_path.parent.is_dir():
@@ -720,13 +886,35 @@ def _parse_output_artifact(
         raise OpaqueStepError("Codex produced no final output artifact")
     try:
         raw = path.read_bytes()
+    except OSError as exc:
+        raise OpaqueStepError(
+            "Codex final output artifact failed schema validation"
+        ) from exc
+    return _parse_output_artifact_bytes(
+        raw,
+        stdout=stdout,
+        stderr=stderr,
+        run_id=run_id,
+        isolation=isolation,
+    )
+
+
+def _parse_output_artifact_bytes(
+    raw: bytes,
+    *,
+    stdout: bytes,
+    stderr: str,
+    run_id: str,
+    isolation: dict[str, Any] | None = None,
+) -> CodexOutputArtifact:
+    try:
         decode_strict_json_bytes(
             raw,
             max_bytes=len(raw),
             max_depth=len(raw),
         )
         artifact = CodexOutputArtifact.model_validate_json(raw)
-    except (OSError, StrictJsonDecodeError, ValidationError) as exc:
+    except (StrictJsonDecodeError, ValidationError) as exc:
         raise OpaqueStepError(
             "Codex final output artifact failed schema validation"
         ) from exc
@@ -751,6 +939,8 @@ def _decode_stderr(stderr: bytes) -> str:
 
 
 __all__ = [
+    "CodexStructuredExecution",
+    "CodexStructuredExecutionFailure",
     "SubprocessCodexRunner",
     "build_codex_command",
 ]

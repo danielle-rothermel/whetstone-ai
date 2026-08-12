@@ -67,7 +67,7 @@ def _recovery_failure(row: _EffectRow) -> TerminalFailure:
         raise _AuthorityCorruptionError("expired lease has no expiration")
     payload = {
         "semantic_key": row.request.semantic_key,
-        "request_identity_hash": row.request.request_identity_hash,
+        "request_hash": row.request.request_hash,
         "owner_id": row.owner_id,
         "attempt_id": row.attempt_id,
         "fence": row.fence,
@@ -356,9 +356,7 @@ class EffectAuthority:
                     AcquireResult(
                         request=request,
                         outcome=AcquireOutcome.REQUEST_CONFLICT,
-                        existing_request_identity_hash=(
-                            row.request.request_identity_hash
-                        ),
+                        existing_request_hash=(row.request.request_hash),
                         existing_replay_policy=row.request.replay_policy,
                     ),
                 )

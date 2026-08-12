@@ -127,7 +127,7 @@ def _proposal_trace(
         components=components,
         trainset=(
             Miprov2DatasetExample(
-                task_identity=_hash("proposal-task"),
+                task_hash=_hash("proposal-task"),
                 rendered_record="input=example; expected=answer",
             ),
         ),
@@ -164,7 +164,7 @@ def _proposal_trace(
         state = fold_proposal_response(
             state,
             Miprov2ProposalResponse(
-                request_identity_hash=request.identity_hash,
+                request_hash=request.identity_hash,
                 text=(
                     "Instruction: replacement "
                     f"{request.component_index}-{request.proposal_index} "
@@ -192,7 +192,7 @@ def test_bootstrap_proposal_and_search_shapes_match_source_oracle(
     planning = create_fewshot_candidate_plans(
         bindings=_bindings(),
         component_ids=component_ids,
-        trainset_task_identities=tasks,
+        trainset_task_hashes=tasks,
         num_candidate_sets=4,
         max_bootstrapped_demos=3,
         max_labeled_demos=2,
@@ -268,8 +268,8 @@ def test_demo_category_identity_is_predictor_specific() -> None:
         inputs={"input": "changed"},
         outputs={"output": "changed"},
         augmented=False,
-        source_task_identity=_hash("task"),
-        source_rollout_identity=_hash("rollout"),
+        source_task_hash=_hash("task"),
+        source_generation_identity=_hash("generation"),
         source_trace_identity=_hash("trace"),
         source_output_identity=_hash("output"),
         source_score_identity=_hash("score"),
@@ -306,7 +306,7 @@ def test_explicit_compiled_and_uncompiled_teacher_semantics_match_oracle() -> (
     common: dict[str, Any] = {
         "bindings": _bindings(),
         "component_ids": ("component-0", "component-1"),
-        "trainset_task_identities": tasks,
+        "trainset_task_hashes": tasks,
         "num_candidate_sets": 3,
         "max_bootstrapped_demos": 3,
         "max_labeled_demos": 2,

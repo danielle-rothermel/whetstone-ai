@@ -11,7 +11,7 @@ from whetstone.coordination.official import (
 
 from .support import full_hash
 
-ROLLOUT_RESULT_SCHEMA = "whetstone.rollout_result"
+GENERATION_RESULT_SCHEMA = "whetstone.generation_result"
 
 
 def _resolver(bound: dict[str, str]):
@@ -21,7 +21,7 @@ def _resolver(bound: dict[str, str]):
         if char is None:
             return None
         return ObjectReference(
-            schema=ROLLOUT_RESULT_SCHEMA, content_hash=full_hash(char)
+            schema=GENERATION_RESULT_SCHEMA, content_hash=full_hash(char)
         )
 
     return resolve

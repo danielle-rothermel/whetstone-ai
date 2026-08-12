@@ -19,75 +19,35 @@ def _cache(root: str | None):
     return PromptResultCache(Path(root))
 
 
-def drive_internal_success(payload: JsonValue) -> JsonValue:
-    from tests.envs.support import FakeTransport, constant_reply
-    from whetstone.envs.procedure import env_procedure_config
-    from whetstone.envs.registry import env_spec
-    from whetstone.evaluation.drivers.internal import (
-        InternalRowRequest,
-        InternalRowResult,
-        drive_internal_row,
-    )
-
-    request = InternalRowRequest.from_process_payload(payload)
-    instance = request.instance.to_instance()
-    env = env_spec(request.env_name)
-    if (
-        env_procedure_config(env).config_identity_hash
-        != request.procedure_config_hash
-    ):
-        raise ValueError("internal row procedure identity is not canonical")
-    outcome = drive_internal_row(
-        env,
-        candidate=request.candidate,
-        instance=instance,
-        provider_call_config=request.provider_call_config,
-        execution_policy=request.execution_policy,
-        transport=FakeTransport(constant_reply(instance.gold)),
-        procedure_config_hash=request.procedure_config_hash,
-        logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
-        drive_ordinal=request.drive_ordinal,
-        cache=_cache(request.cache_root),
-        cache_phase=request.cache_phase,
-        cache_unit=request.cache_unit,
-        render_guard=request.render_guard,
-    )
-    return InternalRowResult(
-        request_identity=request.request_identity,
-        outcome=outcome,
-    ).model_dump(mode="json")
-
-
 def drive_d1_success(payload: JsonValue) -> JsonValue:
     from tests.envs.support import FakeTransport, constant_reply
     from tests.execution.fake_python import local_python_executor
-    from whetstone.envs.d1 import build_d1_experiment
-    from whetstone.envs.ed1 import Ed1Instance
-    from whetstone.envs.ed1_scoring import score_ed1_submission
-    from whetstone.evaluation.drivers.d1 import (
-        D1RowRequest,
-        D1RowResult,
-        drive_d1_row,
+    from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+    from whetstone.envs.code_comp.modes.direct import build_direct_experiment
+    from whetstone.envs.code_comp.scoring import score_code_comp_submission
+    from whetstone.evaluation.drivers.code_comp.direct import (
+        DirectRowRequest,
+        DirectRowResult,
+        drive_direct_row,
     )
 
-    request = D1RowRequest.from_process_payload(payload)
+    request = DirectRowRequest.from_process_payload(payload)
     instance = request.instance.to_instance()
     task = request.humaneval_task.to_task()
-    experiment = build_d1_experiment(
+    experiment = build_direct_experiment(
         input_arm=request.input_arm,
         rename_token=request.rename_token,
-        tasks=(Ed1Instance(instance=instance, humaneval_task=task),),
+        tasks=(CodeCompTaskInstance(instance=instance, humaneval_task=task),),
         internal_n=1,
         official_n=1,
-        repeats=1,
+        num_samples=1,
     )
     if (
-        experiment.rollout_definition.procedure_config_hash
+        experiment.generation_graph.procedure_config_hash
         != request.procedure_config_hash
     ):
         raise ValueError("D1 row procedure identity is not canonical")
-    outcome = drive_d1_row(
+    outcome = drive_direct_row(
         experiment=experiment,
         candidate_body=request.candidate_body,
         instance=instance,
@@ -95,18 +55,18 @@ def drive_d1_success(payload: JsonValue) -> JsonValue:
         execution_policy=request.execution_policy,
         transport=FakeTransport(constant_reply(task.ground_truth_code)),
         scorer=partial(
-            score_ed1_submission,
+            score_code_comp_submission,
             executor=local_python_executor(),
         ),
         logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
+        sample_index=request.sample_index,
         drive_ordinal=request.drive_ordinal,
         cache=_cache(request.cache_root),
         cache_phase=request.cache_phase,
         cache_unit=request.cache_unit,
     )
-    return D1RowResult(
-        request_identity=request.request_identity,
+    return DirectRowResult(
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")
 
@@ -132,28 +92,32 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
 
     from tests.envs.support import FakeTransport
     from tests.execution.fake_python import local_python_executor
-    from whetstone.envs.ed1 import (
-        DECODER_TEMPLATE,
-        Ed1Experiment,
-        Ed1Instance,
-        build_ed1_experiment,
+    from whetstone.envs.code_comp.constants import DECODER_TEMPLATE
+    from whetstone.envs.code_comp.dataset import (
+        CodeCompTaskInstance,
         ed1_instance_from_task,
         humaneval_task_from_instance,
     )
-    from whetstone.envs.ed1_scoring import score_ed1_submission
-    from whetstone.envs.ed1m_oracle import score_ed1m_reconstruction
-    from whetstone.evaluation.drivers.ed1 import (
-        Ed1RowRequest,
-        Ed1RowResult,
-        drive_ed1_row,
+    from whetstone.envs.code_comp.modes.encdec import (
+        EncDecExperiment,
+        build_encdec_experiment,
+    )
+    from whetstone.envs.code_comp.modes.mutant import score_mutant_submission
+    from whetstone.envs.code_comp.scoring import score_code_comp_submission
+    from whetstone.evaluation.drivers.code_comp.encdec import (
+        EncDecRowRequest,
+        EncDecRowResult,
+        drive_encdec_row,
     )
 
-    request = Ed1RowRequest.from_process_payload(payload)
+    request = EncDecRowRequest.from_process_payload(payload)
     instance = request.instance.to_instance()
     mutant = request.mutant_record
     if mutant is None:
         task = humaneval_task_from_instance(instance)
-        task_fixture = Ed1Instance(instance=instance, humaneval_task=task)
+        task_fixture = CodeCompTaskInstance(
+            instance=instance, humaneval_task=task
+        )
         decoder_source = task.ground_truth_code
     else:
         canonical_solution = mutant.canonical_full_source
@@ -168,43 +132,45 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         )
         task_fixture = ed1_instance_from_task(task)
         decoder_source = mutant.mutated_full_source
-    experiment = build_ed1_experiment(
+    experiment = build_encdec_experiment(
+        provider_call_config=request.provider_call_config,
         budget_ratio=request.budget_ratio,
         tasks=(task_fixture,),
         internal_n=1,
         official_n=1,
-        repeats=1,
+        num_samples=1,
     )
     if mutant is not None:
-        from whetstone.envs.ed1m import (
-            Ed1mExperiment,
-            build_ed1m_procedure_config,
+        from whetstone.envs.code_comp.modes.mutant import (
+            MutantExperiment,
+            build_mutant_procedure_config,
         )
 
         if (
-            build_ed1m_procedure_config().config_identity_hash
+            build_mutant_procedure_config().config_hash
             != request.procedure_config_hash
         ):
             raise ValueError("ED1M row procedure identity is not canonical")
 
         experiment_fields = {
             field.name: getattr(experiment, field.name)
-            for field in fields(Ed1Experiment)
+            for field in fields(EncDecExperiment)
         }
         experiment_fields["env_name"] = request.env_name
         experiment_fields["dataset_revision"] = request.dataset_revision
-        experiment = Ed1mExperiment(
+        experiment = MutantExperiment(
             **experiment_fields,
-            mutants={mutant.content_identity: mutant},
+            mutants={mutant.content_hash: mutant},
         )
     elif (
-        experiment.rollout_definition.procedure_config_hash
+        experiment.generation_graph.procedure_config_hash
         != request.procedure_config_hash
     ):
         raise ValueError("ED1 row procedure identity is not canonical")
 
     def reply(prompt: str) -> str:
-        if prompt.startswith(DECODER_TEMPLATE.split("{encoder_output}")[0]):
+        decoder_prefix = DECODER_TEMPLATE.split("{encoder_output}", 1)[0]
+        if prompt.startswith(decoder_prefix):
             return decoder_source
         return "A compact executable reconstruction description."
 
@@ -233,13 +199,13 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
 
     scorer = partial(
         (
-            score_ed1m_reconstruction
+            score_mutant_submission
             if mutant is not None
-            else score_ed1_submission
+            else score_code_comp_submission
         ),
         executor=local_python_executor(),
     )
-    outcome = drive_ed1_row(
+    outcome = drive_encdec_row(
         experiment=experiment,
         candidate_template=request.candidate_template,
         instance=instance,
@@ -248,13 +214,13 @@ def _drive_ed1(payload: JsonValue, *, transient_first: bool) -> JsonValue:
         transport=transport,
         scorer=scorer,
         logical_call_id=request.logical_call_id,
-        repeat_index=request.repeat_index,
+        sample_index=request.sample_index,
         drive_ordinal=request.drive_ordinal,
         cache=_cache(request.cache_root),
         cache_phase=request.cache_phase,
         cache_unit=request.cache_unit,
     )
-    return Ed1RowResult(
-        request_identity=request.request_identity,
+    return EncDecRowResult(
+        request_hash=request.request_hash,
         outcome=outcome,
     ).model_dump(mode="json")

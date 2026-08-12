@@ -46,20 +46,20 @@ class GepaParentRunRequest(BaseModel):
         if tuple(self.seed_candidate) != self.control.component_names:
             raise ValueError("GEPA parent workflow seed component order drift")
         if tuple(item.data_id for item in self.trainset) != (
-            self.control.trainset_task_identities
+            self.control.trainset_task_hashes
         ):
             raise ValueError("GEPA parent workflow trainset identity drift")
         # Mirror the engine's valset binding check so an unrunnable request
         # cannot validate and hash into a persistable workflow ID.
         if self.valset is None:
-            if self.control.source_valset_task_identities is not None:
+            if self.control.source_valset_task_hashes is not None:
                 raise ValueError(
                     "GEPA parent workflow omitted its bound valset"
                 )
-        elif self.control.source_valset_task_identities is None:
+        elif self.control.source_valset_task_hashes is None:
             raise ValueError("GEPA parent workflow supplied an unbound valset")
         elif tuple(item.data_id for item in self.valset) != (
-            self.control.valset_task_identities
+            self.control.valset_task_hashes
         ):
             raise ValueError("GEPA parent workflow valset identity drift")
         return self
@@ -77,7 +77,7 @@ def register_gepa_adapter_factory(
 ) -> None:
     """Register exact runtime authorities before parent recovery may start."""
 
-    identity_hash = factory.runtime_identity_hash
+    identity_hash = factory.runtime_hash
     require_full_hash(identity_hash, field="GEPA factory identity")
     existing = _GEPA_FACTORIES.get(identity_hash)
     if existing is not None and existing is not factory:
@@ -94,7 +94,7 @@ def _registered_factory(
         raise RuntimeError(
             "GEPA adapter factory is not registered before DBOS launch"
         ) from None
-    if factory.runtime_identity_hash != request.factory_identity_hash:
+    if factory.runtime_hash != request.factory_identity_hash:
         raise RuntimeError("registered GEPA factory identity drifted")
     return factory
 

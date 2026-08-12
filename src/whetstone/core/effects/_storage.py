@@ -68,7 +68,7 @@ def _terminal_text(value: EffectTerminal | None) -> str | None:
 def _row_insert_values(row: _EffectRow) -> tuple[Any, ...]:
     return (
         str(row.request.semantic_key),
-        str(row.request.request_identity_hash),
+        str(row.request.request_hash),
         row.request.replay_policy.value,
         row.state.value,
         str(row.owner_id),
@@ -85,7 +85,7 @@ def _row_update_values(row: _EffectRow) -> tuple[Any, ...]:
 
 def _row_match_values(row: _EffectRow) -> tuple[Any, ...]:
     return (
-        str(row.request.request_identity_hash),
+        str(row.request.request_hash),
         row.request.replay_policy.value,
         row.state.value,
         str(row.owner_id),
@@ -119,7 +119,7 @@ def _decode_row(
     if raw is None:
         return None
     (
-        request_identity_hash,
+        request_hash,
         replay_policy,
         state,
         owner_id,
@@ -128,9 +128,9 @@ def _decode_row(
         expires_at,
         terminal_json,
     ) = raw
-    request_identity_hash_text = _require_persisted_text(
-        request_identity_hash,
-        field="request_identity_hash",
+    request_hash_text = _require_persisted_text(
+        request_hash,
+        field="request_hash",
     )
     replay_policy_text = _require_persisted_text(
         replay_policy, field="replay_policy"
@@ -152,7 +152,7 @@ def _decode_row(
     request = EffectRequest.model_validate(
         {
             "semantic_key": semantic_key,
-            "request_identity_hash": request_identity_hash_text,
+            "request_hash": request_hash_text,
             "replay_policy": ReplayPolicy(replay_policy_text),
         }
     )

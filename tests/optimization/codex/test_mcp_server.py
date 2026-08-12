@@ -4,17 +4,17 @@ import pytest
 from dr_serialize import StrictJsonDecodeError
 from dr_store import ObjectStore, SqliteBackend
 
-from tests.envs.support import execution_policy
 from tests.optimization.codex.support import (
     MODEL_ROUTE,
-    ROW_JOB_ENTRYPOINT,
     FakeCodexRunner,
     ScriptedAgentCall,
     binding,
     engine,
     request,
+    runtime_config,
     tool_config,
 )
+from whetstone.envs.code_comp.constants import MUTATION_FIELD
 from whetstone.envs.factory import EnvExperiment
 from whetstone.optimization.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optimization.codex.mcp_server import (
@@ -64,15 +64,8 @@ def test_serialized_environment_reconstructs_evaluation_server(
     parent_store = ObjectStore(SqliteBackend(tmp_path / "parent.sqlite"))
     parent_engine = engine(parent_store, codex_experiment)
     config = tool_config(parent_engine, codex_experiment, "codex-child")
-    runtime = EvaluationRuntimeConfig(
-        env_name="c18",
-        model=MODEL_ROUTE,
-        pool_n_per_stratum=2,
-        split_sizes=(1, 1, 1),
-        repeats=1,
-        expected_eval_config_hash=parent_engine.eval_config_ref.identity_hash,
-        execution_policy=execution_policy(),
-        row_job_entrypoint=ROW_JOB_ENTRYPOINT,
+    runtime = runtime_config(
+        parent_engine,
         partial_log_path=str(tmp_path / "child-partials"),
         prompt_cache_path=str(tmp_path / "child-cache"),
     )
@@ -91,9 +84,7 @@ def test_serialized_environment_reconstructs_evaluation_server(
             experiment=codex_experiment,
         )
     )
-    template = codex_experiment.initial_candidate.payload[
-        "user_prompt_template"
-    ]
+    template = codex_experiment.initial_candidate.payload[MUTATION_FIELD]
     assert isinstance(template, str)
     runner = FakeCodexRunner(
         server=server,
@@ -125,16 +116,7 @@ def test_server_rejects_reward_policy_identity_mismatch(
         codex_experiment,
         "codex-wrong-reward",
     ).model_copy(update={"reward_policy_hash": "0" * 64})
-    runtime = EvaluationRuntimeConfig(
-        env_name="c18",
-        model=MODEL_ROUTE,
-        pool_n_per_stratum=2,
-        split_sizes=(1, 1, 1),
-        repeats=1,
-        expected_eval_config_hash=evaluation_engine.eval_config_ref.identity_hash,
-        execution_policy=execution_policy(),
-        row_job_entrypoint=ROW_JOB_ENTRYPOINT,
-    )
+    runtime = runtime_config(evaluation_engine)
     step_request = request(codex_experiment.initial_candidate, config)
 
     with pytest.raises(ValueError):

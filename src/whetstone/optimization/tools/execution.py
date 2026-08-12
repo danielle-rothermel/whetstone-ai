@@ -92,7 +92,7 @@ class ToolEvaluation:
     """Evaluator output before Reward scalarization and ToolResult creation."""
 
     output: ImmutableJsonObject
-    rollout_refs: tuple[TypedRef, ...]
+    generation_refs: tuple[TypedRef, ...]
     aggregates: Mapping[str, float | None]
     eval_config_hash: IdentityHash
 
@@ -332,7 +332,7 @@ class EvaluatingToolExecutor:
         evaluation: ToolEvaluation,
         config: ToolConfig,
     ) -> ToolResult:
-        if evaluation.eval_config_hash != config.eval_config_identity_hash:
+        if evaluation.eval_config_hash != config.eval_config_hash:
             raise ToolEvaluationError(
                 TerminalFailure(
                     code="tool_eval_config_mismatch",
@@ -340,7 +340,7 @@ class EvaluatingToolExecutor:
                         "Tool evaluation bound a different exact Eval Config"
                     ),
                     details={
-                        "expected": config.eval_config_identity_hash,
+                        "expected": config.eval_config_hash,
                         "actual": evaluation.eval_config_hash,
                     },
                 )
@@ -350,13 +350,13 @@ class EvaluatingToolExecutor:
                 self._reward_policy,
                 aggregates=evaluation.aggregates,
                 evidence_role=EvaluationRole.INTERNAL,
-                evidence_refs=evaluation.rollout_refs,
+                evidence_refs=evaluation.generation_refs,
                 provenance_ordinal=entry_ordinal,
             )
             return ToolResult(
                 call=tool_call_reference(call),
                 output=evaluation.output,
-                evaluation_evidence_refs=evaluation.rollout_refs,
+                evaluation_evidence_refs=evaluation.generation_refs,
                 reward=reward_reference(reward),
                 provenance_ordinal=entry_ordinal,
             )

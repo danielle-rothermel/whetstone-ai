@@ -33,8 +33,8 @@ SCHEMA_AGGREGATION_CONFIG = "whetstone.aggregation.config"
 SCHEMA_EVAL_DEFINITION = "whetstone.eval.definition"
 SCHEMA_EVAL_CONFIG = "whetstone.eval.config"
 SCHEMA_TASK_SET = "whetstone.task_set"
-SCHEMA_REPEAT_PLAN = "whetstone.repeat_plan"
-SCHEMA_REPEAT_ID = "whetstone.repeat_id"
+SCHEMA_SAMPLE_PLAN = "whetstone.sample_plan"
+SCHEMA_SAMPLE_ID = "whetstone.sample_id"
 SCHEMA_COMPRESSION_REFERENCE_KEY = "whetstone.compression_reference.key"
 SCHEMA_COMPRESSION_REFERENCE_ARTIFACT = (
     "whetstone.compression_reference.artifact"
@@ -175,7 +175,7 @@ class SamplingDefinition(_FrozenModel):
     version: str
     variables: tuple[VariableSpec, ...] = (
         VariableSpec(name="task_set_hash"),
-        VariableSpec(name="repeat_plan_hash"),
+        VariableSpec(name="sample_plan_hash"),
     )
 
     def identity_hash(self) -> str:
@@ -205,7 +205,7 @@ class SamplingDefinition(_FrozenModel):
 class SamplingConfig(_FrozenModel):
     definition_ref: DefinitionRef
     assignment: tuple[tuple[str, JsonValue], ...]
-    config_identity_hash: str
+    config_hash: str
 
     @classmethod
     def _create(
@@ -224,7 +224,7 @@ class SamplingConfig(_FrozenModel):
         return cls(
             definition_ref=definition.ref(),
             assignment=tuple(assignment.items()),
-            config_identity_hash=config_hash,
+            config_hash=config_hash,
         )
 
     def assignment_dict(self) -> dict[str, JsonValue]:
@@ -258,7 +258,7 @@ class PreprocessingDefinition(_FrozenModel):
     variables: tuple[VariableSpec, ...] = ()
 
     @model_validator(mode="after")
-    def reject_duplicate_instances(self) -> Self:
+    def reject_duplicate_tasks(self) -> Self:
         names = [binding.instance_name for binding in self.steps]
         if len(names) != len(set(names)):
             raise ValueError("preprocessing instance names must be unique")
@@ -319,7 +319,7 @@ class PreprocessingConfig(_FrozenModel):
     definition_ref: DefinitionRef
     assignment: tuple[tuple[str, JsonValue], ...]
     resolved_step_versions: tuple[tuple[str, str, str], ...]
-    config_identity_hash: str
+    config_hash: str
 
     @classmethod
     def _create(
@@ -343,7 +343,7 @@ class PreprocessingConfig(_FrozenModel):
             definition_ref=definition.ref(),
             assignment=tuple(assignment.items()),
             resolved_step_versions=resolved_steps,
-            config_identity_hash=config_hash,
+            config_hash=config_hash,
         )
 
 
@@ -463,7 +463,7 @@ class MetricExtractionConfig(_FrozenModel):
     definition_ref: DefinitionRef
     assignment: tuple[tuple[str, JsonValue], ...]
     resolved_operator_versions: tuple[tuple[str, str], ...]
-    config_identity_hash: str
+    config_hash: str
 
     @classmethod
     def _create(
@@ -487,7 +487,7 @@ class MetricExtractionConfig(_FrozenModel):
             definition_ref=definition.ref(),
             assignment=tuple(assignment.items()),
             resolved_operator_versions=resolved_operators,
-            config_identity_hash=config_hash,
+            config_hash=config_hash,
         )
 
 
@@ -538,7 +538,7 @@ class EvaluationProcedureConfig(_FrozenModel):
     preprocessing_config_hash: str
     metric_extraction_config_hash: str
     assignment: tuple[tuple[str, JsonValue], ...]
-    config_identity_hash: str
+    config_hash: str
 
     @classmethod
     def _create(
@@ -553,21 +553,17 @@ class EvaluationProcedureConfig(_FrozenModel):
             schema=SCHEMA_EVALUATION_PROCEDURE_CONFIG,
             payload={
                 "definition_identity": definition.identity_hash(),
-                "preprocessing_config": preprocessing.config_identity_hash,
-                "metric_extraction_config": (
-                    metric_extraction.config_identity_hash
-                ),
+                "preprocessing_config": preprocessing.config_hash,
+                "metric_extraction_config": (metric_extraction.config_hash),
                 "assignment": _assignment_payload(assignment),
             },
         )
         return cls(
             definition_ref=definition.ref(),
-            preprocessing_config_hash=preprocessing.config_identity_hash,
-            metric_extraction_config_hash=(
-                metric_extraction.config_identity_hash
-            ),
+            preprocessing_config_hash=preprocessing.config_hash,
+            metric_extraction_config_hash=(metric_extraction.config_hash),
             assignment=tuple(assignment.items()),
-            config_identity_hash=config_hash,
+            config_hash=config_hash,
         )
 
 
@@ -620,7 +616,7 @@ class AggregationDefinition(_FrozenModel):
 class AggregationConfig(_FrozenModel):
     definition_ref: DefinitionRef
     assignment: tuple[tuple[str, JsonValue], ...]
-    config_identity_hash: str
+    config_hash: str
 
     @classmethod
     def _create(
@@ -639,7 +635,7 @@ class AggregationConfig(_FrozenModel):
         return cls(
             definition_ref=definition.ref(),
             assignment=tuple(assignment.items()),
-            config_identity_hash=config_hash,
+            config_hash=config_hash,
         )
 
     def assignment_dict(self) -> dict[str, JsonValue]:
@@ -692,7 +688,7 @@ class EvalConfig(_FrozenModel):
     sampling_config_hash: str
     evaluation_procedure_config_hash: str
     aggregation_config_hash: str
-    config_identity_hash: str
+    config_hash: str
 
     @classmethod
     def _create(
@@ -707,21 +703,21 @@ class EvalConfig(_FrozenModel):
             schema=SCHEMA_EVAL_CONFIG,
             payload={
                 "definition_identity": definition.identity_hash(),
-                "sampling_config": sampling.config_identity_hash,
+                "sampling_config": sampling.config_hash,
                 "evaluation_procedure_config": (
-                    evaluation_procedure.config_identity_hash
+                    evaluation_procedure.config_hash
                 ),
-                "aggregation_config": aggregation.config_identity_hash,
+                "aggregation_config": aggregation.config_hash,
             },
         )
         return cls(
             definition_ref=definition.ref(),
-            sampling_config_hash=sampling.config_identity_hash,
+            sampling_config_hash=sampling.config_hash,
             evaluation_procedure_config_hash=(
-                evaluation_procedure.config_identity_hash
+                evaluation_procedure.config_hash
             ),
-            aggregation_config_hash=aggregation.config_identity_hash,
-            config_identity_hash=config_hash,
+            aggregation_config_hash=aggregation.config_hash,
+            config_hash=config_hash,
         )
 
 

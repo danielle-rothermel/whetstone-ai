@@ -220,7 +220,7 @@ class ToolDefinitionRef(BaseModel):
 
     record: ToolDefinition
     record_ref: TypedRef
-    identity_hash: IdentityHash
+    config_hash: IdentityHash
 
     @model_validator(mode="after")
     def _validate(self) -> ToolDefinitionRef:
@@ -231,9 +231,9 @@ class ToolDefinitionRef(BaseModel):
             raise ValueError(
                 "Tool Definition record_ref must address the exact record"
             )
-        if self.identity_hash != self.record.identity_hash():
+        if self.config_hash != self.record.identity_hash():
             raise ValueError(
-                "Tool Definition identity_hash must match the exact record"
+                "Tool Definition config_hash must match the exact record"
             )
         return self
 
@@ -246,7 +246,7 @@ def tool_definition_reference(
         record_ref=typed_ref_for_record(
             TOOL_DEFINITION_SCHEMA, definition.record_content()
         ),
-        identity_hash=definition.identity_hash(),
+        config_hash=definition.identity_hash(),
     )
 
 
@@ -289,7 +289,7 @@ class ToolConfig(BaseModel):
             raise ValueError(
                 "Tool Config operational_policy_refs must be unique"
             )
-        IdentityHash(self.eval_config.config_identity_hash)
+        IdentityHash(self.eval_config.config_hash)
         return self
 
     @property
@@ -303,8 +303,8 @@ class ToolConfig(BaseModel):
         )
 
     @property
-    def eval_config_identity_hash(self) -> IdentityHash:
-        return IdentityHash(self.eval_config.config_identity_hash)
+    def eval_config_hash(self) -> IdentityHash:
+        return IdentityHash(self.eval_config.config_hash)
 
     def identity_payload(self) -> dict[str, Any]:
         # Persisted identity keys are a pinned wire contract.
@@ -315,7 +315,7 @@ class ToolConfig(BaseModel):
                     "schema_name": self.definition.record_ref.schema_name,
                     "content_hash": self.definition.record_ref.content_hash,
                 },
-                "identity_hash": self.definition.identity_hash,
+                "identity_hash": self.definition.config_hash,
             },
             "endpoint_key": self.endpoint_key,
             "eval_config": {
@@ -340,9 +340,7 @@ class ToolConfig(BaseModel):
                 "aggregation_config_hash": (
                     self.eval_config.aggregation_config_hash
                 ),
-                "config_identity_hash": (
-                    self.eval_config.config_identity_hash
-                ),
+                "config_hash": (self.eval_config.config_hash),
             },
             "reward_policy_hash": self.reward_policy_hash,
             "capacity": {
@@ -386,7 +384,7 @@ class ToolConfigRef(BaseModel):
 
     record: ToolConfig
     record_ref: TypedRef
-    identity_hash: IdentityHash
+    config_hash: IdentityHash
 
     @model_validator(mode="after")
     def _validate(self) -> ToolConfigRef:
@@ -397,9 +395,9 @@ class ToolConfigRef(BaseModel):
             raise ValueError(
                 "Tool Config record_ref must address the exact record"
             )
-        if self.identity_hash != self.record.identity_hash():
+        if self.config_hash != self.record.identity_hash():
             raise ValueError(
-                "Tool Config identity_hash must match the exact record"
+                "Tool Config config_hash must match the exact record"
             )
         return self
 
@@ -410,7 +408,7 @@ def tool_config_reference(config: ToolConfig) -> ToolConfigRef:
         record_ref=typed_ref_for_record(
             TOOL_CONFIG_SCHEMA, config.record_content()
         ),
-        identity_hash=config.identity_hash(),
+        config_hash=config.identity_hash(),
     )
 
 
@@ -447,7 +445,7 @@ class RuntimeToolHandle:
 
     @property
     def tool_config_hash(self) -> IdentityHash:
-        return self.tool_config_ref.identity_hash
+        return self.tool_config_ref.config_hash
 
     def __call__(self, call: ToolCall) -> ToolResult:
         if call.tool_config != self.tool_config_ref:
@@ -493,7 +491,7 @@ class ToolCall(BaseModel):
 
     @property
     def tool_config_hash(self) -> IdentityHash:
-        return self.tool_config.identity_hash
+        return self.tool_config.config_hash
 
     @property
     def store_namespace_key(self) -> OpaqueKey:
@@ -650,7 +648,7 @@ class ToolResult(BaseModel):
 
     @property
     def tool_config_hash(self) -> IdentityHash:
-        return self.tool_config.identity_hash
+        return self.tool_config.config_hash
 
     @property
     def store_namespace_key(self) -> OpaqueKey:

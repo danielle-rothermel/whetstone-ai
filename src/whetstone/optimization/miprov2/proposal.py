@@ -132,14 +132,14 @@ class Miprov2DatasetExample(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    task_identity: StrictStr
+    task_hash: StrictStr
     rendered_record: StrictStr
 
     @model_validator(mode="after")
     def _validate(self) -> Miprov2DatasetExample:
         require_full_hash(
-            self.task_identity,
-            field="dataset task_identity",
+            self.task_hash,
+            field="dataset task_hash",
         )
         return self
 
@@ -297,7 +297,7 @@ class Miprov2ProposalRequest(BaseModel):
     effect: Miprov2ProposalEffect
     schema_tag: StrictStr
     temperature: float
-    rollout_id: StrictInt | None = None
+    generation_id: StrictInt | None = None
     component_index: StrictInt | None = None
     component_id: StrictStr | None = None
     proposal_index: StrictInt | None = None
@@ -343,10 +343,13 @@ class Miprov2ProposalRequest(BaseModel):
             raise ValueError(
                 "per-proposal requests require component and proposal indices"
             )
-        if per_proposal and self.rollout_id is None:
-            raise ValueError("per-proposal requests require a rollout id")
-        if self.rollout_id is not None and not 0 <= self.rollout_id <= 10**9:
-            raise ValueError("proposal rollout id is outside DSPy's range")
+        if per_proposal and self.generation_id is None:
+            raise ValueError("per-proposal requests require a generation id")
+        if (
+            self.generation_id is not None
+            and not 0 <= self.generation_id <= 10**9
+        ):
+            raise ValueError("proposal generation id is outside DSPy's range")
         if self.component_index is not None and self.component_index < 0:
             raise ValueError("proposal component index cannot be negative")
         if self.proposal_index is not None and self.proposal_index < 0:
@@ -361,7 +364,7 @@ class Miprov2ProposalRequest(BaseModel):
             raise ValueError("proposal selected_tip_key is unknown")
         if not per_proposal and (
             any(value is not None for value in indices)
-            or self.rollout_id is not None
+            or self.generation_id is not None
             or self.selected_tip_key is not None
         ):
             raise ValueError(
@@ -388,7 +391,7 @@ class Miprov2ProposalRequest(BaseModel):
             "effect": self.effect,
             "schema_tag": self.schema_tag,
             "temperature": self.temperature,
-            "rollout_id": self.rollout_id,
+            "generation_id": self.generation_id,
             "component_index": self.component_index,
             "component_id": self.component_id,
             "proposal_index": self.proposal_index,
@@ -412,7 +415,7 @@ class Miprov2ProposalResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    request_identity_hash: StrictStr
+    request_hash: StrictStr
     text: StrictStr = ""
     failed: StrictBool = False
     failure_detail: StrictStr | None = None
@@ -441,8 +444,8 @@ class Miprov2ProposalResponse(BaseModel):
     @model_validator(mode="after")
     def _validate(self) -> Miprov2ProposalResponse:
         require_full_hash(
-            self.request_identity_hash,
-            field="proposal request_identity_hash",
+            self.request_hash,
+            field="proposal request_hash",
         )
         if self.failed and not self.failure_detail:
             raise ValueError("failed proposal response requires detail")
@@ -475,7 +478,7 @@ def _validate_proposal_evidence(item: Miprov2ProposalEvidence) -> None:
     Miprov2ProposalResponse.model_validate(
         item.response.model_dump(mode="json")
     )
-    if item.response.request_identity_hash != item.request.identity_hash:
+    if item.response.request_hash != item.request.identity_hash:
         raise ValueError(
             "proposal evidence response belongs to another request"
         )
@@ -555,7 +558,7 @@ class Miprov2ProposalState(BaseModel):
     proposal_index: StrictInt = 0
     selected_tip_key: StrictStr | None = None
     selected_tip: StrictStr | None = None
-    rollout_id: StrictInt | None = None
+    generation_id: StrictInt | None = None
     task_demos: StrictStr = NO_TASK_DEMOS
     program_description: StrictStr = PROGRAM_DESCRIPTION_UNAVAILABLE
     component_description: StrictStr = COMPONENT_DESCRIPTION_UNAVAILABLE
@@ -855,7 +858,7 @@ def fold_proposal_response(
     request = state.pending_request
     if request is None:
         raise ValueError("proposal state has no pending request")
-    if response.request_identity_hash != request.identity_hash:
+    if response.request_hash != request.identity_hash:
         raise ValueError("proposal response belongs to another request")
     _require_exact_pending_request(state)
 
@@ -970,7 +973,7 @@ def _request(
         effect=effect,
         schema_tag=schema_tag,
         temperature=temperature,
-        rollout_id=state.rollout_id if per_proposal else None,
+        generation_id=state.generation_id if per_proposal else None,
         component_index=state.component_index if per_proposal else None,
         component_id=component.component_id if per_proposal else None,
         proposal_index=state.proposal_index if per_proposal else None,
@@ -1042,7 +1045,7 @@ def _require_canonical_proposal_state(state: Miprov2ProposalState) -> None:
         proposal_index=0,
         selected_tip_key=None,
         selected_tip=None,
-        rollout_id=None,
+        generation_id=None,
         task_demos=NO_TASK_DEMOS,
         program_description=PROGRAM_DESCRIPTION_UNAVAILABLE,
         component_description=COMPONENT_DESCRIPTION_UNAVAILABLE,
@@ -1092,7 +1095,7 @@ def _dataset_batch(
 ) -> str:
     stop = min(len(state.trainset), start + state.view_data_batch_size)
     return "\n\n".join(
-        f"Task {example.task_identity}:\n{example.rendered_record}"
+        f"Task {example.task_hash}:\n{example.rendered_record}"
         for example in state.trainset[start:stop]
     )
 
@@ -1332,20 +1335,20 @@ def _select_proposal_configuration(
             arguments=keys,
             result=selected_tip_key,
         )
-    rollout_id = rng.randint(0, 10**9)
+    generation_id = rng.randint(0, 10**9)
     checkpoint = checkpoint.append(
         rng=rng,
         phase="proposal",
         operation="randint",
         arguments=(0, 10**9),
-        result=rollout_id,
+        result=generation_id,
     )
     return state.model_copy(
         update={
             "rng_checkpoint": checkpoint,
             "selected_tip_key": selected_tip_key,
             "selected_tip": selected_tip,
-            "rollout_id": rollout_id,
+            "generation_id": generation_id,
             "task_demos": _task_demos(state),
             "program_description": PROGRAM_DESCRIPTION_UNAVAILABLE,
             "component_description": COMPONENT_DESCRIPTION_UNAVAILABLE,
@@ -1700,7 +1703,7 @@ def _fold_instruction(
             "stage": "proposal_select",
             "selected_tip_key": None,
             "selected_tip": None,
-            "rollout_id": None,
+            "generation_id": None,
             "evidence": (*state.evidence, item),
             "instruction_slots": (*state.instruction_slots, slot),
         }

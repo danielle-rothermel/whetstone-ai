@@ -7,8 +7,8 @@ from whetstone_envs.core import Instance, TaskPool, content_hash
 
 from whetstone.core.identity import compute_identity_hash
 
-ENV_TASK_SCHEMA = "whetstone.env_task"
-ENV_TASK_SCHEMA_VERSION = 1
+TASK_SCHEMA = "whetstone.task"
+TASK_SCHEMA_VERSION = 1
 
 #: The Graph External Input prefix. A probe field ``constraints_block`` is
 #: bound as the external input ``task.constraints_block`` on the LLM Call
@@ -16,18 +16,18 @@ ENV_TASK_SCHEMA_VERSION = 1
 EXTERNAL_INPUT_PREFIX = "task."
 
 
-def _instance_content_hash(instance: Instance) -> str:
+def _task_content_hash(instance: Instance) -> str:
     """The env content hash of a single instance (a one-instance pool).
 
     Reuses ``whetstone_envs.core.content_hash`` -- the same order-independent
-    canonical-JSON SHA-256 the env manifests pin -- so an EnvTask's identity
+    canonical-JSON SHA-256 the env manifests pin -- so an Task's identity
     tracks exactly the fields the env repo treats as content-defining.
     """
     return content_hash(TaskPool((instance,)))
 
 
 @dataclass(frozen=True, slots=True)
-class EnvTask:
+class Task:
     """One whetstone-env instance wrapped as a Task-role value.
 
     Frozen. Carries the stable task identity, the env name, the Graph
@@ -37,7 +37,7 @@ class EnvTask:
     """
 
     env_name: str
-    instance_id: str
+    task_id: str
     seed: int
     strata: tuple[str, ...]
     #: Graph External Inputs: the rendered prompt inputs, ``task.<field>``.
@@ -45,14 +45,14 @@ class EnvTask:
     #: Evaluation input: the gold/oracle-checkable state.
     gold: str
     #: The env content hash of the wrapped instance (identity-bearing).
-    instance_content_hash: str
+    task_content_hash: str
 
     @classmethod
-    def from_instance(cls, env_name: str, instance: Instance) -> EnvTask:
+    def from_instance(cls, env_name: str, instance: Instance) -> Task:
         """Wrap a whetstone-env :class:`Instance` for env ``env_name``."""
         return cls(
             env_name=env_name,
-            instance_id=instance.id,
+            task_id=instance.id,
             seed=instance.seed,
             strata=tuple(instance.strata),
             prompt_inputs=tuple(
@@ -60,7 +60,7 @@ class EnvTask:
                 for k, v in sorted(instance.prompt_inputs.items())
             ),
             gold=instance.gold,
-            instance_content_hash=_instance_content_hash(instance),
+            task_content_hash=_task_content_hash(instance),
         )
 
     @property
@@ -82,24 +82,24 @@ class EnvTask:
         """The identity-defining payload (ordering-stable, JSON-safe)."""
         return {
             "env_name": self.env_name,
-            "instance_id": self.instance_id,
+            "task_id": self.task_id,
             "seed": self.seed,
             "strata": list(self.strata),
-            "instance_content_hash": self.instance_content_hash,
+            "task_content_hash": self.task_content_hash,
         }
 
-    def task_identity(self) -> str:
+    def task_hash(self) -> str:
         """The stable full Identity Hash of this task (dr-serialize)."""
         return compute_identity_hash(
-            schema=ENV_TASK_SCHEMA,
-            schema_version=ENV_TASK_SCHEMA_VERSION,
+            schema=TASK_SCHEMA,
+            schema_version=TASK_SCHEMA_VERSION,
             payload=self.identity_payload(),
         )
 
 
 __all__ = [
-    "ENV_TASK_SCHEMA",
-    "ENV_TASK_SCHEMA_VERSION",
     "EXTERNAL_INPUT_PREFIX",
-    "EnvTask",
+    "TASK_SCHEMA",
+    "TASK_SCHEMA_VERSION",
+    "Task",
 ]

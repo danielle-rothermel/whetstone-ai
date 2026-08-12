@@ -49,7 +49,6 @@ from dr_exec import (
 )
 from dr_store import ObjectStore, SqliteBackend
 
-import whetstone.optimization.codex.runner as runner_module
 from tests.optimization.codex.support import (
     binding,
     engine,
@@ -69,6 +68,7 @@ from whetstone.optimization.codex.runner import (
     _CODEX_DENIED_FEATURES,
     _DIRECT_EXEC_SOURCE,
     _MCP_TOOLS_APPROVAL_MODE,
+    CodexStructuredExecutionFailure,
     SubprocessCodexRunner,
     _decode_stderr,
     _MacOsProcessIsolation,
@@ -308,18 +308,6 @@ def _subprocess_boundary(
     )
 
 
-@pytest.fixture
-def declared_seatbelt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> Path:
-    sandbox_exec = tmp_path / "sandbox-exec"
-    sandbox_exec.touch()
-    monkeypatch.setattr(runner_module, "_MACOS_SANDBOX_EXEC", sandbox_exec)
-    monkeypatch.setattr(sys, "platform", "darwin")
-    return sandbox_exec
-
-
 def test_subprocess_declares_typed_execution_and_preserves_artifact_evidence(
     tmp_path: Path,
     codex_experiment: EnvExperiment,
@@ -503,8 +491,13 @@ def test_exit_outcomes_preserve_return_code_and_stderr(
         execution_executor=fake,
     )
 
-    with pytest.raises(OpaqueStepError, match=f"^{message}$"):
+    with pytest.raises(
+        CodexStructuredExecutionFailure, match=f"^{message}$"
+    ) as error:
         boundary.runner.run(boundary.request, boundary.handle)
+
+    assert error.value.stderr == b"exact stderr"
+    assert error.value.artifact_bytes
 
 
 @pytest.mark.parametrize(

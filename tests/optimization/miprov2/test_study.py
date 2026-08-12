@@ -182,7 +182,7 @@ def test_failed_observation_is_zero_and_has_no_reward(tmp_path) -> None:
         effect_identity_hash=FULL_B,
         purpose="miprov2_sample",
         candidate=intent.candidate,
-        task_batch_identities=context.task_batch_identities,
+        task_batch_hashes=context.task_batch_hashes,
         eval_config=context.eval_config,
         eval_config_binding=context.eval_config_binding,
         evaluation_binding=intent.evaluation_binding,
@@ -213,7 +213,7 @@ def test_failed_observation_rejects_score_or_reward_model_copy_bypass(
         "effect_identity_hash": FULL_B,
         "purpose": "miprov2_sample",
         "candidate": intent.candidate.model_dump(mode="json"),
-        "task_batch_identities": list(context.task_batch_identities),
+        "task_batch_hashes": list(context.task_batch_hashes),
         "eval_config": context.eval_config.model_dump(mode="json"),
         "eval_config_binding": context.eval_config_binding.model_dump(
             mode="json"
@@ -251,7 +251,7 @@ def test_observation_candidate_is_an_exact_candidate_ref(tmp_path) -> None:
             candidate=other.model_copy(
                 update={"record_ref": intent.candidate.record_ref}
             ),
-            task_batch_identities=context.task_batch_identities,
+            task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
             evaluation_binding=intent.evaluation_binding,
@@ -441,7 +441,7 @@ def _study_observation(
         }
     )
     evaluation_binding = EvaluationBinding(
-        schema_version=2,
+        schema_version=3,
         eval_config=binding.eval_config,
         role=EvaluationRole.INTERNAL,
         campaign="miprov2-study-test",
@@ -453,7 +453,7 @@ def _study_observation(
         evidence_role=EvaluationRole.INTERNAL,
         evidence_refs=(
             TypedRef(
-                schema_name="whetstone.rollout_aggregate",
+                schema_name="whetstone.aggregate",
                 content_hash=f"{20_000 + nonce:064x}",
             ),
         ),
@@ -464,7 +464,7 @@ def _study_observation(
         effect_identity_hash=effect_hash,
         purpose=purpose,
         candidate=candidate_ref,
-        task_batch_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        task_batch_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         eval_config=binding.eval_config,
         eval_config_binding=binding,
         evaluation_binding=evaluation_binding,
@@ -573,7 +573,7 @@ def _study_case(
             minibatch_full_eval_steps=steps,
         ),
         run_id="study-run",
-        validation_task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        validation_task_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         validation_eval_source=(
             context.eval_config_binding.request.source_eval_config
         ),
@@ -685,7 +685,7 @@ def test_equal_size_minibatch_promotion_flow_matches_frozen_oracle(
             minibatch_full_eval_steps=5,
         ),
         run_id="study-run",
-        validation_task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        validation_task_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         validation_eval_source=(
             context.eval_config_binding.request.source_eval_config
         ),

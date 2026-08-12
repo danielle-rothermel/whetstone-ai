@@ -14,7 +14,7 @@ from pydantic import (
 
 from whetstone.core.identity import require_full_hash
 from whetstone.provider.classification import (
-    Generation,
+    ProviderGeneration,
     ProviderSemanticFailure,
     SemanticFailureClass,
     classify_outcome,
@@ -59,7 +59,7 @@ class ProviderCallAttempt(BaseModel):
     #: Exactly one stable transport evidence artifact (provider bodies here).
     evidence: ProviderInvocationEvidence
     #: The Whetstone semantic classification of this attempt.
-    generation: Generation | None = None
+    provider_generation: ProviderGeneration | None = None
     semantic_failure: ProviderSemanticFailure | None = None
 
     @model_validator(mode="after")
@@ -78,17 +78,18 @@ class ProviderCallAttempt(BaseModel):
         if self.ended_at < self.started_at:
             raise ValueError("ended_at cannot precede started_at")
         # Exactly one classification side is present.
-        has_generation = self.generation is not None
+        has_provider_generation = self.provider_generation is not None
         has_failure = self.semantic_failure is not None
-        if has_generation == has_failure:
+        if has_provider_generation == has_failure:
             raise ValueError(
-                "a ProviderCallAttempt holds exactly one of generation or "
-                "semantic_failure"
+                "a ProviderCallAttempt holds exactly one of "
+                "provider_generation or semantic_failure"
             )
         expected = classify_outcome(self.evidence.outcome)
-        if has_generation and self.generation != expected:
+        if has_provider_generation and self.provider_generation != expected:
             raise ValueError(
-                "generation must exactly reclassify the evidence outcome"
+                "provider_generation must exactly reclassify the evidence "
+                "outcome"
             )
         if has_failure and self.semantic_failure != expected:
             raise ValueError(
@@ -106,7 +107,7 @@ class ProviderCallAttempt(BaseModel):
 
     @property
     def succeeded(self) -> bool:
-        return self.generation is not None
+        return self.provider_generation is not None
 
     @property
     def failure_class(self) -> SemanticFailureClass | None:
@@ -122,7 +123,8 @@ class ProviderCallAttempt(BaseModel):
 class ProviderCallResult(BaseModel):
     """Terminal semantic Result for one logical provider call.
 
-    Request identity, ordered completed attempts, and the final Generation or
+    Request identity, ordered completed attempts, and the final
+    ProviderGeneration or
     Provider Semantic Failure. An exhausted Provider Semantic Failure is a
     valid terminal Result, not an exception.
     """
@@ -132,11 +134,11 @@ class ProviderCallResult(BaseModel):
     schema_version: Literal[2] = PROVIDER_CALL_RESULT_SCHEMA_VERSION
     logical_call_id: StrictStr
     #: Provider Call Request identity payload (config-ref + transcript).
-    request_identity: dict[str, Any]
+    request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
     #: Ordered completed attempts (attempt 1 .. N).
     attempts: tuple[ProviderCallAttempt, ...]
-    generation: Generation | None = None
+    provider_generation: ProviderGeneration | None = None
     semantic_failure: ProviderSemanticFailure | None = None
 
     @model_validator(mode="after")
@@ -163,18 +165,22 @@ class ProviderCallResult(BaseModel):
                     "every attempt shares the Result's execution_policy_hash"
                 )
         # Exactly one terminal side is present.
-        has_generation = self.generation is not None
+        has_provider_generation = self.provider_generation is not None
         has_failure = self.semantic_failure is not None
-        if has_generation == has_failure:
+        if has_provider_generation == has_failure:
             raise ValueError(
-                "a ProviderCallResult holds exactly one of generation or "
-                "semantic_failure"
+                "a ProviderCallResult holds exactly one of "
+                "provider_generation or semantic_failure"
             )
         # The terminal outcome must equal the last attempt's classification.
         last = self.attempts[-1]
-        if has_generation and self.generation != last.generation:
+        if (
+            has_provider_generation
+            and self.provider_generation != last.provider_generation
+        ):
             raise ValueError(
-                "terminal generation must equal the final attempt's generation"
+                "terminal provider_generation must equal the final attempt's "
+                "provider_generation"
             )
         if has_failure and self.semantic_failure != last.semantic_failure:
             raise ValueError(
@@ -190,13 +196,10 @@ class ProviderCallResult(BaseModel):
                 mode="json",
                 include={"request_identity", "policy_identity"},
             )
-            if (
-                evidence_identities["request_identity"]
-                != self.request_identity
-            ):
+            if evidence_identities["request_identity"] != self.request_hash:
                 raise ValueError(
                     "every attempt evidence request identity must equal the "
-                    "Result's request_identity"
+                    "Result's request_hash"
                 )
             if (
                 evidence_identities["policy_identity"]
@@ -209,7 +212,7 @@ class ProviderCallResult(BaseModel):
 
     @property
     def succeeded(self) -> bool:
-        return self.generation is not None
+        return self.provider_generation is not None
 
     @property
     def attempt_count(self) -> int:

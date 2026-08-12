@@ -52,7 +52,7 @@ PARTIAL_STORAGE_THREAT_MODEL = (
     "concurrently or between operations."
 )
 
-_CANONICAL_REQUEST_IDENTITY = re.compile(r"[0-9a-f]{64}")
+_CANONICAL_REQUEST_HASH = re.compile(r"[0-9a-f]{64}")
 _ENTRY_NAME = re.compile(r"[0-9a-f]{64}\.json")
 _TEMPORARY_NAME = re.compile(r"\.[0-9a-f]{64}\.[0-9a-f]{32}\.tmp")
 
@@ -60,10 +60,10 @@ _PERSISTED_FIELDS = frozenset(
     {
         "schema",
         "phase",
-        "instance_id",
+        "task_id",
         "unit",
-        "repeat_id",
-        "request_identity",
+        "sample_index",
+        "request_hash",
         "redrive_pending",
         "split_role",
         "score",
@@ -100,10 +100,10 @@ class PartialCallRecord(BaseModel):
     )
 
     phase: StrictStr
-    instance_id: StrictStr
+    task_id: StrictStr
     unit: StrictStr
-    repeat_id: StrictInt
-    request_identity: StrictStr
+    sample_index: StrictInt
+    request_hash: StrictStr
     redrive_pending: StrictBool
     score: float | None = None
     failed: StrictBool = False
@@ -137,12 +137,12 @@ class PartialCallRecord(BaseModel):
             _validate_timestamp(value)
         return value
 
-    @field_validator("request_identity")
+    @field_validator("request_hash")
     @classmethod
-    def _validate_request_identity(cls, value: str) -> str:
-        if _CANONICAL_REQUEST_IDENTITY.fullmatch(value) is None:
+    def _validate_request_hash(cls, value: str) -> str:
+        if _CANONICAL_REQUEST_HASH.fullmatch(value) is None:
             raise ValueError(
-                "request_identity must be a canonical 64-character "
+                "request_hash must be a canonical 64-character "
                 "lowercase hexadecimal digest"
             )
         return value
@@ -158,10 +158,10 @@ class PartialCallRecord(BaseModel):
         _reject_non_finite(self.score, path="score")
         _reject_non_finite(self.latency_s, path="latency_s")
         _reject_non_finite(self.provider_error, path="provider_error")
-        if not self.phase or not self.instance_id or not self.unit:
+        if not self.phase or not self.task_id or not self.unit:
             raise ValueError("partial identity fields must be non-empty")
-        if self.repeat_id < 0:
-            raise ValueError("repeat_id must be non-negative")
+        if self.sample_index < 0:
+            raise ValueError("sample_index must be non-negative")
         sources = (
             self.cache_source_phase,
             self.cache_source_unit,
@@ -184,10 +184,10 @@ class PartialCallRecord(BaseModel):
     def key(self) -> tuple[str, str, str, int, str]:
         return partial_key(
             self.phase,
-            self.instance_id,
+            self.task_id,
             self.unit,
-            self.repeat_id,
-            self.request_identity,
+            self.sample_index,
+            self.request_hash,
         )
 
     def as_dict(self) -> dict[str, object]:
@@ -195,10 +195,10 @@ class PartialCallRecord(BaseModel):
         return {
             "schema": self.schema_name,
             "phase": self.phase,
-            "instance_id": self.instance_id,
+            "task_id": self.task_id,
             "unit": self.unit,
-            "repeat_id": self.repeat_id,
-            "request_identity": self.request_identity,
+            "sample_index": self.sample_index,
+            "request_hash": self.request_hash,
             "redrive_pending": self.redrive_pending,
             "split_role": self.split_role,
             "score": self.score,
@@ -243,13 +243,13 @@ class PartialCallRecord(BaseModel):
 
 def partial_key(
     phase: str,
-    instance_id: str,
+    task_id: str,
     unit: str,
-    repeat_id: int,
-    request_identity: str,
+    sample_index: int,
+    request_hash: str,
 ) -> tuple[str, str, str, int, str]:
     """Return the stable identity of one persisted call observation."""
-    return (phase, instance_id, unit, repeat_id, request_identity)
+    return (phase, task_id, unit, sample_index, request_hash)
 
 
 def _validate_timestamp(value: str) -> None:
@@ -389,13 +389,13 @@ def _same_file_snapshot(
 
 
 def _entry_name(record: PartialCallRecord) -> str:
-    phase, instance_id, unit, repeat_id, request_identity = record.key()
+    phase, task_id, unit, sample_index, request_hash = record.key()
     identity = {
         "phase": phase,
-        "instance_id": instance_id,
+        "task_id": task_id,
         "unit": unit,
-        "repeat_id": repeat_id,
-        "request_identity": request_identity,
+        "sample_index": sample_index,
+        "request_hash": request_hash,
     }
     return (
         f"{hashlib.sha256(_canonical_json_bytes(identity)).hexdigest()}.json"

@@ -53,7 +53,7 @@ def _proposal_request(
 
 def _transport(
     *outcomes: ProviderTransportOutcome,
-    temperature: float = 1.4,
+    temperature: float | None = 1.4,
     max_attempts: int = 1,
     resolved_provider_config: ProviderCallConfig | None = None,
 ):
@@ -88,7 +88,7 @@ def _transport(
                 "dr_providers.provider_call_config",
                 provider_config.model_dump(mode="json"),
             ),
-            identity_hash=provider_config.identity_hash,
+            record_hash=provider_config.identity_hash,
         ),
         temperature=temperature,
     )
@@ -133,6 +133,17 @@ def test_exact_batch_uses_identical_prompt_and_temperature() -> None:
         len({draft.request_evidence["logical_call_id"] for draft in drafts})
         == 3
     )
+
+
+def test_unset_temperature_is_not_added_to_provider_controls() -> None:
+    proposer, config, recording, _ = _transport(
+        provider_support.response_outcome(text="candidate"),
+        temperature=None,
+    )
+
+    proposer.draft(config, _proposal_request(), 1)
+
+    assert recording.served[0].config.controls.temperature is None
 
 
 def test_preserves_provider_response_usage_cost_and_attempt_evidence() -> None:
@@ -187,13 +198,13 @@ def test_invalid_generation_is_an_explicit_failed_slot_not_an_underfill() -> (
     assert drafts[1].failed
     assert drafts[1].template == ""
     assert drafts[1].terminal_failure is not None
-    assert "blank-generation" in drafts[1].terminal_failure.message
+    assert "blank-provider-generation" in drafts[1].terminal_failure.message
     assert len(recording.served) == 2
     assert (
         drafts[1].response_evidence["provider_call_result"][
             "semantic_failure"
         ]["failure_class"]
-        == "blank-generation"
+        == "blank-provider-generation"
     )
 
 
@@ -219,8 +230,8 @@ def test_rejected_response_retains_accounting_and_failure_evidence() -> None:
     assert draft.terminal_failure.model_dump(mode="json") == {
         "code": "proposal_failed",
         "message": (
-            "provider proposer failed with blank-generation: provider "
-            "returned a blank or whitespace-only generation"
+            "provider proposer failed with blank-provider-generation: "
+            "provider returned a blank or whitespace-only generation"
         ),
         "details": {},
     }
@@ -230,9 +241,9 @@ def test_rejected_response_retains_accounting_and_failure_evidence() -> None:
         result_evidence["logical_call_id"]
         == (draft.request_evidence["logical_call_id"])
     )
-    assert result_evidence["generation"] is None
+    assert result_evidence["provider_generation"] is None
     assert result_evidence["semantic_failure"] == {
-        "failure_class": "blank-generation",
+        "failure_class": "blank-provider-generation",
         "message": "provider returned a blank or whitespace-only generation",
         "transport_failure": None,
         "rejected_response": response.model_dump(mode="json"),
@@ -271,7 +282,7 @@ def test_resolved_provider_config_hash_must_match_proposer_identity() -> None:
     mismatched = config.model_copy(
         update={
             "provider_call_config": config.provider_call_config.model_copy(
-                update={"identity_hash": "f" * 64}
+                update={"record_hash": "f" * 64}
             )
         }
     )
@@ -304,7 +315,7 @@ def test_resolved_provider_config_record_ref_must_match_before_call() -> None:
     )
     assert wrong_ref != config.provider_call_config.record_ref
     assert (
-        wrong_record.identity_hash == config.provider_call_config.identity_hash
+        wrong_record.identity_hash == config.provider_call_config.record_hash
     )
 
     with pytest.raises(ValueError, match="record does not match"):
@@ -391,7 +402,7 @@ def test_fake_transport_never_invents_padding_candidates() -> None:
             record_ref=typed_ref_for_record(
                 "dr_providers.provider_call_config", {"route": "proposal"}
             ),
-            identity_hash="a" * 64,
+            record_hash="a" * 64,
         ),
         temperature=1.4,
     )

@@ -4,6 +4,10 @@ from collections.abc import Sequence
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.code_comp.constants import (
+    CODE_COMP_ENV_NAME,
+    MUTATION_FIELD,
+)
 from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
@@ -28,15 +32,15 @@ class EngineToolEvaluator:
     def _resolve_engine(
         self, call: ToolCall, config: ToolConfig
     ) -> EvaluationEngine:
-        if config.eval_config_identity_hash != (
-            self._engine.eval_config_ref.identity_hash
+        if config.eval_config_hash != (
+            self._engine.eval_config_ref.config_hash
         ):
             raise ToolValidationError(
                 "tool config is not bound to the engine's exact Eval Config"
             )
         model_route = call.args.get("model_route")
         provider_config = (
-            self._engine.experiment.rollout_definition.provider_call_config
+            self._engine.experiment.generation_graph.provider_call_config
         )
         expected_model_route = provider_config.definition.route.model
         if model_route != expected_model_route:
@@ -70,12 +74,15 @@ class EngineToolEvaluator:
 
     def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
         engine = self._resolve_engine(call, config)
+        template = call.args.get("template")
+        if engine.experiment.env_name == CODE_COMP_ENV_NAME:
+            payload = {MUTATION_FIELD: template}
+        else:
+            payload = {"user_prompt_template": template}
         candidate = Candidate(
             candidate_id=call.call_id,
             base_ref=TypedRef.model_validate(call.args["base_ref"]),
-            payload={
-                "user_prompt_template": call.args.get("template"),
-            },
+            payload=payload,
         )
         evaluated = engine.evaluate(
             EvaluationRequest(
@@ -121,10 +128,10 @@ class EngineToolEvaluator:
                     for field in config.definition.record.output_fields
                 }
             ),
-            rollout_refs=(evaluated.evidence_ref,),
+            generation_refs=(evaluated.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
             eval_config_hash=(
-                evidence.evaluation_binding.eval_config.identity_hash
+                evidence.evaluation_binding.eval_config.config_hash
             ),
         )
 

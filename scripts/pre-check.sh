@@ -9,5 +9,4 @@ uv sync --locked --group dev
 ./scripts/ci/lint.sh --structural-only
 # Specific tests own this fast gate through the precheck marker; exhaustive
 # and integration coverage remains in the CI lanes.
-uv run pytest -q -n auto \
-  -m "precheck and not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention"
+uv run pytest -q -n auto -m precheck

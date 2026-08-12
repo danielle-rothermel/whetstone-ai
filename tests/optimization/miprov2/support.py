@@ -22,7 +22,7 @@ from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation import (
     DefinitionRef,
     EvalConfig,
-    RepeatPlan,
+    SamplePlan,
     SamplingDefinition,
     TaskSet,
 )
@@ -88,14 +88,14 @@ def miprov2_injected_defaults() -> Miprov2InjectedDefaults:
                     "dr_providers.provider_call_config",
                     provider.model_dump(mode="json"),
                 ),
-                identity_hash=provider.identity_hash,
+                record_hash=provider.identity_hash,
             )
         ),
         bootstrap_eval_source=eval_config_reference(eval_config(FULL_A)),
         validation_eval_source=validation,
         reward_policy=internal_reward_policy(),
         evaluation_binding=EvaluationBinding(
-            schema_version=2,
+            schema_version=3,
             eval_config=validation,
             role=EvaluationRole.INTERNAL,
             campaign="miprov2-control-test",
@@ -160,7 +160,7 @@ def miprov2_evidence_source_eval_config():
             sampling_config_hash=FULL_B,
             evaluation_procedure_config_hash=FULL_C,
             aggregation_config_hash=FULL_D,
-            config_identity_hash=identity,
+            config_hash=identity,
         )
     )
 
@@ -193,10 +193,10 @@ def make_miprov2_evidence_fixture(
         bindings=miprov2_evidence_bindings(control_identity_hash),
         plan_identity_hash=FULL_D,
         task_index=0,
-        task_identity=MIPROV2_EVIDENCE_TASK_IDENTITY,
+        task_hash=MIPROV2_EVIDENCE_TASK_IDENTITY,
         round_index=0,
         copy_task_model=False,
-        rollout_id=None,
+        generation_id=None,
         temperature=None,
     )
     policy = Miprov2EvaluationExecutionPolicy(
@@ -212,19 +212,19 @@ def make_miprov2_evidence_fixture(
         purpose="bootstrap",
         effect_identity_hash=attempt.identity_hash(),
         execution_policy=policy,
-        task_batch_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        task_batch_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
     )
     task_set = TaskSet(
         manifest_id="miprov2-evidence-tasks",
         version="1",
         dataset_revision="test",
-        task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        task_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
     )
-    repeat_plan = RepeatPlan(
+    sample_plan = SamplePlan(
         plan_id="miprov2-evidence-repeats",
         version="1",
-        task_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
-        repeat_count=1,
+        task_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        num_samples=1,
     )
     sampling = SamplingDefinition(
         definition_id="miprov2-evidence-sampling",
@@ -232,13 +232,13 @@ def make_miprov2_evidence_fixture(
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
     eval_binding = Miprov2EvalConfigBinding(
         request=request,
         task_set=task_set,
-        repeat_plan=repeat_plan,
+        sample_plan=sample_plan,
         sampling_config=sampling,
         eval_config=derive_eval_config_reference(
             request.source_eval_config,
@@ -246,7 +246,7 @@ def make_miprov2_evidence_fixture(
         ),
     )
     exact_binding = EvaluationBinding(
-        schema_version=2,
+        schema_version=3,
         eval_config=eval_binding.eval_config,
         role=EvaluationRole.INTERNAL,
         campaign="miprov2-evidence",
@@ -271,7 +271,7 @@ def make_miprov2_evidence_fixture(
         effect_identity_hash=attempt.identity_hash(),
         intent_id=intent.intent_id,
         candidate=candidate_ref,
-        task_batch_identities=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
+        task_batch_hashes=(MIPROV2_EVIDENCE_TASK_IDENTITY,),
         eval_config=eval_binding.eval_config,
         eval_config_binding=eval_binding,
         evaluation_binding=exact_binding,
@@ -308,7 +308,7 @@ def canonical_miprov2_eval_source(sampling_hash: str):
             sampling_config_hash=sampling_hash,
             evaluation_procedure_config_hash=FULL_C,
             aggregation_config_hash=FULL_D,
-            config_identity_hash=identity,
+            config_hash=identity,
         )
     )
 
@@ -326,7 +326,7 @@ def make_minimal_miprov2_runtime(
             "bootstrap_eval_source": bootstrap_source,
             "validation_eval_source": validation_source,
             "evaluation_binding": EvaluationBinding(
-                schema_version=2,
+                schema_version=3,
                 eval_config=validation_source,
                 role=EvaluationRole.INTERNAL,
                 campaign="miprov2-runtime-test",
@@ -347,18 +347,18 @@ def make_minimal_miprov2_runtime(
     component_id = control.component_ids[0]
     labeled = tuple(
         LabeledTaskDemo(
-            source_task_identity=task_identity,
+            source_task_hash=task_hash,
             inputs_by_component={component_id: {"query": f"q-{index}"}},
             outputs_by_component={component_id: {"answer": f"a-{index}"}},
         )
-        for index, task_identity in enumerate(control.trainset_task_identities)
+        for index, task_hash in enumerate(control.trainset_task_hashes)
     )
     proposal_trainset = tuple(
         Miprov2DatasetExample(
-            task_identity=task_identity,
+            task_hash=task_hash,
             rendered_record=f"query=q-{index}; answer=a-{index}",
         )
-        for index, task_identity in enumerate(control.trainset_task_identities)
+        for index, task_hash in enumerate(control.trainset_task_hashes)
     )
     bindings = Miprov2DurableBindings(
         control_identity_hash=control.identity_hash(),
@@ -412,7 +412,7 @@ def make_minimal_miprov2_runtime(
         proposal_trainset=proposal_trainset,
         component_field_order={component_id: ("query", "answer")},
         budget=Miprov2EffectBudget(
-            bootstrap_rollouts=0,
+            bootstrap_generations=0,
             proposal_calls=proposal_calls,
             evaluations=2,
             task_rows=6,
@@ -430,13 +430,13 @@ def resolve_miprov2_eval_config_binding(
         manifest_id=f"miprov2-runtime-tasks-{suffix}",
         version="1",
         dataset_revision="test",
-        task_identities=request.task_batch_identities,
+        task_hashes=request.task_batch_hashes,
     )
-    repeat_plan = RepeatPlan(
+    sample_plan = SamplePlan(
         plan_id=f"miprov2-runtime-repeats-{suffix}",
         version="1",
-        task_identities=request.task_batch_identities,
-        repeat_count=request.repeat_count,
+        task_hashes=request.task_batch_hashes,
+        num_samples=request.num_samples,
     )
     sampling = SamplingDefinition(
         definition_id="miprov2-runtime-sampling",
@@ -444,13 +444,13 @@ def resolve_miprov2_eval_config_binding(
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
     return Miprov2EvalConfigBinding(
         request=request,
         task_set=task_set,
-        repeat_plan=repeat_plan,
+        sample_plan=sample_plan,
         sampling_config=sampling,
         eval_config=derive_eval_config_reference(
             request.source_eval_config,

@@ -95,7 +95,7 @@ class _Adapter:
             if effect_log is not None and effect_log.exists()
             else []
         )
-        self.effect_identities: list[str] = []
+        self.effect_hashes: list[str] = []
         self.effect_kinds: list[str] = []
         self.propose_new_texts = self.propose
 
@@ -105,7 +105,7 @@ class _Adapter:
         semantic: dict[str, Any],
         execute: Any,
     ) -> Any:
-        ordinal = len(self.effect_identities)
+        ordinal = len(self.effect_hashes)
         request = json.loads(
             _canonical(
                 {
@@ -118,7 +118,7 @@ class _Adapter:
             )
         )
         identity = _digest(request)
-        self.effect_identities.append(identity)
+        self.effect_hashes.append(identity)
         self.effect_kinds.append(kind)
         self._trace.append(kind, ordinal=ordinal, semantic=semantic)
         if ordinal < len(self._records):
@@ -325,7 +325,7 @@ def run_oracle(
         cache_evaluation=False,
     )
     return {
-        "effect_identities": adapter.effect_identities,
+        "effect_hashes": adapter.effect_hashes,
         "effect_kinds": adapter.effect_kinds,
         "result": _result_payload(result),
         "timeline": trace.timeline,

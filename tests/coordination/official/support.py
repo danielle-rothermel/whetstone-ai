@@ -28,7 +28,7 @@ def eval_config_ref() -> EvalConfigRef:
             sampling_config_hash="b" * 64,
             evaluation_procedure_config_hash="d" * 64,
             aggregation_config_hash="e" * 64,
-            config_identity_hash=EVAL_HASH,
+            config_hash=EVAL_HASH,
         )
     )
 
@@ -46,11 +46,11 @@ def record_ref(char: str) -> TypedRef:
 
 
 def aggregate_ref(char: str) -> TypedRef:
-    return content_ref("whetstone.rollout_aggregate", char)
+    return content_ref("whetstone.aggregate", char)
 
 
 def result_ref(char: str) -> TypedRef:
-    return content_ref("whetstone.rollout_result", char)
+    return content_ref("whetstone.generation_result", char)
 
 
 def oer_ref(char: str) -> TypedRef:

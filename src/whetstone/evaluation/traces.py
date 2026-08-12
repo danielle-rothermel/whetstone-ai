@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.experiment.graph.nodes import GENERATION_OUTPUT_FIELD
+from whetstone.experiment.graph.nodes import PROVIDER_GENERATION_OUTPUT_FIELD
 
 __all__ = [
     "MAX_EXECUTED_COMPONENT_FIELDS",
@@ -295,9 +295,11 @@ def _llm_component_step(
         trace_index=trace_index,
         component_id=component_id,
         input_field_names=(_COMPONENT_PROMPT_FIELD,),
-        output_field_names=(GENERATION_OUTPUT_FIELD,),
+        output_field_names=(PROVIDER_GENERATION_OUTPUT_FIELD,),
         inputs=ImmutableJsonObject({_COMPONENT_PROMPT_FIELD: prompt}),
-        outputs=ImmutableJsonObject({GENERATION_OUTPUT_FIELD: generation}),
+        outputs=ImmutableJsonObject(
+            {PROVIDER_GENERATION_OUTPUT_FIELD: generation}
+        ),
     )
 
 
@@ -311,10 +313,10 @@ def _llm_component_values(
         )
     if step.input_field_names != (
         _COMPONENT_PROMPT_FIELD,
-    ) or step.output_field_names != (GENERATION_OUTPUT_FIELD,):
+    ) or step.output_field_names != (PROVIDER_GENERATION_OUTPUT_FIELD,):
         raise ValueError("LLM trace fields must be prompt and generation")
     prompt = step.inputs[_COMPONENT_PROMPT_FIELD]
-    generation = step.outputs[GENERATION_OUTPUT_FIELD]
+    generation = step.outputs[PROVIDER_GENERATION_OUTPUT_FIELD]
     if type(prompt) is not str or type(generation) is not str:
         raise ValueError("LLM trace prompt and generation must be strings")
     return prompt, generation

@@ -36,13 +36,13 @@ def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
     """Extract coverage-honest telemetry from a provider-call result."""
     if result is None:
         return CallTelemetry()
-    if not result.succeeded or result.generation is None:
+    if not result.succeeded or result.provider_generation is None:
         return CallTelemetry(
             latency_s=_accepted_latency(result),
             provider_error=_provider_error_of(result),
         )
-    usage = result.generation.response.usage
-    finish_reason = result.generation.response.finish_reason
+    usage = result.provider_generation.response.usage
+    finish_reason = result.provider_generation.response.finish_reason
     if usage is None:
         return CallTelemetry(
             latency_s=_accepted_latency(result),
@@ -86,7 +86,7 @@ def _accepted_latency(result: ProviderCallResult | None) -> float | None:
         (
             candidate
             for candidate in result.attempts
-            if candidate.generation is not None
+            if candidate.provider_generation is not None
         ),
         result.attempts[-1],
     )

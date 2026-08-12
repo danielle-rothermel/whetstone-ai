@@ -6,6 +6,7 @@ import base64
 from dataclasses import dataclass
 from typing import Self
 
+import zstandard
 from pydantic import field_serializer, field_validator
 
 from whetstone.evaluation.config import (
@@ -14,6 +15,10 @@ from whetstone.evaluation.config import (
     _FrozenModel,
     identity_hash_for,
 )
+
+#: The pinned zstd level for description-length measurement. Fixed by the
+#: experiment; a level change is a deliberate breaking measurement change.
+ZSTD_LEVEL = 19
 
 
 class CompressionReferenceKey(_FrozenModel):
@@ -107,11 +112,28 @@ def compression_ratio(
     return numerator_bytes / reference.byte_length
 
 
+def zstd_compressed_utf8_byte_length(
+    text: str,
+    *,
+    level: int = ZSTD_LEVEL,
+) -> int:
+    """Return the zstd-compressed byte length of UTF-8-encoded text.
+
+    Pure and deterministic given ``text`` and ``level``.
+    """
+
+    payload = text.encode("utf-8")
+    compressed = zstandard.ZstdCompressor(level=level).compress(payload)
+    return len(compressed)
+
+
 __all__ = [
     "ZERO_DENOMINATOR",
+    "ZSTD_LEVEL",
     "CompressionReferenceArtifact",
     "CompressionReferenceKey",
     "CompressionReferenceResolver",
     "ReferenceResolutionError",
     "compression_ratio",
+    "zstd_compressed_utf8_byte_length",
 ]

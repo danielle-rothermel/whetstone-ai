@@ -163,5 +163,5 @@ def test_sampling_or_aggregation_change_alters_only_eval_config_hash() -> None:
 
 def test_eval_config_hash_is_native_composite_identity() -> None:
     ec = eval_config()
-    assert eval_config_hash(ec) == ec.config_identity_hash
+    assert eval_config_hash(ec) == ec.config_hash
     assert len(eval_config_hash(ec)) == 64

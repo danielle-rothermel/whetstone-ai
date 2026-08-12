@@ -27,6 +27,9 @@ from whetstone.optimization.contracts import (
     optimization_run_reference,
 )
 from whetstone.optimization.copro.adapter import CoproAdapter
+from whetstone.optimization.copro.code_comp.contract import (
+    encdec_copro_proposal_contract,
+)
 from whetstone.optimization.copro.control import (
     CoproInjectedDefaults,
     configure_copro,
@@ -58,16 +61,16 @@ def durable_copro_proposal_executor(
     )
 
 
-def copro_prompt_model(*, temperature: float = 1.4) -> ProposerConfig:
+def copro_prompt_model() -> ProposerConfig:
     return ProposerConfig(
         provider_call_config=IdentityRef(
             record_ref=typed_ref_for_record(
                 "dr_providers.provider_call_config",
                 {"route": "copro-proposer"},
             ),
-            identity_hash=FULL_A,
+            record_hash=FULL_A,
         ),
-        temperature=temperature,
+        temperature=None,
     )
 
 
@@ -84,6 +87,9 @@ def configure_test_copro(
         track_stats=track_stats,
         defaults=CoproInjectedDefaults(
             prompt_model=copro_prompt_model(),
+            proposal_contract=encdec_copro_proposal_contract(
+                budget_ratio=None
+            ),
             evaluation_binding=evaluation_binding(),
             expected_reward_policy_hash=policy.identity_hash(),
             provider_execution_policy_hash=FULL_A,
@@ -143,8 +149,7 @@ def copro_run(control: Any) -> OptimizationRunRef:
             terminal_output_contract=OutputContract(returned_proposal_count=1),
             template_render_contract=TemplateRenderContract(
                 kind=TemplateRenderKind.PYTHON_FORMAT_V1,
-                available_fields=("input",),
-                required_fields=("input",),
+                available_fields=(),
             ),
             reward_policy=internal_reward_policy(),
         )
@@ -176,7 +181,7 @@ def copro_step_request(
             )
         ),
         candidates=candidates
-        or (copro_candidate("baseline", "base {input}"),),
+        or (copro_candidate("baseline", "Describe the code"),),
         pools={"attempt_history": history or []},
         hyperparameters=control.step_hyperparameters(iteration=step_index),
         budget=BudgetState(

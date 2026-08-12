@@ -75,7 +75,7 @@ class _FakeBroker:
                 )
             )
         return GepaEvaluationEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             rows=tuple(rows),
             logical_metric_calls=len(rows),
         )
@@ -91,7 +91,7 @@ class _FakeBroker:
             {"component": request.component_name},
         )
         return GepaProposalEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             raw_response=f"```\n{replacement}\n```",
             parsed_components=(
                 GepaCandidateComponent(
@@ -249,7 +249,7 @@ class _LiteralFenceBroker(_FakeBroker):
             {"component": request.component_name},
         )
         return GepaProposalEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             raw_response=f"```\n{replacement}\n```",
             parsed_components=(
                 GepaCandidateComponent(
@@ -294,7 +294,7 @@ class _FailureBroker(_FakeBroker):
             {"data_id": request.data[0].data_id},
         )
         return GepaEvaluationEffectResult(
-            request_identity_hash=request.identity_hash(),
+            request_hash=request.identity_hash(),
             rows=(
                 GepaEvaluationRow(
                     data=request.data[0],
@@ -560,3 +560,22 @@ def test_format_failure_precedes_failed_prediction_skip() -> None:
             without_failure_batch,
             ["alpha"],
         )
+
+
+def test_reflective_dataset_falls_back_without_component_traces() -> None:
+    trajectory = GepaTrajectoryProjection(
+        data_id=data_instance(0).data_id,
+        inputs={"question": "2+2?"},
+        generated_outputs={"test_results": [{"case_id": "case_0"}]},
+        feedback="score=0 with case detail",
+        prediction_failed=True,
+        component_records={},
+    )
+    adapter = _adapter(_FakeBroker())
+    reflective = adapter.make_reflective_dataset(
+        {"alpha": "alpha-0", "beta": "beta-0"},
+        _evaluation_batch(trajectory),
+        ["alpha"],
+    )
+
+    assert reflective["alpha"][0]["Feedback"] == "score=0 with case detail"

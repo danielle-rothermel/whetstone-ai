@@ -13,15 +13,15 @@ from whetstone.provider.attempt import (
     ProviderCallResult,
 )
 from whetstone.provider.classification import (
-    Generation,
+    ProviderGeneration,
     ProviderSemanticFailure,
     classify_outcome,
 )
 
 
-def _accepted_generation() -> Generation:
+def _accepted_generation() -> ProviderGeneration:
     classification = classify_outcome(s.response_outcome(text="ok"))
-    assert isinstance(classification, Generation)
+    assert isinstance(classification, ProviderGeneration)
     return classification
 
 
@@ -49,7 +49,7 @@ def _attempt(
         outcome=outcome,
     )
     classification = classify_outcome(outcome)
-    if isinstance(classification, Generation):
+    if isinstance(classification, ProviderGeneration):
         generation = classification
         failure = None
     else:
@@ -62,7 +62,7 @@ def _attempt(
         started_at=0.0,
         ended_at=0.25,
         evidence=evidence,
-        generation=generation,
+        provider_generation=generation,
         semantic_failure=failure,
     )
 
@@ -113,7 +113,7 @@ class TestProviderCallAttempt:
                 started_at=0.0,
                 ended_at=1.0,
                 evidence=evidence,
-                generation=gen,
+                provider_generation=gen,
                 semantic_failure=_transient_failure(),
             )
 
@@ -152,7 +152,7 @@ class TestProviderCallAttempt:
                 started_at=2.0,
                 ended_at=1.0,
                 evidence=evidence,
-                generation=_accepted_generation(),
+                provider_generation=_accepted_generation(),
             )
 
     @pytest.mark.parametrize(
@@ -183,7 +183,7 @@ class TestProviderCallAttempt:
                 ),
                 started_at=started_at,
                 ended_at=ended_at,
-                generation=_accepted_generation(),
+                provider_generation=_accepted_generation(),
             )
 
     def test_success_evidence_rejects_failure_classification(self) -> None:
@@ -221,7 +221,7 @@ class TestProviderCallAttempt:
                     policy=s.build_transport_policy(),
                     outcome=failure,
                 ),
-                generation=generation,
+                provider_generation=generation,
             )
 
 
@@ -241,10 +241,10 @@ class TestProviderCallResult:
         )
         result = ProviderCallResult(
             logical_call_id="lc-1",
-            request_identity=s.build_request().identity_payload(),
+            request_hash=s.build_request().identity_payload(),
             execution_policy_hash=policy_hash,
             attempts=(a1, a2),
-            generation=a2.generation,
+            provider_generation=a2.provider_generation,
         )
         assert result.succeeded
         assert result.attempt_count == 2
@@ -266,10 +266,10 @@ class TestProviderCallResult:
         )
         result = ProviderCallResult(
             logical_call_id="lc-1",
-            request_identity=s.build_request().identity_payload(),
+            request_hash=s.build_request().identity_payload(),
             execution_policy_hash=policy_hash,
             attempts=(attempt,),
-            generation=attempt.generation,
+            provider_generation=attempt.provider_generation,
         )
         with pytest.raises(ValueError, match="schema_version"):
             ProviderCallResult.model_validate(
@@ -291,10 +291,10 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="ordered 1"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity={},
+                request_hash={},
                 execution_policy_hash=policy_hash,
                 attempts=(a1, a3),
-                generation=a3.generation,
+                provider_generation=a3.provider_generation,
             )
 
     def test_terminal_must_match_last_attempt(self) -> None:
@@ -307,10 +307,10 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="final attempt"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity={},
+                request_hash={},
                 execution_policy_hash=policy_hash,
                 attempts=(a1,),
-                generation=_accepted_generation(),
+                provider_generation=_accepted_generation(),
             )
 
     def test_requires_at_least_one_attempt(self) -> None:
@@ -318,13 +318,13 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="at least one attempt"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity={},
+                request_hash={},
                 execution_policy_hash=policy_hash,
                 attempts=(),
                 semantic_failure=_transient_failure(),
             )
 
-    def test_request_identity_must_match_every_attempt_evidence(self) -> None:
+    def test_request_hash_must_match_every_attempt_evidence(self) -> None:
         policy_hash = s.build_execution_policy().identity_hash
         attempt = _attempt(
             number=1,
@@ -334,12 +334,12 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="request identity"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity=s.build_request(
+                request_hash=s.build_request(
                     content="foreign"
                 ).identity_payload(),
                 execution_policy_hash=policy_hash,
                 attempts=(attempt,),
-                generation=attempt.generation,
+                provider_generation=attempt.provider_generation,
             )
 
     def test_attempt_evidence_policy_identities_must_agree(self) -> None:
@@ -360,8 +360,8 @@ class TestProviderCallResult:
         with pytest.raises(ValueError, match="policy identity"):
             ProviderCallResult(
                 logical_call_id="lc-1",
-                request_identity=s.build_request().identity_payload(),
+                request_hash=s.build_request().identity_payload(),
                 execution_policy_hash=policy_hash,
                 attempts=(a1, a2),
-                generation=a2.generation,
+                provider_generation=a2.provider_generation,
             )

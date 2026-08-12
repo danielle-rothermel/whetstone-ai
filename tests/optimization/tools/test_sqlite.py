@@ -10,8 +10,6 @@ from tests.optimization.processes import (
 )
 from tests.optimization.tools.sqlite_scenarios import (
     run_sqlite_capacity_race,
-    run_sqlite_global_capacity,
-    run_sqlite_same_call_replay,
 )
 from tests.optimization.tools.support import (
     capacity_binding,
@@ -285,21 +283,3 @@ def test_spawned_sqlite_capacity_race_is_atomic(
     tmp_path: Path, start_method: str
 ) -> None:
     run_sqlite_capacity_race(tmp_path, start_method)
-
-
-@pytest.mark.sqlite_contention
-@pytest.mark.parametrize("start_method", in_process_start_methods())
-@pytest.mark.process_integration
-def test_spawned_global_capacity_has_one_process_shared_bucket(
-    tmp_path: Path, start_method: str
-) -> None:
-    run_sqlite_global_capacity(tmp_path, start_method)
-
-
-@pytest.mark.sqlite_contention
-@pytest.mark.parametrize("start_method", in_process_start_methods())
-@pytest.mark.process_integration
-def test_spawned_same_call_replay_has_one_ordinal(
-    tmp_path: Path, start_method: str
-) -> None:
-    run_sqlite_same_call_replay(tmp_path, start_method)

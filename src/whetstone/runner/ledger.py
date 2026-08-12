@@ -217,16 +217,18 @@ class ViewerCellPublicationRef(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     projection: ViewerPublishedFileRef
-    rollout_outputs: ViewerPublishedFileRef
+    generation_outputs: ViewerPublishedFileRef
 
     @model_validator(mode="after")
     def _validate_pair(self) -> ViewerCellPublicationRef:
         projection = PurePosixPath(self.projection.relative_path)
-        rollouts = PurePosixPath(self.rollout_outputs.relative_path)
+        generation_outputs_path = PurePosixPath(
+            self.generation_outputs.relative_path
+        )
         if (
             projection.name != "projection.json"
-            or rollouts.name != "rollout_outputs.jsonl"
-            or projection.parent != rollouts.parent
+            or generation_outputs_path.name != "generation_outputs.jsonl"
+            or projection.parent != generation_outputs_path.parent
             or len(projection.parts) != 3
             or projection.parts[0] != "viewer_cells"
         ):
@@ -505,8 +507,8 @@ class OfficialAnchorRecord(BaseModel):
     eval_config_hash: StrictStr
     #: Raw environment IDs and semantic task identities preserve evaluation
     #: order independently; every per-task vector below aligns to both.
-    official_instance_ids: tuple[StrictStr, ...]
-    official_task_identities: tuple[StrictStr, ...]
+    official_task_ids: tuple[StrictStr, ...]
+    official_task_hashes: tuple[StrictStr, ...]
     baseline_evidence_ref: TypedRef
     ceiling_evidence_ref: TypedRef
     baseline_official: StrictFloat
@@ -530,34 +532,23 @@ class OfficialAnchorRecord(BaseModel):
         require_full_hash(self.graph_hash, field="graph_hash")
         require_full_hash(self.eval_config_hash, field="eval_config_hash")
 
-        if not self.official_instance_ids:
-            raise ValueError(
-                "official_instance_ids must contain at least one ID"
-            )
-        if any(
-            not instance_id.strip()
-            for instance_id in self.official_instance_ids
-        ):
-            raise ValueError(
-                "official_instance_ids must contain non-empty IDs"
-            )
-        if len(set(self.official_instance_ids)) != len(
-            self.official_instance_ids
-        ):
-            raise ValueError("official_instance_ids must contain unique IDs")
+        if not self.official_task_ids:
+            raise ValueError("official_task_ids must contain at least one ID")
+        if any(not task_id.strip() for task_id in self.official_task_ids):
+            raise ValueError("official_task_ids must contain non-empty IDs")
+        if len(set(self.official_task_ids)) != len(self.official_task_ids):
+            raise ValueError("official_task_ids must contain unique IDs")
 
-        for identity in self.official_task_identities:
-            require_full_hash(identity, field="official_task_identities")
-        if len(set(self.official_task_identities)) != len(
-            self.official_task_identities
+        for identity in self.official_task_hashes:
+            require_full_hash(identity, field="official_task_hashes")
+        if len(set(self.official_task_hashes)) != len(
+            self.official_task_hashes
         ):
-            raise ValueError(
-                "official_task_identities must contain unique hashes"
-            )
+            raise ValueError("official_task_hashes must contain unique hashes")
 
-        official_count = len(self.official_instance_ids)
+        official_count = len(self.official_task_ids)
         aligned_fields = (
-            "official_task_identities",
+            "official_task_hashes",
             "baseline_per_task",
             "ceiling_per_task",
             "baseline_per_task_counts",
@@ -566,7 +557,7 @@ class OfficialAnchorRecord(BaseModel):
         for field_name in aligned_fields:
             if len(getattr(self, field_name)) != official_count:
                 raise ValueError(
-                    f"{field_name} length must match official_instance_ids"
+                    f"{field_name} length must match official_task_ids"
                 )
 
         if self.official_repeats_used <= 0:
@@ -1263,7 +1254,7 @@ class Ledger:
             opened_cell_stat = os.fstat(cell_descriptor)
             if set(os.listdir(cell_descriptor)) != {
                 "projection.json",
-                "rollout_outputs.jsonl",
+                "generation_outputs.jsonl",
             }:
                 raise RuntimeError(
                     f"viewer publication has an invalid file set at {path}"
@@ -1273,10 +1264,10 @@ class Ledger:
                 "projection.json",
                 path / "projection.json",
             )
-            rollouts_body = self._read_publication_file(
+            generation_outputs_body = self._read_publication_file(
                 cell_descriptor,
-                "rollout_outputs.jsonl",
-                path / "rollout_outputs.jsonl",
+                "generation_outputs.jsonl",
+                path / "generation_outputs.jsonl",
             )
             try:
                 current_cell_stat = os.stat(
@@ -1299,7 +1290,7 @@ class Ledger:
                 )
         finally:
             os.close(cell_descriptor)
-        return projection_body, rollouts_body
+        return projection_body, generation_outputs_body
 
     @staticmethod
     def _cleanup_publication_temp(
@@ -1315,7 +1306,7 @@ class Ledger:
         except FileNotFoundError:
             return
         try:
-            for filename in ("projection.json", "rollout_outputs.jsonl"):
+            for filename in ("projection.json", "generation_outputs.jsonl"):
                 try:
                     os.unlink(filename, dir_fd=temp_descriptor)
                 except FileNotFoundError:
@@ -1333,7 +1324,7 @@ class Ledger:
         cell_id: str,
         env: str,
         projection_body: bytes,
-        rollout_lines: Sequence[str],
+        generation_lines: Sequence[str],
     ) -> ViewerCellPublicationRef:
         """Publish one cell outside every stable viewer source snapshot.
 
@@ -1347,7 +1338,7 @@ class Ledger:
                 cell_id=cell_id,
                 env=env,
                 projection_body=projection_body,
-                rollout_lines=rollout_lines,
+                generation_lines=generation_lines,
             )
 
     def _write_viewer_publication_unlocked(
@@ -1356,23 +1347,23 @@ class Ledger:
         cell_id: str,
         env: str,
         projection_body: bytes,
-        rollout_lines: Sequence[str],
+        generation_lines: Sequence[str],
     ) -> ViewerCellPublicationRef:
         """Atomically publish one immutable two-file viewer cell."""
         cell_filename = _canonical_cell_filename(cell_id, expected_env=env)
         path = self.viewer_cells_dir / cell_filename
-        rollouts_body = "".join(rollout_lines).encode("utf-8")
+        generation_outputs_body = "".join(generation_lines).encode("utf-8")
         relative_parent = Path("viewer_cells") / cell_filename
         publication_ref = ViewerCellPublicationRef(
             projection=ViewerPublishedFileRef(
                 relative_path=(relative_parent / "projection.json").as_posix(),
                 sha256=hashlib.sha256(projection_body).hexdigest(),
             ),
-            rollout_outputs=ViewerPublishedFileRef(
+            generation_outputs=ViewerPublishedFileRef(
                 relative_path=(
-                    relative_parent / "rollout_outputs.jsonl"
+                    relative_parent / "generation_outputs.jsonl"
                 ).as_posix(),
-                sha256=hashlib.sha256(rollouts_body).hexdigest(),
+                sha256=hashlib.sha256(generation_outputs_body).hexdigest(),
             ),
         )
         (
@@ -1390,7 +1381,7 @@ class Ledger:
                 path,
             )
             if existing is not None:
-                if existing != (projection_body, rollouts_body):
+                if existing != (projection_body, generation_outputs_body):
                     raise RuntimeError(
                         f"viewer publication conflicts at {path}"
                     )
@@ -1433,8 +1424,8 @@ class Ledger:
                 )
                 self._write_publication_file(
                     temporary_descriptor,
-                    "rollout_outputs.jsonl",
-                    rollouts_body,
+                    "generation_outputs.jsonl",
+                    generation_outputs_body,
                 )
                 os.fsync(temporary_descriptor)
             finally:
@@ -1453,7 +1444,7 @@ class Ledger:
                     cell_filename,
                     path,
                 )
-                if existing != (projection_body, rollouts_body):
+                if existing != (projection_body, generation_outputs_body):
                     raise
             os.fsync(directory_descriptor)
             self._validate_root_binding(

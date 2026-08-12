@@ -6,7 +6,10 @@ from dataclasses import dataclass, field
 from dr_providers import ProviderCallRequest, ProviderInvocationEvidence
 
 from whetstone.provider.attempt import ProviderCallAttempt, ProviderCallResult
-from whetstone.provider.classification import Generation, classify_outcome
+from whetstone.provider.classification import (
+    ProviderGeneration,
+    classify_outcome,
+)
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = [
@@ -81,7 +84,7 @@ class _Driver:
             ended_at = self.clock()
 
             classification = classify_outcome(evidence.outcome)
-            if isinstance(classification, Generation):
+            if isinstance(classification, ProviderGeneration):
                 attempt = ProviderCallAttempt(
                     logical_call_id=self.logical_call_id,
                     attempt_number=attempt_number,
@@ -89,15 +92,15 @@ class _Driver:
                     started_at=started_at,
                     ended_at=ended_at,
                     evidence=evidence,
-                    generation=classification,
+                    provider_generation=classification,
                 )
                 attempts.append(attempt)
                 return ProviderCallResult(
                     logical_call_id=self.logical_call_id,
-                    request_identity=self.request.identity_payload(),
+                    request_hash=self.request.identity_payload(),
                     execution_policy_hash=policy_hash,
                     attempts=tuple(attempts),
-                    generation=classification,
+                    provider_generation=classification,
                 )
 
             attempt = ProviderCallAttempt(
@@ -125,7 +128,7 @@ class _Driver:
         last = attempts[-1]
         return ProviderCallResult(
             logical_call_id=self.logical_call_id,
-            request_identity=self.request.identity_payload(),
+            request_hash=self.request.identity_payload(),
             execution_policy_hash=policy_hash,
             attempts=tuple(attempts),
             semantic_failure=last.semantic_failure,

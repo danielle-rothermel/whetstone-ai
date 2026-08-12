@@ -157,10 +157,10 @@ class EvaluationClaims:
             )
         if (
             attestation.graph_hash
-            != self._engine.experiment.rollout_definition.graph_hash
+            != self._engine.experiment.generation_graph.graph_hash
         ):
             raise ValueError(
-                "Evaluation Result Attestation uses another rollout graph"
+                "Evaluation Result Attestation uses another generation graph"
             )
         return attestation
 
@@ -295,7 +295,7 @@ class EvaluationClaims:
             require_attestation=False,
         )
         attestation = EvaluationResultAttestation(
-            graph_hash=self._engine.experiment.rollout_definition.graph_hash,
+            graph_hash=self._engine.experiment.generation_graph.graph_hash,
             resolution=resolution,
         )
         persisted, _ = self._store.put(

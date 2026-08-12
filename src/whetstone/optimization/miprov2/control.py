@@ -264,7 +264,8 @@ class Miprov2InjectedDefaults(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: ProposerConfig
-    # Source authorities, not fixed per-effect configs. Bootstrap rollouts and
+    # Source authorities, not fixed per-effect configs. Bootstrap generations
+    # and
     # each randomly sampled validation minibatch derive an exact ordered-subset
     # Eval Config from the corresponding source before issuing an Intent.
     bootstrap_eval_source: EvalConfigRef
@@ -301,10 +302,10 @@ class Miprov2Control(BaseModel):
     teacher_candidate: CandidateRef
     teacher_compiled: StrictBool
     program_layout: Miprov2ProgramLayout
-    source_trainset_task_identities: tuple[StrictStr, ...]
-    source_valset_task_identities: tuple[StrictStr, ...] | None
-    trainset_task_identities: tuple[StrictStr, ...]
-    valset_task_identities: tuple[StrictStr, ...]
+    source_trainset_task_hashes: tuple[StrictStr, ...]
+    source_valset_task_hashes: tuple[StrictStr, ...] | None
+    trainset_task_hashes: tuple[StrictStr, ...]
+    valset_task_hashes: tuple[StrictStr, ...]
     auto_validation_sample_indices: tuple[StrictInt, ...] | None
 
     prompt_model: ProposerConfig
@@ -425,26 +426,26 @@ class Miprov2Control(BaseModel):
         )
         for field, identities in (
             (
-                "source_trainset_task_identities",
-                self.source_trainset_task_identities,
+                "source_trainset_task_hashes",
+                self.source_trainset_task_hashes,
             ),
-            ("trainset_task_identities", self.trainset_task_identities),
-            ("valset_task_identities", self.valset_task_identities),
+            ("trainset_task_hashes", self.trainset_task_hashes),
+            ("valset_task_hashes", self.valset_task_hashes),
         ):
             for identity in identities:
                 require_full_hash(identity, field=field)
-        if self.source_valset_task_identities is not None and any(
-            not identity for identity in self.source_valset_task_identities
+        if self.source_valset_task_hashes is not None and any(
+            not identity for identity in self.source_valset_task_hashes
         ):
             raise ValueError(
-                "Whetstone safety: source_valset_task_identities contains "
+                "Whetstone safety: source_valset_task_hashes contains "
                 "an empty identity"
             )
-        if self.source_valset_task_identities is not None:
-            for identity in self.source_valset_task_identities:
+        if self.source_valset_task_hashes is not None:
+            for identity in self.source_valset_task_hashes:
                 require_full_hash(
                     identity,
-                    field="source_valset_task_identities",
+                    field="source_valset_task_hashes",
                 )
         _validate_teacher_settings(self.teacher_settings.to_json())
         if self.evaluation_binding.eval_config != self.validation_eval_source:
@@ -558,16 +559,16 @@ class Miprov2Control(BaseModel):
                 "identity_hash": self.program_layout.identity_hash(),
                 "config": self.program_layout.identity_payload(),
             },
-            "source_trainset_task_identities": list(
-                self.source_trainset_task_identities
+            "source_trainset_task_hashes": list(
+                self.source_trainset_task_hashes
             ),
-            "source_valset_task_identities": (
-                list(self.source_valset_task_identities)
-                if self.source_valset_task_identities is not None
+            "source_valset_task_hashes": (
+                list(self.source_valset_task_hashes)
+                if self.source_valset_task_hashes is not None
                 else None
             ),
-            "trainset_task_identities": list(self.trainset_task_identities),
-            "valset_task_identities": list(self.valset_task_identities),
+            "trainset_task_hashes": list(self.trainset_task_hashes),
+            "valset_task_hashes": list(self.valset_task_hashes),
             "auto_validation_sample_indices": (
                 list(self.auto_validation_sample_indices)
                 if self.auto_validation_sample_indices is not None
@@ -645,7 +646,7 @@ class Miprov2Control(BaseModel):
                 MIPROV2_CONTROL_SCHEMA,
                 self.model_dump(mode="json"),
             ),
-            identity_hash=self.identity_hash(),
+            record_hash=self.identity_hash(),
         )
 
     def require_identity_hash(self, persisted_hash: str) -> None:
@@ -674,20 +675,20 @@ class Miprov2Control(BaseModel):
 
 
 def _pre_auto_valset(control: Miprov2Control) -> tuple[str, ...]:
-    if control.source_valset_task_identities is not None:
-        return control.source_valset_task_identities
+    if control.source_valset_task_hashes is not None:
+        return control.source_valset_task_hashes
     size = min(
         1000,
-        max(1, int(len(control.source_trainset_task_identities) * 0.80)),
+        max(1, int(len(control.source_trainset_task_hashes) * 0.80)),
     )
-    return control.source_trainset_task_identities[-size:]
+    return control.source_trainset_task_hashes[-size:]
 
 
 def _validate_resolved_derivations(control: Miprov2Control) -> None:
     """Reject a persisted control that configure_miprov2 could not produce."""
 
-    source_trainset = control.source_trainset_task_identities
-    source_valset = control.source_valset_task_identities
+    source_trainset = control.source_trainset_task_hashes
+    source_valset = control.source_valset_task_hashes
     if not source_trainset:
         raise ValueError("resolved MIPROv2 source trainset cannot be empty")
     if source_valset is None:
@@ -706,7 +707,7 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
         expected_trainset = source_trainset
         expected_pre_auto_valset = source_valset
 
-    if control.trainset_task_identities != expected_trainset:
+    if control.trainset_task_hashes != expected_trainset:
         raise ValueError(
             "resolved MIPROv2 trainset conflicts with source datasets"
         )
@@ -726,7 +727,7 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
             raise ValueError(
                 "resolved manual MIPROv2 cannot carry auto sample indices"
             )
-        if control.valset_task_identities != expected_pre_auto_valset:
+        if control.valset_task_hashes != expected_pre_auto_valset:
             raise ValueError(
                 "resolved manual MIPROv2 valset conflicts with source datasets"
             )
@@ -762,7 +763,7 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
         expected_valset = tuple(
             expected_pre_auto_valset[index] for index in expected_indices
         )
-        if control.valset_task_identities != expected_valset:
+        if control.valset_task_hashes != expected_valset:
             raise ValueError(
                 "resolved MIPROv2 valset order conflicts with sample indices"
             )
@@ -790,7 +791,7 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
             )
 
     if control.minibatch and control.minibatch_size > len(
-        control.valset_task_identities
+        control.valset_task_hashes
     ):
         raise ValueError(
             "resolved MIPROv2 minibatch_size exceeds resolved valset"
@@ -1273,10 +1274,10 @@ def configure_miprov2(
         teacher_candidate=teacher_snapshot,
         teacher_compiled=resolved_teacher_compiled,
         program_layout=layout_snapshot,
-        source_trainset_task_identities=source_trainset,
-        source_valset_task_identities=source_valset,
-        trainset_task_identities=resolved_trainset,
-        valset_task_identities=resolved_valset,
+        source_trainset_task_hashes=source_trainset,
+        source_valset_task_hashes=source_valset,
+        trainset_task_hashes=resolved_trainset,
+        valset_task_hashes=resolved_valset,
         auto_validation_sample_indices=sample_indices,
         prompt_model=prompt_model_snapshot,
         bootstrap_eval_source=bootstrap_source_snapshot,

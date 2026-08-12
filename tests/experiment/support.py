@@ -6,15 +6,15 @@ from whetstone.evaluation import (
     MetricExtractionDefinition,
     MetricQuestionBinding,
     PreprocessingDefinition,
-    RepeatPlan,
+    SamplePlan,
     SamplingDefinition,
     TaskSet,
 )
-from whetstone.evaluation.code.aggregate import (
+from whetstone.evaluation.aggregate import (
     SKIP_TOLERANCE_VARIABLE,
+    Aggregate,
     CompletenessPolicy,
     EvaluationMatrixPlan,
-    RolloutAggregate,
     RowValue,
     TaskRows,
     aggregation_definition,
@@ -27,26 +27,26 @@ BINDING_ID = "c" * 64
 SELECTION_QUALITY_AGGREGATE_NAME = "selection_quality"
 
 
-def aggregate_plan(*, tasks: int, repeats: int) -> EvaluationMatrixPlan:
-    task_identities = tuple(f"task-{index}" for index in range(tasks))
+def aggregate_plan(*, tasks: int, num_samples: int) -> EvaluationMatrixPlan:
+    task_hashes = tuple(f"task-{index}" for index in range(tasks))
     task_set = TaskSet(
         manifest_id="selection.tasks",
         version="1",
         dataset_revision="selection-fixture",
-        task_identities=task_identities,
+        task_hashes=task_hashes,
     )
-    repeat_plan = RepeatPlan(
+    sample_plan = SamplePlan(
         plan_id="selection.repeats",
         version="1",
-        task_identities=task_identities,
-        repeat_count=repeats,
+        task_hashes=task_hashes,
+        num_samples=num_samples,
     )
     sampling = SamplingDefinition(
         definition_id="selection.sampling", version="1"
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "repeat_plan_hash": repeat_plan.identity_hash(),
+            "sample_plan_hash": sample_plan.identity_hash(),
         }
     )
     policy = CompletenessPolicy()
@@ -84,7 +84,7 @@ def aggregate_plan(*, tasks: int, repeats: int) -> EvaluationMatrixPlan:
         eval_config=eval_config,
         sampling_config=sampling,
         task_set=task_set,
-        repeat_plan=repeat_plan,
+        sample_plan=sample_plan,
         aggregation_config=aggregation,
     )
 
@@ -94,12 +94,12 @@ def quality_aggregate(
     graph_hash: str = GRAPH_A,
     value: float = 1.0,
     tasks: int = 2,
-    repeats: int = 2,
-) -> RolloutAggregate:
+    num_samples: int = 2,
+) -> Aggregate:
     task_rows = tuple(
         TaskRows(
-            task_identity=f"task-{t}",
-            rows=tuple(RowValue(value=value) for _ in range(repeats)),
+            task_hash=f"task-{t}",
+            rows=tuple(RowValue(value=value) for _ in range(num_samples)),
         )
         for t in range(tasks)
     )
@@ -108,7 +108,7 @@ def quality_aggregate(
         graph_hash=graph_hash,
         evaluation_binding_hash=BINDING_ID,
         task_rows=task_rows,
-        plan=aggregate_plan(tasks=tasks, repeats=repeats),
+        plan=aggregate_plan(tasks=tasks, num_samples=num_samples),
     )
 
 
@@ -117,12 +117,12 @@ def compression_aggregate(
     graph_hash: str = GRAPH_A,
     value: float = 2.0,
     tasks: int = 2,
-    repeats: int = 2,
-) -> RolloutAggregate:
+    num_samples: int = 2,
+) -> Aggregate:
     task_rows = tuple(
         TaskRows(
-            task_identity=f"task-{task_index}",
-            rows=tuple(RowValue(value=value) for _ in range(repeats)),
+            task_hash=f"task-{task_index}",
+            rows=tuple(RowValue(value=value) for _ in range(num_samples)),
         )
         for task_index in range(tasks)
     )
@@ -131,7 +131,7 @@ def compression_aggregate(
         graph_hash=graph_hash,
         evaluation_binding_hash=BINDING_ID,
         task_rows=task_rows,
-        plan=aggregate_plan(tasks=tasks, repeats=repeats),
+        plan=aggregate_plan(tasks=tasks, num_samples=num_samples),
     )
 
 
@@ -139,17 +139,17 @@ def incomplete_quality_aggregate(
     *,
     graph_hash: str = GRAPH_A,
     tasks: int = 2,
-    repeats: int = 2,
-) -> RolloutAggregate:
+    num_samples: int = 2,
+) -> Aggregate:
     task_rows = (
         TaskRows(
-            task_identity="task-0",
+            task_hash="task-0",
             rows=(RowValue(value=1.0),),
         ),
         *(
             TaskRows(
-                task_identity=f"task-{t}",
-                rows=tuple(RowValue(value=1.0) for _ in range(repeats)),
+                task_hash=f"task-{t}",
+                rows=tuple(RowValue(value=1.0) for _ in range(num_samples)),
             )
             for t in range(1, tasks)
         ),
@@ -159,5 +159,5 @@ def incomplete_quality_aggregate(
         graph_hash=graph_hash,
         evaluation_binding_hash=BINDING_ID,
         task_rows=task_rows,
-        plan=aggregate_plan(tasks=tasks, repeats=repeats),
+        plan=aggregate_plan(tasks=tasks, num_samples=num_samples),
     )

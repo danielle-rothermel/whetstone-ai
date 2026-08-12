@@ -29,7 +29,7 @@ EVALUATION_PROCEDURE_CONFIG_SCHEMA = "whetstone.evaluation_procedure.config"
 def sampling_config() -> SamplingConfig:
     definition = SamplingDefinition(definition_id="samp", version="1")
     return definition.materialize(
-        {"task_set_hash": "ts1", "repeat_plan_hash": "rp1"}
+        {"task_set_hash": "ts1", "sample_plan_hash": "rp1"}
     )
 
 

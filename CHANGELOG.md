@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Add `CodeCompExperimentConfig` as the unified typed input for HumanEval
+  code-compression experiments, with `CodeCompEvaluationRuntimeConfig` for
+  subprocess engine reconstruction and Codex MCP cutover.
+- Add shared evaluation driver helpers (`row_common`, `eval_result`) extracted
+  from the retired internal row path.
 - Add a Codex optimization adapter with a typed output artifact, one bounded
   MCP evaluation tool backed by the pinned official protocol SDK, and
   fail-closed macOS filesystem isolation.
@@ -25,6 +30,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Cut `EvaluationEngine` over to code_comp experiments only; row execution
+  flows through `run_code_comp_eval` and mode-specific row requests rather
+  than the generic internal driver.
+- Migrate evaluation, coordination, runner, Codex, and preview fixtures to
+  `code_comp` candidates (`MUTATION_FIELD`) and canonical task hashes.
 - Launch the sandbox-wrapped Codex command through pinned `dr-exec` typed
   `PROCESS_BOUNDARY_ONLY` execution with caller-owned durable run records.
 - Own generic evaluation configuration, planning, aggregation, measurement,
@@ -49,6 +59,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Align direct-mode rendered prompts and evidence validation with per-instance
+  input-arm text rather than the arm token alone.
+- Map HumanEval task IDs to canonical sampling task hashes in anchor preview
+  and calibration paths.
 - Restrict Codex runtime reconstruction to internal sampling, validate
   evaluation-tool inputs before launch, surface durable tool failures to the
   model, stage complete namespace packages, and retain failed PostgreSQL
@@ -60,5 +74,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Removed
 
-- Remove retired audit, design, planning, and research artifacts together with
-  stale package paths and nonessential module/package prose.
+- Remove the generic internal evaluation row driver (`internal.py`) and its
+  `run_internal_eval` entrypoint; `InternalEvalResult` lives under
+  `evaluation.drivers.eval_result`.
+- Remove QA env registry, probes, oracle operators, `build_env_experiment`,
+  and the associated env test suite.

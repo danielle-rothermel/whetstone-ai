@@ -54,8 +54,8 @@ from whetstone.runner.routes import (
     task_model_for_env,
 )
 from whetstone.runner.viewer_projection import (
+    VIEWER_GENERATION_ROW_SCHEMA,
     VIEWER_PROJECTION_SCHEMA,
-    VIEWER_ROLLOUT_ROW_SCHEMA,
     ViewerCellProjection,
     ViewerRolloutRow,
     build_viewer_cell_projection,
@@ -73,8 +73,8 @@ __all__ = [
     "RESERVE_USD",
     "SPEND_SCHEMA",
     "STOP_LOSS_MULTIPLIER",
+    "VIEWER_GENERATION_ROW_SCHEMA",
     "VIEWER_PROJECTION_SCHEMA",
-    "VIEWER_ROLLOUT_ROW_SCHEMA",
     "BudgetGuard",
     "CellConfig",
     "CellError",

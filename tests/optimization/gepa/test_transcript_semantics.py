@@ -48,7 +48,7 @@ def _result(
         {"request": request.identity_hash()},
     )
     return GepaProposalEffectResult(
-        request_identity_hash=request.identity_hash(),
+        request_hash=request.identity_hash(),
         raw_response="unchanged",
         parsed_components=(
             GepaCandidateComponent(

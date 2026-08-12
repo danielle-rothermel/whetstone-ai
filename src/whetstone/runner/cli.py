@@ -39,11 +39,7 @@ import typer
 
 from whetstone.coordination.run_workflow import RunController
 from whetstone.core.identity import compute_identity_hash
-from whetstone.envs.task_selection import (
-    TaskSplitManifest,
-    TaskSplitManifestError,
-    parse_task_split_manifest,
-)
+from whetstone.experiment.task_selection import load_task_split_manifest
 from whetstone.optimization.gepa.factory import CanonicalGepaAdapterFactory
 from whetstone.optimization.proposal.proposer import ProviderProposerTransport
 from whetstone.runner.cell import (
@@ -89,17 +85,6 @@ class RunnerLaunch:
     transport: ProviderProposerTransport
     controllers: tuple[RunController, ...] = ()
     gepa_factories: tuple[CanonicalGepaAdapterFactory, ...] = ()
-
-
-def load_task_split_manifest(path: Path) -> TaskSplitManifest:
-    """Read one environment-owned task-selection manifest from disk."""
-    try:
-        payload = path.read_bytes()
-    except OSError as exc:
-        raise TaskSplitManifestError(
-            f"cannot read task-selection manifest {path}: {exc}"
-        ) from exc
-    return parse_task_split_manifest(payload)
 
 
 def _load_factory(path: str) -> Callable[[], RunnerLaunch]:

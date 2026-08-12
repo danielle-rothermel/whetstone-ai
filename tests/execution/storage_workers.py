@@ -145,7 +145,7 @@ def execute_cache_worker(
             block=block,
         ),
         logical_call_id=f"call-{worker_id}",
-        repeat_index=0,
+        sample_index=0,
         drive_ordinal=0,
         cache=cache,
         phase="worker",
@@ -195,10 +195,10 @@ def append_partial_worker(
     PartialLog(path=Path(path)).append(
         PartialCallRecord(
             phase="worker",
-            instance_id=f"task-{worker_id}",
+            task_id=f"task-{worker_id}",
             unit=f"candidate-{worker_id}",
-            repeat_id=worker_id,
-            request_identity=f"{worker_id:064x}",
+            sample_index=worker_id,
+            request_hash=f"{worker_id:064x}",
             redrive_pending=False,
             output_text=str(worker_id) * payload_size,
         )
@@ -214,10 +214,10 @@ def write_torn_partial_worker(
     log = PartialLog(path=Path(path))
     record = PartialCallRecord(
         phase="worker",
-        instance_id="torn-task",
+        task_id="torn-task",
         unit="torn-candidate",
-        repeat_id=99,
-        request_identity="c" * 64,
+        sample_index=99,
+        request_hash="c" * 64,
         redrive_pending=False,
         at="2026-07-31T12:00:00+00:00",
     )
@@ -263,10 +263,10 @@ def run_partial_operation(
         log.append(
             PartialCallRecord(
                 phase="worker",
-                instance_id="task-operation",
+                task_id="task-operation",
                 unit="candidate-operation",
-                repeat_id=20,
-                request_identity="d" * 64,
+                sample_index=20,
+                request_hash="d" * 64,
                 redrive_pending=False,
             )
         )

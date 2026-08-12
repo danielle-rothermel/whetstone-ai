@@ -92,10 +92,10 @@ def test_intent_has_exact_refs_and_no_loose_identity_fields() -> None:
     intent = _evaluation_intent(proposed)
     dumped = intent.model_dump()
     assert dumped["candidate"]["record"]["candidate_id"] == "P1"
-    assert dumped["target_eval_config"]["record"]["config_identity_hash"]
+    assert dumped["target_eval_config"]["record"]["config_hash"]
     assert (
-        dumped["evaluation_binding"]["eval_config"]["identity_hash"]
-        == intent.target_eval_config.identity_hash
+        dumped["evaluation_binding"]["eval_config"]["config_hash"]
+        == intent.target_eval_config.config_hash
     )
     assert "candidate_id" not in dumped
     assert "target_eval_config_ref" not in dumped
@@ -130,7 +130,7 @@ def _evaluation_binding(
         environment_fingerprint=ExecutionEnvironmentFingerprint(
             dependency_versions=(("dr-code", "0.1.0"),),
             code_revision="deadbeef",
-            runtime_identity="linux-x86_64",
+            runtime_hash="linux-x86_64",
         ),
         provenance_note="schema test",
         provenance_ordinal=1,
@@ -150,7 +150,7 @@ def _provider_execution_policy_ref() -> IdentityRef:
             PROVIDER_EXECUTION_POLICY_SCHEMA,
             policy.identity_payload(),
         ),
-        identity_hash=policy.identity_hash,
+        record_hash=policy.identity_hash,
     )
 
 
@@ -197,7 +197,7 @@ def _proposal_request(
             "whetstone.test.optimizer_config",
             {"algorithm": "proposal"},
         ),
-        identity_hash=FULL_A,
+        record_hash=FULL_A,
     )
     run = OptimizationRun(
         run_id=run_id,
@@ -221,7 +221,7 @@ def _proposal_request(
         candidates=(candidate(),),
         step_output_contract=contract
         or OutputContract(returned_proposal_count=1),
-        budget=budget or BudgetState(remaining={"rollouts": 10}),
+        budget=budget or BudgetState(remaining={"generations": 10}),
     )
 
 
@@ -289,7 +289,7 @@ def test_intent_resolution_v2_wire_contract_is_exact() -> None:
     assert record["reward_evidence_refs"] == []
     assert (
         typed_ref_for_record(INTENT_RESOLUTION_SCHEMA, record).content_hash
-        == "cab35d7a23180d26126ecf4950fb9618829b7ffcb627a90f5235e6d1a948454d"
+        == "4fef9b65817a2a59a051472fc30cbac4dfe72ab09acd14fead536c317b31f620"
     )
 
 
@@ -554,7 +554,7 @@ def test_step_request_serializes_the_exact_composed_run_reference() -> None:
 
     assert dumped["run"] == request.run.model_dump(mode="json")
     assert dumped["run"]["record"] == request.run.record.record_content()
-    assert dumped["run"]["identity_hash"] == request.run.identity_hash
+    assert dumped["run"]["config_hash"] == request.run.config_hash
     assert dumped["run"]["record_ref"] == request.run.record_ref.model_dump(
         mode="json"
     )
@@ -591,7 +591,7 @@ def test_run_requires_and_identity_binds_render_contract() -> None:
             available_fields=(),
         )
     )
-    assert request.run.identity_hash != literal_request.run.identity_hash
+    assert request.run.config_hash != literal_request.run.config_hash
     assert (
         step_request_reference(request).record_ref
         != step_request_reference(literal_request).record_ref
@@ -613,9 +613,9 @@ def test_run_requires_and_identity_binds_render_contract() -> None:
             "record_ref must address the exact run",
         ),
         (
-            ("identity_hash",),
+            ("config_hash",),
             "f" * 64,
-            "identity_hash must match the exact run",
+            "config_hash must match the exact run",
         ),
     ],
 )
@@ -699,7 +699,7 @@ def test_optimization_run_owns_tool_mode_constraints() -> None:
             "whetstone.test.optimizer_config",
             {"algorithm": "tool"},
         ),
-        identity_hash=FULL_A,
+        record_hash=FULL_A,
     )
     with pytest.raises(ValidationError, match="requires a Tool Config"):
         OptimizationRun(
@@ -743,11 +743,11 @@ def test_optimization_run_owns_proposal_reward_policy() -> None:
 def test_budget_validates_overlapping_maps_independently() -> None:
     with pytest.raises(ValidationError, match=r"consumed.*cannot be negative"):
         BudgetState(
-            consumed={"rollouts": -1},
-            remaining={"rollouts": 10},
+            consumed={"generations": -1},
+            remaining={"generations": 10},
         )
     with pytest.raises(ValidationError, match="strict integer"):
-        BudgetState(remaining={"rollouts": True})
+        BudgetState(remaining={"generations": True})
 
 
 def test_optimization_run_composes_exact_contract_refs() -> None:
@@ -756,7 +756,7 @@ def test_optimization_run_composes_exact_contract_refs() -> None:
             "whetstone.test.optimizer_config",
             {"algorithm": "identity"},
         ),
-        identity_hash="a" * 64,
+        record_hash="a" * 64,
     )
     run = OptimizationRun(
         run_id="run-1",
@@ -768,7 +768,7 @@ def test_optimization_run_composes_exact_contract_refs() -> None:
     )
     run_ref = optimization_run_reference(run)
     assert run_ref.record == run
-    assert run_ref.identity_hash == run.identity_hash()
+    assert run_ref.config_hash == run.identity_hash()
     assert run_ref.record_ref.schema_name == "whetstone.optimization_run"
     assert OPTIMIZATION_RUN_SCHEMA == "whetstone.optimization_run"
     assert OPTIMIZATION_RUN_SCHEMA_VERSION == 1
@@ -784,7 +784,7 @@ def test_optimization_run_composes_exact_contract_refs() -> None:
     )
     assert (
         run.identity_hash()
-        == "a1da7e6360588016d7e5d00ab145c8077a2ffbce099f7db7501aeaf554f8d044"
+        == "2c384a33f35b83c0b59144a2199b9c838ea56d3444bad26f6fcce22cf44b4bb3"
     )
 
 
@@ -1053,7 +1053,7 @@ def test_tool_chain_is_exact_and_terminal_variants_are_exclusive() -> None:
     call_ref = tool_call_reference(call)
     success = ToolResult(
         call=call_ref,
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     assert tool_result_reference(success).record == success
@@ -1079,7 +1079,7 @@ def test_tool_chain_is_exact_and_terminal_variants_are_exclusive() -> None:
     with pytest.raises(ValidationError, match="exactly success"):
         ToolResult(
             call=call_ref,
-            output={"rollout_refs": [], "accepted_ordinal": 1},
+            output={"generation_refs": [], "accepted_ordinal": 1},
             refusal={"refusal_class": "capacity", "reason": "full"},
         )
 
@@ -1090,11 +1090,11 @@ def test_tool_definition_config_call_and_result_cannot_diverge() -> None:
         ToolCapacityScope.RUN,
         tool_run().record_ref,
     )
-    with pytest.raises(ValidationError, match="identity_hash"):
+    with pytest.raises(ValidationError, match="config_hash"):
         ToolDefinitionRef(
             record=config.definition.record,
             record_ref=config.definition.record_ref,
-            identity_hash="a" * 64,
+            config_hash="a" * 64,
         )
     with pytest.raises(ValidationError, match="input_fields"):
         ToolCall(
@@ -1131,5 +1131,5 @@ def test_tool_definition_config_call_and_result_cannot_diverge() -> None:
     with pytest.raises(ValidationError, match="output_fields"):
         ToolResult(
             call=tool_call_reference(call),
-            output={"rollout_refs": []},
+            output={"generation_refs": []},
         )

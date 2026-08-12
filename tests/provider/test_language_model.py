@@ -20,7 +20,7 @@ from dr_providers import (
 )
 
 from whetstone.provider.failures import (
-    EmptyGenerationError,
+    EmptyProviderGenerationError,
     PermanentFailureError,
     RateLimitedFailureError,
 )
@@ -337,7 +337,7 @@ class TestProviderResultFromResponse:
 
     def test_blank_text_raises_empty_generation(self) -> None:
         response = ProviderTransportResponse(text="   ")
-        with pytest.raises(EmptyGenerationError):
+        with pytest.raises(EmptyProviderGenerationError):
             provider_result_from_response(response, output_field="code")
 
 

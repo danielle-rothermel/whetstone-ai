@@ -28,7 +28,7 @@ _SCHEMA_VERSION = 2
 _POSTGRES_CREATE_TABLE = f"""
 CREATE TABLE {_TABLE_NAME} (
     semantic_key TEXT COLLATE "C" PRIMARY KEY,
-    request_identity_hash TEXT COLLATE "C" NOT NULL,
+    request_hash TEXT COLLATE "C" NOT NULL,
     replay_policy TEXT COLLATE "C" NOT NULL CHECK (
         replay_policy IN ('idempotent', 'durable_workflow', 'no_redrive')
     ),
@@ -62,7 +62,7 @@ CREATE TABLE {_METADATA_TABLE_NAME} (
 _POSTGRES_TABLE_COLUMNS = (
     ("semantic_key", "text", "NO", 1, "pg_catalog", "C", "c", True, -1),
     (
-        "request_identity_hash",
+        "request_hash",
         "text",
         "NO",
         2,
@@ -173,7 +173,7 @@ _POSTGRES_CONSTRAINTS: tuple[_PostgreSQLConstraint, ...] = (
 )
 
 _SELECT_ROW_POSTGRES = f"""
-SELECT request_identity_hash, replay_policy, state, owner_id, attempt_id,
+SELECT request_hash, replay_policy, state, owner_id, attempt_id,
        fence, expires_at, terminal_json
 FROM {_TABLE_NAME}
 WHERE semantic_key = %s
@@ -182,7 +182,7 @@ FOR UPDATE
 
 _INSERT_ROW_POSTGRES = f"""
 INSERT INTO {_TABLE_NAME} (
-    semantic_key, request_identity_hash, replay_policy, state, owner_id,
+    semantic_key, request_hash, replay_policy, state, owner_id,
     attempt_id, fence, expires_at, terminal_json
 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (semantic_key) DO NOTHING
@@ -191,11 +191,11 @@ RETURNING 1
 
 _UPDATE_ROW_POSTGRES = f"""
 UPDATE {_TABLE_NAME}
-SET request_identity_hash = %s, replay_policy = %s, state = %s,
+SET request_hash = %s, replay_policy = %s, state = %s,
     owner_id = %s, attempt_id = %s, fence = %s, expires_at = %s,
     terminal_json = %s
 WHERE semantic_key = %s
-  AND request_identity_hash = %s
+  AND request_hash = %s
   AND replay_policy = %s
   AND state = %s
   AND owner_id = %s

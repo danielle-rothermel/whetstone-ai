@@ -104,17 +104,9 @@ ENCDEC_DEFAULT_TASK_MODEL = "google/gemini-3.1-flash-lite"
 #: Config (hence the graph hash) and is recorded on the cell line under
 #: ``models.task``. The ``--task-model`` CLI flag overrides this default.
 TASK_MODEL_BY_ENV: dict[str, str] = {
-    # The constraint-heavy entailment envs default to the deepseek model.
-    "c18": DEEPSEEK_TASK_MODEL,
-    "c18h": DEEPSEEK_TASK_MODEL,
-    "c22": DEEPSEEK_TASK_MODEL,
-    # c22h follows the c22 column convention; overridable via --task-model.
-    "c22h": DEEPSEEK_TASK_MODEL,
-    # The enc-dec family (ed1 / ed1m) and the direct-generation precursor (d1)
-    # share one enc/dec model family so their anchors pair on the same model.
-    "ed1": ENCDEC_DEFAULT_TASK_MODEL,
-    "ed1m": ENCDEC_DEFAULT_TASK_MODEL,
-    "d1": ENCDEC_DEFAULT_TASK_MODEL,
+    # The code_comp env (direct, encdec, encdec_mutant) shares one task-model
+    # family so anchor cells pair on the same model.
+    "code_comp": ENCDEC_DEFAULT_TASK_MODEL,
 }
 
 
@@ -124,23 +116,8 @@ TASK_MODEL_BY_ENV: dict[str, str] = {
 #: identity-bearing: a tolerant cell has a distinct ``eval_config_hash`` from a
 #: strict one. Value: ``(missing_data, fraction)``.
 COMPLETENESS_BY_ENV: dict[str, tuple[str, float]] = {
-    # The deepseek task model is non-retryably flaky under concurrency at
-    # roughly 1%, so a strict propagate anchor never certifies. The bounded
-    # tolerance certifies while the skipped rows stay explicit counts on the
-    # aggregate and the cell line, never silently dropped.
-    "c18": ("skip", 0.02),
-    "c18h": ("skip", 0.02),
-    # The enc-dec family declares a higher tolerance: its per-row failures are
-    # genuine stochastic model behavior at tight budgets. At a tight ratio the
-    # model sometimes emits an empty completion (a permanent parse error), and
-    # a tight budget can drop the entry-point name so the decoder writes valid
-    # code under a wrong function name. 15% covers the observed rate with
-    # margin; override per-cell with --missing-data / --max-skip-fraction.
-    "ed1": ("skip", 0.15),
-    "ed1m": ("skip", 0.15),
-    # d1 issues a single direct generation, so its stochastic tail is somewhat
-    # smaller than the enc-dec two-call rows; 15% covers it with margin.
-    "d1": ("skip", 0.15),
+    # code_comp rows declare a higher tolerance for stochastic model behavior.
+    "code_comp": ("skip", 0.15),
 }
 
 
@@ -312,6 +289,7 @@ def canonical_task_route(
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
     reasoning: ReasoningEffort | None = None,
+    token_limit: int | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -322,11 +300,12 @@ def canonical_task_route(
     ``OPENROUTER_API_KEY``. Temperature defaults to 0; pass ``None`` to leave
     the control unset. The absolute cap accommodates reasoning-model
     generations while the idle timeout is the real stall detector.
-    ``reasoning`` sets the output-affecting reasoning effort, which folds into
-    the config identity.
+    ``reasoning`` and ``token_limit`` are output-affecting controls that fold
+    into the config identity.
     """
     call_config = openrouter_chat_config(
-        model=model, controls=_controls(temperature, reasoning)
+        model=model,
+        controls=_controls(temperature, reasoning, token_limit),
     )
     transport_policy = policy_for(
         ProviderKind.OPENROUTER,
@@ -354,6 +333,7 @@ def openai_direct_route(
     model: str = CANONICAL_TASK_MODEL,
     temperature: float | None = 0.0,
     reasoning: ReasoningEffort | None = None,
+    token_limit: int | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     idle_timeout_seconds: float = DEFAULT_IDLE_SECONDS,
     max_attempts: int = 3,
@@ -365,10 +345,11 @@ def openai_direct_route(
     ``ProviderKind.OPENAI`` -- so the config identity, hence the graph route
     identity, is distinct from the OpenRouter route for the same model. Chosen
     when temperature must hold. ``reasoning`` serializes as
-    ``reasoning_effort`` and folds into the config identity.
+    ``reasoning_effort``; it and ``token_limit`` fold into config identity.
     """
     call_config = openai_chat_config(
-        model=model, controls=_controls(temperature, reasoning)
+        model=model,
+        controls=_controls(temperature, reasoning, token_limit),
     )
     transport_policy = policy_for(
         ProviderKind.OPENAI,

@@ -57,7 +57,7 @@ from whetstone.optimization.proposal.proposer import (
 
 MIPROV2_ADAPTER_KEY = "miprov2"
 MIPROV2_STATE_KEY = "miprov2_state"
-MIPROV2_BOOTSTRAP = "bootstrap_rollout"
+MIPROV2_BOOTSTRAP = "bootstrap_generation"
 MIPROV2_PROPOSAL = "proposal_model"
 MIPROV2_BASELINE = "baseline_evaluation"
 MIPROV2_SAMPLE = "sample_evaluation"
@@ -349,7 +349,7 @@ class Miprov2Adapter:
             assert plan.eval_config_binding is not None
             self._preflight_task_rows(
                 request.budget,
-                len(plan.eval_config_binding.task_batch_identities),
+                len(plan.eval_config_binding.task_batch_hashes),
             )
             binding = self._eval_config_resolver.resolve(
                 plan.eval_config_binding
@@ -375,10 +375,10 @@ class Miprov2Adapter:
                 },
             )
         if plan.kind == MIPROV2_BOOTSTRAP:
-            assert plan.bootstrap_rollout is not None
+            assert plan.bootstrap_generation is not None
             assert plan.state.resolved_eval_binding is not None
             assert plan.state.pending_bootstrap_candidate is not None
-            attempt = plan.bootstrap_rollout
+            attempt = plan.bootstrap_generation
             self._preflight_task_rows(request.budget, 1)
             teacher_candidate = plan.state.pending_bootstrap_candidate
             intent_id = (
@@ -402,7 +402,7 @@ class Miprov2Adapter:
                 effect_identity_hash=attempt.identity_hash(),
                 intent_id=intent_id,
                 candidate=teacher_candidate,
-                task_batch_identities=(attempt.task_identity,),
+                task_batch_hashes=(attempt.task_hash,),
                 eval_config=plan.state.resolved_eval_binding.eval_config,
                 eval_config_binding=plan.state.resolved_eval_binding,
                 evaluation_binding=evaluation_binding,
@@ -433,7 +433,7 @@ class Miprov2Adapter:
                 proposed_candidates=(teacher_candidate.record,),
                 evaluation_intents=(intent,),
                 budget_delta=BudgetDelta(
-                    consumed={"bootstrap_rollouts": 1, "task_rows": 1}
+                    consumed={"bootstrap_generations": 1, "task_rows": 1}
                 ),
                 state_delta={
                     MIPROV2_STATE_KEY: plan.state.model_dump(mode="json"),
@@ -446,7 +446,7 @@ class Miprov2Adapter:
         effect = plan.evaluation
         self._preflight_task_rows(
             request.budget,
-            len(effect.task_batch_identities),
+            len(effect.task_batch_hashes),
         )
         if plan.state.resolved_eval_binding is None:
             raise ValueError("evaluation has no exact Eval Config binding")
@@ -472,7 +472,7 @@ class Miprov2Adapter:
             effect_identity_hash=effect.identity_hash(),
             intent_id=intent_id,
             candidate=candidate_reference(effect.candidate),
-            task_batch_identities=effect.task_batch_identities,
+            task_batch_hashes=effect.task_batch_hashes,
             eval_config=effect.eval_config,
             eval_config_binding=plan.state.resolved_eval_binding,
             evaluation_binding=evaluation_binding,
@@ -502,14 +502,12 @@ class Miprov2Adapter:
             budget_delta=BudgetDelta(
                 consumed={
                     "evaluations": 1,
-                    "task_rows": len(effect.task_batch_identities),
+                    "task_rows": len(effect.task_batch_hashes),
                 }
             ),
             state_delta={
                 MIPROV2_STATE_KEY: plan.state.model_dump(mode="json"),
-                "miprov2_task_batch_identities": list(
-                    effect.task_batch_identities
-                ),
+                "miprov2_task_batch_hashes": list(effect.task_batch_hashes),
             },
         )
 
@@ -527,7 +525,7 @@ class Miprov2Adapter:
         """Require the harness budget to project the durable effect journal."""
 
         for label in (
-            "bootstrap_rollouts",
+            "bootstrap_generations",
             "proposal_calls",
             "evaluations",
             "task_rows",
@@ -566,14 +564,14 @@ class Miprov2Adapter:
             raise ValueError("MIPROv2 proposer must return exactly one draft")
         draft = drafts[0]
         evidence = {
-            "proposal_request_identity_hash": generic.identity_hash(),
+            "proposal_request_hash": generic.identity_hash(),
             "request_evidence": draft.request_evidence.to_json(),
             "response_evidence": draft.response_evidence.to_json(),
             "usage": draft.usage.to_json(),
             "cost": draft.cost,
         }
         response = Miprov2ProposalResponse(
-            request_identity_hash=native.identity_hash,
+            request_hash=native.identity_hash,
             text=draft.template,
             failed=draft.failed,
             failure_detail=(
@@ -606,7 +604,7 @@ class Miprov2Adapter:
                             advanced.proposal_state.component_index
                         ].component_id
                     ),
-                    "proposal_request_identity_hash": native.identity_hash,
+                    "proposal_request_hash": native.identity_hash,
                 },
             ),
             budget_delta=budget_delta,

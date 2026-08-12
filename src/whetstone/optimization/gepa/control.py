@@ -114,10 +114,10 @@ class GepaControl(BaseModel):
     task_model_identity_hash: StrictStr
     prompt_format_identity_hash: StrictStr
     prompt_binding_identity_hash: StrictStr
-    source_trainset_task_identities: tuple[StrictStr, ...]
-    source_valset_task_identities: tuple[StrictStr, ...] | None
-    trainset_task_identities: tuple[StrictStr, ...]
-    valset_task_identities: tuple[StrictStr, ...]
+    source_trainset_task_hashes: tuple[StrictStr, ...]
+    source_valset_task_hashes: tuple[StrictStr, ...] | None
+    trainset_task_hashes: tuple[StrictStr, ...]
+    valset_task_hashes: tuple[StrictStr, ...]
     component_names: tuple[StrictStr, ...]
     num_predictors: StrictInt
 
@@ -187,11 +187,11 @@ class GepaControl(BaseModel):
             require_full_hash(getattr(self, field), field=field)
         for field, identities in (
             (
-                "source_trainset_task_identities",
-                self.source_trainset_task_identities,
+                "source_trainset_task_hashes",
+                self.source_trainset_task_hashes,
             ),
-            ("trainset_task_identities", self.trainset_task_identities),
-            ("valset_task_identities", self.valset_task_identities),
+            ("trainset_task_hashes", self.trainset_task_hashes),
+            ("valset_task_hashes", self.valset_task_hashes),
         ):
             if not identities:
                 raise ValueError(f"{field} must be non-empty")
@@ -199,34 +199,29 @@ class GepaControl(BaseModel):
                 require_full_hash(identity, field=field)
             if len(set(identities)) != len(identities):
                 raise ValueError(f"{field} must contain unique identities")
-        if self.source_valset_task_identities is not None:
-            if not self.source_valset_task_identities:
+        if self.source_valset_task_hashes is not None:
+            if not self.source_valset_task_hashes:
                 raise ValueError(
-                    "source_valset_task_identities must be non-empty when set"
+                    "source_valset_task_hashes must be non-empty when set"
                 )
-            for identity in self.source_valset_task_identities:
-                require_full_hash(
-                    identity, field="source_valset_task_identities"
-                )
-            if len(set(self.source_valset_task_identities)) != len(
-                self.source_valset_task_identities
+            for identity in self.source_valset_task_hashes:
+                require_full_hash(identity, field="source_valset_task_hashes")
+            if len(set(self.source_valset_task_hashes)) != len(
+                self.source_valset_task_hashes
             ):
                 raise ValueError(
-                    "source_valset_task_identities must contain unique "
-                    "identities"
+                    "source_valset_task_hashes must contain unique identities"
                 )
-        if self.trainset_task_identities != (
-            self.source_trainset_task_identities
-        ):
+        if self.trainset_task_hashes != (self.source_trainset_task_hashes):
             raise ValueError(
                 "canonical GEPA does not silently resample the trainset"
             )
         expected_valset = (
-            self.source_trainset_task_identities
-            if self.source_valset_task_identities is None
-            else self.source_valset_task_identities
+            self.source_trainset_task_hashes
+            if self.source_valset_task_hashes is None
+            else self.source_valset_task_hashes
         )
-        if self.valset_task_identities != expected_valset:
+        if self.valset_task_hashes != expected_valset:
             raise ValueError(
                 "valset identities do not match the ordered source binding"
             )
@@ -317,13 +312,13 @@ class GepaControl(BaseModel):
             return gepa_auto_budget(
                 num_predictors=self.num_predictors,
                 num_candidates=GEPA_AUTO_CANDIDATES[self.auto],
-                valset_size=len(self.valset_task_identities),
+                valset_size=len(self.valset_task_hashes),
             )
         if self.max_full_evals is not None:
             # This intentionally copies DSPy's asymmetric valset=None branch.
-            denominator = len(self.trainset_task_identities)
-            if self.source_valset_task_identities is not None:
-                denominator += len(self.valset_task_identities)
+            denominator = len(self.trainset_task_hashes)
+            if self.source_valset_task_hashes is not None:
+                denominator += len(self.valset_task_hashes)
             return self.max_full_evals * denominator
         assert self.max_metric_calls is not None
         return self.max_metric_calls
@@ -334,7 +329,7 @@ class GepaControl(BaseModel):
         payload["reflection_model_identity_hash"] = (
             self.reflection_model.identity_hash()
         )
-        payload["metric_identity_hash"] = self.metric.identity_hash
+        payload["metric_identity_hash"] = self.metric.config_hash
         return payload
 
     def identity_hash(self) -> str:
@@ -393,8 +388,8 @@ def configure_gepa(
     task_model_identity_hash: str,
     prompt_format_identity_hash: str,
     prompt_binding_identity_hash: str,
-    trainset_task_identities: tuple[str, ...],
-    valset_task_identities: tuple[str, ...] | None,
+    trainset_task_hashes: tuple[str, ...],
+    valset_task_hashes: tuple[str, ...] | None,
     component_names: tuple[str, ...],
     num_predictors: int,
     auto: GepaAutoMode | None = None,
@@ -422,9 +417,9 @@ def configure_gepa(
     if teacher is not None:
         raise ValueError("Teacher is not supported in GEPA.")
     resolved_valset = (
-        trainset_task_identities
-        if valset_task_identities is None
-        else valset_task_identities
+        trainset_task_hashes
+        if valset_task_hashes is None
+        else valset_task_hashes
     )
     budget_count = sum(
         value is not None for value in (auto, max_full_evals, max_metric_calls)
@@ -445,8 +440,8 @@ def configure_gepa(
             valset_size=len(resolved_valset),
         )
     elif max_full_evals is not None:
-        denominator = len(trainset_task_identities)
-        if valset_task_identities is not None:
+        denominator = len(trainset_task_hashes)
+        if valset_task_hashes is not None:
             denominator += len(resolved_valset)
         resolved_metric_calls = max_full_evals * denominator
     else:
@@ -467,10 +462,10 @@ def configure_gepa(
         task_model_identity_hash=task_model_identity_hash,
         prompt_format_identity_hash=prompt_format_identity_hash,
         prompt_binding_identity_hash=prompt_binding_identity_hash,
-        source_trainset_task_identities=trainset_task_identities,
-        source_valset_task_identities=valset_task_identities,
-        trainset_task_identities=trainset_task_identities,
-        valset_task_identities=resolved_valset,
+        source_trainset_task_hashes=trainset_task_hashes,
+        source_valset_task_hashes=valset_task_hashes,
+        trainset_task_hashes=trainset_task_hashes,
+        valset_task_hashes=resolved_valset,
         component_names=component_names,
         num_predictors=num_predictors,
         auto=auto,

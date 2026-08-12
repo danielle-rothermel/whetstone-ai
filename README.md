@@ -16,8 +16,11 @@ these areas:
   computation graphs, objectives, rewards, and realized evaluation settings
   into immutable configurations.
 - **[Environments and sampling](src/whetstone/envs/)** assemble task pools,
-  internal and official splits, rollout definitions, and reward policies for
-  code-generation and encoder-decoder experiments.
+  internal and official splits, generation graphs, and reward policies for
+  code-generation and encoder-decoder experiments. HumanEval code-compression
+  work is configured through `CodeCompExperimentConfig` and built with
+  `build_code_comp_experiment()`; legacy QA env names remain only for
+  negative-control tests until their sources are removed.
 - **[Provider interaction](src/whetstone/provider/)** classifies transport
   outcomes, applies bounded semantic retry policy, and retains the exact
   evidence for every completed attempt.
@@ -25,7 +28,7 @@ these areas:
   preserve partial progress, reuse prompt results, and resume completed work
   without changing its identity.
 - **[Evaluation and scoring](src/whetstone/evaluation/)** own evaluation
-  definitions and configs, task-and-repeat plans, measurements, compression,
+  definitions and configs, task-and-sample plans, measurements, compression,
   aggregation, graph execution, and complete reward evidence.
 - **[Optimization](src/whetstone/optimization/)** provides the shared harness,
   proposal and tool contracts, native COPRO, MIPROv2, and GEPA flows, and a
@@ -43,7 +46,7 @@ The repository boundaries follow the same shape:
 | --- | --- | --- |
 | Core | `whetstone.core` | Shared identity, roles, and effect primitives |
 | Experiment | `whetstone.experiment` | Candidates, bindings, graph identity, objectives, and rewards |
-| Environments | `whetstone.envs` | Task pools, sampling, rollout definitions, and environment-specific policy |
+| Environments | `whetstone.envs` | Task pools, sampling, generation graphs, and environment-specific policy |
 | Provider | `whetstone.provider` | Provider requests, attempt evidence, classification, and retry policy |
 | Execution | `whetstone.execution` | Process fanout, partial progress, prompt caching, and resume behavior |
 | Evaluation | `whetstone.evaluation` | Evaluation configs, plans, drivers, traces, measurements, compression, scoring, evidence, and aggregates |
@@ -71,6 +74,10 @@ class TypedRef(BaseModel):
     schema_name: NonEmptyId
     content_hash: ContentHash
 
+class IdentityRef(BaseModel):
+    record_ref: TypedRef
+    record_hash: IdentityHash
+
 class TerminalFailure(BaseModel):
     code: NonEmptyId
     message: NonEmptyId
@@ -87,6 +94,11 @@ class Candidate(BaseModel):
     candidate_id: NonEmptyId
     base_ref: TypedRef
     payload: ImmutableJsonObject
+
+class EvalConfigRef(BaseModel):
+    record: EvalConfig
+    record_ref: TypedRef
+    config_hash: IdentityHash
 
 class EvaluationBinding(BaseModel):
     eval_config: EvalConfigRef
@@ -116,7 +128,7 @@ Environment packages compose reusable evaluation inputs without coupling the
 evaluation engine to a particular task family or graph implementation.
 
 ```python
-class RolloutDefinitionLike(Protocol):
+class GenerationGraphLike(Protocol):
     @property
     def graph_hash(self) -> str: ...
     @property
@@ -127,7 +139,7 @@ class RolloutDefinitionLike(Protocol):
 @dataclass(frozen=True, slots=True)
 class EnvExperiment:
     env_name: str
-    rollout_definition: RolloutDefinitionLike
+    generation_graph: GenerationGraphLike
     initial_candidate: Candidate
     ceiling_candidate: Candidate
     eval_configs: EnvEvalConfigs
@@ -140,6 +152,28 @@ class Completeness(StrEnum):
     SKIP = "skip"
 ```
 
+Code-compression experiments share `env=code_comp` and select a mode with
+`CodeCompMode` (`direct`, `encdec`, or `encdec_mutant`). One typed config
+object assembles the pool, split, sampling plan, model routes, and mode
+settings; callers build durable experiments from it rather than passing flat
+constructor kwargs.
+
+```python
+from whetstone.envs.code_comp import CodeCompMode, build_code_comp_experiment
+from whetstone.envs.code_comp.config import default_code_comp_config
+
+config = default_code_comp_config(
+    CodeCompMode.ENCDEC,
+    pool={"tasks": tasks},
+    split={"internal_n": 32, "official_n": 100},
+)
+experiment = config.build_experiment()
+```
+
+Subprocess optimizers and MCP evaluation servers reconstruct engines through
+`CodeCompEvaluationRuntimeConfig`, which round-trips the same config identity
+and refuses a mismatched Eval Config hash.
+
 ## [Provider interaction](src/whetstone/provider/)
 
 Provider contracts separate raw invocation evidence from Whetstone's semantic
@@ -151,15 +185,15 @@ class ProviderCallAttempt(BaseModel):
     attempt_number: StrictInt
     execution_policy_hash: StrictStr
     evidence: ProviderInvocationEvidence
-    generation: Generation | None
+    provider_generation: ProviderGeneration | None
     semantic_failure: ProviderSemanticFailure | None
 
 class ProviderCallResult(BaseModel):
     logical_call_id: StrictStr
-    request_identity: dict[str, Any]
+    request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
     attempts: tuple[ProviderCallAttempt, ...]
-    generation: Generation | None
+    provider_generation: ProviderGeneration | None
     semantic_failure: ProviderSemanticFailure | None
 ```
 
@@ -206,9 +240,9 @@ class PromptResultCache:
         self,
         key: str,
         *,
-        request_identity: dict[str, Any],
+        request_hash: dict[str, Any],
         execution_policy_hash: str,
-        repeat_index: int,
+        sample_index: int,
         drive_ordinal: int,
         result: ProviderCallResult,
         phase: str,
@@ -221,6 +255,10 @@ class PromptResultCache:
 
 The canonical engine turns one immutable request into a durable evidence graph
 whose rows, traces, aggregates, and optional reward all address exact records.
+`EvaluationEngine` accepts code_comp experiments only and dispatches row work
+through the direct or encoder-decoder drivers (`DirectRowRequest` /
+`EncDecRowRequest`); the retired generic internal row driver is no longer
+supported.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -234,11 +272,19 @@ class EvaluationEngine:
 ```
 
 ```python
+class EvaluationOutputRow(BaseModel):
+    task_id: StrictStr
+    task_hash: StrictStr
+    task_index: StrictInt
+    sample_index: StrictInt
+
 class EvaluationEvidence(BaseModel):
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     graph_hash: StrictStr
-    task_identities: tuple[str, ...]
+    dataset_hash: StrictStr
+    task_hashes: tuple[str, ...]
+    num_samples: StrictInt
     row_accounting: RowAccounting
     component_traces_ref: TypedRef
     outputs_ref: TypedRef
@@ -291,17 +337,24 @@ class CodexOutputArtifact(BaseModel):
     control_cost: dict[str, Any]
 ```
 
-The subprocess Codex runner uses the pinned official MCP SDK to validate the
-protocol and tool-input boundary. Callers supply its executor; production
-composition requires a pinned `dr-exec` `ProcessExecutor` with an isolated
-host Python runtime and a caller-owned, absolute, durable directory run store.
-The sandbox-wrapped Codex command is declared as typed
-`PROCESS_BOUNDARY_ONLY` execution, and the run-store root is not granted to
-the child. The runner fails closed without macOS `sandbox-exec` and limits
-filesystem access to staged runtime and declared state paths. It accepts the
-configured Codex executable without enforcing a CLI version and does not claim
-network, credential, full descendant-process, or hermetic containment.
-Proposal acceptance validates the typed artifact and mutation contract; it
+Codex has two subprocess paths. The optimizer path
+(`SubprocessCodexRunner.run`) registers the Whetstone MCP evaluation server
+so Codex can measure candidates during a tool-using step; that runner uses
+the pinned official MCP SDK to validate the protocol and tool-input
+boundary. The proposal-only path
+(`CodexCliProposerTransport` / `run_structured_prompt`) asks Codex for
+schema-constrained proposal artifacts with MCP disabled, and is the route
+COPRO uses when Codex is only drafting candidates. Callers supply the
+executor for both; production composition requires a pinned `dr-exec`
+`ProcessExecutor` with an isolated host Python runtime and a caller-owned,
+absolute, durable directory run store. The sandbox-wrapped Codex command is
+declared as typed `PROCESS_BOUNDARY_ONLY` execution, and the run-store root
+is not granted to the child. The runner fails closed without macOS
+`sandbox-exec` and limits filesystem access to staged runtime and declared
+state paths. It accepts the configured Codex executable without enforcing a
+CLI version and does not claim network, credential, full
+descendant-process, or hermetic containment. On the optimizer path,
+proposal acceptance validates the typed artifact and mutation contract; it
 does not require matching MCP evidence for every proposal. A configured
 partial log grants write access to its parent directory, so that directory
 must not contain unrelated state.
@@ -373,6 +426,27 @@ Run the complete local gate before committing or pushing:
 ./scripts/pre-check.sh
 ```
 
+For faster iteration while editing, run the fast subset (unit tests excluding slow
+integration and pathway lanes):
+
+```bash
+./scripts/test-fast.sh
+```
+
+End-to-end pathway lanes live under `tests/pathways/` and run via dedicated scripts:
+
+```bash
+./scripts/ci/pathways.sh
+./scripts/ci/runner-cell-pathway.sh
+./scripts/ci/evaluation-restart-pathway.sh
+./scripts/ci/fanout-containment-pathway.sh
+./scripts/ci/prompt-cache-pathway.sh
+./scripts/ci/preview-anchor-pathway.sh
+./scripts/ci/sqlite-time-pathway.sh
+./scripts/ci/sqlite-contention-pathway.sh
+./scripts/ci/gepa-dbos-pathway.sh
+```
+
 Install the same gate for both Git hooks with:
 
 ```bash
@@ -382,17 +456,17 @@ uv run pre-commit install
 The authoritative unit lane is serial:
 
 ```bash
-uv run pytest tests/ -q \
-  -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention"
+uv run pytest tests/ -q
 ```
+
+Default collection skips ``slow`` tests (integration lanes and ``tests/pathways/``).
+Opt in with ``-m slow``, ``-m pathway``, or ``./scripts/ci/*-pathway.sh``.
 
 For a faster local iteration loop, the same selection can use a fixed four
 workers with load balancing:
 
 ```bash
-uv run pytest tests/ -q \
-  -m "not process_integration and not postgres_integration and not sqlite_time_integration and not sqlite_contention" \
-  -n 4 --dist=load
+uv run pytest tests/ -q -n 4 --dist=load
 ```
 
 The parallel command is a local convenience, not the CI default. Keep the
@@ -487,7 +561,7 @@ so both paths share one registration invariant.
 MIPROv2 persists the exact optimization run, optimizer configuration,
 proposal-executor policy, and proposer-transport durability identity in its
 runtime state. Its durable effect budget accounts for task rows alongside
-rollouts, proposal calls, and evaluations; the adapter verifies the persisted
+generations, proposal calls, and evaluations; the adapter verifies the persisted
 ceiling and preflights the next row batch before resolving an Eval Config,
 publishing an Evaluation Intent, or invoking a proposal effect. Candidate
 assembly uses the run's render contract and rejects literal-replacement input

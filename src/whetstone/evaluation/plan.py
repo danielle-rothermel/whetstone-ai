@@ -1,4 +1,4 @@
-"""Whetstone-owned task selection and repeat-plan contracts."""
+"""Whetstone-owned task selection and sample-plan contracts."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Self
 from pydantic import field_validator, model_validator
 
 from whetstone.evaluation.config import (
-    SCHEMA_REPEAT_ID,
-    SCHEMA_REPEAT_PLAN,
+    SCHEMA_SAMPLE_ID,
+    SCHEMA_SAMPLE_PLAN,
     SCHEMA_TASK_SET,
     _FrozenModel,
     identity_hash_for,
@@ -25,20 +25,19 @@ class TaskSet(_FrozenModel):
     manifest_id: str
     version: str
     dataset_revision: str
-    task_identities: tuple[str, ...] = ()
+    task_hashes: tuple[str, ...] = ()
     selection_rule: SelectionRule | None = None
 
     @model_validator(mode="after")
     def validate_selector(self) -> Self:
-        has_list = bool(self.task_identities)
+        has_list = bool(self.task_hashes)
         has_rule = self.selection_rule is not None
         if has_list == has_rule:
             raise ValueError(
-                "TaskSet carries exactly one of task_identities or "
-                "selection_rule"
+                "TaskSet carries exactly one of task_hashes or selection_rule"
             )
-        if len(set(self.task_identities)) != len(self.task_identities):
-            raise ValueError("task_identities must be unique")
+        if len(set(self.task_hashes)) != len(self.task_hashes):
+            raise ValueError("task_hashes must be unique")
         return self
 
     def identity_payload(self) -> dict[str, object]:
@@ -53,7 +52,7 @@ class TaskSet(_FrozenModel):
                 "params": [list(pair) for pair in self.selection_rule.params],
             }
         else:
-            payload["task_identities"] = list(self.task_identities)
+            payload["task_hashes"] = list(self.task_hashes)
         return payload
 
     def identity_hash(self) -> str:
@@ -64,66 +63,66 @@ class TaskSet(_FrozenModel):
 
 
 @dataclass(frozen=True, slots=True)
-class RepeatProvenanceRow:
-    task_identity: str
-    repeat_index: int
+class SampleProvenanceRow:
+    task_hash: str
+    sample_index: int
     seed: int | None = None
 
     def __post_init__(self) -> None:
-        if self.repeat_index < 0:
-            raise ValueError("repeat_index must be non-negative")
+        if self.sample_index < 0:
+            raise ValueError("sample_index must be non-negative")
 
 
-class RepeatId(_FrozenModel):
-    task_identity: str
-    index: int
+class SampleId(_FrozenModel):
+    task_hash: str
+    sample_index: int
     rng_seed: int | None = None
 
-    @field_validator("index")
+    @field_validator("sample_index")
     @classmethod
-    def validate_index(cls, value: int) -> int:
+    def validate_sample_index(cls, value: int) -> int:
         if value < 0:
-            raise ValueError("repeat index must be non-negative")
+            raise ValueError("sample_index must be non-negative")
         return value
 
     def identity_payload(self) -> dict[str, object]:
-        return {"task_identity": self.task_identity, "index": self.index}
+        return {"task_hash": self.task_hash, "sample_index": self.sample_index}
 
     def identity_hash(self) -> str:
         return identity_hash_for(
-            schema=SCHEMA_REPEAT_ID,
+            schema=SCHEMA_SAMPLE_ID,
             payload=self.identity_payload(),
         )
 
 
-class Repeat(_FrozenModel):
-    repeat_id: RepeatId
+class Sample(_FrozenModel):
+    sample_id: SampleId
 
 
-class RepeatPlan(_FrozenModel):
+class SamplePlan(_FrozenModel):
     plan_id: str
     version: str
-    task_identities: tuple[str, ...]
-    repeat_count: int
+    task_hashes: tuple[str, ...]
+    num_samples: int
     seeds: tuple[tuple[str, int], ...] = ()
 
-    @field_validator("repeat_count")
+    @field_validator("num_samples")
     @classmethod
-    def validate_repeat_count(cls, value: int) -> int:
+    def validate_num_samples(cls, value: int) -> int:
         if value < 1:
-            raise ValueError("repeat_count must be at least 1")
+            raise ValueError("num_samples must be at least 1")
         return value
 
     @model_validator(mode="after")
     def validate_slots(self) -> Self:
-        if not self.task_identities:
-            raise ValueError("task_identities must not be empty")
-        if len(set(self.task_identities)) != len(self.task_identities):
-            raise ValueError("task_identities must be unique")
+        if not self.task_hashes:
+            raise ValueError("task_hashes must not be empty")
+        if len(set(self.task_hashes)) != len(self.task_hashes):
+            raise ValueError("task_hashes must be unique")
         valid_keys = {
-            f"{task_identity}#{index}"
-            for task_identity in self.task_identities
-            for index in range(self.repeat_count)
+            f"{task_hash}#{index}"
+            for task_hash in self.task_hashes
+            for index in range(self.num_samples)
         }
         seed_keys = [key for key, _seed in self.seeds]
         if len(seed_keys) != len(set(seed_keys)):
@@ -136,56 +135,56 @@ class RepeatPlan(_FrozenModel):
             )
         return self
 
-    def repeats(self) -> tuple[Repeat, ...]:
+    def samples(self) -> tuple[Sample, ...]:
         seeds = dict(self.seeds)
         return tuple(
-            Repeat(
-                repeat_id=RepeatId(
-                    task_identity=task_identity,
-                    index=index,
-                    rng_seed=seeds.get(f"{task_identity}#{index}"),
+            Sample(
+                sample_id=SampleId(
+                    task_hash=task_hash,
+                    sample_index=index,
+                    rng_seed=seeds.get(f"{task_hash}#{index}"),
                 )
             )
-            for task_identity in self.task_identities
-            for index in range(self.repeat_count)
+            for task_hash in self.task_hashes
+            for index in range(self.num_samples)
         )
 
     def identity_payload(self) -> dict[str, object]:
         return {
             "plan_id": self.plan_id,
             "version": self.version,
-            "task_identities": list(self.task_identities),
-            "repeat_count": self.repeat_count,
+            "task_hashes": list(self.task_hashes),
+            "num_samples": self.num_samples,
         }
 
     def identity_hash(self) -> str:
         return identity_hash_for(
-            schema=SCHEMA_REPEAT_PLAN,
+            schema=SCHEMA_SAMPLE_PLAN,
             payload=self.identity_payload(),
         )
 
 
-def repeat_plan_from_provenance(
-    rows: tuple[RepeatProvenanceRow, ...],
+def sample_plan_from_provenance(
+    rows: tuple[SampleProvenanceRow, ...],
     *,
     plan_id: str,
     version: str,
-) -> RepeatPlan:
+) -> SamplePlan:
     task_order: list[str] = []
     indices_by_task: dict[str, set[int]] = {}
     seeds: dict[tuple[str, int], int] = {}
     for row in rows:
-        if row.task_identity not in indices_by_task:
-            task_order.append(row.task_identity)
-            indices_by_task[row.task_identity] = set()
-        indices = indices_by_task[row.task_identity]
-        if row.repeat_index in indices:
+        if row.task_hash not in indices_by_task:
+            task_order.append(row.task_hash)
+            indices_by_task[row.task_hash] = set()
+        indices = indices_by_task[row.task_hash]
+        if row.sample_index in indices:
             raise ValueError(
-                "duplicate (task_identity, repeat_index) in provenance rows"
+                "duplicate (task_hash, sample_index) in provenance rows"
             )
-        indices.add(row.repeat_index)
+        indices.add(row.sample_index)
         if row.seed is not None:
-            seeds[(row.task_identity, row.repeat_index)] = row.seed
+            seeds[(row.task_hash, row.sample_index)] = row.seed
 
     if not task_order:
         raise ValueError("provenance rows are empty")
@@ -194,35 +193,35 @@ def repeat_plan_from_provenance(
         raise ValueError(
             "every task must have the same number of repeat slots"
         )
-    repeat_count = counts.pop()
-    for task_identity, indices in indices_by_task.items():
-        if indices != set(range(repeat_count)):
+    num_samples = counts.pop()
+    for task_hash, indices in indices_by_task.items():
+        if indices != set(range(num_samples)):
             raise ValueError(
-                f"task {task_identity!r} repeat indices are not contiguous "
-                f"0..{repeat_count - 1}"
+                f"task {task_hash!r} repeat indices are not contiguous "
+                f"0..{num_samples - 1}"
             )
 
     seed_pairs = tuple(
-        (f"{task_identity}#{index}", seeds[(task_identity, index)])
-        for task_identity in task_order
-        for index in range(repeat_count)
-        if (task_identity, index) in seeds
+        (f"{task_hash}#{index}", seeds[(task_hash, index)])
+        for task_hash in task_order
+        for index in range(num_samples)
+        if (task_hash, index) in seeds
     )
-    return RepeatPlan(
+    return SamplePlan(
         plan_id=plan_id,
         version=version,
-        task_identities=tuple(task_order),
-        repeat_count=repeat_count,
+        task_hashes=tuple(task_order),
+        num_samples=num_samples,
         seeds=seed_pairs,
     )
 
 
 __all__ = [
-    "Repeat",
-    "RepeatId",
-    "RepeatPlan",
-    "RepeatProvenanceRow",
+    "Sample",
+    "SampleId",
+    "SamplePlan",
+    "SampleProvenanceRow",
     "SelectionRule",
     "TaskSet",
-    "repeat_plan_from_provenance",
+    "sample_plan_from_provenance",
 ]

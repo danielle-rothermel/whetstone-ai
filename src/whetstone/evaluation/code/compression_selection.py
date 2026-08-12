@@ -33,16 +33,16 @@ class ExperimentTaskView(Protocol):
     def gt_code_wo_comments(self) -> str: ...
 
 
-def compression_reference_key(task_identity: str) -> CompressionReferenceKey:
+def compression_reference_key(task_hash: str) -> CompressionReferenceKey:
     """The generic Compression Reference Key naming one task's reference.
 
-    ``task_identity`` is the task identity. The returned key is a plain
+    ``task_hash`` is the task identity. The returned key is a plain
     namespaced key with no dataset-field knowledge.
     """
 
     return CompressionReferenceKey(
         namespace=COMPRESSION_REFERENCE_NAMESPACE,
-        name=task_identity,
+        name=task_hash,
     )
 
 
@@ -61,13 +61,13 @@ def select_compression_reference(
 
 
 def compression_reference_binding(
-    task_identity: str,
+    task_hash: str,
     task: ExperimentTaskView,
 ) -> tuple[CompressionReferenceKey, CompressionReferenceArtifact]:
     """The ``(key, artifact)`` binding for one task's compression reference."""
 
     return (
-        compression_reference_key(task_identity),
+        compression_reference_key(task_hash),
         select_compression_reference(task),
     )
 
@@ -75,7 +75,7 @@ def compression_reference_binding(
 def build_resolver(
     bindings: Mapping[str, ExperimentTaskView],
 ) -> CompressionReferenceResolver:
-    """Build a generic resolver over ``{task_identity: task}``.
+    """Build a generic resolver over ``{task_hash: task}``.
 
     Each task's exact ``gt_code_wo_comments`` bytes become the resolved
     artifact for its generic key. The resulting resolver is an ordinary
@@ -83,10 +83,10 @@ def build_resolver(
     """
 
     mapping = {
-        compression_reference_key(task_identity): select_compression_reference(
+        compression_reference_key(task_hash): select_compression_reference(
             task
         )
-        for task_identity, task in bindings.items()
+        for task_hash, task in bindings.items()
     }
     return CompressionReferenceResolver.from_mapping(mapping)
 

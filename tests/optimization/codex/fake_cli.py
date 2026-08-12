@@ -9,6 +9,7 @@ import anyio
 import typer
 from mcp.client import Client
 
+from whetstone.envs.code_comp.constants import MUTATION_FIELD
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.codex.mcp_bridge import EvaluateCandidateServer
 from whetstone.optimization.codex.mcp_server import build_server_from_env
@@ -133,7 +134,7 @@ def main(context: typer.Context) -> None:
     output_count = request.step_output_contract.returned_proposal_count
     if output_count:
         base = request.candidates[0]
-        template = base.payload["user_prompt_template"]
+        template = base.payload[MUTATION_FIELD]
         assert isinstance(template, str)
         proposed_template = f"{template}\nAnswer carefully."
         base_ref = base.base_ref.model_dump(mode="json")
@@ -150,7 +151,7 @@ def main(context: typer.Context) -> None:
                 "base_ref": candidate_reference(base).record_ref.model_dump(
                     mode="json"
                 ),
-                "payload": {"user_prompt_template": proposed_template},
+                "payload": {MUTATION_FIELD: proposed_template},
             }
         )
         conversation_evidence["mcp_result"] = result

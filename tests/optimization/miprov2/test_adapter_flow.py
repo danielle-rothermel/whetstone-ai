@@ -111,28 +111,29 @@ class _PersistingEvaluationService:
             "miprov2_baseline": 0.1,
             "miprov2_sample": 0.9,
         }[intent.purpose]
-        task_identities = _load_context_tasks(self.store, intent)
+        task_hashes = _load_context_tasks(self.store, intent)
         traces = EvaluationComponentTraces(
-            schema_version=1,
+            schema_version=2,
             candidate=intent.candidate,
             evaluation_binding=intent.evaluation_binding,
             evaluation_role=EvaluationRole.INTERNAL,
             graph_hash=GRAPH_HASH,
             purpose=intent.purpose,
             split_role="internal",
-            task_identities=task_identities,
-            repeat_count=1,
+            task_hashes=task_hashes,
+            num_samples=1,
             rows=tuple(
                 EvaluationComponentTraceRow(
-                    instance_id=f"instance-{index}",
-                    task_identity=task_identity,
-                    repeat=0,
+                    task_id=f"instance-{index}",
+                    task_hash=task_hash,
+                    task_index=index,
+                    sample_index=0,
                     executed_component_trace=ExecutedComponentTracePayload(
                         row_state=ExecutedRowState.SUCCESS,
                         executed_component_steps=(),
                     ),
                 )
-                for index, task_identity in enumerate(task_identities)
+                for index, task_hash in enumerate(task_hashes)
             ),
         )
         traces_ref = persist_test_record(
@@ -147,7 +148,7 @@ class _PersistingEvaluationService:
         )
         aggregate_ref = persist_test_record(
             self.store,
-            "whetstone.rollout_aggregate",
+            "whetstone.aggregate",
             {"intent_id": intent.intent_id, "score": score},
         )
         reward = apply_reward_policy(
@@ -163,20 +164,20 @@ class _PersistingEvaluationService:
             reward.record_content(),
         )
         evidence = EvaluationEvidence(
-            schema_version=2,
+            schema_version=3,
             candidate=intent.candidate,
             evaluation_binding=intent.evaluation_binding,
             graph_hash=GRAPH_HASH,
             graph_config_ref="flow-graph",
             purpose=intent.purpose,
-            dataset_identity="miprov2-flow-dataset",
-            task_identities=task_identities,
-            repeat_count=1,
-            per_task_values=(score,) * len(task_identities),
-            per_task_counts=(1,) * len(task_identities),
+            dataset_hash="miprov2-flow-dataset",
+            task_hashes=task_hashes,
+            num_samples=1,
+            per_task_values=(score,) * len(task_hashes),
+            per_task_counts=(1,) * len(task_hashes),
             row_accounting=RowAccounting(
-                planned=len(task_identities),
-                present=len(task_identities),
+                planned=len(task_hashes),
+                present=len(task_hashes),
                 missing=0,
                 failed=0,
                 invalid=0,
@@ -222,7 +223,7 @@ def _load_context_tasks(
     ref = store.resolve(key)
     assert ref is not None
     context = Miprov2IntentContext.model_validate(store.get(ref))
-    return context.task_batch_identities
+    return context.task_batch_hashes
 
 
 def _adapter(
@@ -291,7 +292,7 @@ def test_real_adapter_reaches_terminal_and_replays_without_duplicate_effects(
     )
     initial_budget = BudgetState(
         remaining={
-            "bootstrap_rollouts": 0,
+            "bootstrap_generations": 0,
             "proposal_calls": 2,
             "evaluations": 2,
             "task_rows": 6,
@@ -351,9 +352,9 @@ def test_real_adapter_reaches_terminal_and_replays_without_duplicate_effects(
         "evaluations": 2,
         "task_rows": 6,
     }
-    assert "bootstrap_rollouts" not in results[-1].budget.consumed
+    assert "bootstrap_generations" not in results[-1].budget.consumed
     assert results[-1].budget.remaining == {
-        "bootstrap_rollouts": 0,
+        "bootstrap_generations": 0,
         "proposal_calls": 0,
         "evaluations": 0,
         "task_rows": 0,

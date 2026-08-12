@@ -83,7 +83,7 @@ class CanonicalGepaAdapterFactory:
         self._prompt_services = prompt_services
 
     @property
-    def runtime_identity_hash(self) -> str:
+    def runtime_hash(self) -> str:
         return compute_identity_hash(
             schema=GEPA_ADAPTER_FACTORY_SCHEMA,
             schema_version=GEPA_ADAPTER_FACTORY_SCHEMA_VERSION,
@@ -95,10 +95,10 @@ class CanonicalGepaAdapterFactory:
                 ),
                 "adapter_identity_hash": (GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH),
                 "evaluation_authority_identity_hash": (
-                    self._evaluation_authority.runtime_identity_hash
+                    self._evaluation_authority.runtime_hash
                 ),
                 "proposal_authority_identity_hash": (
-                    self._proposal_authority.runtime_identity_hash
+                    self._proposal_authority.runtime_hash
                 ),
                 "prompt_binding_identity_hash": (
                     self._prompt_services.binding.identity_hash()
@@ -109,11 +109,11 @@ class CanonicalGepaAdapterFactory:
     def create(self, *, control: GepaControl) -> WhetstoneGepaAdapter:
         self._require_control(control)
         register_gepa_evaluation_authority(
-            self._evaluation_authority.runtime_identity_hash,
+            self._evaluation_authority.runtime_hash,
             self._evaluation_authority,
         )
         register_gepa_proposal_authority(
-            self._proposal_authority.runtime_identity_hash,
+            self._proposal_authority.runtime_hash,
             self._proposal_authority,
         )
         return WhetstoneGepaAdapter(

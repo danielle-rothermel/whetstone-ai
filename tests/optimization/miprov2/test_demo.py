@@ -66,8 +66,8 @@ def test_bootstrap_acceptance_matches_dspy_threshold_truthiness(
 
 def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
     acceptance = BootstrapAcceptance(
-        source_task_identity=_identity("task-1"),
-        source_rollout_identity=_identity("rollout-1"),
+        source_task_hash=_identity("task-1"),
+        source_generation_identity=_identity("generation-1"),
         source_trace_identity=_identity("trace-1"),
         source_output_identity=_identity("output-1"),
         source_score_identity=_identity("score-1"),
@@ -78,8 +78,8 @@ def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
     )
 
     assert acceptance.identity_payload() == {
-        "source_task_identity": _identity("task-1"),
-        "source_rollout_identity": _identity("rollout-1"),
+        "source_task_hash": _identity("task-1"),
+        "source_generation_identity": _identity("generation-1"),
         "source_trace_identity": _identity("trace-1"),
         "source_output_identity": _identity("output-1"),
         "source_score_identity": _identity("score-1"),
@@ -89,7 +89,7 @@ def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
         "accepted": True,
     }
     assert acceptance.identity_hash() == (
-        "27485dfdf414685caccbb24781a8922fe568d22b599699051d577992651070a3"
+        "3db91c8745079e47b131422958602d340ae51041f5e5e9cf2ad27a76c5804799"
     )
     changed = acceptance.model_copy(
         update={"source_output_identity": _identity("output-2")}
@@ -100,8 +100,8 @@ def test_acceptance_identity_binds_all_source_evidence_and_decision() -> None:
 def test_acceptance_rejects_a_decision_that_disagrees_with_rule() -> None:
     with pytest.raises(ValidationError, match="threshold rule"):
         BootstrapAcceptance(
-            source_task_identity=_identity("task-1"),
-            source_rollout_identity=_identity("rollout-1"),
+            source_task_hash=_identity("task-1"),
+            source_generation_identity=_identity("generation-1"),
             source_trace_identity=_identity("trace-1"),
             source_output_identity=_identity("output-1"),
             source_score_identity=_identity("score-1"),
@@ -155,7 +155,7 @@ def test_demo_copy_and_construct_refreeze_json_and_stabilize_identity() -> (
     None
 ):
     task = LabeledTaskDemo(
-        source_task_identity=_identity("task-immutable"),
+        source_task_hash=_identity("task-immutable"),
         inputs_by_component={"first": {"question": "q"}},
         outputs_by_component={"first": {"answer": "a"}},
     )
@@ -182,9 +182,11 @@ def test_demo_copy_and_construct_refreeze_json_and_stabilize_identity() -> (
         operator.setitem(cast("Any", constructed.inputs), "nested", {})
 
 
-def test_labeled_demo_adapts_to_component_without_fake_rollout_data() -> None:
+def test_labeled_demo_adapts_to_component_without_fake_generation_data() -> (
+    None
+):
     task = LabeledTaskDemo(
-        source_task_identity=_identity("task-1"),
+        source_task_hash=_identity("task-1"),
         inputs_by_component={
             "first": {"question": "q"},
             "second": {"draft": "d"},
@@ -202,8 +204,8 @@ def test_labeled_demo_adapts_to_component_without_fake_rollout_data() -> None:
     assert demo.source_trace_index is None
     assert demo.inputs == {"draft": "d"}
     assert demo.outputs == {"answer": "a"}
-    assert demo.source_task_identity == _identity("task-1")
-    assert demo.source_rollout_identity == demo.source_trace_identity
+    assert demo.source_task_hash == _identity("task-1")
+    assert demo.source_generation_identity == demo.source_trace_identity
     assert demo.source_trace_identity == demo.source_output_identity
     assert len(demo.acceptance_identity_hash) == 64
 
@@ -215,8 +217,8 @@ def _bootstrapped_demo(**overrides: object):
         "inputs": {"question": "q"},
         "outputs": {"answer": "a"},
         "augmented": True,
-        "source_task_identity": _identity("task"),
-        "source_rollout_identity": _identity("rollout"),
+        "source_task_hash": _identity("task"),
+        "source_generation_identity": _identity("generation"),
         "source_trace_identity": _identity("trace"),
         "source_output_identity": _identity("output"),
         "source_score_identity": _identity("score"),
@@ -266,7 +268,7 @@ def test_trace_step_field_mappings_are_deeply_immutable() -> None:
 
 def test_labeled_task_component_mappings_cannot_drift() -> None:
     task = LabeledTaskDemo(
-        source_task_identity=_identity("task-1"),
+        source_task_hash=_identity("task-1"),
         inputs_by_component={"first": {"question": "q"}},
         outputs_by_component={"first": {"answer": "a"}},
     )
@@ -286,8 +288,8 @@ def test_non_finite_metric_values_are_rejected_at_construction(
         _bootstrapped_demo(score=bad)
     with pytest.raises(ValidationError):
         BootstrapAcceptance(
-            source_task_identity=_identity("task"),
-            source_rollout_identity=_identity("rollout"),
+            source_task_hash=_identity("task"),
+            source_generation_identity=_identity("generation"),
             source_trace_identity=_identity("trace"),
             source_output_identity=_identity("output"),
             source_score_identity=_identity("score"),
@@ -298,8 +300,8 @@ def test_non_finite_metric_values_are_rejected_at_construction(
         )
     with pytest.raises(ValidationError):
         BootstrapAcceptance(
-            source_task_identity=_identity("task"),
-            source_rollout_identity=_identity("rollout"),
+            source_task_hash=_identity("task"),
+            source_generation_identity=_identity("generation"),
             source_trace_identity=_identity("trace"),
             source_output_identity=_identity("output"),
             source_score_identity=_identity("score"),
@@ -326,9 +328,9 @@ def test_demo_input_and_output_field_names_must_be_disjoint() -> None:
 
 
 def test_labeled_demo_requires_a_production_task_content_hash() -> None:
-    with pytest.raises(ValidationError, match="source_task_identity"):
+    with pytest.raises(ValidationError, match="source_task_hash"):
         LabeledTaskDemo(
-            source_task_identity="task-label",
+            source_task_hash="task-label",
             inputs_by_component={"first": {"question": "q"}},
             outputs_by_component={"first": {"answer": "a"}},
         )
@@ -338,7 +340,7 @@ def test_component_demo_set_is_component_ordered_and_identity_bearing() -> (
     None
 ):
     task = LabeledTaskDemo(
-        source_task_identity=_identity("task-1"),
+        source_task_hash=_identity("task-1"),
         inputs_by_component={"first": {"question": "q"}},
         outputs_by_component={"first": {"answer": "a"}},
     )
@@ -352,14 +354,14 @@ def test_component_demo_set_is_component_ordered_and_identity_bearing() -> (
         ),
     )
 
-    assert demo_set.demos_for("first")[0].source_task_identity == _identity(
+    assert demo_set.demos_for("first")[0].source_task_hash == _identity(
         "task-1"
     )
     assert demo_set.demos_for("first")[0].identity_hash() == (
-        "094c495d09976e247b22c6f331ad6c24984c5501cece210eec0f49dff3dafe83"
+        "8ae6d18873b535c63ccc0b9d6ddbc4d4c04edb6f7dc38187d2b5ce7dd3c4599e"
     )
     assert demo_set.identity_hash() == (
-        "9b60bb128ae60c328e0a44120d01430340bf0f98dc87fc139437774a1b9e29bd"
+        "c260b17e063449a8ce5c42919508bcb7c90e0fa2438c6502ab79a47b9039b568"
     )
     with pytest.raises(KeyError):
         demo_set.demos_for("missing")

@@ -184,7 +184,7 @@ def test_official_record_certifies_ordinary_results_no_new_role() -> None:
     assert isinstance(record, OfficialEvaluationRecord)
     ref = record.planned_results[0].result_ref
     assert ref is not None
-    assert ref.schema_name == "whetstone.rollout_result"
+    assert ref.schema_name == "whetstone.generation_result"
 
 
 def test_official_record_carries_immutable_revision_chain() -> None:

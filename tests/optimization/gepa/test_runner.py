@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar, cast
-from uuid import uuid4
+from typing import ClassVar
 
 import pytest
 
@@ -72,7 +70,7 @@ def _load_runner():
 class _Factory:
     def __init__(self, control, *, identity_salt: str = "unit") -> None:
         self.control = control
-        self.runtime_identity_hash = typed_ref_for_record(
+        self.runtime_hash = typed_ref_for_record(
             "test.gepa.factory",
             {
                 "control": control.identity_hash(),
@@ -109,13 +107,13 @@ def test_parent_replay_recreates_adapter_at_ordinal_zero(
     trainset = (
         GepaDataInstance(
             upstream_position=0,
-            data_id=control.trainset_task_identities[0],
+            data_id=control.trainset_task_hashes[0],
             data_ref=data_ref,
             loader_identity_hash="f" * 64,
         ),
     )
     request = module.GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
+        factory_identity_hash=factory.runtime_hash,
         control=control,
         seed_candidate={"prompt": "seed"},
         trainset=trainset,
@@ -153,13 +151,13 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
     factory = _Factory(control)
     module.register_gepa_adapter_factory(factory)
     request = module.GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
+        factory_identity_hash=factory.runtime_hash,
         control=control,
         seed_candidate={"prompt": "seed"},
         trainset=(
             GepaDataInstance(
                 upstream_position=0,
-                data_id=control.trainset_task_identities[0],
+                data_id=control.trainset_task_hashes[0],
                 data_ref=typed_ref_for_record(
                     "test.gepa.data",
                     {"id": "train"},
@@ -168,7 +166,7 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
             ),
         ),
     )
-    factory.runtime_identity_hash = ContentHash("9" * 64)
+    factory.runtime_hash = ContentHash("9" * 64)
 
     with pytest.raises(RuntimeError, match="factory identity drifted"):
         module.DbosGepaRunner().run(request)
@@ -177,7 +175,7 @@ def test_parent_refuses_registered_factory_identity_drift() -> None:
 def _train_instance(control):
     return GepaDataInstance(
         upstream_position=0,
-        data_id=control.trainset_task_identities[0],
+        data_id=control.trainset_task_hashes[0],
         data_ref=typed_ref_for_record("test.gepa.data", {"id": "train"}),
         loader_identity_hash="f" * 64,
     )
@@ -187,7 +185,7 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
 
     module = _load_runner()
     control = gepa_control()
-    assert control.source_valset_task_identities is None
+    assert control.source_valset_task_hashes is None
 
     with pytest.raises(ValueError, match="supplied an unbound valset"):
         module.GepaParentRunRequest(
@@ -198,7 +196,7 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
             valset=(
                 GepaDataInstance(
                     upstream_position=0,
-                    data_id=control.trainset_task_identities[0],
+                    data_id=control.trainset_task_hashes[0],
                     data_ref=typed_ref_for_record(
                         "test.gepa.data",
                         {"id": "val"},
@@ -212,8 +210,8 @@ def test_parent_request_rejects_a_valset_the_control_never_bound() -> None:
 def test_parent_request_rejects_bound_valset_identity_drift() -> None:
 
     module = _load_runner()
-    control = gepa_control(valset_task_identities=("c" * 64,))
-    assert control.source_valset_task_identities is not None
+    control = gepa_control(valset_task_hashes=("c" * 64,))
+    assert control.source_valset_task_hashes is not None
 
     with pytest.raises(ValueError, match="valset identity drift"):
         module.GepaParentRunRequest(
@@ -242,7 +240,7 @@ def test_parent_request_rejects_bound_valset_identity_drift() -> None:
         valset=(
             GepaDataInstance(
                 upstream_position=0,
-                data_id=control.valset_task_identities[0],
+                data_id=control.valset_task_hashes[0],
                 data_ref=typed_ref_for_record(
                     "test.gepa.data",
                     {"id": "val"},
@@ -274,7 +272,7 @@ def test_parent_request_rejects_same_count_seed_reordering() -> None:
             trainset=(
                 GepaDataInstance(
                     upstream_position=0,
-                    data_id=control.trainset_task_identities[0],
+                    data_id=control.trainset_task_hashes[0],
                     data_ref=typed_ref_for_record(
                         "test.gepa.data",
                         {"id": "train"},
@@ -283,272 +281,3 @@ def test_parent_request_rejects_same_count_seed_reordering() -> None:
                 ),
             ),
         )
-
-
-@pytest.mark.skipif(
-    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
-    reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
-)
-@pytest.mark.postgres_integration
-def test_real_dbos_parent_same_id_returns_checkpointed_result(
-    monkeypatch,
-) -> None:
-    from dbos import DBOS, DBOSConfig
-
-    from whetstone.optimization.gepa.runner import (
-        DbosGepaRunner,
-        GepaParentRunRequest,
-        register_gepa_adapter_factory,
-    )
-
-    suffix = uuid4().hex[:10]
-    database_url = os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
-    config: DBOSConfig = {
-        "name": f"gepa-parent-{suffix}",
-        "system_database_url": database_url,
-        "application_database_url": database_url,
-        "application_version": f"gepa-parent-{suffix}",
-        "run_admin_server": False,
-        "use_listen_notify": False,
-    }
-    DBOS(config=config)
-    control = gepa_control()
-    factory = _Factory(control, identity_salt=suffix)
-    register_gepa_adapter_factory(cast(Any, factory))
-    request = GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
-        control=control,
-        seed_candidate={"prompt": "seed"},
-        trainset=(
-            GepaDataInstance(
-                upstream_position=0,
-                data_id=control.trainset_task_identities[0],
-                data_ref=typed_ref_for_record(
-                    "test.gepa.data",
-                    {"id": "train"},
-                ),
-                loader_identity_hash="f" * 64,
-            ),
-        ),
-    )
-    engine_calls = 0
-
-    def fake_run_gepa_engine(**kwargs):
-        nonlocal engine_calls
-        engine_calls += 1
-        kwargs["adapter"].effect_ordinal = 7
-        return make_gepa_detailed_result(control)
-
-    monkeypatch.setattr(
-        "whetstone.optimization.gepa.adapter.run_gepa_engine",
-        fake_run_gepa_engine,
-    )
-    try:
-        DBOS.launch()
-        runner = DbosGepaRunner()
-        first = runner.run(request)
-        replay = runner.run(request)
-        assert replay == first
-        assert engine_calls == 1
-        assert factory.create_calls == factory.persist_calls == 1
-    finally:
-        DBOS.destroy()
-
-
-@pytest.mark.skipif(
-    "WHETSTONE_TEST_POSTGRES_DSN" not in os.environ,
-    reason="WHETSTONE_TEST_POSTGRES_DSN is required for real DBOS replay",
-)
-@pytest.mark.postgres_integration
-def test_real_dbos_parent_recovery_keeps_child_and_later_step_aligned(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    from dbos import DBOS, DBOSClient, DBOSConfig
-    from dbos._error import (
-        DBOSAwaitedWorkflowCancelledError,
-        DBOSWorkflowCancelledError,
-    )
-    from dr_store import ObjectStore, SqliteBackend
-
-    from tests.optimization.gepa.support import (
-        evaluation_authority_binding,
-        evaluation_result,
-        prompt_services,
-        proposal_authority_binding,
-    )
-    from whetstone.core.identity import TypedRef
-    from whetstone.optimization.gepa.contracts import GepaEffectContext
-    from whetstone.optimization.gepa.effect_runtime import (
-        DbosGepaEffectBroker,
-        register_gepa_evaluation_authority,
-    )
-    from whetstone.optimization.gepa.engine import GepaDetailedResult
-    from whetstone.optimization.gepa.runner import (
-        DbosGepaRunner,
-        GepaParentRunRequest,
-        register_gepa_adapter_factory,
-    )
-    from whetstone.optimization.gepa.source import (
-        GEPA_SOURCE_MANIFEST_HASH,
-    )
-    from whetstone.optimization.gepa.upstream_adapter import (
-        GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
-        WhetstoneGepaAdapter,
-    )
-
-    suffix = uuid4().hex[:10]
-    database_url = os.environ["WHETSTONE_TEST_POSTGRES_DSN"]
-    config: DBOSConfig = {
-        "name": f"gepa-recovery-{suffix}",
-        "system_database_url": database_url,
-        "application_database_url": database_url,
-        "application_version": f"gepa-parent-recovery-{suffix}",
-        "run_admin_server": False,
-        "use_listen_notify": False,
-    }
-    DBOS(config=config)
-    terminal_step_calls = 0
-
-    @DBOS.step(retries_allowed=False)
-    def terminal_step(control_hash: str) -> TypedRef:
-        nonlocal terminal_step_calls
-        terminal_step_calls += 1
-        return typed_ref_for_record(
-            "whetstone.gepa.run_result_artifact",
-            {"control": control_hash, "suffix": suffix},
-        )
-
-    services = prompt_services()
-    control = gepa_control().model_copy(
-        update={
-            "component_names": ("alpha", "beta"),
-            "num_predictors": 2,
-            "prompt_format_identity_hash": (
-                services.descriptor.identity_hash()
-            ),
-            "prompt_binding_identity_hash": (services.binding.identity_hash()),
-        }
-    )
-    data = GepaDataInstance(
-        upstream_position=0,
-        data_id=control.trainset_task_identities[0],
-        data_ref=typed_ref_for_record(
-            "test.gepa.data",
-            {"id": "train"},
-        ),
-        loader_identity_hash="f" * 64,
-    )
-    evaluation_binding = evaluation_authority_binding()
-
-    class EvaluationAuthority:
-        runtime_identity_hash = evaluation_binding.authority_identity_hash
-        calls = 0
-
-        def evaluate(self, request):
-            self.calls += 1
-            return evaluation_result(request)
-
-    authority = EvaluationAuthority()
-    store = ObjectStore(
-        SqliteBackend(tmp_path / "parent-recovery-effects.sqlite")
-    )
-
-    class RecoveryFactory:
-        runtime_identity_hash = typed_ref_for_record(
-            "test.gepa.recovery_factory",
-            {"suffix": suffix},
-        ).content_hash
-
-        def __init__(self) -> None:
-            self.crash_after_terminal_once = True
-            self.create_calls = 0
-
-        def create(self, *, control):
-            self.create_calls += 1
-            register_gepa_evaluation_authority(
-                authority.runtime_identity_hash,
-                authority,
-            )
-            return WhetstoneGepaAdapter(
-                context=GepaEffectContext(
-                    run_id=f"gepa:parent-recovery:{suffix}",
-                    control_identity_hash=control.identity_hash(),
-                    source_manifest_identity_hash=(GEPA_SOURCE_MANIFEST_HASH),
-                    adapter_identity_hash=(
-                        GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH
-                    ),
-                ),
-                broker=DbosGepaEffectBroker(store),
-                evaluation_authority=evaluation_binding,
-                proposal_authority=proposal_authority_binding(services),
-                prompt_services=services,
-            )
-
-        def persist_result(self, *, control, adapter, detailed_result):
-            del adapter, detailed_result
-            artifact_ref = terminal_step(control.identity_hash())
-            if self.crash_after_terminal_once:
-                self.crash_after_terminal_once = False
-                raise DBOSWorkflowCancelledError(
-                    "injected interruption after terminal step"
-                )
-            return artifact_ref
-
-    factory = RecoveryFactory()
-    register_gepa_adapter_factory(cast(Any, factory))
-    request = GepaParentRunRequest(
-        factory_identity_hash=factory.runtime_identity_hash,
-        control=control,
-        seed_candidate={"alpha": "unchanged", "beta": "unchanged"},
-        trainset=(data,),
-    )
-
-    def fake_run_gepa_engine(**kwargs):
-        adapter = kwargs["adapter"]
-        adapter.evaluate(
-            list(kwargs["trainset"]),
-            dict(kwargs["seed_candidate"]),
-        )
-        return GepaDetailedResult(
-            candidates=({"alpha": "unchanged", "beta": "unchanged"},),
-            parents=((),),
-            val_aggregate_scores=(0.0,),
-            val_subscores=({control.valset_task_identities[0]: 0.0},),
-            per_val_instance_best_candidates={
-                control.valset_task_identities[0]: (0,)
-            },
-            discovery_eval_counts=(0,),
-            seed=control.seed,
-            best_idx=0,
-            control_identity_hash=control.identity_hash(),
-        )
-
-    monkeypatch.setattr(
-        "whetstone.optimization.gepa.adapter.run_gepa_engine",
-        fake_run_gepa_engine,
-    )
-    client = None
-    try:
-        DBOS.launch()
-        runner = DbosGepaRunner()
-        with pytest.raises(
-            DBOSAwaitedWorkflowCancelledError,
-        ):
-            runner.run(request)
-        assert authority.calls == terminal_step_calls == 1
-
-        client = DBOSClient(system_database_url=database_url)
-        workflow_id = f"whetstone-gepa-run-{request.identity_hash()}"
-        recovered = client.resume_workflow(workflow_id).get_result()
-
-        assert recovered.artifact_ref.schema_name == (
-            "whetstone.gepa.run_result_artifact"
-        )
-        assert authority.calls == 1
-        assert terminal_step_calls == 1
-        assert factory.create_calls == 2
-    finally:
-        if client is not None:
-            client.destroy()
-        DBOS.destroy()

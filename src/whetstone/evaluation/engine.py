@@ -1,28 +1,39 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from dr_store import ObjectStore
+from whetstone_envs.core import Instance
 
 from whetstone.core.identity import (
     IdentityRef,
     TypedRef,
     typed_ref_for_record,
 )
+from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
+from whetstone.envs.code_comp.experiment import CodeCompExperiment
+from whetstone.envs.code_comp.generation_graph.direct import (
+    render_direct_frame,
+)
+from whetstone.envs.code_comp.modes.direct import DirectExperiment
+from whetstone.envs.code_comp.mutation_surface import (
+    render_encoder_frame,
+    validate_instruction_body,
+)
+from whetstone.envs.code_comp.registry import CodeCompMode, code_comp_mode_for
+from whetstone.envs.code_comp.scoring import CodeBatchScorer
+from whetstone.envs.code_comp.submission_result import (
+    submission_result_to_record,
+)
 from whetstone.envs.factory import EnvExperiment
-from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import (
-    render_prompt,
-    validate_candidate_prompt,
-)
 from whetstone.envs.sampling import EnvSplitSampling, derive_split_sampling
-from whetstone.evaluation.code.aggregate import ROLLOUT_AGGREGATE_SCHEMA
-from whetstone.evaluation.drivers.internal import (
-    InternalEvalResult,
-    InternalRowJobFactory,
-    run_internal_eval,
-)
+from whetstone.evaluation.aggregate import AGGREGATE_SCHEMA
+from whetstone.evaluation.drivers.code_comp.direct import DirectRowJobFactory
+from whetstone.evaluation.drivers.code_comp.dispatch import run_code_comp_eval
+from whetstone.evaluation.drivers.code_comp.encdec import EncDecRowJobFactory
+from whetstone.evaluation.drivers.eval_result import InternalEvalResult
+from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
@@ -56,6 +67,7 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.experiment.reward import REWARD_SCHEMA, reward_reference
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
@@ -92,12 +104,7 @@ class EngineEvaluation:
 
 
 class EvaluationEngine:
-    """Render, execute, aggregate, and persist one exact sampling binding.
-
-    :func:`run_internal_eval` is the only row-driving loop.
-    This engine owns its external contract: exact Config validation, candidate
-    preflight, content-addressed evidence, and optimizer-facing references.
-    """
+    """Render, execute, aggregate, and persist one exact code_comp binding."""
 
     def __init__(
         self,
@@ -106,11 +113,12 @@ class EvaluationEngine:
         experiment: EnvExperiment,
         sampling: EnvSplitSampling,
         execution_policy: ProviderExecutionPolicy,
-        row_job_factory: InternalRowJobFactory,
+        row_job_factory: DirectRowJobFactory | EncDecRowJobFactory,
         concurrency: int = DEFAULT_CONCURRENCY,
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
         prompt_cache: PromptResultCache | None = None,
+        batch_scorer: CodeBatchScorer | None = None,
     ) -> None:
         self._store = store
         self.experiment = experiment
@@ -121,6 +129,11 @@ class EvaluationEngine:
         self._max_wall_seconds = max_wall_seconds
         self._partial_log = partial_log
         self._prompt_cache = prompt_cache
+        self._batch_scorer = batch_scorer
+        if self.experiment.env_name != CODE_COMP_ENV_NAME:
+            raise TypeError(
+                "EvaluationEngine supports code_comp experiments only"
+            )
         expected = experiment.eval_configs.eval_config_for(sampling.split_role)
         if expected != sampling.eval_config:
             canonical = (
@@ -130,7 +143,7 @@ class EvaluationEngine:
                 else experiment.eval_configs.official
             )
             expected_subset = self._derive_sampling(
-                canonical, sampling.task_set.task_identities
+                canonical, sampling.task_set.task_hashes
             )
             if expected_subset != sampling:
                 raise ValueError(
@@ -145,10 +158,13 @@ class EvaluationEngine:
     @property
     def task_model_identity_hash(self) -> str:
         """Identity of the exact task-model Provider Call Config route."""
-
-        provider_config = (
-            self.experiment.rollout_definition.provider_call_config
-        )
+        if isinstance(self.experiment, CodeCompExperiment):
+            if self.experiment.config.mode is CodeCompMode.DIRECT:
+                graph = self.experiment.generation_graph
+                return graph.provider_call_config.identity_hash
+            models = self.experiment.config.models
+            return models.encoder_call_config().identity_hash
+        provider_config = self.experiment.generation_graph.provider_call_config
         return provider_config.identity_hash
 
     @property
@@ -174,7 +190,7 @@ class EvaluationEngine:
                 PROVIDER_EXECUTION_POLICY_SCHEMA,
                 self._execution_policy.identity_payload(),
             ),
-            identity_hash=self._execution_policy.identity_hash,
+            record_hash=self._execution_policy.identity_hash,
         )
 
     @property
@@ -193,8 +209,8 @@ class EvaluationEngine:
             raise ValueError("derived sampling task IDs must be unique")
         source_by_id = dict(
             zip(
-                source.task_set.task_identities,
-                source.instances,
+                source.task_set.task_hashes,
+                source.tasks,
                 strict=True,
             )
         )
@@ -221,13 +237,11 @@ class EvaluationEngine:
             namespace=namespace,
             dataset_revision=source.task_set.dataset_revision,
             split_role=source.split_role,
-            instances=selected,
-            task_identity_of=lambda instance: identity_by_instance[
-                id(instance)
-            ],
+            tasks=selected,
+            task_hash_of=lambda instance: identity_by_instance[id(instance)],
             procedure=source.procedure_config,
             aggregation=source.aggregation_config,
-            repeats=source.repeat_plan.repeat_count,
+            num_samples=source.sample_plan.num_samples,
         )
 
     def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine:
@@ -244,18 +258,27 @@ class EvaluationEngine:
             sampling=derived,
             execution_policy=self._execution_policy,
             row_job_factory=self._row_job_factory,
+            concurrency=self._concurrency,
             max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
+            batch_scorer=self._batch_scorer,
         )
+
+    def _code_comp_mode(self) -> CodeCompMode | None:
+        try:
+            return code_comp_mode_for(self.experiment)
+        except TypeError:
+            return None
 
     def preflight(self, candidate: Candidate) -> None:
         """Reject malformed candidates before any provider call."""
-        validate_candidate_prompt(
-            env_spec(self.experiment.env_name),
-            candidate,
-            self.sampling.instances,
-        )
+        body = candidate.payload.get(MUTATION_FIELD)
+        if type(body) is not str:
+            raise ValueError(
+                "code_comp candidate body must be a strict string"
+            )
+        validate_instruction_body(body)
 
     def validate_request(self, request: EvaluationRequest) -> None:
         """Validate the complete evaluation request before execution."""
@@ -295,11 +318,11 @@ class EvaluationEngine:
             candidate=candidate_reference(request.candidate),
             evaluation_binding=request.evaluation_binding,
             evaluation_role=request.evaluation_binding.role,
-            graph_hash=self.experiment.rollout_definition.graph_hash,
+            graph_hash=self.experiment.generation_graph.graph_hash,
             purpose=request.purpose,
             split_role=self.sampling.split_role,
-            task_identities=self.sampling.task_set.task_identities,
-            repeat_count=self.sampling.repeat_plan.repeat_count,
+            task_hashes=self.sampling.task_set.task_hashes,
+            num_samples=self.sampling.sample_plan.num_samples,
             component_traces_ref=component_traces_ref,
             outputs=rows,
         )
@@ -309,30 +332,31 @@ class EvaluationEngine:
         request: EvaluationRequest,
         result: InternalEvalResult,
     ) -> tuple[EvaluationComponentTraces, tuple[EvaluationOutputRow, ...]]:
-        instance_ids = tuple(
-            str(instance.id) for instance in self.sampling.instances
-        )
-        task_identities = self.sampling.task_set.task_identities
-        if len(instance_ids) != len(task_identities):
+        task_ids = tuple(str(instance.id) for instance in self.sampling.tasks)
+        task_hashes = self.sampling.task_set.task_hashes
+        if len(task_ids) != len(task_hashes):
             raise ValueError(
                 "sampling instances and task identities must align exactly"
             )
-        if len(set(instance_ids)) != len(instance_ids):
+        if len(set(task_ids)) != len(task_ids):
             raise ValueError("sampling instance IDs must be unique")
-        if len(set(task_identities)) != len(task_identities):
+        if len(set(task_hashes)) != len(task_hashes):
             raise ValueError("sampling task identities must be unique")
 
-        task_identity_by_instance = dict(
-            zip(instance_ids, task_identities, strict=True)
-        )
+        task_hash_by_instance = dict(zip(task_ids, task_hashes, strict=True))
         instance_by_id = {
-            str(instance.id): instance for instance in self.sampling.instances
+            str(instance.id): instance for instance in self.sampling.tasks
         }
-        repeat_count = self.sampling.repeat_plan.repeat_count
+        task_index_by_id = {
+            task_id: task_index for task_index, task_id in enumerate(task_ids)
+        }
+        num_samples = self.sampling.sample_plan.num_samples
         planned_ordinal = {
-            (instance_id, repeat): instance_index * repeat_count + repeat
-            for instance_index, instance_id in enumerate(instance_ids)
-            for repeat in range(repeat_count)
+            GenerationIndex(
+                task_index=task_index, sample_index=sample_index
+            ): task_index * num_samples + sample_index
+            for task_index, task_id in enumerate(task_ids)
+            for sample_index in range(num_samples)
         }
         trace_rows: list[EvaluationComponentTraceRow] = []
         output_rows: list[EvaluationOutputRow] = []
@@ -342,8 +366,12 @@ class EvaluationEngine:
                 raise ValueError(
                     "evaluation trace candidate_id does not match request"
                 )
-            key = (output.instance_id, output.repeat)
-            ordinal = planned_ordinal.get(key)
+            task_index = task_index_by_id[output.task_id]
+            generation_index = GenerationIndex(
+                task_index=task_index,
+                sample_index=output.sample_index,
+            )
+            ordinal = planned_ordinal.get(generation_index)
             if ordinal is None:
                 raise ValueError(
                     "evaluation trace row is outside the exact sampling plan"
@@ -354,12 +382,13 @@ class EvaluationEngine:
                     "repeat order"
                 )
             prior_ordinal = ordinal
-            task_identity = task_identity_by_instance[output.instance_id]
+            task_hash = task_hash_by_instance[output.task_id]
             trace_rows.append(
                 EvaluationComponentTraceRow(
-                    instance_id=output.instance_id,
-                    task_identity=task_identity,
-                    repeat=output.repeat,
+                    task_id=output.task_id,
+                    task_hash=task_hash,
+                    task_index=task_index,
+                    sample_index=output.sample_index,
                     executed_component_trace=ExecutedComponentTracePayload(
                         row_state=output.row_state,
                         executed_component_steps=(
@@ -371,13 +400,14 @@ class EvaluationEngine:
             output_rows.append(
                 EvaluationOutputRow(
                     candidate_id=output.candidate_id,
-                    instance_id=output.instance_id,
-                    task_identity=task_identity,
-                    repeat=output.repeat,
-                    rendered_prompt=render_prompt(
-                        env_spec(self.experiment.env_name),
+                    task_id=output.task_id,
+                    task_hash=task_hash,
+                    task_index=task_index,
+                    sample_index=output.sample_index,
+                    rendered_prompt=self._rendered_prompt(
                         request.candidate,
-                        instance_by_id[output.instance_id],
+                        instance_by_id[output.task_id],
+                        max_budget=output.max_budget,
                     ),
                     output_text=output.output_text,
                     score=output.score,
@@ -389,6 +419,9 @@ class EvaluationEngine:
                     provider_error=output.provider_error,
                     max_budget=output.max_budget,
                     over_budget=output.over_budget,
+                    code_submission_result=submission_result_to_record(
+                        output.code_submission_result
+                    ),
                 )
             )
         return (
@@ -397,32 +430,126 @@ class EvaluationEngine:
                 candidate=candidate_reference(request.candidate),
                 evaluation_binding=request.evaluation_binding,
                 evaluation_role=request.evaluation_binding.role,
-                graph_hash=self.experiment.rollout_definition.graph_hash,
+                graph_hash=self.experiment.generation_graph.graph_hash,
                 purpose=request.purpose,
                 split_role=self.sampling.split_role,
-                task_identities=task_identities,
-                repeat_count=repeat_count,
+                task_hashes=task_hashes,
+                num_samples=num_samples,
                 rows=tuple(trace_rows),
             ),
             tuple(output_rows),
         )
 
+    def _rendered_prompt(
+        self,
+        candidate: Candidate,
+        instance: Instance,
+        *,
+        max_budget: int | None,
+    ) -> str:
+        mode = self._code_comp_mode()
+        if mode in {CodeCompMode.ENCDEC, CodeCompMode.ENCDEC_MUTANT}:
+            body = candidate.payload[MUTATION_FIELD]
+            if type(body) is not str:
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
+            return render_encoder_frame(
+                body,
+                input_code=instance.prompt_inputs["input_code"],
+                max_budget=max_budget,
+            )
+        if mode is CodeCompMode.DIRECT:
+            body = candidate.payload[MUTATION_FIELD]
+            if type(body) is not str:
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
+            assert isinstance(self.experiment, DirectExperiment)
+            from whetstone.evaluation.drivers.code_comp.direct import (
+                _input_arm_text,
+            )
+
+            input_arm, _score_task = _input_arm_text(self.experiment, instance)
+            return render_direct_frame(
+                body,
+                input_arm=input_arm,
+            )
+        raise TypeError("unsupported code_comp mode for prompt rendering")
+
     def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
         self.validate_request(request)
-        result = run_internal_eval(
-            self.experiment,
-            candidate=request.candidate,
-            sampling=self.sampling,
-            execution_policy=self._execution_policy,
-            row_job_factory=self._row_job_factory,
-            evaluation_binding=request.evaluation_binding,
-            concurrency=self._concurrency,
-            max_wall_seconds=self._max_wall_seconds,
-            partial_log=self._partial_log,
-            render_guard=True,
-            cache=self._prompt_cache,
-        )
+        result = self._run(request)
         return self._persist(request, result)
+
+    def _run(self, request: EvaluationRequest) -> InternalEvalResult:
+        mode = self._code_comp_mode()
+        if mode is not None:
+            body = request.candidate.payload[MUTATION_FIELD]
+            if type(body) is not str:
+                raise ValueError(
+                    "code_comp candidate body must be a strict string"
+                )
+            common = {
+                "candidate_id": request.candidate.candidate_id,
+                "sampling": self.sampling,
+                "execution_policy": self._execution_policy,
+                "evaluation_binding": request.evaluation_binding,
+                "concurrency": self._concurrency,
+                "max_wall_seconds": self._max_wall_seconds,
+                "partial_log": self._partial_log,
+                "cache": self._prompt_cache,
+                "batch_scorer": self._batch_scorer,
+            }
+            if mode is CodeCompMode.DIRECT:
+                from whetstone.evaluation.drivers.code_comp.direct import (
+                    DirectEvalResult,
+                )
+
+                result = run_code_comp_eval(
+                    self.experiment,
+                    candidate_body=body,
+                    row_job_factory=cast(
+                        DirectRowJobFactory, self._row_job_factory
+                    ),
+                    **common,
+                )
+                assert isinstance(result, DirectEvalResult)
+                return InternalEvalResult(
+                    aggregate=result.submission_score_aggregate,
+                    reward=result.reward,
+                    per_task_scores=result.per_task_scores,
+                    per_task_counts=result.per_task_counts,
+                    outputs=result.outputs,
+                    supplemental_aggregates=(),
+                    request_identities=result.request_identities,
+                )
+            from whetstone.evaluation.drivers.code_comp.encdec import (
+                EncDecEvalResult,
+            )
+
+            result = run_code_comp_eval(
+                self.experiment,
+                candidate_template=body,
+                row_job_factory=cast(
+                    EncDecRowJobFactory, self._row_job_factory
+                ),
+                **common,
+            )
+            assert isinstance(result, EncDecEvalResult)
+            return InternalEvalResult(
+                aggregate=result.primary_aggregate,
+                reward=result.reward,
+                per_task_scores=result.per_task_scores,
+                per_task_counts=result.per_task_counts,
+                outputs=result.outputs,
+                supplemental_aggregates=(result.compression_aggregate,),
+                request_identities=result.request_identities,
+                concurrency_halved=result.concurrency_halved,
+                deadline_reached=result.deadline_reached,
+                guard_timeouts=result.guard_timeouts,
+            )
+        raise TypeError("EvaluationEngine supports code_comp experiments only")
 
     def _persist(
         self, request: EvaluationRequest, result: InternalEvalResult
@@ -462,9 +589,17 @@ class EvaluationEngine:
         )
         aggregation_output = aggregate.aggregation_output
         aggregate_record = aggregate.record_content()
-        aggregate_ref = self._put(ROLLOUT_AGGREGATE_SCHEMA, aggregate_record)
+        aggregate_ref = self._put(AGGREGATE_SCHEMA, aggregate_record)
         if aggregate_ref != aggregate.record_ref():
             raise ValueError("persisted aggregate reference diverged")
+        for supplemental in result.supplemental_aggregates:
+            supplemental_ref = self._put(
+                AGGREGATE_SCHEMA, supplemental.record_content()
+            )
+            if supplemental_ref != supplemental.record_ref():
+                raise ValueError(
+                    "persisted supplemental aggregate reference diverged"
+                )
         reward_ref = None
         if result.reward is not None:
             reward_ref = reward_reference(result.reward)
@@ -483,13 +618,13 @@ class EvaluationEngine:
             graph_hash=aggregate.graph_hash,
             graph_config_ref=aggregate.graph_hash,
             purpose=request.purpose,
-            dataset_identity=self.sampling.task_set.dataset_revision,
-            task_identities=self.sampling.task_set.task_identities,
-            repeat_count=self.sampling.repeat_plan.repeat_count,
+            dataset_hash=self.sampling.task_set.dataset_revision,
+            task_hashes=self.sampling.task_set.task_hashes,
+            num_samples=self.sampling.sample_plan.num_samples,
             per_task_values=result.per_task_scores,
             per_task_counts=result.per_task_counts,
             row_accounting=RowAccounting(
-                planned=aggregate.task_count * aggregate.repeat_count,
+                planned=aggregate.task_count * aggregate.num_samples,
                 present=aggregate.rows_present,
                 missing=aggregate.rows_missing,
                 failed=aggregate.rows_failed,
@@ -528,7 +663,7 @@ class EvaluationEngine:
             for row in self._partial_log.load()
             if row.unit == candidate_id
             and row.phase == self.sampling.split_role
-            and row.request_identity in request_identities
+            and row.request_hash in request_identities
         ]
         hits = [row for row in rows if row.cache_hit]
         return CacheEvidence(

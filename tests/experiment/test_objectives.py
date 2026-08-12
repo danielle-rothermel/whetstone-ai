@@ -63,7 +63,7 @@ def test_direct_objective_construction_also_refuses_reward() -> None:
 
 def test_no_reward_derivation_source_exists() -> None:
     members = {m.value for m in ObjectiveDerivationSource}
-    assert members == {"score", "rollout_aggregate"}
+    assert members == {"score", "aggregate"}
     assert "reward" not in members
 
 

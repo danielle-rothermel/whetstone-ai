@@ -41,7 +41,7 @@ def _eval_config(identity_hash: str = FULL_B) -> EvalConfig:
         sampling_config_hash=FULL_A,
         evaluation_procedure_config_hash=FULL_C,
         aggregation_config_hash=FULL_D,
-        config_identity_hash=identity_hash,
+        config_hash=identity_hash,
     )
 
 
@@ -58,7 +58,7 @@ def _provider_execution_policy_ref() -> IdentityRef:
             PROVIDER_EXECUTION_POLICY_SCHEMA,
             policy.identity_payload(),
         ),
-        identity_hash=policy.identity_hash,
+        record_hash=policy.identity_hash,
     )
 
 
@@ -88,7 +88,7 @@ def _binding(
         environment_fingerprint=ExecutionEnvironmentFingerprint(
             dependency_versions=(("dr-code", "0.1.0"),),
             code_revision="deadbeef",
-            runtime_identity="linux-x86_64",
+            runtime_hash="linux-x86_64",
         ),
         provenance_note="schema test",
         provenance_ordinal=1,
@@ -117,7 +117,7 @@ def test_eval_config_ref_rejects_tampered_record_ref() -> None:
 def test_eval_config_ref_rejects_tampered_identity_hash() -> None:
     ref = eval_config_reference(_eval_config())
     payload = ref.model_dump(mode="json")
-    payload["identity_hash"] = FULL_A
+    payload["config_hash"] = FULL_A
 
     with pytest.raises(
         ValidationError, match=r"identity_hash.*exact typed record"
@@ -129,9 +129,9 @@ def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
     binding = _binding()
 
     assert EVALUATION_BINDING_SCHEMA == "whetstone.evaluation_binding"
-    assert EVALUATION_BINDING_SCHEMA_VERSION == 2
+    assert EVALUATION_BINDING_SCHEMA_VERSION == 3
     assert binding.schema_version == EVALUATION_BINDING_SCHEMA_VERSION
-    assert binding.record_content()["schema_version"] == 2
+    assert binding.record_content()["schema_version"] == 3
     assert tuple(binding.record_content()) == tuple(binding.identity_payload())
     assert tuple(binding.identity_payload()) == (
         "schema_version",
@@ -150,17 +150,17 @@ def test_evaluation_binding_identity_contract_literals_are_pinned() -> None:
         "record_ref": {
             "schema_name": "whetstone.provider_execution_policy",
             "content_hash": (
-                "ddb2115fb1631560c9b02b1aa16820482"
-                "e37b28523d1f43ddd7dbecbed664909"
+                "6282ea0fd226f31de13386807a249566"
+                "ed066b2a437fa5ae5fb7fb2792267f40"
             ),
         },
-        "identity_hash": (
-            "e11d5ffb3acb35048f57ae08dbc34cc4b68332115707ecf8fd304e8c5d147ac2"
+        "record_hash": (
+            "dc3b0bb25a7e0e87d461cf376518310daa7ffe318450e85733203e13e7eb1e42"
         ),
     }
     assert (
         binding.identity_hash()
-        == "3b204030cc8e1edefac1feccda2982d43de2901c560bf68038f3c8770601bb57"
+        == "75e1a5fce887b36da046c8b5fc5aa05838ac17413d4b5403ed4041eab4bd4313"
     )
     assert (
         EvaluationBinding.model_validate(binding.model_dump(mode="json"))
@@ -215,12 +215,10 @@ def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
         legacy_identity_hash
         == {
             True: (
-                "f9fa0b6b12b2d3e93f38be8a6fd3a3c3"
-                "b7159528143ce416c4ba5f409c958c14"
+                "eb8c90e15fb6147ce7359958ce7fbd8cd152c8170803a150effcf5fa19804b4e"
             ),
             False: (
-                "7f9667fd5ddf041ed8e331e0329a9c54"
-                "2fe74104b53eb3ca7f02cc26235f7b16"
+                "bfd74fbb8fe543f797e2901d68697c621d8b382027498bf5e6320d7369d4a75c"
             ),
         }[provider_ref_present]
     )
@@ -228,7 +226,7 @@ def test_evaluation_binding_v1_wire_is_partitioned_and_rejected(
 
     with pytest.raises(ValidationError, match="Field required"):
         EvaluationBinding.model_validate(legacy_wire)
-    with pytest.raises(ValidationError, match="Input should be 2"):
+    with pytest.raises(ValidationError, match="Input should be 3"):
         EvaluationBinding.model_validate({"schema_version": 1, **legacy_wire})
 
 
@@ -275,9 +273,9 @@ def test_evaluation_binding_identity_is_sensitive_to_exact_content() -> None:
     changed_campaign_payload = internal.model_dump(mode="json")
     changed_campaign_payload["campaign"] = "another-campaign"
     changed_environment_payload = internal.model_dump(mode="json")
-    changed_environment_payload["environment_fingerprint"][
-        "runtime_identity"
-    ] = "darwin"
+    changed_environment_payload["environment_fingerprint"]["runtime_hash"] = (
+        "darwin"
+    )
     official = _binding(
         role=EvaluationRole.OFFICIAL,
         authority_principal="official-publisher",

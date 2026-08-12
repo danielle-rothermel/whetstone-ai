@@ -90,6 +90,14 @@ def test_reasoning_effort_folds_into_the_config_identity() -> None:
     assert high.call_config.identity_hash != low.call_config.identity_hash
 
 
+def test_task_routes_accept_exact_token_limits() -> None:
+    openrouter = canonical_task_route(token_limit=2048)
+    openai = openai_direct_route(token_limit=1024)
+
+    assert openrouter.call_config.controls.token_limit == 2048
+    assert openai.call_config.controls.token_limit == 1024
+
+
 def test_absent_reasoning_leaves_the_provider_default() -> None:
     assert reasoning_effort_for(None) is None
     assert reasoning_effort_for("high") is ReasoningEffort.HIGH
@@ -137,16 +145,14 @@ def test_route_for_applies_the_task_model_override() -> None:
 
 
 def test_task_model_for_env_prefers_the_explicit_override() -> None:
-    assert task_model_for_env("c18") == DEEPSEEK_TASK_MODEL
-    assert task_model_for_env("ed1") == ENCDEC_DEFAULT_TASK_MODEL
+    assert task_model_for_env("code_comp") == ENCDEC_DEFAULT_TASK_MODEL
     assert task_model_for_env("unlisted") == CANONICAL_TASK_MODEL
-    assert task_model_for_env("c18", override="vendor/x") == "vendor/x"
+    assert task_model_for_env("code_comp", override="vendor/x") == "vendor/x"
 
 
 def test_completeness_defaults_to_strict_propagate() -> None:
     assert completeness_for_env("unlisted") == ("propagate", 0.0)
-    assert completeness_for_env("c18") == ("skip", 0.02)
-    assert completeness_for_env("ed1") == ("skip", 0.15)
+    assert completeness_for_env("code_comp") == ("skip", 0.15)
 
 
 def test_identity_summary_carries_no_secret_material() -> None:

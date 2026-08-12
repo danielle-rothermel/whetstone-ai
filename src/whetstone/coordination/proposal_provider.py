@@ -10,24 +10,34 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
+from whetstone.optimization.codex.proposer import (
+    CodexCliProposerConfig,
+    CodexCliProposerTransport,
+)
 from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
     ProposalDraft,
     ProposalExecutorDurabilityContract,
     ProposalRequest,
     ProposerConfig,
+    ProposerRouteConfig,
     ProposerTransport,
     ProviderProposerTransport,
     _durable_proposal_executor,
 )
 
 PROPOSAL_DBOS_POLICY_SCHEMA = "whetstone.proposal_dbos_policy"
-PROPOSAL_DBOS_POLICY_VERSION = 1
+PROPOSAL_DBOS_POLICY_VERSION = 2
 PROPOSAL_DBOS_WORKFLOW_SCHEMA = "whetstone.proposal_dbos_workflow"
 PROPOSAL_DBOS_WORKFLOW_VERSION = 1
 
 #: Persisted contract literal for the one supported durability mode.
 PROPOSAL_DURABILITY_MODE = "at_least_once"
+
+type DurableProposerConfig = ProposerConfig | CodexCliProposerConfig
+type DurableProposerTransport = (
+    ProviderProposerTransport | CodexCliProposerTransport
+)
 
 
 class ProposalProviderError(RuntimeError):
@@ -41,13 +51,16 @@ class _ProposalTransportRegistry:
 
     def __init__(self) -> None:
         self._lock = Lock()
-        self._transports: dict[str, ProviderProposerTransport] = {}
+        self._transports: dict[str, DurableProposerTransport] = {}
 
-    def bind(self, transport: ProviderProposerTransport) -> str:
-        if type(transport) is not ProviderProposerTransport:
+    def bind(self, transport: DurableProposerTransport) -> str:
+        if type(transport) not in (
+            ProviderProposerTransport,
+            CodexCliProposerTransport,
+        ):
             raise ProposalProviderError(
                 "durable proposal registration requires "
-                "ProviderProposerTransport"
+                "a supported proposer transport"
             )
 
         registry_key = transport.durability_identity_hash
@@ -64,7 +77,7 @@ class _ProposalTransportRegistry:
             self._transports[registry_key] = transport
         return registry_key
 
-    def resolve(self, registry_key: str) -> ProviderProposerTransport:
+    def resolve(self, registry_key: str) -> DurableProposerTransport:
         require_full_hash(registry_key, field="transport_registry_key")
         with self._lock:
             try:
@@ -89,14 +102,14 @@ _TRANSPORT_REGISTRY = _ProposalTransportRegistry()
 
 
 def register_proposal_transport(
-    transport: ProviderProposerTransport,
+    transport: DurableProposerTransport,
 ) -> str:
     """Bind one proposer transport under its exact durability identity."""
 
     return _TRANSPORT_REGISTRY.bind(transport)
 
 
-def _registered_transport(registry_key: str) -> ProviderProposerTransport:
+def _registered_transport(registry_key: str) -> DurableProposerTransport:
     return _TRANSPORT_REGISTRY.resolve(registry_key)
 
 
@@ -110,7 +123,7 @@ def _proposal_policy_identity_payload(
         "automatic_dbos_retries": False,
         "durability_mode": PROPOSAL_DURABILITY_MODE,
         "logical_call_boundary": "one_retry_disabled_dbos_step",
-        "provider_retry_owner": "provider_execution_policy",
+        "retry_owner": "proposer_transport",
         "transport_durability_identity_hash": registry_key,
     }
 
@@ -127,7 +140,7 @@ def _proposal_workflow_identity_payload(
     *,
     registry_key: str,
     policy_identity_hash: str,
-    config: ProposerConfig,
+    config: DurableProposerConfig,
     request: ProposalRequest,
     count: int,
 ) -> dict[str, int | str]:
@@ -137,8 +150,8 @@ def _proposal_workflow_identity_payload(
     return {
         "count": count,
         "policy_identity_hash": policy_identity_hash,
-        "proposal_request_identity_hash": request.identity_hash(),
-        "proposer_config_identity_hash": config.identity_hash(),
+        "proposal_request_hash": request.identity_hash(),
+        "proposer_config_hash": config.identity_hash(),
         "transport_durability_identity_hash": registry_key,
     }
 
@@ -147,7 +160,7 @@ def _proposal_workflow_identity(
     *,
     registry_key: str,
     policy_identity_hash: str,
-    config: ProposerConfig,
+    config: DurableProposerConfig,
     request: ProposalRequest,
     count: int,
 ) -> str:
@@ -167,7 +180,7 @@ def _proposal_workflow_identity(
 @DBOS.step(retries_allowed=False)
 def _logical_proposal_step(
     registry_key: str,
-    config: ProposerConfig,
+    config: DurableProposerConfig,
     request: ProposalRequest,
     count: int,
 ) -> tuple[ProposalDraft, ...]:
@@ -181,7 +194,7 @@ def _logical_proposal_step(
 def _proposal_provider_workflow(
     registry_key: str,
     policy_identity_hash: str,
-    config: ProposerConfig,
+    config: DurableProposerConfig,
     request: ProposalRequest,
     count: int,
 ) -> tuple[ProposalDraft, ...]:
@@ -224,7 +237,7 @@ class _DbosProposalExecution(NamedTuple):
     def __call__(
         self,
         *,
-        config: ProposerConfig,
+        config: ProposerRouteConfig,
         request: ProposalRequest,
         transport: ProposerTransport,
         count: int,
@@ -245,6 +258,8 @@ class _DbosProposalExecution(NamedTuple):
             raise ProposalProviderError(
                 "proposal transport differs from its registered identity"
             )
+        if not isinstance(config, ProposerConfig | CodexCliProposerConfig):
+            raise TypeError("unsupported durable proposer config")
         policy_identity_hash = _proposal_policy_identity(
             self.transport_registry_key
         )

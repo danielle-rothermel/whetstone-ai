@@ -18,7 +18,7 @@ from dr_providers import (
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
 from whetstone.provider.failures.exceptions import (
-    EmptyGenerationError,
+    EmptyProviderGenerationError,
     EvalFailureError,
     failure_exception_type_for_class,
 )
@@ -39,15 +39,17 @@ __all__ = [
     "provider_call_request_from_parameters",
     "provider_result_from_response",
     "reasoning_effort_from_parameter",
-    "require_generation_text",
+    "require_provider_generation_text",
     "translate_provider_failure",
 ]
 
 
-def require_generation_text(text: str | None, *, output_field: str) -> str:
+def require_provider_generation_text(
+    text: str | None, *, output_field: str
+) -> str:
     """Require a nonblank generation before it becomes a result field."""
     if text is None or not text.strip():
-        raise EmptyGenerationError(
+        raise EmptyProviderGenerationError(
             f"empty generation for output field {output_field!r}",
             metadata={"output_field": output_field},
         )
@@ -258,7 +260,9 @@ def provider_result_from_response(
         else {}
     )
     return ProviderResult(
-        text=require_generation_text(response.text, output_field=output_field),
+        text=require_provider_generation_text(
+            response.text, output_field=output_field
+        ),
         response_metadata=metadata,
         usage_metadata=usage_metadata,
         provider_cost=(

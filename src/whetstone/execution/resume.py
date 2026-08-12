@@ -25,7 +25,7 @@ def index_partial_records(
 ) -> PartialRecordIndex:
     """Index only records in the current semantic phase and unit."""
     return {
-        (record.instance_id, record.repeat_id, record.request_identity): record
+        (record.task_id, record.sample_index, record.request_hash): record
         for record in records
         if record.phase == phase and record.unit == unit
     }
@@ -34,10 +34,10 @@ def index_partial_records(
 def resolve_exact_resume(
     records: PartialRecordIndex,
     *,
-    instance_id: str,
-    repeat_id: int,
-    ordinal_0_request_identity: str,
-    ordinal_1_request_identity: str,
+    task_id: str,
+    sample_index: int,
+    ordinal_0_request_hash: str,
+    ordinal_1_request_hash: str,
 ) -> ExactResumeDecision:
     """Choose the exact terminal record or next request for one row.
 
@@ -47,17 +47,13 @@ def resolve_exact_resume(
     any other request identity, including another Evaluation Binding, are not
     eligible for restoration.
     """
-    ordinal_1 = records.get(
-        (instance_id, repeat_id, ordinal_1_request_identity)
-    )
+    ordinal_1 = records.get((task_id, sample_index, ordinal_1_request_hash))
     if ordinal_1 is not None:
         if ordinal_1.redrive_pending:
             raise ValueError("an ordinal-1 partial record cannot be pending")
         return ExactResumeDecision(record=ordinal_1, drive_ordinal=None)
 
-    ordinal_0 = records.get(
-        (instance_id, repeat_id, ordinal_0_request_identity)
-    )
+    ordinal_0 = records.get((task_id, sample_index, ordinal_0_request_hash))
     if ordinal_0 is None:
         return ExactResumeDecision(record=None, drive_ordinal=0)
     if ordinal_0.redrive_pending:

@@ -127,9 +127,9 @@ class TestEvidenceNeverTruncated:
         stable = result.to_stable_dict()
         blob = str(stable)
         assert LONG_BODY_TEXT in blob
-        assert result.generation is not None
-        assert result.generation.text == LONG_BODY_TEXT
-        assert len(result.generation.text) == 5000
+        assert result.provider_generation is not None
+        assert result.provider_generation.text == LONG_BODY_TEXT
+        assert len(result.provider_generation.text) == 5000
 
     def test_full_failure_body_survives_into_persisted_attempt(self) -> None:
         request = s.build_request()

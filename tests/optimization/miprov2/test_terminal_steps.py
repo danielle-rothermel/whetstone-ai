@@ -105,7 +105,7 @@ def _adapter_case(tmp_path, *, templates: tuple[str, ...]):
     )
     budget = BudgetState(
         remaining={
-            "bootstrap_rollouts": 0,
+            "bootstrap_generations": 0,
             "proposal_calls": 2,
             "evaluations": 2,
             "task_rows": 6,
@@ -174,7 +174,7 @@ def test_successful_proposal_step_is_not_terminalized(tmp_path) -> None:
 
 def _proposal_response(request) -> Miprov2ProposalResponse:
     return Miprov2ProposalResponse(
-        request_identity_hash=request.identity_hash,
+        request_hash=request.identity_hash,
         text="Instruction: improved {query}.",
         evidence={"ordinal": request.effect_ordinal},
     )
@@ -219,7 +219,7 @@ def _request_for(request, state: Miprov2State):
 
     consumed = {
         label: state.effect_counts[label]
-        for label in ("bootstrap_rollouts", "proposal_calls", "evaluations")
+        for label in ("bootstrap_generations", "proposal_calls", "evaluations")
     }
     consumed["task_rows"] = state.effect_counts["task_rows"]
     remaining = {

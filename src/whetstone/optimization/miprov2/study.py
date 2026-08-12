@@ -348,7 +348,7 @@ class Miprov2EvaluationObservation(_IdentityRecord):
     effect_identity_hash: StrictStr
     purpose: EvaluationPurpose
     candidate: CandidateRef
-    task_batch_identities: tuple[StrictStr, ...]
+    task_batch_hashes: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     eval_config_binding: Miprov2EvalConfigBinding
     evaluation_binding: EvaluationBinding
@@ -364,7 +364,7 @@ class Miprov2EvaluationObservation(_IdentityRecord):
             "effect_identity_hash": self.effect_identity_hash,
             "purpose": self.purpose,
             "candidate": self.candidate.model_dump(mode="json"),
-            "task_batch_identities": list(self.task_batch_identities),
+            "task_batch_hashes": list(self.task_batch_hashes),
             "eval_config": self.eval_config.model_dump(mode="json"),
             "eval_config_binding": self.eval_config_binding.model_dump(
                 mode="json"
@@ -407,12 +407,12 @@ class Miprov2EvaluationObservation(_IdentityRecord):
             self.expected_reward_policy_hash,
             field="expected_reward_policy_hash",
         )
-        if not self.task_batch_identities:
-            raise ValueError("task_batch_identities must not be empty")
-        for index, identity_hash in enumerate(self.task_batch_identities):
+        if not self.task_batch_hashes:
+            raise ValueError("task_batch_hashes must not be empty")
+        for index, identity_hash in enumerate(self.task_batch_hashes):
             require_full_hash(
                 identity_hash,
-                field=f"task_batch_identities[{index}]",
+                field=f"task_batch_hashes[{index}]",
             )
         if self.eval_config != self.eval_config_binding.eval_config:
             raise ValueError(
@@ -681,7 +681,7 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
             raise ValueError("assembled candidate must bind its exact base")
         if (
             self.rendering.control_identity_hash
-            != self.optimizer_config.identity_hash
+            != self.optimizer_config.record_hash
             or self.rendering.base_candidate_identity_hash
             != self.base_candidate.identity_hash
             or self.rendering.categorical_combination_identity_hash
@@ -874,7 +874,7 @@ class StudyTranscript(_IdentityRecord):
     optuna_version: Literal["4.8.0"] = OPTUNA_VERSION
     seed: StrictInt
     run_id: StrictStr
-    validation_task_identities: tuple[StrictStr, ...]
+    validation_task_hashes: tuple[StrictStr, ...]
     validation_eval_source: EvalConfigRef
     reward_policy_hash: StrictStr
     optimizer_config: IdentityRef
@@ -899,9 +899,7 @@ class StudyTranscript(_IdentityRecord):
             "optuna_version": self.optuna_version,
             "seed": self.seed,
             "run_id": self.run_id,
-            "validation_task_identities": list(
-                self.validation_task_identities
-            ),
+            "validation_task_hashes": list(self.validation_task_hashes),
             "validation_eval_source": self.validation_eval_source.model_dump(
                 mode="json"
             ),
@@ -941,18 +939,18 @@ class StudyTranscript(_IdentityRecord):
             raise ValueError("run_id must be non-empty")
         if self.run.record.run_id != self.run_id:
             raise ValueError("study run_id conflicts with the exact run")
-        if not self.validation_task_identities:
-            raise ValueError("validation_task_identities must not be empty")
-        for index, identity_hash in enumerate(self.validation_task_identities):
+        if not self.validation_task_hashes:
+            raise ValueError("validation_task_hashes must not be empty")
+        for index, identity_hash in enumerate(self.validation_task_hashes):
             require_full_hash(
                 identity_hash,
-                field=f"validation_task_identities[{index}]",
+                field=f"validation_task_hashes[{index}]",
             )
-        if len(set(self.validation_task_identities)) != len(
-            self.validation_task_identities
+        if len(set(self.validation_task_hashes)) != len(
+            self.validation_task_hashes
         ):
             raise ValueError("validation task identities must be unique")
-        if len(self.validation_task_identities) != self.schedule.valset_size:
+        if len(self.validation_task_hashes) != self.schedule.valset_size:
             raise ValueError(
                 "validation task identities do not match persisted valset size"
             )
@@ -1017,7 +1015,7 @@ class StudyTranscript(_IdentityRecord):
         self._validate_evaluation_binding(
             self.baseline.evaluation,
             expected_purpose="miprov2_baseline",
-            expected_tasks=self.validation_task_identities,
+            expected_tasks=self.validation_task_hashes,
         )
         if len(self.samples) > self.schedule.num_trials:
             raise ValueError("sample count exceeds persisted num_trials")
@@ -1042,7 +1040,7 @@ class StudyTranscript(_IdentityRecord):
                 expected_params=normalized,
                 expected_combination=expected_candidate,
             )
-            batch_size = len(sample.evaluation.task_batch_identities)
+            batch_size = len(sample.evaluation.task_batch_hashes)
             expected_batch_size = (
                 self.schedule.minibatch_size
                 if self.schedule.minibatch
@@ -1059,19 +1057,19 @@ class StudyTranscript(_IdentityRecord):
                     "batch_full_evaluation does not match task batch size"
                 )
             if sample.batch_full_evaluation:
-                expected_tasks = self.validation_task_identities
+                expected_tasks = self.validation_task_hashes
             else:
                 valid_subset = len(
-                    set(sample.evaluation.task_batch_identities)
+                    set(sample.evaluation.task_batch_hashes)
                 ) == batch_size and set(
-                    sample.evaluation.task_batch_identities
-                ).issubset(self.validation_task_identities)
+                    sample.evaluation.task_batch_hashes
+                ).issubset(self.validation_task_hashes)
                 if not valid_subset:
                     raise ValueError(
                         "minibatch tasks must be a unique ordered subset "
                         "of the validation set"
                     )
-                expected_tasks = sample.evaluation.task_batch_identities
+                expected_tasks = sample.evaluation.task_batch_hashes
             self._validate_evaluation_binding(
                 sample.evaluation,
                 expected_purpose="miprov2_sample",
@@ -1092,7 +1090,7 @@ class StudyTranscript(_IdentityRecord):
                 self._validate_evaluation_binding(
                     promotion.evaluation,
                     expected_purpose="miprov2_promotion",
-                    expected_tasks=self.validation_task_identities,
+                    expected_tasks=self.validation_task_hashes,
                 )
                 if promotion.evaluation.intent_id in seen_intent_ids:
                     raise ValueError("evaluation intent IDs must be unique")
@@ -1145,7 +1143,7 @@ class StudyTranscript(_IdentityRecord):
             raise ValueError("evaluation binding belongs to another run")
         if binding.purpose != expected_purpose:
             raise ValueError("evaluation binding has the wrong purpose")
-        if binding.task_batch_identities != expected_tasks:
+        if binding.task_batch_hashes != expected_tasks:
             raise ValueError(
                 "evaluation task order does not match the persisted "
                 "study contract"
@@ -1154,13 +1152,12 @@ class StudyTranscript(_IdentityRecord):
         request = derivation.request
         expected_derivation_purpose = expected_purpose.removeprefix("miprov2_")
         if (
-            request.control_identity_hash
-            != self.optimizer_config.identity_hash
+            request.control_identity_hash != self.optimizer_config.record_hash
             or request.source_eval_config != self.validation_eval_source
             or request.purpose != expected_derivation_purpose
             or request.effect_identity_hash != binding.effect_identity_hash
-            or request.task_batch_identities != expected_tasks
-            or request.repeat_count != 1
+            or request.task_batch_hashes != expected_tasks
+            or request.num_samples != 1
         ):
             raise ValueError(
                 "evaluation derivation does not match the persisted "
@@ -1442,7 +1439,7 @@ class Miprov2Study:
         space: Miprov2ParameterSpace,
         schedule: Miprov2StudySchedule,
         run_id: str,
-        validation_task_identities: tuple[str, ...],
+        validation_task_hashes: tuple[str, ...],
         validation_eval_source: EvalConfigRef,
         reward_policy_hash: str,
         optimizer_config: IdentityRef,
@@ -1455,7 +1452,7 @@ class Miprov2Study:
         self.space = space
         self.schedule = schedule
         self.run_id = run_id
-        self.validation_task_identities = validation_task_identities
+        self.validation_task_hashes = validation_task_hashes
         self.validation_eval_source = validation_eval_source
         self.reward_policy_hash = reward_policy_hash
         self.optimizer_config = optimizer_config
@@ -1492,7 +1489,7 @@ class Miprov2Study:
         return StudyTranscript(
             seed=self.seed,
             run_id=self.run_id,
-            validation_task_identities=self.validation_task_identities,
+            validation_task_hashes=self.validation_task_hashes,
             validation_eval_source=self.validation_eval_source,
             reward_policy_hash=self.reward_policy_hash,
             optimizer_config=self.optimizer_config,
@@ -1600,7 +1597,7 @@ class Miprov2Study:
             assert promotion_full_score is not None
             assert promotion_evaluation is not None
             if (
-                len(promotion_evaluation.task_batch_identities)
+                len(promotion_evaluation.task_batch_hashes)
                 != self.schedule.valset_size
             ):
                 raise ValueError(
@@ -1610,7 +1607,7 @@ class Miprov2Study:
             self._validate_evaluation_binding(
                 promotion_evaluation,
                 expected_purpose="miprov2_promotion",
-                expected_tasks=self.validation_task_identities,
+                expected_tasks=self.validation_task_hashes,
             )
             if (
                 promotion_evaluation.candidate.identity_hash
@@ -1756,16 +1753,16 @@ class Miprov2Study:
             if self.schedule.minibatch
             else self.schedule.valset_size
         )
-        if len(evaluation.task_batch_identities) != expected_batch_size:
+        if len(evaluation.task_batch_hashes) != expected_batch_size:
             raise ValueError(
                 "sample task batch does not match persisted schedule"
             )
-        expected_tasks = evaluation.task_batch_identities
+        expected_tasks = evaluation.task_batch_hashes
         if len(expected_tasks) >= self.schedule.valset_size:
-            expected_tasks = self.validation_task_identities
+            expected_tasks = self.validation_task_hashes
         elif len(set(expected_tasks)) != len(expected_tasks) or not set(
             expected_tasks
-        ).issubset(self.validation_task_identities):
+        ).issubset(self.validation_task_hashes):
             raise ValueError(
                 "sample tasks must be a unique ordered validation subset"
             )
@@ -1787,8 +1784,7 @@ class Miprov2Study:
             score=score,
             evaluation=evaluation,
             batch_full_evaluation=(
-                len(evaluation.task_batch_identities)
-                >= self.schedule.valset_size
+                len(evaluation.task_batch_hashes) >= self.schedule.valset_size
             ),
         )
 
@@ -1803,20 +1799,19 @@ class Miprov2Study:
             raise ValueError("evaluation binding belongs to another run")
         if binding.purpose != expected_purpose:
             raise ValueError("evaluation binding has the wrong purpose")
-        if binding.task_batch_identities != expected_tasks:
+        if binding.task_batch_hashes != expected_tasks:
             raise ValueError(
                 "evaluation task order does not match the persisted "
                 "study contract"
             )
         request = binding.eval_config_binding.request
         if (
-            request.control_identity_hash
-            != self.optimizer_config.identity_hash
+            request.control_identity_hash != self.optimizer_config.record_hash
             or request.source_eval_config != self.validation_eval_source
             or request.purpose != expected_purpose.removeprefix("miprov2_")
             or request.effect_identity_hash != binding.effect_identity_hash
-            or request.task_batch_identities != expected_tasks
-            or request.repeat_count != 1
+            or request.task_batch_hashes != expected_tasks
+            or request.num_samples != 1
         ):
             raise ValueError(
                 "evaluation derivation does not match the persisted "
@@ -1844,7 +1839,7 @@ class Miprov2Study:
         expected = (
             self.seed,
             self.run_id,
-            self.validation_task_identities,
+            self.validation_task_hashes,
             self.validation_eval_source,
             self.reward_policy_hash,
             self.optimizer_config,
@@ -1861,7 +1856,7 @@ class Miprov2Study:
         actual = (
             transcript.seed,
             transcript.run_id,
-            transcript.validation_task_identities,
+            transcript.validation_task_hashes,
             transcript.validation_eval_source,
             transcript.reward_policy_hash,
             transcript.optimizer_config,

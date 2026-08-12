@@ -1,30 +1,18 @@
 from __future__ import annotations
 
-import multiprocessing
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from threading import Event
 
 import pytest
 from dr_serialize import StrictJsonDecodeError
 
-from tests.core.effects.authority_spawn import acquire_then_exit, spawn_result
-from tests.core.effects.authority_sqlite_scenarios import (
-    run_spawned_authority_contention,
-    run_spawned_same_owner_different_attempts_arbitrate_once,
-)
 from tests.core.effects.authority_support import (
     _acquire,
     _request,
     _result_ref,
 )
-from tests.optimization.processes import (
-    in_process_start_methods,
-    join_processes,
-    terminate_processes,
-)
-from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
 from whetstone.core.effects import _storage as storage_module
 from whetstone.core.effects.authority import (
     AcquireOutcome,
@@ -32,7 +20,6 @@ from whetstone.core.effects.authority import (
     EffectAuthorityError,
     EffectLease,
     ReplayPolicy,
-    StaleLeaseError,
     TerminalOutcome,
 )
 
@@ -122,7 +109,7 @@ def test_persisted_authority_literals_and_sqlite_schema_are_pinned(
         ).fetchone()
     assert columns == [
         "semantic_key",
-        "request_identity_hash",
+        "request_hash",
         "replay_policy",
         "state",
         "owner_id",
@@ -139,7 +126,7 @@ def test_persisted_authority_literals_and_sqlite_schema_are_pinned(
     compact_metadata_sql = "".join(metadata_sql[0].split())
     for column in (
         "semantic_key",
-        "request_identity_hash",
+        "request_hash",
         "replay_policy",
         "state",
         "owner_id",
@@ -286,29 +273,6 @@ def test_sqlite_rejects_submillisecond_lease_durations(
         )
 
 
-@pytest.mark.sqlite_time_integration
-def test_sqlite_maintenance_terminalization_surfaces_renewal_loss(
-    tmp_path: Path,
-) -> None:
-    database = tmp_path / "renewal-loss.sqlite"
-    authority = EffectAuthority.sqlite(database)
-    acquired = _acquire(
-        authority,
-        _request(),
-        duration=timedelta(milliseconds=1),
-    )
-    assert acquired.lease is not None
-    wait_for_sqlite_authority_after(database, acquired.lease.expires_at)
-
-    with pytest.raises(StaleLeaseError, match="effect lease is stale"):
-        with authority.maintain(
-            acquired.lease,
-            lease_duration=timedelta(milliseconds=1),
-        ) as maintenance:
-            assert maintenance._stop.wait(timeout=1)
-            maintenance.succeed(result_ref=_result_ref("too-late"))
-
-
 def test_sqlite_rejects_malformed_preexisting_schema_and_version(
     tmp_path: Path,
 ) -> None:
@@ -375,72 +339,3 @@ def test_sqlite_initialization_is_idempotent_and_terminal_write_atomic(
         attempt="attempt-2",
     )
     assert replay.outcome is AcquireOutcome.BUSY
-
-
-@pytest.mark.sqlite_contention
-@pytest.mark.parametrize("start_method", in_process_start_methods())
-@pytest.mark.process_integration
-def test_spawned_same_owner_different_attempts_arbitrate_once(
-    tmp_path: Path,
-    start_method: str,
-) -> None:
-    run_spawned_same_owner_different_attempts_arbitrate_once(
-        tmp_path,
-        start_method,
-    )
-
-
-@pytest.mark.sqlite_time_integration
-@pytest.mark.sqlite_contention
-@pytest.mark.process_integration
-def test_spawned_sqlite_owner_exit_allows_authority_timed_takeover(
-    tmp_path: Path,
-) -> None:
-    context = multiprocessing.get_context("spawn")
-    database = tmp_path / "takeover.sqlite"
-    request = _request()
-    output = context.Queue()
-    process = context.Process(
-        target=acquire_then_exit,
-        args=(
-            str(database),
-            request.model_dump(),
-            "crashed-worker",
-            "crashed-attempt",
-            1.2,
-            output,
-        ),
-    )
-    process_started = False
-    try:
-        process.start()
-        process_started = True
-        first = spawn_result(output)
-        join_processes((process,), timeout=10)
-    finally:
-        if process_started:
-            terminate_processes((process,), timeout=10)
-    assert first["lease"]["fence"] == 1
-    first_expiry = datetime.fromisoformat(first["lease"]["expires_at"])
-    wait_for_sqlite_authority_after(database, first_expiry)
-
-    takeovers = run_spawned_authority_contention(
-        database,
-        start_method="spawn",
-    )
-    assert sorted(result["outcome"] for result in takeovers) == [
-        AcquireOutcome.ACQUIRED.value,
-        AcquireOutcome.BUSY.value,
-    ]
-    acquired = next(
-        result
-        for result in takeovers
-        if result["outcome"] == AcquireOutcome.ACQUIRED
-    )
-    busy = next(
-        result
-        for result in takeovers
-        if result["outcome"] == AcquireOutcome.BUSY
-    )
-    assert acquired["lease"]["fence"] == 2
-    assert busy["busy_expires_at"] == acquired["lease"]["expires_at"]

@@ -5,12 +5,16 @@ import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from threading import Event, Lock
+from threading import Event
 
 import pytest
 from dr_store import ObjectStore, SqliteBackend
 from pydantic import ValidationError
 
+from tests.core.effects.authority_support import (
+    _FakeClock,
+    _ScriptedRenewalWait,
+)
 from tests.optimization.support import eval_config
 from whetstone.core.effects.authority import (
     EffectAuthority,
@@ -84,7 +88,7 @@ def _config(
     definition = ToolDefinition(
         tool_name="evaluate_candidate",
         input_fields=("model_route", "template"),
-        output_fields=("rollout_refs", "accepted_ordinal"),
+        output_fields=("generation_refs", "accepted_ordinal"),
     )
     return ToolConfig(
         definition=tool_definition_reference(definition),
@@ -164,17 +168,17 @@ class CountingEvaluator:
         if self.failure is not None:
             raise ToolEvaluationError(self.failure)
         evidence = typed_ref_for_record(
-            "whetstone.test.tool_rollout",
+            "whetstone.test.tool_generation",
             {"ordinal": self.evaluations},
         )
         return ToolEvaluation(
             output=ImmutableJsonObject(
                 {
-                    "rollout_refs": [evidence.model_dump(mode="json")],
+                    "generation_refs": [evidence.model_dump(mode="json")],
                     "accepted_ordinal": self.evaluations,
                 }
             ),
-            rollout_refs=(evidence,),
+            generation_refs=(evidence,),
             aggregates={"score": 1.0},
             eval_config_hash=FULL_A,
         )
@@ -366,7 +370,7 @@ def test_invalid_reward_is_terminal_failure_and_replays_exactly(
             evaluation = super().evaluate(call, config)
             return ToolEvaluation(
                 output=evaluation.output,
-                rollout_refs=evaluation.rollout_refs,
+                generation_refs=evaluation.generation_refs,
                 aggregates={},
                 eval_config_hash=evaluation.eval_config_hash,
             )
@@ -419,7 +423,7 @@ def test_terminal_effect_reconciles_missing_store_completion(tmp_path) -> None:
     assert entry.capacity_debit_ordinal == 1
     result = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     result_ref = store.persist_result(result)
@@ -661,9 +665,7 @@ def test_execution_request_conflict_is_explicit(tmp_path) -> None:
     store.admit(call, config)
     request = tool_effect_request(call)
     authority.acquire(
-        request.model_copy(
-            update={"request_identity_hash": IdentityHash("b" * 64)}
-        ),
+        request.model_copy(update={"request_hash": IdentityHash("b" * 64)}),
         owner_id="other-owner",
         attempt_id="other-attempt",
         lease_duration=timedelta(seconds=10),
@@ -697,7 +699,7 @@ def test_no_redrive_expiration_requires_recovery(tmp_path) -> None:
     clock.current += timedelta(seconds=11)
     fabricated = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     with pytest.raises(
@@ -738,7 +740,7 @@ def test_completed_admission_projection_cannot_override_recovery_required(
     accepted = store.admit(call, config)
     fabricated = ToolResult(
         call=tool_call_reference(call),
-        output={"rollout_refs": [], "accepted_ordinal": 1},
+        output={"generation_refs": [], "accepted_ordinal": 1},
         provenance_ordinal=1,
     )
     fabricated_ref = store.persist_result(fabricated)
@@ -857,35 +859,37 @@ def test_same_executor_concurrent_replay_has_one_active_evaluator(
     assert evaluator.evaluations == 1
 
 
-@pytest.mark.sqlite_time_integration
 def test_long_evaluation_renews_lease_and_prevents_takeover(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = tmp_path / "tool.sqlite"
-    effect_database = tmp_path / "effects.sqlite"
     policy = _policy()
     config = _config(policy)
     call = _call(config, "long-evaluation")
     entered = Event()
     release = Event()
+    renewal_wait = _ScriptedRenewalWait()
+    clock = _FakeClock()
+    lease_duration = timedelta(milliseconds=90)
 
     class BlockingEvaluator(CountingEvaluator):
         def evaluate(
             self, call: ToolCall, config: ToolConfig
         ) -> ToolEvaluation:
             entered.set()
-            assert release.wait(timeout=10)
+            assert release.wait(timeout=2)
             return super().evaluate(call, config)
 
     evaluator = BlockingEvaluator()
-    lease_duration = timedelta(seconds=1.2)
+    authority = EffectAuthority.memory(
+        clock=clock,
+        _renewal_wait_strategy=renewal_wait,
+    )
     renewal_observed_past_original_expiry = Event()
-    renewal_lock = Lock()
     original_expiry: datetime | None = None
     successful_renewals = 0
-    first_authority = EffectAuthority.sqlite(effect_database)
-    real_renew = first_authority.renew
+    real_renew = authority.renew
 
     def recording_renew(
         lease: EffectLease,
@@ -893,46 +897,54 @@ def test_long_evaluation_renews_lease_and_prevents_takeover(
         lease_duration: timedelta,
     ) -> EffectLease:
         nonlocal original_expiry, successful_renewals
-        with renewal_lock:
-            if original_expiry is None:
-                original_expiry = lease.expires_at
+        if original_expiry is None:
+            original_expiry = lease.expires_at
         renewed = real_renew(lease, lease_duration=lease_duration)
         renewal_authority_time = renewed.expires_at - lease_duration
-        with renewal_lock:
-            successful_renewals += 1
-            if renewal_authority_time > original_expiry:
-                renewal_observed_past_original_expiry.set()
+        successful_renewals += 1
+        if (
+            original_expiry is not None
+            and renewal_authority_time > original_expiry
+        ):
+            renewal_observed_past_original_expiry.set()
         return renewed
 
-    monkeypatch.setattr(first_authority, "renew", recording_renew)
-    first_store = _store(database, effect_authority=first_authority)
+    monkeypatch.setattr(authority, "renew", recording_renew)
+    store = _store(database, effect_authority=authority)
     first = _executor(
         evaluator,
         policy,
-        first_authority,
+        authority,
         owner_id="owner-1",
         lease_duration=lease_duration,
-    ).runtime_handle(config, first_store, _binding())
-    contender_authority = EffectAuthority.sqlite(effect_database)
+    ).runtime_handle(config, store, _binding())
     contender = _executor(
         evaluator,
         policy,
-        contender_authority,
+        authority,
         owner_id="owner-2",
         lease_duration=lease_duration,
-    ).runtime_handle(
-        config,
-        _store(database, effect_authority=contender_authority),
-        _binding(),
-    )
+    ).runtime_handle(config, store, _binding())
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         future = pool.submit(first, call)
-        assert entered.wait(timeout=10)
+        assert entered.wait(timeout=2)
         try:
-            assert renewal_observed_past_original_expiry.wait(timeout=10)
-            with renewal_lock:
-                assert successful_renewals >= 3
+            for tick in range(4):
+                renewal_wait.await_request_count(tick + 1)
+                renewal_wait.release_one()
+                clock.advance(timedelta(milliseconds=30))
+            assert original_expiry is not None
+            now = clock()
+            if now <= original_expiry:
+                clock.advance(
+                    original_expiry - now + timedelta(microseconds=1)
+                )
+            renewal_wait.await_request_count(5)
+            renewal_wait.release_one()
+            clock.advance(timedelta(milliseconds=30))
+            assert renewal_observed_past_original_expiry.wait(timeout=2)
+            assert successful_renewals >= 3
             with pytest.raises(ToolExecutionBusyError):
                 contender(call)
         finally:

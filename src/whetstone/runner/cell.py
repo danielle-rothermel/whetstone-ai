@@ -62,11 +62,13 @@ from whetstone.core.identity import (
     require_full_hash,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.evaluation.code.statistics import (
+from whetstone.evaluation.analysis.statistics import (
     BootstrapCI,
     bootstrap_delta_ci,
 )
-from whetstone.evaluation.code.statistics import bootstrap_mean_ci as _mean_ci
+from whetstone.evaluation.analysis.statistics import (
+    bootstrap_mean_ci as _mean_ci,
+)
 from whetstone.evaluation.engine import EngineEvaluation, EvaluationEngine
 from whetstone.evaluation.schema import EvaluationEvidence
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
@@ -570,30 +572,30 @@ def _official_anchor_record(
 ) -> OfficialAnchorRecord:
     """Validate and build the viewer-only official anchor projection."""
     sampling = config.official_engine.sampling
-    expected_task_identities = sampling.task_set.task_identities
-    rollout_definition = config.official_engine.experiment.rollout_definition
-    expected_graph_hash = rollout_definition.graph_hash
-    expected_task_model = rollout_definition.provider_call_config.route.model
+    expected_task_hashes = sampling.task_set.task_hashes
+    generation_graph = config.official_engine.experiment.generation_graph
+    expected_graph_hash = generation_graph.graph_hash
+    expected_task_model = generation_graph.provider_call_config.route.model
     if config.task_model != expected_task_model:
         raise CellError(
-            "cell task_model must match the rollout definition's provider "
+            "cell task_model must match the generation graph's provider "
             f"route model {expected_task_model!r}"
         )
-    aligned_count = len(expected_task_identities)
+    aligned_count = len(expected_task_hashes)
     for arm, evaluated in (("baseline", baseline), ("ceiling", ceiling)):
         evidence = evaluated.evidence
-        if evidence.task_identities != expected_task_identities:
+        if evidence.task_hashes != expected_task_hashes:
             raise CellError(
-                f"official {arm} task_identities do not match sampling order"
+                f"official {arm} task_hashes do not match sampling order"
             )
-        if evidence.repeat_count != sampling.repeat_plan.repeat_count:
+        if evidence.num_samples != sampling.sample_plan.num_samples:
             raise CellError(
-                f"official {arm} repeat_count does not match sampling"
+                f"official {arm} num_samples does not match sampling"
             )
         if evidence.graph_hash != expected_graph_hash:
             raise CellError(
-                f"official {arm} graph_hash does not match the rollout "
-                "definition"
+                f"official {arm} graph_hash does not match the "
+                "generation graph definition"
             )
         if (
             evidence.aggregate_status != "ok"
@@ -620,12 +622,12 @@ def _official_anchor_record(
             "task_model": config.task_model,
             "graph_hash": expected_graph_hash,
             "eval_config_hash": (
-                config.official_engine.eval_config_ref.identity_hash
+                config.official_engine.eval_config_ref.config_hash
             ),
-            "official_instance_ids": tuple(
-                str(instance.id) for instance in sampling.instances
+            "official_task_ids": tuple(
+                str(instance.id) for instance in sampling.tasks
             ),
-            "official_task_identities": expected_task_identities,
+            "official_task_hashes": expected_task_hashes,
             "baseline_evidence_ref": baseline.evidence_ref,
             "ceiling_evidence_ref": ceiling.evidence_ref,
             "baseline_official": baseline_score,
@@ -634,7 +636,7 @@ def _official_anchor_record(
             "ceiling_per_task": ceiling.evidence.per_task_values,
             "baseline_per_task_counts": baseline.evidence.per_task_counts,
             "ceiling_per_task_counts": ceiling.evidence.per_task_counts,
-            "official_repeats_used": sampling.repeat_plan.repeat_count,
+            "official_repeats_used": sampling.sample_plan.num_samples,
         }
     )
 
@@ -884,7 +886,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
         config.ledger.write_official_anchor(
             _official_anchor_record(config, baseline=baseline, ceiling=ceiling)
         )
-    projection, rollout_lines = build_viewer_cell_projection(
+    projection, generation_lines = build_viewer_cell_projection(
         cell_id=config.cell_id,
         optimizer=config.optimizer,
         env=config.env,
@@ -904,7 +906,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
         cell_id=config.cell_id,
         env=config.env,
         projection_body=projection.to_bytes(),
-        rollout_lines=rollout_lines,
+        generation_lines=generation_lines,
     )
     record = CellRecord(
         cell_id=config.cell_id,
@@ -929,7 +931,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
         ),
         headroom_ci95=headroom_ci.as_tuple() if headroom_ci else None,
         official_repeats_used=(
-            config.official_engine.sampling.repeat_plan.repeat_count
+            config.official_engine.sampling.sample_plan.num_samples
         ),
         pooled_observation_counts={
             "baseline": sum(baseline.evidence.per_task_counts),
@@ -965,9 +967,7 @@ def run_cell(config: CellConfig) -> CellOutcome:
             viewer_publication=viewer_publication,
         ),
         graph_hash=baseline.evidence.graph_hash,
-        eval_config_hash=(
-            config.official_engine.eval_config_ref.identity_hash
-        ),
+        eval_config_hash=(config.official_engine.eval_config_ref.config_hash),
         controls=CellControls(),
         started_at=started_at,
         finished_at=_now(),

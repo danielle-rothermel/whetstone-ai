@@ -270,7 +270,7 @@ class HarnessRunController:
         return self._control
 
     @property
-    def runtime_identity_hash(self) -> str:
+    def runtime_hash(self) -> str:
         """The identity the parent workflow registry binds this under."""
         return self._control.identity_hash()
 

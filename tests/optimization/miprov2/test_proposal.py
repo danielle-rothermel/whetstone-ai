@@ -90,7 +90,7 @@ def _component(
 def _dataset(count: int) -> tuple[Miprov2DatasetExample, ...]:
     return tuple(
         Miprov2DatasetExample(
-            task_identity=f"{index + 1:064x}",
+            task_hash=f"{index + 1:064x}",
             rendered_record=f"input={index}; expected={index}",
         )
         for index in range(count)
@@ -146,7 +146,7 @@ def _fold(
     failed: bool = False,
 ) -> Miprov2ProposalState:
     response = Miprov2ProposalResponse(
-        request_identity_hash=request.identity_hash,
+        request_hash=request.identity_hash,
         text="" if failed else text,
         failed=failed,
         failure_detail="scripted failure" if failed else None,
@@ -236,7 +236,7 @@ def test_dataset_summary_has_one_initial_nine_followups_and_final() -> None:
     assert state.dataset_descriptor_calls == 10
     assert state.dataset_summary == "compact dataset"
     assert all(item.request.temperature == 1.0 for item in state.evidence)
-    assert all(item.request.rollout_id is None for item in state.evidence)
+    assert all(item.request.generation_id is None for item in state.evidence)
 
 
 def test_dataset_complete_skips_are_cumulative_and_observations_concat() -> (
@@ -477,8 +477,8 @@ def test_two_components_are_predictor_major_with_exact_rng_draws() -> None:
     assert [
         (draw.operation, draw.result) for draw in state.rng_checkpoint.draws
     ] == expected
-    assert len({request.rollout_id for request in requests[:3]}) == 1
-    assert requests[0].rollout_id != requests[3].rollout_id
+    assert len({request.generation_id for request in requests[:3]}) == 1
+    assert requests[0].generation_id != requests[3].generation_id
     assert state.instruction_pools[0][0] == "First {input}."
     assert state.instruction_pools[1][0] == "Second {input}."
 
@@ -580,7 +580,7 @@ def test_response_binding_and_pending_request_are_replay_safe() -> None:
         fold_proposal_response(
             planned.state,
             Miprov2ProposalResponse(
-                request_identity_hash="0" * 64,
+                request_hash="0" * 64,
                 text="new {input}",
             ),
         )
@@ -667,7 +667,7 @@ def test_rng_and_response_json_are_deeply_immutable_across_bypass_apis() -> (
 ):
     caller = {"nested": {"items": [1]}}
     response = Miprov2ProposalResponse(
-        request_identity_hash=_identity("request"),
+        request_hash=_identity("request"),
         evidence=caller,
     )
     caller["nested"]["items"].append(2)
@@ -701,7 +701,7 @@ def test_forged_response_copy_rejects_before_fold_and_after_restart() -> None:
     )
     pending, request = _next(state)
     response = Miprov2ProposalResponse(
-        request_identity_hash=request.identity_hash,
+        request_hash=request.identity_hash,
         text="Improved {input}",
     )
     forged = BaseModel.model_copy(
@@ -726,7 +726,7 @@ def test_forged_response_copy_rejects_before_fold_and_after_restart() -> None:
         )
 
 
-def test_proposal_request_identity_payload_and_digest_are_pinned() -> None:
+def test_proposal_request_hash_payload_and_digest_are_pinned() -> None:
     state = _start(
         candidates=1,
         data_aware=False,
@@ -743,7 +743,7 @@ def test_proposal_request_identity_payload_and_digest_are_pinned() -> None:
         "effect": "instruction_proposal",
         "schema_tag": "miprov2-instruction-proposal/v1",
         "temperature": 0.7,
-        "rollout_id": request.rollout_id,
+        "generation_id": request.generation_id,
         "component_index": 0,
         "component_id": "user_prompt_template",
         "proposal_index": 0,
@@ -753,7 +753,7 @@ def test_proposal_request_identity_payload_and_digest_are_pinned() -> None:
         "prompt": request.prompt,
     }
     assert request.identity_hash == (
-        "ee3de3e21d9c396deca205b688af3f61ff94ec85369e50c0ea271fb0810db69a"
+        "5508e5f133da6af8a364a68afbf5e38ae485a506c6afdec439d9f98e740185df"
     )
 
 
@@ -789,7 +789,7 @@ def test_bootstrap_demo_bridge_preserves_order_fields_and_key_presence() -> (
 ):
     assert MIPROV2_DEMO_BRIDGE_VERSION == "whetstone_component_demo_bridge/v1"
     labeled_task = LabeledTaskDemo(
-        source_task_identity=_identity("task"),
+        source_task_hash=_identity("task"),
         inputs_by_component={"user_prompt_template": {"input": "question"}},
         outputs_by_component={"user_prompt_template": {"output": "answer"}},
     )
@@ -800,8 +800,8 @@ def test_bootstrap_demo_bridge_preserves_order_fields_and_key_presence() -> (
         inputs={"input": "boot-question"},
         outputs={"output": "boot-answer"},
         augmented=True,
-        source_task_identity=_identity("boot-task"),
-        source_rollout_identity=_identity("rollout"),
+        source_task_hash=_identity("boot-task"),
+        source_generation_identity=_identity("generation"),
         source_trace_identity=_identity("trace"),
         source_output_identity=_identity("output"),
         source_score_identity=_identity("score"),
@@ -905,7 +905,7 @@ def test_crash_roundtrip_after_every_proposal_effect() -> None:
     assert state.instruction_pools == (("Answer {input}.",),)
 
 
-def test_outer_bindings_change_proposal_request_identity() -> None:
+def test_outer_bindings_change_proposal_request_hash() -> None:
     first = _start(
         candidates=1,
         program_aware=False,

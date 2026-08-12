@@ -61,7 +61,7 @@ def test_runtime_state_and_evaluation_identity_payloads_are_pinned() -> None:
         purpose="miprov2_baseline",
         candidate=state.control.base_candidate.record,
         categorical_combination_identity_hash="a" * 64,
-        task_batch_identities=state.control.valset_task_identities,
+        task_batch_hashes=state.control.valset_task_hashes,
         execution_policy=Miprov2EvaluationExecutionPolicy(
             num_threads=state.control.num_threads,
             max_errors=state.control.max_errors,
@@ -81,14 +81,14 @@ def test_runtime_state_and_evaluation_identity_payloads_are_pinned() -> None:
             mode="json"
         ),
         "categorical_combination_identity_hash": "a" * 64,
-        "task_batch_identities": list(state.control.valset_task_identities),
+        "task_batch_hashes": list(state.control.valset_task_hashes),
         "execution_policy": spec.execution_policy.model_dump(mode="json"),
         "suggestion": None,
         "promotion_candidate": None,
         "candidate_assembly": None,
     }
     assert spec.identity_hash() == (
-        "4405d08efd51adbc3a0fd8f642aae1ff67f513aa8f93f2621529181b1a513ee7"
+        "472f9a7d5c8573cdc39927a60887679a167def686c45808c7ef9f0f80e9e2171"
     )
     assert tuple(state.identity_payload()) == (
         "schema_name",
@@ -131,7 +131,7 @@ def test_runtime_state_and_evaluation_identity_payloads_are_pinned() -> None:
     )
     assert state.identity_payload() == state.model_dump(mode="json")
     assert state.identity_hash() == (
-        "d145ef317349a8fe6c4850b87a956fe38c451be4543adbab9e7ade9a2f11501d"
+        "2a4d1c1fdc47bb7c22afd1c7d59a435a1726610323a94ee1064f8757dfc79462"
     )
 
 
@@ -417,7 +417,7 @@ def test_runtime_nested_strict_int_cannot_bypass_state_revalidation(
 ) -> None:
     _driver, state = _runtime()
     forged_budget = Miprov2EffectBudget.model_construct(
-        bootstrap_rollouts=state.budget.bootstrap_rollouts,
+        bootstrap_generations=state.budget.bootstrap_generations,
         proposal_calls=state.budget.proposal_calls,
         evaluations=state.budget.evaluations,
         task_rows=invalid_task_rows,
@@ -468,7 +468,7 @@ def _resolved_evaluation(
     purpose = effect.purpose.removeprefix("miprov2_")
     assert purpose in {"baseline", "sample", "promotion"}
     exact_binding = EvaluationBinding(
-        schema_version=2,
+        schema_version=3,
         eval_config=effect.eval_config,
         role=EvaluationRole.INTERNAL,
         campaign="miprov2-runtime-test",
@@ -479,7 +479,7 @@ def _resolved_evaluation(
         evidence_role=EvaluationRole.INTERNAL,
         evidence_refs=(
             TypedRef(
-                schema_name="whetstone.rollout_aggregate",
+                schema_name="whetstone.aggregate",
                 content_hash=f"{20_000 + nonce:064x}",
             ),
         ),
@@ -490,7 +490,7 @@ def _resolved_evaluation(
         effect_identity_hash=effect.identity_hash(),
         purpose=effect.purpose,
         candidate=candidate_reference(effect.candidate),
-        task_batch_identities=effect.task_batch_identities,
+        task_batch_hashes=effect.task_batch_hashes,
         eval_config=effect.eval_config,
         eval_config_binding=binding,
         evaluation_binding=exact_binding,
@@ -509,14 +509,14 @@ def _resolved_evaluation(
         effect_identity_hash=effect.identity_hash(),
         intent_id=observation.intent_id,
         candidate=observation.candidate,
-        task_batch_identities=effect.task_batch_identities,
+        task_batch_hashes=effect.task_batch_hashes,
         eval_config=effect.eval_config,
         eval_config_binding=binding,
         evaluation_binding=exact_binding,
         execution_policy=effect.execution_policy,
         reward_policy_hash=state.control.reward_policy_hash,
     )
-    row_count = len(effect.task_batch_identities)
+    row_count = len(effect.task_batch_hashes)
     return Miprov2ResolvedEvaluation(
         context=context,
         reward_value=score / 100,
@@ -543,7 +543,7 @@ def _fold_all_proposals(
         state = driver.fold_proposal(
             plan.state,
             Miprov2ProposalResponse(
-                request_identity_hash=plan.proposal_request.identity_hash,
+                request_hash=plan.proposal_request.identity_hash,
                 text=f"Instruction: improved-{ordinal} {{query}}.",
                 evidence={"ordinal": ordinal},
             ),
@@ -644,8 +644,8 @@ def test_evaluation_binding_binds_exact_tasks_and_execution_policy() -> None:
     assert plan.kind == "eval_config_binding"
     assert plan.eval_config_binding is not None
     assert plan.eval_config_binding.purpose == "baseline"
-    assert plan.eval_config_binding.task_batch_identities == (
-        state.control.valset_task_identities
+    assert plan.eval_config_binding.task_batch_hashes == (
+        state.control.valset_task_hashes
     )
     assert plan.eval_config_binding.execution_policy.num_threads == (
         state.control.num_threads
@@ -673,7 +673,7 @@ def test_proposal_budget_exhaustion_stops_before_next_effect() -> None:
     state = driver.fold_proposal(
         first.state,
         Miprov2ProposalResponse(
-            request_identity_hash=first.proposal_request.identity_hash,
+            request_hash=first.proposal_request.identity_hash,
             text="Instruction: improved {query}.",
             evidence={"ordinal": 0},
         ),
@@ -691,7 +691,7 @@ def test_minimal_runtime_flow_accounts_rows_and_returns_exact_winner() -> None:
     assert terminal.state.terminal_result is not None
     assert terminal.state.terminal_result.winner_score == 90.0
     assert terminal.state.effect_counts == {
-        "bootstrap_rollouts": 0,
+        "bootstrap_generations": 0,
         "proposal_calls": 2,
         "evaluations": 2,
         "task_rows": 6,

@@ -50,7 +50,7 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
     assert module.PROPOSAL_DBOS_POLICY_SCHEMA == (
         "whetstone.proposal_dbos_policy"
     )
-    assert module.PROPOSAL_DBOS_POLICY_VERSION == 1
+    assert module.PROPOSAL_DBOS_POLICY_VERSION == 2
     assert module.PROPOSAL_DBOS_WORKFLOW_SCHEMA == (
         "whetstone.proposal_dbos_workflow"
     )
@@ -61,12 +61,12 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
         "automatic_dbos_retries": False,
         "durability_mode": "at_least_once",
         "logical_call_boundary": "one_retry_disabled_dbos_step",
-        "provider_retry_owner": "provider_execution_policy",
+        "retry_owner": "proposer_transport",
         "transport_durability_identity_hash": FULL_C,
     }
     policy_identity = module._proposal_policy_identity(FULL_C)
     assert policy_identity == (
-        "10bf4652e413c4dc834601b673d220a305a7a9ade07794558b5eef8a6e9b0489"
+        "24299dd5ff03be2ca43e5fc26e5e5b03beb341dde296b2a03d548a35beeb088a"
     )
 
     stable_config = ProposerConfig(
@@ -75,7 +75,7 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
                 "dr_providers.provider_call_config",
                 {"fixture": "stable"},
             ),
-            identity_hash=FULL_A,
+            record_hash=FULL_A,
         )
     )
     workflow_payload = module._proposal_workflow_identity_payload(
@@ -88,8 +88,8 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
     assert workflow_payload == {
         "count": 1,
         "policy_identity_hash": policy_identity,
-        "proposal_request_identity_hash": _request().identity_hash(),
-        "proposer_config_identity_hash": stable_config.identity_hash(),
+        "proposal_request_hash": _request().identity_hash(),
+        "proposer_config_hash": stable_config.identity_hash(),
         "transport_durability_identity_hash": FULL_C,
     }
     assert (
@@ -100,7 +100,7 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
             request=_request(),
             count=1,
         )
-        == "85724dc3ba2d8b3796098fa858e032ad1e144be50a6b1bfe5e4b4de7ad00ba9e"
+        == "b7892f7c2012cf8eb6980f34d5a118b79f45858cf02977cca50ea84d9cefe7fe"
     )
 
 
@@ -427,7 +427,7 @@ def test_registration_rejects_a_structural_transport_duck_type() -> None:
 
     with pytest.raises(
         module.ProposalProviderError,
-        match="requires ProviderProposerTransport",
+        match="requires a supported proposer transport",
     ):
         module.register_proposal_transport(_StructuralProposerTransport())
 

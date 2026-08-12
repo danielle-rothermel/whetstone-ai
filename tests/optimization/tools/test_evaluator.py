@@ -15,6 +15,7 @@ from whetstone.core.identity import (
     TypedRef,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.envs.code_comp.constants import MUTATION_FIELD
 from whetstone.evaluation.engine import (
     EvaluationEngine,
 )
@@ -76,14 +77,21 @@ def _tool_call(
     config: ToolConfig,
     *,
     call_id: str,
-    model_route: str = "openai/test",
+    model_route: str | None = None,
     task_ids: list[str] | None = None,
 ) -> ToolCall:
     base = engine.experiment.initial_candidate
+    resolved_route = (
+        model_route
+        if model_route is not None
+        else (
+            engine.experiment.generation_graph.provider_call_config.definition.route.model
+        )
+    )
     args: dict[str, object] = {
         "base_ref": base.base_ref.model_dump(mode="json"),
-        "model_route": model_route,
-        "template": base.payload["user_prompt_template"],
+        "model_route": resolved_route,
+        "template": base.payload[MUTATION_FIELD],
     }
     if task_ids is not None:
         args["task_ids"] = task_ids
@@ -104,10 +112,10 @@ def test_tool_projection_uses_same_engine_evidence(tmp_path) -> None:
 
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
-    assert projected.eval_config_hash == engine.eval_config_ref.identity_hash
-    assert len(projected.rollout_refs) == 1
+    assert projected.eval_config_hash == engine.eval_config_ref.config_hash
+    assert len(projected.generation_refs) == 1
     assert projected.output["evaluation_evidence_ref"] == (
-        projected.rollout_refs[0].model_dump(mode="json")
+        projected.generation_refs[0].model_dump(mode="json")
     )
     artifact = TypedRef.model_validate(projected.output["output_artifact_ref"])
     assert store.get(artifact.reference)
@@ -141,8 +149,8 @@ def test_tool_projection_rejects_malformed_task_subsets(tmp_path) -> None:
         config,
         call_id="duplicate-task",
         task_ids=[
-            engine.sampling.task_set.task_identities[0],
-            engine.sampling.task_set.task_identities[0],
+            engine.sampling.task_set.task_hashes[0],
+            engine.sampling.task_set.task_hashes[0],
         ],
     )
     with pytest.raises(ToolValidationError, match="must be unique"):
@@ -157,7 +165,7 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
     store = ObjectStore(SqliteBackend(tmp_path / "tool-subset.sqlite"))
     engine = _engine(tmp_path, store=store)
     config = _subset_tool_config(engine, store_namespace_key="tool-subset")
-    bound_task = engine.sampling.task_set.task_identities[0]
+    bound_task = engine.sampling.task_set.task_hashes[0]
     call = _tool_call(
         engine,
         config,
@@ -169,8 +177,8 @@ def test_tool_projection_accepts_a_validated_task_subset(tmp_path) -> None:
 
     projected = EngineToolEvaluator(engine).evaluate(call, config)
 
-    assert projected.eval_config_hash == engine.eval_config_ref.identity_hash
-    assert len(projected.rollout_refs) == 1
+    assert projected.eval_config_hash == engine.eval_config_ref.config_hash
+    assert len(projected.generation_refs) == 1
 
 
 @pytest.mark.process_integration

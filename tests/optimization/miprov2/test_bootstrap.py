@@ -14,7 +14,7 @@ from whetstone.optimization.miprov2.bootstrap import (
     ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL,
     BootstrapAttemptPlan,
     BootstrapErrorLimitReached,
-    BootstrapRolloutResult,
+    BootstrapGenerationResult,
     FewshotCandidatePlan,
     FewshotSeedKind,
     TeacherSource,
@@ -83,7 +83,7 @@ def _planning(**overrides: Any):
     values: dict[str, Any] = {
         "bindings": _bindings(),
         "component_ids": COMPONENTS,
-        "trainset_task_identities": TASKS,
+        "trainset_task_hashes": TASKS,
         "num_candidate_sets": 6,
         "max_bootstrapped_demos": 4,
         "max_labeled_demos": 4,
@@ -103,7 +103,7 @@ def _labeled_trainset(
 ) -> tuple[LabeledTaskDemo, ...]:
     return tuple(
         LabeledTaskDemo(
-            source_task_identity=task_id,
+            source_task_hash=task_id,
             inputs_by_component={
                 "first": {"question": task_id},
                 "second": {"draft": f"draft-{task_id}"},
@@ -124,11 +124,11 @@ def _result(
     metric_present: bool = True,
     trace_steps: tuple[ObservedTraceStep, ...] = (),
     error: str | None = None,
-) -> BootstrapRolloutResult:
-    return BootstrapRolloutResult(
+) -> BootstrapGenerationResult:
+    return BootstrapGenerationResult(
         attempt_identity_hash=attempt.identity_hash(),
-        source_rollout_identity=_identity(
-            f"rollout-{attempt.task_index}-{attempt.round_index}"
+        source_generation_identity=_identity(
+            f"generation-{attempt.task_index}-{attempt.round_index}"
         ),
         source_trace_identity=_identity(
             f"trace-{attempt.task_index}-{attempt.round_index}"
@@ -157,7 +157,7 @@ def test_fewshot_candidate_plan_identity_payload_and_digest_are_pinned() -> (
         bindings=_golden_bindings(),
         kind=FewshotSeedKind.RESET,
         component_ids=("generate",),
-        trainset_task_identities=("4" * 64,),
+        trainset_task_hashes=("4" * 64,),
         max_bootstrapped_demos=0,
         max_labeled_demos=0,
         max_rounds=1,
@@ -184,7 +184,7 @@ def test_fewshot_candidate_plan_identity_payload_and_digest_are_pinned() -> (
         },
         "kind": "reset",
         "component_ids": ["generate"],
-        "trainset_task_identities": ["4" * 64],
+        "trainset_task_hashes": ["4" * 64],
         "max_bootstrapped_demos": 0,
         "max_labeled_demos": 0,
         "max_rounds": 1,
@@ -197,7 +197,7 @@ def test_fewshot_candidate_plan_identity_payload_and_digest_are_pinned() -> (
         ),
     }
     assert plan.identity_hash() == (
-        "ec30974f9a747bae4a37eb0485e74c4c91b93fdf8f56b0f30c78434d709c22c8"
+        "56e9541ffe2a41ac3d6a6e2601b89783dd14ec36ffea53c5b44bcdae17884882"
     )
 
 
@@ -212,10 +212,10 @@ def test_bootstrap_attempt_plan_identity_payload_and_digest_are_pinned() -> (
         bindings=_golden_bindings(),
         plan_identity_hash="5" * 64,
         task_index=2,
-        task_identity="6" * 64,
+        task_hash="6" * 64,
         round_index=1,
         copy_task_model=True,
-        rollout_id=1,
+        generation_id=1,
         temperature=1.0,
     )
 
@@ -234,16 +234,16 @@ def test_bootstrap_attempt_plan_identity_payload_and_digest_are_pinned() -> (
         },
         "plan_identity_hash": "5" * 64,
         "task_index": 2,
-        "task_identity": "6" * 64,
+        "task_hash": "6" * 64,
         "round_index": 1,
         "exclude_equal_task_from_all_teacher_components": True,
         "restore_teacher_demos_after_effect": True,
         "copy_task_model": True,
-        "rollout_id": 1,
+        "generation_id": 1,
         "temperature": 1.0,
     }
     assert attempt.identity_hash() == (
-        "52ff6e6d1e0d9c3ab7d5268b6e5cd4a0ae206aad24cba11e18e267c268518bab"
+        "12a1c4dce0a41eccebac246a477fc2bea9cb0f4aa2236f7989fd2021e8a95f5c"
     )
 
 
@@ -266,8 +266,8 @@ def test_candidate_count_uses_exact_special_seed_range(
 
 
 def test_candidate_plans_require_production_task_content_hashes() -> None:
-    with pytest.raises(ValueError, match="trainset_task_identities"):
-        _plans(trainset_task_identities=("task-label",))
+    with pytest.raises(ValueError, match="trainset_task_hashes"):
+        _plans(trainset_task_hashes=("task-label",))
 
 
 def test_special_seed_kinds_and_unshuffled_minus_one() -> None:
@@ -276,7 +276,7 @@ def test_special_seed_kinds_and_unshuffled_minus_one() -> None:
     assert reset.kind is FewshotSeedKind.RESET
     assert labels.kind is FewshotSeedKind.LABELS_ONLY
     assert unshuffled.kind is FewshotSeedKind.BOOTSTRAP
-    assert unshuffled.trainset_task_identities == TASKS
+    assert unshuffled.trainset_task_hashes == TASKS
     assert unshuffled.max_bootstrapped_demos == 4
 
 
@@ -294,10 +294,10 @@ def test_minus_two_falls_through_to_shared_shuffle_when_labels_disabled() -> (
 
     assert reset.kind is FewshotSeedKind.RESET
     assert minus_two.kind is FewshotSeedKind.BOOTSTRAP
-    assert minus_two.trainset_task_identities == tuple(expected_minus_two)
+    assert minus_two.trainset_task_hashes == tuple(expected_minus_two)
     assert minus_two.max_bootstrapped_demos == expected_minus_two_size
-    assert minus_one.trainset_task_identities == TASKS
-    assert seed_zero.trainset_task_identities == tuple(expected_zero)
+    assert minus_one.trainset_task_hashes == TASKS
+    assert seed_zero.trainset_task_hashes == tuple(expected_zero)
     assert seed_zero.max_bootstrapped_demos == expected_zero_size
 
 
@@ -325,7 +325,7 @@ def test_shared_rng_checkpoint_flows_from_dataset_through_bootstrap() -> None:
             for item in planning.plans
             if item.candidate_seed == candidate_seed
         )
-        assert plan.trainset_task_identities == tuple(expected)
+        assert plan.trainset_task_hashes == tuple(expected)
         assert plan.max_bootstrapped_demos == expected_size
     assert planning.rng_checkpoint.state == Miprov2RandomState.from_random(
         oracle
@@ -460,7 +460,7 @@ def test_attempt_plan_excludes_current_demo_and_only_copies_on_retry() -> None:
     assert first.exclude_equal_task_from_all_teacher_components is True
     assert first.restore_teacher_demos_after_effect is True
     assert first.copy_task_model is False
-    assert first.rollout_id is None
+    assert first.generation_id is None
     assert first.temperature is None
 
     failed = fold_bootstrap_result(
@@ -476,7 +476,7 @@ def test_attempt_plan_excludes_current_demo_and_only_copies_on_retry() -> None:
     assert retry.task_index == first.task_index
     assert retry.round_index == 1
     assert retry.copy_task_model is True
-    assert retry.rollout_id == 1
+    assert retry.generation_id == 1
     assert retry.temperature == 1.0
 
 
@@ -783,11 +783,11 @@ def test_train_is_augmented_first_and_raw_pool_narrows_across_components() -> (
     rng = random.Random(0)
     first_raw = rng.sample(validation, 3)
     second_raw = rng.sample(first_raw, 3)
-    assert [demo.source_task_identity for demo in first[1:]] == [
-        task.source_task_identity for task in first_raw
+    assert [demo.source_task_hash for demo in first[1:]] == [
+        task.source_task_hash for task in first_raw
     ]
-    assert [demo.source_task_identity for demo in second[1:]] == [
-        task.source_task_identity for task in second_raw
+    assert [demo.source_task_hash for demo in second[1:]] == [
+        task.source_task_hash for task in second_raw
     ]
 
 
@@ -804,12 +804,12 @@ def test_materialization_rejects_rows_not_in_generic_plan_order() -> None:
             component_ids=COMPONENTS,
         )
 
-    ordered = {task.source_task_identity: task for task in _labeled_trainset()}
+    ordered = {task.source_task_hash: task for task in _labeled_trainset()}
     materialized = materialize_bootstrap_demo_set(
         plan=generic,
         state=state,
         labeled_trainset=tuple(
-            ordered[identity] for identity in generic.trainset_task_identities
+            ordered[identity] for identity in generic.trainset_task_hashes
         ),
         component_ids=COMPONENTS,
     )

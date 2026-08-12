@@ -26,6 +26,7 @@ dependencies = [
 ]
 
 [project.scripts]
+whetstone-copro-propose = "whetstone.optimization.copro.preview_cli:main"
 whetstone-validate = "whetstone.runner.cli:main"
 
 [dependency-groups]
@@ -33,6 +34,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=8.4.2",
     "pytest-xdist>=3.8.0",
+    "rich>=15.0.0",
     "ruff>=0.15.10",
     "ty>=0.0.54",
 ]
@@ -54,14 +56,17 @@ target-version = "py313"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--strict-markers"]
+addopts = ["--strict-markers", "-m", "not slow"]
+# Default pytest skips slow tests; opt in with -m slow, -m pathway, or ./scripts/ci/*-pathway.sh
 markers = [
     "precheck: small deterministic contract and smoke selection for the local commit gate",
+    "slow: spawns processes, uses DBOS, or waits on real time; excluded from default pytest collection",
     "process_integration: exercises observed spawned-process and process-group behavior",
     "process_guardian: exercises observed guardian and parent-death behavior",
     "postgres_integration: exercises live PostgreSQL and DBOS behavior",
     "sqlite_time_integration: exercises SQLite behavior against real elapsed time",
     "sqlite_contention: exercises SQLite behavior under concurrent access",
+    "pathway: end-to-end lane exercised only via scripts/ci/*-pathway.sh; lives under tests/pathways/",
 ]
 
 [tool.pyright]

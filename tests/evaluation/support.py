@@ -6,7 +6,11 @@ from functools import cache
 from dr_serialize import Jsonable
 from dr_store import ObjectStore
 
-from tests.envs.support import execution_policy, process_row_job_factory
+from tests.envs.support import (
+    code_comp_direct_experiment,
+    execution_policy,
+    in_process_direct_row_job_factory,
+)
 from whetstone.coordination.evaluation_claims import (
     EVALUATION_INTENT_CLAIM_SCHEMA,
     EVALUATION_RESULT_ATTESTATION_SCHEMA,
@@ -16,14 +20,19 @@ from whetstone.coordination.evaluation_claims import (
 from whetstone.coordination.evaluation_service import EngineEvaluationService
 from whetstone.core.identity import TypedRef
 from whetstone.core.roles import EvaluationRole
-from whetstone.envs.factory import EnvExperiment, build_env_experiment
-from whetstone.envs.registry import env_spec
-from whetstone.envs.rollout_definition import LLM_NODE_ID, render_prompt
-from whetstone.evaluation.drivers.internal import (
-    InternalRowJobFactory,
-    InternalRowOutcome,
-    InternalRowRequest,
-    _llm_component_step,
+from whetstone.envs.code_comp.constants import CODE_COMP_ENV_NAME
+from whetstone.envs.code_comp.generation_graph.direct import (
+    render_direct_frame,
+)
+from whetstone.envs.code_comp.modes.direct import (
+    DIRECT_WRAPPER_BODY_NAIVE,
+)
+from whetstone.envs.factory import EnvExperiment
+from whetstone.envs.generation_graph import LLM_NODE_ID
+from whetstone.evaluation.drivers.code_comp.direct import (
+    DirectRowJobFactory,
+    DirectRowOutcome,
+    DirectRowRequest,
 )
 from whetstone.evaluation.engine import (
     EngineEvaluation,
@@ -33,7 +42,7 @@ from whetstone.evaluation.schema import (
     EvaluationComponentTraces,
     EvaluationEvidence,
 )
-from whetstone.evaluation.traces import ExecutedRowState
+from whetstone.evaluation.traces import ExecutedRowState, _llm_component_step
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.binding import (
@@ -50,45 +59,43 @@ from whetstone.optimization.contracts import (
     ResolutionClass,
     ResolutionDetail,
 )
+from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.provider.policy import ProviderExecutionPolicy
 
-_DEFAULT_ROW_JOB_FACTORY = process_row_job_factory(
-    "tests.envs.process_workers:drive_internal_success"
-)
+_DEFAULT_ROW_JOB_FACTORY = in_process_direct_row_job_factory()
 
 
-def _uncached_experiment(*, repeats: int = 1) -> EnvExperiment:
-    return build_env_experiment(
-        "c18",
-        model="openai/test",
-        pool_n_per_stratum=2,
-        split_sizes=(1, 1, 1),
-        repeats=repeats,
+def _uncached_experiment(*, num_samples: int = 1) -> EnvExperiment:
+    return code_comp_direct_experiment(
+        num_samples=num_samples,
+        task_count=3,
+        internal_n=1,
+        official_n=1,
     )
 
 
 @cache
-def _cached_experiment(repeats: int) -> EnvExperiment:
-    return _uncached_experiment(repeats=repeats)
+def _cached_experiment(num_samples: int) -> EnvExperiment:
+    return _uncached_experiment(num_samples=num_samples)
 
 
-def _experiment(*, repeats: int = 1) -> EnvExperiment:
-    return _cached_experiment(repeats)
+def _experiment(*, num_samples: int = 1) -> EnvExperiment:
+    return _cached_experiment(num_samples)
 
 
 def _engine(
     tmp_path,
     *,
     store: ObjectStore,
-    row_job_factory: InternalRowJobFactory = _DEFAULT_ROW_JOB_FACTORY,
-    repeats: int = 1,
+    row_job_factory: DirectRowJobFactory = _DEFAULT_ROW_JOB_FACTORY,
+    num_samples: int = 1,
     partial: bool = False,
     cache: bool = False,
     role: EvaluationRole = EvaluationRole.INTERNAL,
     provider_policy: ProviderExecutionPolicy | None = None,
     max_wall_seconds: float | None = None,
 ) -> EvaluationEngine:
-    experiment = _experiment(repeats=repeats)
+    experiment = _experiment(num_samples=num_samples)
     sampling = (
         experiment.eval_configs.internal
         if role is EvaluationRole.INTERNAL
@@ -196,7 +203,7 @@ def _bind_with_forged_terminal_attestation(
     resolution: IntentResolution,
 ) -> None:
     attestation = EvaluationResultAttestation(
-        graph_hash=service._engine.experiment.rollout_definition.graph_hash,
+        graph_hash=service._engine.experiment.generation_graph.graph_hash,
         resolution=resolution,
     )
     attestation_ref = _put_typed(
@@ -263,17 +270,29 @@ def _load_component_traces(
     )
 
 
-def _successful_internal_outcome(
-    request: InternalRowRequest,
-) -> InternalRowOutcome:
-    output_text = request.instance.gold
-    prompt = render_prompt(
-        env_spec(request.env_name),
-        request.candidate,
-        request.instance.to_instance(),
+def _successful_direct_outcome(
+    request: DirectRowRequest,
+) -> DirectRowOutcome:
+    from whetstone.envs.code_comp.dataset import CodeCompTaskInstance
+    from whetstone.envs.code_comp.modes.direct import build_direct_experiment
+    from whetstone.evaluation.drivers.code_comp.direct import _input_arm_text
+
+    instance = request.instance.to_instance()
+    task = request.humaneval_task.to_task()
+    output_text = task.ground_truth_code
+    body = request.candidate_body
+    experiment = build_direct_experiment(
+        input_arm=request.input_arm,
+        rename_token=request.rename_token,
+        tasks=(CodeCompTaskInstance(instance=instance, humaneval_task=task),),
+        internal_n=1,
+        official_n=1,
+        num_samples=1,
     )
-    return InternalRowOutcome(
-        score=1.0,
+    input_arm, _score_task = _input_arm_text(experiment, instance)
+    prompt = render_direct_frame(body, input_arm=input_arm)
+    return DirectRowOutcome(
+        submission_score=1.0,
         row_state=ExecutedRowState.SUCCESS,
         executed_component_steps=(
             _llm_component_step(
@@ -285,4 +304,18 @@ def _successful_internal_outcome(
         ),
         output_text=output_text,
         finish_reason="stop",
+    )
+
+
+def _code_comp_test_candidate(
+    *,
+    candidate_id: str = "test-candidate",
+    body: str = DIRECT_WRAPPER_BODY_NAIVE,
+) -> Candidate:
+    from whetstone.envs.code_comp.candidates import env_candidate_base_ref
+
+    return Candidate(
+        candidate_id=candidate_id,
+        base_ref=env_candidate_base_ref(CODE_COMP_ENV_NAME),
+        payload={MUTATION_FIELD: body},
     )

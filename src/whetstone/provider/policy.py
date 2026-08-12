@@ -41,7 +41,7 @@ def default_retry_eligibility() -> dict[SemanticFailureClass, bool]:
         SemanticFailureClass.RATE_LIMIT: True,
         SemanticFailureClass.TIMEOUT: True,
         SemanticFailureClass.PROVIDER_REJECTION: False,
-        SemanticFailureClass.BLANK_GENERATION: False,
+        SemanticFailureClass.BLANK_PROVIDER_GENERATION: False,
         SemanticFailureClass.MALFORMED_RESPONSE: False,
     }
 

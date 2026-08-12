@@ -20,6 +20,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA as _EVALUATION_EVIDENCE_SCHEMA,
 )
@@ -34,14 +35,14 @@ from whetstone.experiment.reward import RewardRef
 #: Persisted-format contracts. Exact wire fields and versions are pinned by
 #: golden tests; never derive them from internal dataclass names.
 EVALUATION_COMPONENT_TRACES_SCHEMA = "whetstone.evaluation_component_traces"
-EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION = 1
+EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION = 2
 EVALUATION_OUTPUTS_SCHEMA = "whetstone.evaluation_outputs"
-EVALUATION_OUTPUTS_SCHEMA_VERSION = 2
-EVALUATION_EVIDENCE_SCHEMA_VERSION = 2
+EVALUATION_OUTPUTS_SCHEMA_VERSION = 4
+EVALUATION_EVIDENCE_SCHEMA_VERSION = 3
 
 
 class RowAccounting(BaseModel):
-    """Complete accounting for the exact task-by-repeat matrix."""
+    """Complete accounting for the exact task-by-sample matrix."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -62,6 +63,80 @@ class CacheEvidence(BaseModel):
     source_call_ids: tuple[str, ...] = ()
 
 
+class CodeScoreRecord(BaseModel):
+    """Persisted reward-facing scalar for one code submission."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    passed: StrictBool
+    infrastructure_unknown: StrictBool
+    outcome: StrictStr
+    fidelity_to_mutant: StrictFloat | None = None
+    attractor_pull: StrictFloat | None = None
+
+
+class CodeCaseResultRecord(BaseModel):
+    """Persisted HumanEval per-case outcome."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    case_id: StrictStr
+    status: StrictStr
+    message: StrictStr
+    input_repr: StrictStr
+    expected_output_repr: StrictStr
+    actual_output_repr: StrictStr
+
+
+class MutantInputResultRecord(BaseModel):
+    """Persisted mutant-oracle per-input outcome."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_index: StrictInt
+    input_repr: StrictStr
+    expected_mutant_repr: StrictStr
+    expected_canonical_repr: StrictStr
+    actual_kind: StrictStr
+    actual_output_repr: StrictStr
+    matched_mutant: StrictBool
+    matched_canonical: StrictBool
+    is_distinct: StrictBool
+
+
+class HumanEvalSubmissionResultRecord(BaseModel):
+    """Persisted HumanEval submission result with per-case detail."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["humaneval"] = "humaneval"
+    score: CodeScoreRecord
+    outcome: StrictStr
+    function_names: tuple[StrictStr, ...]
+    best_function_name: StrictStr | None
+    total_cases: StrictInt
+    cases: tuple[CodeCaseResultRecord, ...] = ()
+
+
+class MutantSubmissionResultRecord(BaseModel):
+    """Persisted mutant-oracle submission result with per-input detail."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["mutant"] = "mutant"
+    score: CodeScoreRecord
+    outcome: StrictStr
+    function_names: tuple[StrictStr, ...]
+    best_function_name: StrictStr | None
+    total_cases: StrictInt
+    input_results: tuple[MutantInputResultRecord, ...] = ()
+
+
+CodeSubmissionResultRecord = (
+    HumanEvalSubmissionResultRecord | MutantSubmissionResultRecord
+)
+
+
 class EvaluationOutputRow(BaseModel):
     """Stable serialized projection of one driven evaluation output row."""
 
@@ -72,9 +147,10 @@ class EvaluationOutputRow(BaseModel):
     )
 
     candidate_id: StrictStr
-    instance_id: StrictStr
-    task_identity: StrictStr
-    repeat: StrictInt
+    task_id: StrictStr
+    task_hash: StrictStr
+    task_index: StrictInt
+    sample_index: StrictInt
     rendered_prompt: StrictStr
     output_text: StrictStr | None
     score: StrictFloat | None
@@ -86,14 +162,17 @@ class EvaluationOutputRow(BaseModel):
     provider_error: ImmutableJsonObject | None
     max_budget: StrictInt | None
     over_budget: StrictBool | None
+    code_submission_result: CodeSubmissionResultRecord | None = None
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationOutputRow:
-        for field_name in ("candidate_id", "instance_id", "task_identity"):
+        for field_name in ("candidate_id", "task_id", "task_hash"):
             if not getattr(self, field_name).strip():
                 raise ValueError(f"{field_name} must be non-empty")
-        if self.repeat < 0:
-            raise ValueError("repeat must be non-negative")
+        if self.sample_index < 0:
+            raise ValueError("sample_index must be non-negative")
+        if self.task_index < 0:
+            raise ValueError("task_index must be non-negative")
         if self.max_budget is not None and self.max_budget < 0:
             raise ValueError("max_budget must be non-negative")
         state_count = sum((self.failed, self.missing, self.invalid))
@@ -105,25 +184,40 @@ class EvaluationOutputRow(BaseModel):
             )
         return self
 
+    def generation_index(self) -> GenerationIndex:
+        return GenerationIndex(
+            task_index=self.task_index,
+            sample_index=self.sample_index,
+        )
+
 
 class EvaluationComponentTraceRow(BaseModel):
     """Exact executed-component observation for one planned row."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    instance_id: StrictStr
-    task_identity: StrictStr
-    repeat: StrictInt
+    task_id: StrictStr
+    task_hash: StrictStr
+    task_index: StrictInt
+    sample_index: StrictInt
     executed_component_trace: ExecutedComponentTracePayload
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationComponentTraceRow:
-        for field_name in ("instance_id", "task_identity"):
+        for field_name in ("task_id", "task_hash"):
             if not getattr(self, field_name).strip():
                 raise ValueError(f"{field_name} must be non-empty")
-        if self.repeat < 0:
-            raise ValueError("repeat must be non-negative")
+        if self.sample_index < 0:
+            raise ValueError("sample_index must be non-negative")
+        if self.task_index < 0:
+            raise ValueError("task_index must be non-negative")
         return self
+
+    def generation_index(self) -> GenerationIndex:
+        return GenerationIndex(
+            task_index=self.task_index,
+            sample_index=self.sample_index,
+        )
 
 
 class EvaluationComponentTraces(BaseModel):
@@ -131,15 +225,15 @@ class EvaluationComponentTraces(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     evaluation_role: EvaluationRole
     graph_hash: IdentityHash
     purpose: StrictStr
     split_role: StrictStr
-    task_identities: tuple[StrictStr, ...]
-    repeat_count: StrictInt
+    task_hashes: tuple[StrictStr, ...]
+    num_samples: StrictInt
     rows: tuple[EvaluationComponentTraceRow, ...]
 
     @model_validator(mode="after")
@@ -152,58 +246,58 @@ class EvaluationComponentTraces(BaseModel):
             raise ValueError("purpose must be non-empty")
         if not self.split_role.strip():
             raise ValueError("split_role must be non-empty")
-        if self.repeat_count < 1:
-            raise ValueError("repeat_count must be at least 1")
-        if not self.task_identities:
-            raise ValueError("task_identities must be non-empty")
-        if any(not task.strip() for task in self.task_identities):
-            raise ValueError("task_identities must be non-empty")
-        if len(set(self.task_identities)) != len(self.task_identities):
-            raise ValueError("task_identities must be unique")
+        if self.num_samples < 1:
+            raise ValueError("num_samples must be at least 1")
+        if not self.task_hashes:
+            raise ValueError("task_hashes must be non-empty")
+        if any(not task.strip() for task in self.task_hashes):
+            raise ValueError("task_hashes must be non-empty")
+        if len(set(self.task_hashes)) != len(self.task_hashes):
+            raise ValueError("task_hashes must be unique")
 
-        task_to_instance: dict[str, str] = {}
-        instance_to_task: dict[str, str] = {}
+        task_hash_to_id: dict[str, str] = {}
+        task_id_to_hash: dict[str, str] = {}
         planned_ordinal = {
-            (task_identity, repeat): task_index * self.repeat_count + repeat
-            for task_index, task_identity in enumerate(self.task_identities)
-            for repeat in range(self.repeat_count)
+            GenerationIndex(
+                task_index=task_index, sample_index=sample_index
+            ): task_index * self.num_samples + sample_index
+            for task_index, _task_hash in enumerate(self.task_hashes)
+            for sample_index in range(self.num_samples)
         }
-        seen_keys: set[tuple[str, int]] = set()
+        seen_keys: set[GenerationIndex] = set()
         prior_ordinal = -1
         for row in self.rows:
             if (
-                task_to_instance.setdefault(row.task_identity, row.instance_id)
-                != row.instance_id
+                task_hash_to_id.setdefault(row.task_hash, row.task_id)
+                != row.task_id
             ):
-                raise ValueError(
-                    "one task_identity cannot name multiple instance_ids"
-                )
+                raise ValueError("one task_hash cannot name multiple task_ids")
             if (
-                instance_to_task.setdefault(row.instance_id, row.task_identity)
-                != row.task_identity
+                task_id_to_hash.setdefault(row.task_id, row.task_hash)
+                != row.task_hash
             ):
                 raise ValueError(
-                    "one instance_id cannot name multiple task_identities"
+                    "one task_id cannot name multiple task_hashes"
                 )
-            key = (row.task_identity, row.repeat)
+            key = row.generation_index()
             if key in seen_keys:
                 raise ValueError(
-                    "trace rows must have unique task_identity/repeat keys"
+                    "trace rows must have unique generation index keys"
                 )
             seen_keys.add(key)
             ordinal = planned_ordinal.get(key)
             if ordinal is None:
                 raise ValueError(
-                    "trace row is outside the exact task/repeat plan"
+                    "trace row is outside the exact task/sample plan"
                 )
             if ordinal <= prior_ordinal:
                 raise ValueError(
-                    "trace rows must follow exact task/repeat order"
+                    "trace rows must follow exact task/sample order"
                 )
             prior_ordinal = ordinal
         if seen_keys != set(planned_ordinal):
             raise ValueError(
-                "trace rows must cover the exact task/repeat plan"
+                "trace rows must cover the exact task/sample plan"
             )
         return self
 
@@ -245,15 +339,15 @@ class EvaluationOutputsRecord(BaseModel):
         allow_inf_nan=False,
     )
 
-    schema_version: Literal[2]
+    schema_version: Literal[4]
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     evaluation_role: EvaluationRole
     graph_hash: IdentityHash
     purpose: StrictStr
     split_role: StrictStr
-    task_identities: tuple[StrictStr, ...]
-    repeat_count: StrictInt
+    task_hashes: tuple[StrictStr, ...]
+    num_samples: StrictInt
     component_traces_ref: TypedRef
     outputs: tuple[EvaluationOutputRow, ...]
 
@@ -274,22 +368,24 @@ class EvaluationOutputsRecord(BaseModel):
             raise ValueError("purpose must be non-empty")
         if not self.split_role.strip():
             raise ValueError("split_role must be non-empty")
-        if self.repeat_count < 1:
-            raise ValueError("repeat_count must be at least 1")
-        if not self.task_identities:
-            raise ValueError("task_identities must be non-empty")
-        if any(not task.strip() for task in self.task_identities):
-            raise ValueError("task_identities must be non-empty")
-        if len(set(self.task_identities)) != len(self.task_identities):
-            raise ValueError("task_identities must be unique")
+        if self.num_samples < 1:
+            raise ValueError("num_samples must be at least 1")
+        if not self.task_hashes:
+            raise ValueError("task_hashes must be non-empty")
+        if any(not task.strip() for task in self.task_hashes):
+            raise ValueError("task_hashes must be non-empty")
+        if len(set(self.task_hashes)) != len(self.task_hashes):
+            raise ValueError("task_hashes must be unique")
 
-        task_to_instance: dict[str, str] = {}
-        instance_to_task: dict[str, str] = {}
-        seen_keys: set[tuple[str, int]] = set()
+        task_hash_to_id: dict[str, str] = {}
+        task_id_to_hash: dict[str, str] = {}
+        seen_keys: set[GenerationIndex] = set()
         planned_ordinal = {
-            (task_identity, repeat): task_index * self.repeat_count + repeat
-            for task_index, task_identity in enumerate(self.task_identities)
-            for repeat in range(self.repeat_count)
+            GenerationIndex(
+                task_index=task_index, sample_index=sample_index
+            ): task_index * self.num_samples + sample_index
+            for task_index, _task_hash in enumerate(self.task_hashes)
+            for sample_index in range(self.num_samples)
         }
         prior_ordinal = -1
         for row in self.outputs:
@@ -298,38 +394,36 @@ class EvaluationOutputsRecord(BaseModel):
                     "every output row candidate_id must match the record"
                 )
             if (
-                task_to_instance.setdefault(row.task_identity, row.instance_id)
-                != row.instance_id
+                task_hash_to_id.setdefault(row.task_hash, row.task_id)
+                != row.task_id
             ):
-                raise ValueError(
-                    "one task_identity cannot name multiple instance_ids"
-                )
+                raise ValueError("one task_hash cannot name multiple task_ids")
             if (
-                instance_to_task.setdefault(row.instance_id, row.task_identity)
-                != row.task_identity
+                task_id_to_hash.setdefault(row.task_id, row.task_hash)
+                != row.task_hash
             ):
                 raise ValueError(
-                    "one instance_id cannot name multiple task_identities"
+                    "one task_id cannot name multiple task_hashes"
                 )
-            key = (row.task_identity, row.repeat)
+            key = row.generation_index()
             if key in seen_keys:
                 raise ValueError(
-                    "output rows must have unique task_identity/repeat keys"
+                    "output rows must have unique generation index keys"
                 )
             seen_keys.add(key)
             ordinal = planned_ordinal.get(key)
             if ordinal is None:
                 raise ValueError(
-                    "output row is outside the exact task/repeat plan"
+                    "output row is outside the exact task/sample plan"
                 )
             if ordinal <= prior_ordinal:
                 raise ValueError(
-                    "output rows must follow exact task/repeat order"
+                    "output rows must follow exact task/sample order"
                 )
             prior_ordinal = ordinal
         if seen_keys != set(planned_ordinal):
             raise ValueError(
-                "output rows must cover the exact task/repeat plan"
+                "output rows must cover the exact task/sample plan"
             )
         return self
 
@@ -342,7 +436,7 @@ class EvaluationEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
     graph_hash: StrictStr
@@ -350,9 +444,9 @@ class EvaluationEvidence(BaseModel):
     purpose: StrictStr
     #: Source dataset revision/manifest identity. The ordered TaskSet identity
     #: is a separate sampling/config identity and must not be substituted here.
-    dataset_identity: StrictStr
-    task_identities: tuple[str, ...]
-    repeat_count: StrictInt
+    dataset_hash: StrictStr
+    task_hashes: tuple[str, ...]
+    num_samples: StrictInt
     per_task_values: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     row_accounting: RowAccounting
@@ -369,9 +463,9 @@ class EvaluationEvidence(BaseModel):
     guard_timeouts: StrictInt = 0
 
     @model_validator(mode="after")
-    def _validate_dataset_identity(self) -> EvaluationEvidence:
-        if not self.dataset_identity.strip():
-            raise ValueError("dataset_identity must be non-empty")
+    def _validate_dataset_hash(self) -> EvaluationEvidence:
+        if not self.dataset_hash.strip():
+            raise ValueError("dataset_hash must be non-empty")
         if (
             self.component_traces_ref.schema_name
             != EVALUATION_COMPONENT_TRACES_SCHEMA
@@ -447,6 +541,9 @@ __all__ = [
     "EVALUATION_OUTPUTS_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA_VERSION",
     "CacheEvidence",
+    "CodeCaseResultRecord",
+    "CodeScoreRecord",
+    "CodeSubmissionResultRecord",
     "EvaluationComponentTraceRow",
     "EvaluationComponentTraces",
     "EvaluationComponentTracesRef",
@@ -456,5 +553,8 @@ __all__ = [
     "EvaluationFailureEvidenceRef",
     "EvaluationOutputRow",
     "EvaluationOutputsRecord",
+    "HumanEvalSubmissionResultRecord",
+    "MutantInputResultRecord",
+    "MutantSubmissionResultRecord",
     "RowAccounting",
 ]

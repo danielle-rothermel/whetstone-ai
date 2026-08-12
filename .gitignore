@@ -8,5 +8,6 @@ artifacts/
 analysis/samples/**/*.json
 .env
 .coverage
+*.sqlite3
 .DS_STORE
 .claude/ralph-loop.local.md

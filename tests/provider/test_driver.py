@@ -53,7 +53,7 @@ class TestSuccessPath:
         )
         assert result.succeeded
         assert result.attempt_count == 1
-        generation = result.generation
+        generation = result.provider_generation
         assert generation is not None
         assert generation.text == "ok"
         assert len(transport.served) == 1
@@ -69,7 +69,7 @@ class TestSuccessPath:
         )
         assert result.succeeded
         assert result.attempt_count == 3
-        generation = result.generation
+        generation = result.provider_generation
         assert generation is not None
         assert generation.text == "finally"
         assert sleeps.delays == [1.0, 2.0]
@@ -97,7 +97,7 @@ class TestExhaustionIsExpectedOutput:
         )
         assert isinstance(result, ProviderCallResult)
         assert not result.succeeded
-        assert result.generation is None
+        assert result.provider_generation is None
         failure = result.semantic_failure
         assert isinstance(failure, ProviderSemanticFailure)
         assert failure.failure_class is SemanticFailureClass.TRANSPORT_ERROR
@@ -125,7 +125,10 @@ class TestExhaustionIsExpectedOutput:
         assert result.attempt_count == 1
         failure = result.semantic_failure
         assert isinstance(failure, ProviderSemanticFailure)
-        assert failure.failure_class is SemanticFailureClass.BLANK_GENERATION
+        assert (
+            failure.failure_class
+            is SemanticFailureClass.BLANK_PROVIDER_GENERATION
+        )
         assert failure.rejected_response is not None
 
     def test_terminal_failure_equals_last_attempt(self) -> None:

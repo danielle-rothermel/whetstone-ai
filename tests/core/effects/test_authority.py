@@ -1,184 +1,33 @@
 from __future__ import annotations
 
 import inspect
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from threading import Condition, Event, Lock, Thread
+from threading import Thread
 
 import pytest
 from pydantic import ValidationError
 
 from tests.core.effects.authority_support import (
-    _HASH_A,
-    _HASH_B,
     _LEASE_DURATION,
     _NOW,
     _acquire,
+    _Backend,
+    _CoordinatedAuthority,
+    _FakeClock,
     _request,
     _result_ref,
+    _ScriptedRenewalWait,
 )
-from tests.optimization.sqlite_time import wait_for_sqlite_authority_after
 from whetstone.core.effects.authority import (
     AcquireOutcome,
     EffectAuthority,
     EffectLease,
     EffectTerminal,
-    ReplayPolicy,
     StaleLeaseError,
-    TerminalConflictError,
     TerminalFailure,
     TerminalOutcome,
 )
-from whetstone.core.identity import NonEmptyId, TypedRef
-
-
-class _FakeClock:
-    def __init__(self, now: datetime = _NOW) -> None:
-        self._now = now
-        self._lock = Lock()
-
-    def __call__(self) -> datetime:
-        with self._lock:
-            return self._now
-
-    def advance(self, duration: timedelta) -> None:
-        with self._lock:
-            self._now += duration
-
-
-class _ScriptedRenewalWait:
-    def __init__(self) -> None:
-        self._condition = Condition()
-        self._requested_intervals: list[float] = []
-        self._releases = 0
-
-    def wait(self, interval_seconds: float, stop: Event) -> bool:
-        with self._condition:
-            self._requested_intervals.append(interval_seconds)
-            self._condition.notify_all()
-            ready = self._condition.wait_for(
-                lambda: stop.is_set() or self._releases > 0,
-                timeout=2,
-            )
-            if not ready:
-                raise TimeoutError("test did not script the next renewal wait")
-            if stop.is_set():
-                return True
-            self._releases -= 1
-            return False
-
-    def wake(self) -> None:
-        with self._condition:
-            self._condition.notify_all()
-
-    def await_request_count(self, count: int) -> tuple[float, ...]:
-        with self._condition:
-            observed = self._condition.wait_for(
-                lambda: len(self._requested_intervals) >= count,
-                timeout=2,
-            )
-            if not observed:
-                raise AssertionError(
-                    f"renewer did not request {count} scripted waits"
-                )
-            return tuple(self._requested_intervals)
-
-    def release_one(self) -> None:
-        with self._condition:
-            self._releases += 1
-            self._condition.notify_all()
-
-
-@dataclass(frozen=True, slots=True)
-class _Backend:
-    authority: EffectAuthority
-    clock: _FakeClock | None
-    database: Path | None
-
-    def advance_past(self, instant: datetime) -> None:
-        if self.clock is not None:
-            now = self.clock()
-            if now <= instant:
-                self.clock.advance(instant - now + timedelta(microseconds=1))
-            return
-        assert self.database is not None
-        wait_for_sqlite_authority_after(self.database, instant)
-
-
-class _CoordinatedAuthority(EffectAuthority):
-    def __init__(self, authority: EffectAuthority) -> None:
-        self._authority = authority
-        self._renewal_wait_strategy = authority._renewal_wait_strategy
-        self.release_renewal = Event()
-        self.renewal_entered = Event()
-        self.terminal_entered = Event()
-        self.renew_calls = 0
-        self.terminal_lease: EffectLease | None = None
-
-    def renew(
-        self,
-        lease: EffectLease,
-        *,
-        lease_duration: timedelta,
-    ) -> EffectLease:
-        self.renew_calls += 1
-        self.renewal_entered.set()
-        if not self.release_renewal.wait(timeout=2):
-            raise TimeoutError("test did not release coordinated renewal")
-        return self._authority.renew(
-            lease,
-            lease_duration=lease_duration,
-        )
-
-    def _validate_lease_duration(self, value: timedelta) -> timedelta:
-        return self._authority._validate_lease_duration(value)
-
-    def succeed(
-        self,
-        lease: EffectLease,
-        *,
-        result_ref: TypedRef,
-    ) -> EffectTerminal:
-        self.terminal_lease = lease
-        self.terminal_entered.set()
-        return self._authority.succeed(lease, result_ref=result_ref)
-
-    def fail(
-        self,
-        lease: EffectLease,
-        *,
-        result_ref: TypedRef,
-        failure: TerminalFailure,
-    ) -> EffectTerminal:
-        self.terminal_lease = lease
-        self.terminal_entered.set()
-        return self._authority.fail(
-            lease,
-            result_ref=result_ref,
-            failure=failure,
-        )
-
-
-@pytest.fixture(
-    name="backend",
-    params=(
-        "memory",
-        pytest.param(
-            "sqlite",
-            marks=pytest.mark.sqlite_time_integration,
-        ),
-    ),
-)
-def backend_fixture(
-    request: pytest.FixtureRequest,
-    tmp_path: Path,
-) -> _Backend:
-    if request.param == "memory":
-        clock = _FakeClock()
-        return _Backend(EffectAuthority.memory(clock=clock), clock, None)
-    database = tmp_path / "authority.sqlite"
-    return _Backend(EffectAuthority.sqlite(database), None, database)
+from whetstone.core.identity import NonEmptyId
 
 
 def test_public_transitions_expose_duration_but_no_process_time() -> None:
@@ -250,193 +99,6 @@ def test_same_attempt_replays_but_same_owner_new_attempt_is_busy(
     assert first.lease.attempt_id == "attempt-1"
     assert competing.outcome is AcquireOutcome.BUSY
     assert competing.busy_expires_at == first.lease.expires_at
-
-
-def test_renew_and_takeover_share_backend_authority_time(
-    backend: _Backend,
-) -> None:
-    request = _request()
-    first = _acquire(backend.authority, request)
-    assert first.lease is not None
-
-    backend.advance_past(first.lease.expires_at - _LEASE_DURATION)
-    renewed = backend.authority.renew(
-        first.lease,
-        lease_duration=_LEASE_DURATION,
-    )
-    assert renewed.fence == first.lease.fence
-    assert renewed.expires_at > first.lease.expires_at
-    with pytest.raises(StaleLeaseError):
-        backend.authority.renew(
-            first.lease,
-            lease_duration=_LEASE_DURATION,
-        )
-
-    backend.advance_past(renewed.expires_at)
-    takeover = _acquire(
-        backend.authority,
-        request,
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert takeover.outcome is AcquireOutcome.ACQUIRED
-    assert takeover.lease is not None
-    assert takeover.lease.owner_id == "worker-2"
-    assert takeover.lease.attempt_id == "attempt-2"
-    assert takeover.lease.fence == 2
-
-
-@pytest.mark.parametrize(
-    "policy",
-    (ReplayPolicy.IDEMPOTENT, ReplayPolicy.DURABLE_WORKFLOW),
-)
-def test_stale_attempt_cannot_terminalize_after_takeover(
-    backend: _Backend,
-    policy: ReplayPolicy,
-) -> None:
-    request = _request(policy=policy)
-    first = _acquire(backend.authority, request)
-    assert first.lease is not None
-    backend.advance_past(first.lease.expires_at)
-    takeover = _acquire(
-        backend.authority,
-        request,
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert takeover.lease is not None
-
-    with pytest.raises(StaleLeaseError):
-        backend.authority.succeed(
-            first.lease,
-            result_ref=_result_ref("first"),
-        )
-    terminal = backend.authority.succeed(
-        takeover.lease,
-        result_ref=_result_ref("second"),
-    )
-    assert terminal.attempt_id == "attempt-2"
-    assert terminal.result_ref == _result_ref("second")
-
-
-def test_no_redrive_expiry_becomes_immutable_recovery_required(
-    backend: _Backend,
-) -> None:
-    request = _request(policy=ReplayPolicy.NO_REDRIVE)
-    first = _acquire(backend.authority, request)
-    assert first.lease is not None
-    backend.advance_past(first.lease.expires_at)
-
-    recovered = _acquire(
-        backend.authority,
-        request,
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert recovered.outcome is AcquireOutcome.RECOVERY_REQUIRED
-    assert recovered.terminal is not None
-    assert recovered.terminal.failure is not None
-    assert recovered.terminal.failure.code.startswith("effect-recovery:")
-    assert recovered.terminal.failure.details["owner_id"] == "worker-1"
-    assert recovered.terminal.failure.details["attempt_id"] == "attempt-1"
-
-    replay = _acquire(
-        backend.authority,
-        request,
-        owner="worker-3",
-        attempt="attempt-3",
-    )
-    assert replay == recovered
-    with pytest.raises(TerminalConflictError):
-        backend.authority.succeed(
-            first.lease,
-            result_ref=_result_ref("late"),
-        )
-
-
-def test_request_identity_and_policy_are_immutable(
-    backend: _Backend,
-) -> None:
-    original = _request()
-    _acquire(backend.authority, original)
-
-    divergent_identity = _acquire(
-        backend.authority,
-        _request(identity_hash=_HASH_B),
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert divergent_identity.outcome is AcquireOutcome.REQUEST_CONFLICT
-    assert divergent_identity.existing_request_identity_hash == _HASH_A
-    assert divergent_identity.existing_replay_policy is ReplayPolicy.IDEMPOTENT
-
-    divergent_policy = _acquire(
-        backend.authority,
-        _request(policy=ReplayPolicy.DURABLE_WORKFLOW),
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert divergent_policy.outcome is AcquireOutcome.REQUEST_CONFLICT
-
-
-def test_success_and_failure_are_exact_immutable_and_replayed(
-    backend: _Backend,
-) -> None:
-    success_request = _request(key="effect:success")
-    success = _acquire(backend.authority, success_request)
-    assert success.lease is not None
-    terminal = backend.authority.succeed(
-        success.lease,
-        result_ref=_result_ref("result-a"),
-    )
-    assert (
-        backend.authority.succeed(
-            success.lease,
-            result_ref=_result_ref("result-a"),
-        )
-        == terminal
-    )
-    with pytest.raises(TerminalConflictError):
-        backend.authority.succeed(
-            success.lease,
-            result_ref=_result_ref("result-b"),
-        )
-    replay = _acquire(
-        backend.authority,
-        success_request,
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert replay.outcome is AcquireOutcome.SUCCEEDED
-    assert replay.terminal == terminal
-
-    failure_request = _request(key="effect:failure")
-    failed = _acquire(backend.authority, failure_request)
-    assert failed.lease is not None
-    failure = TerminalFailure(
-        code="provider_timeout",
-        message="provider timed out",
-        details={"provider": "test"},
-    )
-    failed_terminal = backend.authority.fail(
-        failed.lease,
-        result_ref=_result_ref("failed-result"),
-        failure=failure,
-    )
-    failed_replay = _acquire(
-        backend.authority,
-        failure_request,
-        owner="worker-2",
-        attempt="attempt-2",
-    )
-    assert failed_replay.outcome is AcquireOutcome.FAILED
-    assert failed_replay.terminal == failed_terminal
-    with pytest.raises(TerminalConflictError):
-        backend.authority.fail(
-            failed.lease,
-            result_ref=_result_ref("different"),
-            failure=failure,
-        )
 
 
 def test_terminal_outcome_shapes_and_serialized_lease_are_exact() -> None:

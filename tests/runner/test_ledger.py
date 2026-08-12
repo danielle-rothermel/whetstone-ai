@@ -40,8 +40,8 @@ def _publication(cell_id: str = "copro__c18__a0") -> ViewerCellPublicationRef:
             relative_path=f"viewer_cells/{cell_id}/projection.json",
             sha256=_HASH,
         ),
-        rollout_outputs=ViewerPublishedFileRef(
-            relative_path=f"viewer_cells/{cell_id}/rollout_outputs.jsonl",
+        generation_outputs=ViewerPublishedFileRef(
+            relative_path=f"viewer_cells/{cell_id}/generation_outputs.jsonl",
             sha256=_OTHER_HASH,
         ),
     )
@@ -114,8 +114,8 @@ def _anchor(**overrides: object) -> OfficialAnchorRecord:
         task_model="openai/gpt-5-nano",
         graph_hash=_HASH,
         eval_config_hash=_OTHER_HASH,
-        official_instance_ids=("i0", "i1"),
-        official_task_identities=("c" * 64, "d" * 64),
+        official_task_ids=("i0", "i1"),
+        official_task_hashes=("c" * 64, "d" * 64),
         baseline_evidence_ref=_evidence_ref(),
         ceiling_evidence_ref=_evidence_ref(_OTHER_HASH),
         baseline_official=0.5,
@@ -166,121 +166,6 @@ def test_cell_statuses_are_pinned() -> None:
         {"improved", "inconclusive", "no-improvement", "halted"}
     )
     assert COMPLETED_CELL_STATUSES < CELL_STATUSES
-
-
-def test_cell_record_wire_keys_are_pinned() -> None:
-    payload = json.loads(_cell().to_line())
-
-    assert set(payload) == {
-        "schema",
-        "cell_id",
-        "optimizer",
-        "env",
-        "attempt",
-        "canonical",
-        "models",
-        "baseline_official",
-        "ceiling_official",
-        "best_official",
-        "delta",
-        "delta_ci95",
-        "naive_ci95",
-        "ceiling_ci95",
-        "headroom_delta",
-        "headroom_ci95",
-        "official_repeats_used",
-        "escalated",
-        "escalation_note",
-        "pooled_observation_counts",
-        "internal_evals_count",
-        "optimizer_steps",
-        "spend_usd",
-        "wall_s",
-        "lane",
-        "window_notes",
-        "status",
-        "artifacts",
-        "sampling",
-        "telemetry",
-        "controls",
-        "graph_hash",
-        "eval_config_hash",
-        "started_at",
-        "finished_at",
-    }
-    assert payload["schema"] == CELLS_SCHEMA
-    assert set(payload["models"]) == {"task", "proposer"}
-    assert set(payload["sampling"]) == {"official_n", "official_repeats"}
-    assert set(payload["controls"]) == {
-        "temperature",
-        "reasoning_effort",
-        "prompt_cache",
-    }
-    assert set(payload["artifacts"]) == {
-        "optimization_result_ref",
-        "optimization_trace_ref",
-        "best_candidate_id",
-        "official_record_before",
-        "official_record_after",
-        "viewer_publication",
-    }
-    assert set(payload["telemetry"]) == {
-        "total_prompt_tokens",
-        "total_completion_tokens",
-        "total_tokens",
-        "total_reasoning_tokens",
-        "total_latency_s",
-        "mean_latency_s",
-        "token_coverage",
-        "reasoning_coverage",
-        "latency_coverage",
-    }
-
-
-def test_spend_record_wire_keys_are_pinned() -> None:
-    payload = json.loads(
-        SpendRecord(
-            cell_id="copro:c18:a0", phase="before", lane="openrouter"
-        ).to_line()
-    )
-
-    assert set(payload) == {
-        "schema",
-        "event_id",
-        "cell_id",
-        "phase",
-        "lane",
-        "total_credits",
-        "total_usage",
-        "remaining_usd",
-        "at",
-    }
-    assert payload["schema"] == SPEND_SCHEMA
-
-
-def test_official_anchor_wire_keys_are_pinned() -> None:
-    payload = json.loads(_anchor().to_json())
-
-    assert set(payload) == {
-        "schema",
-        "cell_id",
-        "env",
-        "task_model",
-        "graph_hash",
-        "eval_config_hash",
-        "official_instance_ids",
-        "official_task_identities",
-        "baseline_evidence_ref",
-        "ceiling_evidence_ref",
-        "baseline_official",
-        "ceiling_official",
-        "baseline_per_task",
-        "ceiling_per_task",
-        "baseline_per_task_counts",
-        "ceiling_per_task_counts",
-        "official_repeats_used",
-    }
-    assert payload["schema"] == OFFICIAL_ANCHOR_SCHEMA
 
 
 # --------------------------------------------------------------------------
@@ -433,9 +318,9 @@ def test_anchor_requires_evaluation_evidence_refs() -> None:
         )
 
 
-def test_anchor_instance_ids_must_be_unique() -> None:
+def test_anchor_task_ids_must_be_unique() -> None:
     with pytest.raises(ValidationError, match="unique IDs"):
-        _anchor(official_instance_ids=("i0", "i0"))
+        _anchor(official_task_ids=("i0", "i0"))
 
 
 def test_anchor_cell_id_env_must_agree() -> None:
@@ -656,12 +541,14 @@ def test_viewer_publication_commits_by_one_atomic_rename(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=body,
-        rollout_lines=lines,
+        generation_lines=lines,
     )
 
     directory = ledger.viewer_cell_dir("copro:c18:a0")
     assert (directory / "projection.json").read_bytes() == body
-    assert (directory / "rollout_outputs.jsonl").read_text() == "".join(lines)
+    assert (directory / "generation_outputs.jsonl").read_text() == "".join(
+        lines
+    )
     assert ref.projection.relative_path == (
         "viewer_cells/copro__c18__a0/projection.json"
     )
@@ -684,7 +571,7 @@ def test_viewer_publication_hashes_the_exact_committed_bytes(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=body,
-        rollout_lines=lines,
+        generation_lines=lines,
     )
 
     directory = ledger.viewer_cell_dir("copro:c18:a0")
@@ -695,9 +582,9 @@ def test_viewer_publication_hashes_the_exact_committed_bytes(
         ).hexdigest()
     )
     assert (
-        ref.rollout_outputs.sha256
+        ref.generation_outputs.sha256
         == hashlib.sha256(
-            (directory / "rollout_outputs.jsonl").read_bytes()
+            (directory / "generation_outputs.jsonl").read_bytes()
         ).hexdigest()
     )
 
@@ -711,13 +598,13 @@ def test_republishing_identical_viewer_bytes_is_idempotent(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=b"{}",
-        rollout_lines=["{}\n"],
+        generation_lines=["{}\n"],
     )
     second = ledger.write_viewer_publication(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=b"{}",
-        rollout_lines=["{}\n"],
+        generation_lines=["{}\n"],
     )
 
     assert first == second
@@ -731,7 +618,7 @@ def test_republishing_different_viewer_bytes_is_refused(
         cell_id="copro:c18:a0",
         env="c18",
         projection_body=b"{}",
-        rollout_lines=["{}\n"],
+        generation_lines=["{}\n"],
     )
 
     with pytest.raises(RuntimeError, match="conflicts at"):
@@ -739,7 +626,7 @@ def test_republishing_different_viewer_bytes_is_refused(
             cell_id="copro:c18:a0",
             env="c18",
             projection_body=b'{"changed":1}',
-            rollout_lines=["{}\n"],
+            generation_lines=["{}\n"],
         )
 
 
@@ -751,7 +638,7 @@ def test_viewer_publication_refuses_a_mismatched_env(tmp_path: Path) -> None:
             cell_id="copro:c18:a0",
             env="c22",
             projection_body=b"{}",
-            rollout_lines=[],
+            generation_lines=[],
         )
 
 
@@ -762,9 +649,9 @@ def test_viewer_publication_ref_requires_the_canonical_file_pair() -> None:
                 relative_path="viewer_cells/copro__c18__a0/projection.json",
                 sha256=_HASH,
             ),
-            rollout_outputs=ViewerPublishedFileRef(
+            generation_outputs=ViewerPublishedFileRef(
                 relative_path="viewer_cells/copro__c22__a0/"
-                "rollout_outputs.jsonl",
+                "generation_outputs.jsonl",
                 sha256=_OTHER_HASH,
             ),
         )

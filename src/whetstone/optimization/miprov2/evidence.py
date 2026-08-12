@@ -46,7 +46,7 @@ from whetstone.optimization.contracts import (
 )
 from whetstone.optimization.miprov2.bootstrap import (
     BootstrapAttemptPlan,
-    BootstrapRolloutResult,
+    BootstrapGenerationResult,
 )
 from whetstone.optimization.miprov2.demo import ObservedTraceStep
 from whetstone.optimization.miprov2.eval_config import (
@@ -107,7 +107,7 @@ class Miprov2IntentContext(BaseModel):
     effect_identity_hash: StrictStr
     intent_id: StrictStr
     candidate: CandidateRef
-    task_batch_identities: tuple[StrictStr, ...]
+    task_batch_hashes: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     eval_config_binding: Miprov2EvalConfigBinding
     evaluation_binding: EvaluationBinding
@@ -132,9 +132,9 @@ class Miprov2IntentContext(BaseModel):
             raise ValueError(
                 "intent context run_id and intent_id are required"
             )
-        if not self.task_batch_identities:
+        if not self.task_batch_hashes:
             raise ValueError("intent context task batch cannot be empty")
-        for identity in self.task_batch_identities:
+        for identity in self.task_batch_hashes:
             require_full_hash(identity, field="task_batch_identity")
         request = self.eval_config_binding.request
         expected_purpose = {
@@ -147,8 +147,8 @@ class Miprov2IntentContext(BaseModel):
             request.control_identity_hash != self.control_identity_hash
             or request.purpose != expected_purpose
             or request.effect_identity_hash != self.effect_identity_hash
-            or request.task_batch_identities != self.task_batch_identities
-            or request.repeat_count != 1
+            or request.task_batch_hashes != self.task_batch_hashes
+            or request.num_samples != 1
             or request.execution_policy != self.execution_policy
             or self.eval_config_binding.eval_config != self.eval_config
             or self.evaluation_binding.eval_config != self.eval_config
@@ -177,9 +177,7 @@ class Miprov2IntentContext(BaseModel):
                     "the supported optimizable component occupies "
                     "trace index 0"
                 )
-            if self.task_batch_identities != (
-                self.bootstrap_attempt.task_identity,
-            ):
+            if self.task_batch_hashes != (self.bootstrap_attempt.task_hash,):
                 raise ValueError(
                     "bootstrap context must bind its exact single task"
                 )
@@ -213,7 +211,7 @@ class Miprov2IntentContext(BaseModel):
             "effect_identity_hash": self.effect_identity_hash,
             "intent_id": self.intent_id,
             "candidate": self.candidate.model_dump(mode="json"),
-            "task_batch_identities": list(self.task_batch_identities),
+            "task_batch_hashes": list(self.task_batch_hashes),
             "eval_config": self.eval_config.model_dump(mode="json"),
             "eval_config_binding": self.eval_config_binding.model_dump(
                 mode="json"
@@ -387,13 +385,13 @@ class Miprov2EvidenceResolver:
             evidence.candidate,
             evidence.evaluation_binding,
             evidence.purpose,
-            evidence.task_identities,
-            evidence.repeat_count,
+            evidence.task_hashes,
+            evidence.num_samples,
         ) != (
             context.candidate,
             expected_binding,
             resolution.intent.purpose,
-            context.task_batch_identities,
+            context.task_batch_hashes,
             1,
         ):
             raise ValueError(
@@ -402,7 +400,7 @@ class Miprov2EvidenceResolver:
         if expected_binding.role is not EvaluationRole.INTERNAL:
             raise ValueError("MIPROv2 requires an internal Evaluation Binding")
         accounting = _row_accounting(evidence)
-        if accounting.planned != len(context.task_batch_identities):
+        if accounting.planned != len(context.task_batch_hashes):
             raise ValueError("evaluation row plan conflicts with task batch")
 
         traces_ref = evidence.component_traces_ref
@@ -421,8 +419,8 @@ class Miprov2EvidenceResolver:
             traces.graph_hash,
             traces.purpose,
             traces.split_role,
-            traces.task_identities,
-            traces.repeat_count,
+            traces.task_hashes,
+            traces.num_samples,
         ) != (
             evidence.candidate,
             evidence.evaluation_binding,
@@ -430,8 +428,8 @@ class Miprov2EvidenceResolver:
             evidence.graph_hash,
             evidence.purpose,
             "internal",
-            evidence.task_identities,
-            evidence.repeat_count,
+            evidence.task_hashes,
+            evidence.num_samples,
         ):
             raise ValueError(
                 "component traces conflict with exact evaluation evidence"
@@ -491,7 +489,7 @@ class Miprov2EvidenceResolver:
             effect_identity_hash=context.effect_identity_hash,
             purpose=purpose,
             candidate=context.candidate,
-            task_batch_identities=context.task_batch_identities,
+            task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
             evaluation_binding=resolution.intent.evaluation_binding,
@@ -562,7 +560,7 @@ class Miprov2EvidenceResolver:
             effect_identity_hash=context.effect_identity_hash,
             purpose=purpose,
             candidate=context.candidate,
-            task_batch_identities=context.task_batch_identities,
+            task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
             evaluation_binding=resolution.intent.evaluation_binding,
@@ -571,7 +569,7 @@ class Miprov2EvidenceResolver:
             reward_ref=None,
             normalized_score=0.0,
         )
-        rows = len(context.task_batch_identities)
+        rows = len(context.task_batch_hashes)
         return Miprov2ResolvedEvaluation(
             context=context,
             reward_value=0.0,
@@ -589,7 +587,7 @@ class Miprov2EvidenceResolver:
     def resolve_bootstrap(
         self,
         resolution: IntentResolution,
-    ) -> BootstrapRolloutResult:
+    ) -> BootstrapGenerationResult:
         """Select the exact configured step from a successful trace row."""
 
         resolved = self._resolve_completed(resolution)
@@ -611,8 +609,8 @@ class Miprov2EvidenceResolver:
             )
         row = resolved.component_traces.rows[0]
         if (
-            row.task_identity != context.task_batch_identities[0]
-            or row.repeat != 0
+            row.task_hash != context.task_batch_hashes[0]
+            or row.sample_index != 0
             or row.executed_component_trace.row_state.value != "success"
         ):
             raise ValueError(
@@ -637,9 +635,9 @@ class Miprov2EvidenceResolver:
                 "graph position"
             )
         assert context.bootstrap_attempt is not None
-        return BootstrapRolloutResult(
+        return BootstrapGenerationResult(
             attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-            source_rollout_identity=resolved.evidence_ref.content_hash,
+            source_generation_identity=resolved.evidence_ref.content_hash,
             source_trace_identity=resolved.component_traces_ref.content_hash,
             source_output_identity=_selected_step_identity(selected),
             source_score_identity=resolved.reward_ref.record_ref.content_hash,
@@ -658,7 +656,7 @@ class Miprov2EvidenceResolver:
     def resolve_bootstrap_failure(
         self,
         resolution: IntentResolution,
-    ) -> BootstrapRolloutResult:
+    ) -> BootstrapGenerationResult:
         """Preserve exact failure evidence without inventing score or trace."""
 
         context = load_miprov2_intent_context(self.store, resolution.intent)
@@ -699,9 +697,9 @@ class Miprov2EvidenceResolver:
         ):
             raise ValueError("failed bootstrap cannot carry Reward evidence")
         evidence_hash = failure_ref.content_hash
-        return BootstrapRolloutResult(
+        return BootstrapGenerationResult(
             attempt_identity_hash=context.bootstrap_attempt.identity_hash(),
-            source_rollout_identity=evidence_hash,
+            source_generation_identity=evidence_hash,
             source_trace_identity=evidence_hash,
             source_output_identity=evidence_hash,
             source_score_identity=evidence_hash,

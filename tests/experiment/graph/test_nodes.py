@@ -7,9 +7,9 @@ from tests.experiment.graph.support import build_graph_config, fake_hash
 from whetstone.experiment.graph.nodes import (
     EVAL_NODE_TYPE,
     EVALUATION_PROCEDURE_CONFIG_VARIABLE,
-    GENERATION_OUTPUT_FIELD,
     LLM_CALL_NODE_TYPE,
     PROVIDER_CALL_CONFIG_VARIABLE,
+    PROVIDER_GENERATION_OUTPUT_FIELD,
     eval_node_definition,
     eval_node_procedure_hash,
     eval_variable_assignment,
@@ -33,14 +33,14 @@ def test_llm_call_node_uses_closed_versioned_type() -> None:
                 "description": None,
             },
             {
-                "name": GENERATION_OUTPUT_FIELD,
+                "name": PROVIDER_GENERATION_OUTPUT_FIELD,
                 "role": "output",
                 "type_name": "str",
                 "description": None,
             },
         ],
         "input_sources": {"prompt": "task.prompt"},
-        "output_field": GENERATION_OUTPUT_FIELD,
+        "output_field": PROVIDER_GENERATION_OUTPUT_FIELD,
         "variable_names": [PROVIDER_CALL_CONFIG_VARIABLE],
     }
 

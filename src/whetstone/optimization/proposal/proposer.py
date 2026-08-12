@@ -56,6 +56,7 @@ __all__ = [
     "ProposalExecutorDurabilityContract",
     "ProposalRequest",
     "ProposerConfig",
+    "ProposerRouteConfig",
     "ProposerTransport",
     "ProviderCallConfigResolver",
     "ProviderProposerTransport",
@@ -75,12 +76,17 @@ PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION = 1
 
 
 class ProposerConfig(BaseModel):
-    """Exact proposer Provider Call Config plus finite draft temperature."""
+    """Exact provider-backed proposer configuration.
+
+    ``temperature=None`` leaves sampling controls entirely with the referenced
+    Provider Call Config. That is the COPRO path: the optimizer does not force
+    a control that the selected provider or model may not support.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider_call_config: IdentityRef
-    temperature: FiniteFloat = FiniteFloat(1.0)
+    temperature: FiniteFloat | None = FiniteFloat(1.0)
 
     def identity_payload(self) -> dict[str, Any]:
         # Persisted identity contract: spell every key explicitly and pin the
@@ -95,9 +101,11 @@ class ProposerConfig(BaseModel):
                         self.provider_call_config.record_ref.content_hash
                     ),
                 },
-                "identity_hash": str(self.provider_call_config.identity_hash),
+                "identity_hash": str(self.provider_call_config.record_hash),
             },
-            "temperature": float(self.temperature),
+            "temperature": (
+                None if self.temperature is None else float(self.temperature)
+            ),
         }
 
     def identity_hash(self) -> IdentityHash:
@@ -106,6 +114,14 @@ class ProposerConfig(BaseModel):
             schema_version=PROPOSER_CONFIG_SCHEMA_VERSION,
             payload=self.identity_payload(),
         )
+
+
+class ProposerRouteConfig(Protocol):
+    """Minimum identity contract shared by supported proposer routes."""
+
+    def identity_payload(self) -> dict[str, Any]: ...
+
+    def identity_hash(self) -> str: ...
 
 
 class ProposalRequest(BaseModel):
@@ -251,7 +267,7 @@ class ProposerTransport(Protocol):
     def durability_identity_hash(self) -> str: ...
 
     def draft(
-        self, config: ProposerConfig, request: ProposalRequest, count: int
+        self, config: ProposerRouteConfig, request: ProposalRequest, count: int
     ) -> tuple[ProposalDraft, ...]: ...
 
 
@@ -277,7 +293,7 @@ class _ProposalExecution(Protocol):
     def __call__(
         self,
         *,
-        config: ProposerConfig,
+        config: ProposerRouteConfig,
         request: ProposalRequest,
         transport: ProposerTransport,
         count: int,
@@ -339,7 +355,7 @@ class DurableProposalExecutor:
     def execute(
         self,
         *,
-        config: ProposerConfig,
+        config: ProposerRouteConfig,
         request: ProposalRequest,
         transport: ProposerTransport,
         count: int,
@@ -454,10 +470,14 @@ class ProviderProposerTransport:
 
     def draft(
         self,
-        config: ProposerConfig,
+        config: ProposerRouteConfig,
         request: ProposalRequest,
         count: int,
     ) -> tuple[ProposalDraft, ...]:
+        if not isinstance(config, ProposerConfig):
+            raise TypeError(
+                "provider proposer requires provider ProposerConfig"
+            )
         if type(count) is not int or count < 1:
             raise ValueError("proposer draft count must be a positive integer")
 
@@ -483,7 +503,7 @@ class ProviderProposerTransport:
             )
         if (
             provider_config.identity_hash
-            != config.provider_call_config.identity_hash
+            != config.provider_call_config.record_hash
         ):
             raise ValueError(
                 "resolved Provider Call Config hash does not match "
@@ -517,10 +537,15 @@ class ProviderProposerTransport:
             messages = self._prompt_adapter.messages_from_records(
                 tuple(records)
             )
+        parameters = (
+            {}
+            if config.temperature is None
+            else {"temperature": config.temperature}
+        )
         provider_request = provider_call_request_from_parameters(
             config=provider_config,
             messages=messages,
-            parameters={"temperature": config.temperature},
+            parameters=parameters,
         )
 
         drafts = tuple(
@@ -568,9 +593,7 @@ class ProviderProposerTransport:
             "batch_slot": slot,
             "proposal_mode": proposal_request.proposal_mode,
             "request_ordinal": proposal_request.request_ordinal,
-            "proposal_request_identity_hash": (
-                proposal_request.identity_hash()
-            ),
+            "proposal_request_hash": (proposal_request.identity_hash()),
             "provider_call_config": config.provider_call_config.model_dump(
                 mode="json"
             ),
@@ -582,14 +605,14 @@ class ProviderProposerTransport:
             "prompt_adapter_identity_hash": (
                 self.prompt_adapter_identity_hash
             ),
-            "provider_call_request": result.request_identity,
+            "provider_call_request": result.request_hash,
         }
         response_evidence = {
             "logical_call_id": logical_call_id,
             "provider_call_result": result.to_stable_dict(),
         }
 
-        if result.generation is None:
+        if result.provider_generation is None:
             failure = result.semantic_failure
             assert failure is not None
             response = failure.rejected_response
@@ -606,7 +629,7 @@ class ProviderProposerTransport:
             )
 
         provider_result = provider_result_from_response(
-            result.generation.response
+            result.provider_generation.response
         )
         return ProposalDraft(
             template=provider_result.text,
@@ -666,7 +689,7 @@ class FakeProposerTransport:
         self._default = default
         self._execution_policy_hash = execution_policy_hash
         self._prompt_adapter_identity_hash = prompt_adapter_identity_hash
-        self.calls: list[tuple[IdentityHash, ProposalRequest, int]] = []
+        self.calls: list[tuple[str, ProposalRequest, int]] = []
 
     @property
     def execution_policy_hash(self) -> str:
@@ -694,7 +717,10 @@ class FakeProposerTransport:
         )
 
     def draft(
-        self, config: ProposerConfig, request: ProposalRequest, count: int
+        self,
+        config: ProposerRouteConfig,
+        request: ProposalRequest,
+        count: int,
     ) -> tuple[ProposalDraft, ...]:
         if type(count) is not int or count < 0:
             raise ValueError("proposal draft count must be nonnegative")
@@ -705,7 +731,7 @@ class FakeProposerTransport:
         evidence_base = {
             "proposal_mode": request.proposal_mode,
             "request_ordinal": request.request_ordinal,
-            "temperature": config.temperature,
+            "proposer_config": config.identity_payload(),
         }
         drafts: list[ProposalDraft] = []
         for index in range(count):

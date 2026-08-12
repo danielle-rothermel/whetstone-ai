@@ -1,0 +1,219 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+
+from whetstone.evaluation.metrics.blended import (
+    DEFAULT_COMPRESSION_WEIGHT,
+    BoundedCompressionBlendConfig,
+    blend_per_task,
+    blended_reward,
+    blended_reward_from_components,
+    compression_score,
+    retro_blend_recorded_rows,
+)
+
+
+def _cfg(weight: float = 0.10, lo: float = 0.01, hi: float = 4.0):
+    return BoundedCompressionBlendConfig(
+        weight=weight, min_compression_ratio=lo, max_compression_ratio=hi
+    )
+
+
+def test_compression_score_bounds_and_direction() -> None:
+    cfg = _cfg()
+    assert compression_score(4.0, cfg) == pytest.approx(0.0)
+    assert compression_score(0.01, cfg) == pytest.approx(1.0)
+    assert compression_score(10.0, cfg) == pytest.approx(0.0)
+    assert compression_score(0.0, cfg) == pytest.approx(1.0)
+    assert compression_score(0.5, cfg) > compression_score(2.0, cfg)
+
+
+def test_reward_output_always_in_unit_interval() -> None:
+    cfg = _cfg(weight=0.5)
+    for pr in (0.0, 0.25, 0.5, 0.75, 1.0):
+        for cr in (None, 0.0, 0.5, 1.0, 2.0, 4.0, 100.0):
+            r = blended_reward(
+                primary_score=pr, compression_ratio=cr, config=cfg
+            )
+            assert 0.0 <= r <= 1.0
+
+
+def test_pass_zero_gives_zero_regardless_of_compression() -> None:
+    cfg = _cfg(weight=0.9)
+    for cr in (None, 0.0, 0.5, 4.0, 100.0):
+        assert blended_reward(
+            primary_score=0.0, compression_ratio=cr, config=cfg
+        ) == pytest.approx(0.0)
+
+
+def test_pass_one_lands_in_one_minus_w_to_one() -> None:
+    w = 0.30
+    cfg = _cfg(weight=w)
+    assert blended_reward(
+        primary_score=1.0, compression_ratio=4.0, config=cfg
+    ) == pytest.approx(1.0 - w)
+    assert blended_reward(
+        primary_score=1.0, compression_ratio=0.01, config=cfg
+    ) == pytest.approx(1.0)
+    mid = blended_reward(primary_score=1.0, compression_ratio=1.0, config=cfg)
+    assert (1.0 - w) < mid < 1.0
+
+
+def test_weight_zero_degenerates_to_pure_pass_rate() -> None:
+    cfg = _cfg(weight=0.0)
+    for pr in (0.0, 0.4, 1.0):
+        for cr in (None, 0.0, 2.0, 4.0):
+            assert blended_reward(
+                primary_score=pr, compression_ratio=cr, config=cfg
+            ) == pytest.approx(pr)
+
+
+def test_missing_compression_falls_back_to_pass_only() -> None:
+    cfg = _cfg(weight=0.5)
+    assert blended_reward(
+        primary_score=0.8, compression_ratio=None, config=cfg
+    ) == pytest.approx(0.8)
+
+
+def test_degenerate_bounds_give_no_compression_credit() -> None:
+    cfg = _cfg(weight=0.5, lo=2.0, hi=2.0)
+    assert compression_score(1.0, cfg) == pytest.approx(0.0)
+    assert blended_reward(
+        primary_score=1.0, compression_ratio=1.0, config=cfg
+    ) == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_weight_or_bounds_are_rejected(bad: float) -> None:
+    with pytest.raises(ValidationError):
+        BoundedCompressionBlendConfig(weight=bad)
+    with pytest.raises(ValidationError):
+        BoundedCompressionBlendConfig(min_compression_ratio=bad)
+    with pytest.raises(ValidationError):
+        BoundedCompressionBlendConfig(max_compression_ratio=bad)
+
+
+def test_negative_bounds_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        BoundedCompressionBlendConfig(min_compression_ratio=-0.5)
+
+
+def test_inverted_bounds_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="must not be below"):
+        BoundedCompressionBlendConfig(
+            min_compression_ratio=3.0, max_compression_ratio=1.0
+        )
+
+
+def test_every_accepted_config_yields_a_reward_in_unit_interval() -> None:
+    for lo, hi in ((0.0, 4.0), (0.01, 4.0), (2.0, 2.0), (0.5, 5.0)):
+        cfg = _cfg(weight=1.0, lo=lo, hi=hi)
+        for ratio in (0.0, 0.5, 1.0, 3.0, 10.0):
+            reward = blended_reward(
+                primary_score=1.0, compression_ratio=ratio, config=cfg
+            )
+            assert 0.0 <= reward <= 1.0
+
+
+def test_blend_per_task_composes_per_task() -> None:
+    cfg = _cfg(weight=0.5)
+    per_task_primary = (1.0, 0.5, 0.0)
+    per_task_comp = (0.01, 2.0, 0.5)
+    blended = blend_per_task(per_task_primary, per_task_comp, cfg)
+    assert len(blended) == 3
+    assert blended[0] == pytest.approx(1.0)
+    assert blended[2] == pytest.approx(0.0)
+    assert sum(blended) / len(blended) == pytest.approx(
+        (blended[0] + blended[1] + blended[2]) / 3
+    )
+
+
+def test_blend_per_task_missing_compression_is_pass_only() -> None:
+    cfg = _cfg(weight=0.5)
+    blended = blend_per_task((1.0, 0.6), (None, 0.01), cfg)
+    assert blended[0] == pytest.approx(1.0)
+    assert blended[1] == pytest.approx(0.6)
+
+
+def test_blend_per_task_misaligned_vectors_rejected() -> None:
+    with pytest.raises(ValueError, match="aligned"):
+        blend_per_task((1.0,), (0.5, 0.5), _cfg())
+
+
+def test_blend_identity_folds_weight_and_bounds() -> None:
+    base = _cfg(weight=0.10)
+    diff_w = _cfg(weight=0.05)
+    diff_lo = _cfg(weight=0.10, lo=0.02)
+    diff_hi = _cfg(weight=0.10, hi=5.0)
+    keys = {
+        base.blend_identity_key(),
+        diff_w.blend_identity_key(),
+        diff_lo.blend_identity_key(),
+        diff_hi.blend_identity_key(),
+    }
+    assert len(keys) == 4
+    assert "w=0.1" in base.blend_identity_key()
+    assert base.blend_identity_key() == _cfg(weight=0.10).blend_identity_key()
+
+
+def test_default_weight_is_the_named_start() -> None:
+    assert DEFAULT_COMPRESSION_WEIGHT == 0.10
+    assert BoundedCompressionBlendConfig().weight == 0.10
+
+
+def test_weight_out_of_range_rejected() -> None:
+    with pytest.raises(ValidationError):
+        BoundedCompressionBlendConfig(weight=1.5)
+    with pytest.raises(ValidationError):
+        BoundedCompressionBlendConfig(weight=-0.1)
+
+
+def test_retro_compute_matches_live_blend() -> None:
+    cfg = _cfg(weight=0.2, lo=0.01, hi=4.0)
+    live = blended_reward(primary_score=0.9, compression_ratio=1.3, config=cfg)
+    derived = blended_reward_from_components(
+        primary_score=0.9,
+        compression_ratio=1.3,
+        weight=0.2,
+        min_compression_ratio=0.01,
+        max_compression_ratio=4.0,
+    )
+    assert derived == pytest.approx(live)
+
+
+def test_retro_compute_varies_with_weight() -> None:
+    row = dict(primary_score=0.8, compression_ratio=2.0)
+    w0 = blended_reward_from_components(**row, weight=0.0)
+    w1 = blended_reward_from_components(**row, weight=0.5)
+    assert w0 == pytest.approx(0.8)
+    assert w1 != pytest.approx(0.8)
+
+
+def test_retro_blend_recorded_rows() -> None:
+    rows: list[dict[str, object]] = [
+        {"primary_score": 1.0, "compression_ratio": 0.01},
+        {"primary_score": 0.0, "compression_ratio": 0.5},
+        {"primary_score": 0.5, "compression_ratio": None},
+        {"primary_score": None, "compression_ratio": 1.0},
+    ]
+    out = retro_blend_recorded_rows(rows, weight=0.5)
+    assert out["derived"] is True
+    assert out["rows_used"] == 3
+    assert out["rows_skipped"] == 1
+    blends = out["per_row_blended"]
+    assert isinstance(blends, list)
+    assert blends[0] == pytest.approx(1.0)
+    assert blends[1] == pytest.approx(0.0)
+    assert blends[2] == pytest.approx(0.5)
+    assert out["mean_blended"] == pytest.approx((1.0 + 0.0 + 0.5) / 3)
+
+
+def test_retro_blend_varies_with_weight() -> None:
+    rows: list[dict[str, object]] = [
+        {"primary_score": 1.0, "compression_ratio": 2.0}
+    ]
+    w0 = retro_blend_recorded_rows(rows, weight=0.0)["mean_blended"]
+    w5 = retro_blend_recorded_rows(rows, weight=0.5)["mean_blended"]
+    assert w0 == pytest.approx(1.0)
+    assert isinstance(w5, float) and w5 < 1.0

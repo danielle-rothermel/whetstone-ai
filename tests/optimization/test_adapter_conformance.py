@@ -144,7 +144,7 @@ def _miprov2_case(_tmp_path: Path) -> AdapterCase:
         initial_state=state,
         initial_budget=BudgetState(
             remaining={
-                "bootstrap_rollouts": 0,
+                "bootstrap_generations": 0,
                 "proposal_calls": 2,
                 "evaluations": 2,
                 "task_rows": 6,

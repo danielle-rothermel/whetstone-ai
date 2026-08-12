@@ -200,6 +200,6 @@ def _proposer_config(provider_config=None) -> ProposerConfig:
                 "dr_providers.provider_call_config",
                 exact.model_dump(mode="json"),
             ),
-            identity_hash=exact.identity_hash,
+            record_hash=exact.identity_hash,
         )
     )

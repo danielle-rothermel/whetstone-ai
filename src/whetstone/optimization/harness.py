@@ -205,7 +205,7 @@ class OptimizationHarness(OptimizationRunStore):
     ) -> tuple[OptimizationStepResult, TypedRef]:
         """Validate and execute one exact step.
 
-        Repeating an identical ``(run_id, step_index)`` request replays its
+        Sampleing an identical ``(run_id, step_index)`` request replays its
         bound result; a different request for that position raises
         :class:`StepResultConflictError`. Effectful work follows the configured
         replay policy.
@@ -568,7 +568,7 @@ class OptimizationHarness(OptimizationRunStore):
             semantic_key=OpaqueKey(
                 f"{ADAPTER_EFFECT_KEY_PREFIX}{semantic_key_hash}"
             ),
-            request_identity_hash=compute_identity_hash(
+            request_hash=compute_identity_hash(
                 schema=ADAPTER_EFFECT_SCHEMA,
                 schema_version=ADAPTER_EFFECT_SCHEMA_VERSION,
                 payload=payload,
@@ -918,7 +918,7 @@ class OptimizationHarness(OptimizationRunStore):
             semantic_key=OpaqueKey(
                 f"{INTENT_EFFECT_KEY_PREFIX}{semantic_key_hash}"
             ),
-            request_identity_hash=compute_identity_hash(
+            request_hash=compute_identity_hash(
                 schema=INTENT_EFFECT_SCHEMA,
                 schema_version=INTENT_EFFECT_SCHEMA_VERSION,
                 payload={
