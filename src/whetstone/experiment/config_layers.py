@@ -81,9 +81,14 @@ def layered_experiment_config_payload(
             for layer in ExperimentConfigLayer
             if layer not in layer_payloads
         )
+        extra = sorted(
+            str(getattr(layer, "value", layer))
+            for layer in layer_payloads
+            if layer not in set(ExperimentConfigLayer)
+        )
         raise ValueError(
             "experiment config identity requires every layer exactly once; "
-            f"missing {missing}"
+            f"missing {missing}, extra {extra}"
         )
 
     def layer_hash(layer: ExperimentConfigLayer) -> str:
