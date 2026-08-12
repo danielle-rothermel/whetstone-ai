@@ -106,7 +106,7 @@ def test_baseline_preview_uses_one_binding_and_estimates_tiny_data() -> None:
         batch_scorer=_score,
         runtime=_runtime(),
         num_samples=2,
-        power_config=PowerConfig(repeat_cap=3, trials=100, seed=17),
+        power_config=PowerConfig(sample_cap=3),
         bootstrap_resamples=200,
         bootstrap_seed=19,
     )
@@ -154,7 +154,7 @@ def test_baseline_preview_labels_progress_with_budget_mode() -> None:
         batch_scorer=_score,
         runtime=_runtime(),
         budget_ratio=0.5,
-        power_config=PowerConfig(trials=1),
+        power_config=PowerConfig(sample_cap=2),
         bootstrap_resamples=1,
         log=messages.append,
     )
@@ -197,7 +197,7 @@ def test_baseline_preview_threads_partial_log_and_prompt_cache(
         runtime=_runtime(),
         partial_log=partial_log,
         prompt_cache=PromptResultCache(tmp_path / "prompt-cache"),
-        power_config=PowerConfig(trials=1),
+        power_config=PowerConfig(sample_cap=2),
         bootstrap_resamples=1,
     )
 
@@ -214,7 +214,7 @@ def test_baseline_preview_rejects_unknown_selection_before_scoring() -> None:
             task_model=_task_model(),
             batch_scorer=_score,
             runtime=_runtime(),
-            power_config=PowerConfig(trials=1),
+            power_config=PowerConfig(sample_cap=2),
             bootstrap_resamples=1,
         )
 
@@ -241,7 +241,7 @@ def test_baseline_sweep_preserves_manifest_role_across_budget_modes() -> None:
         runtime=_runtime(),
         budget_ratios=(None, 0.5),
         concurrency=3,
-        power_config=PowerConfig(repeat_cap=2, trials=10, seed=17),
+        power_config=PowerConfig(sample_cap=2),
         bootstrap_resamples=10,
         bootstrap_seed=19,
     )

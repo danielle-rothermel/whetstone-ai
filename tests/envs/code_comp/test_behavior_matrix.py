@@ -178,15 +178,15 @@ def test_full_plan_has_all_model_budget_treatments_and_exact_counts(
     plan = _plan(tmp_path)
 
     assert plan.budget_ratios == FULL_BUDGET_RATIOS
-    assert plan.num_samples == 3
+    assert plan.num_samples == 4
     assert plan.concurrency == 100
     assert len(plan.treatments) == 24
     assert len({item.directory for item in plan.treatments}) == 24
-    assert all(item.planned_rows == 60 for item in plan.treatments)
-    assert all(item.planned_provider_calls == 120 for item in plan.treatments)
-    assert sum(item.planned_rows for item in plan.treatments) == 1_440
+    assert all(item.planned_rows == 80 for item in plan.treatments)
+    assert all(item.planned_provider_calls == 160 for item in plan.treatments)
+    assert sum(item.planned_rows for item in plan.treatments) == 1_920
     assert (
-        sum(item.planned_provider_calls for item in plan.treatments) == 2_880
+        sum(item.planned_provider_calls for item in plan.treatments) == 3_840
     )
     assert all(
         item.task_model.provider_call_config.definition.route.model

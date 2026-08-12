@@ -56,7 +56,7 @@ def _validate_anchor_evidence(
     evaluated: EngineEvaluation,
     expected_binding: EvaluationBinding,
     expected_task_ids: tuple[str, ...],
-    expected_repeats: int,
+    expected_samples: int,
     expected_reward_policy_hash: str,
 ) -> None:
     evidence = evaluated.evidence
@@ -64,16 +64,16 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed its Evaluation Binding")
     if evidence.task_hashes != expected_task_ids:
         raise ValueError("calibration evidence changed task identity order")
-    if evidence.num_samples != expected_repeats:
-        raise ValueError("calibration evidence changed repeat count")
+    if evidence.num_samples != expected_samples:
+        raise ValueError("calibration evidence changed sample count")
     if len(evidence.per_task_values) != len(expected_task_ids):
         raise ValueError("calibration evidence has incomplete per-task values")
-    if evidence.per_task_counts != (expected_repeats,) * len(
+    if evidence.per_task_counts != (expected_samples,) * len(
         expected_task_ids
     ):
-        raise ValueError("calibration evidence changed per-task repeat counts")
+        raise ValueError("calibration evidence changed per-task sample counts")
     if evidence.row_accounting.planned != (
-        len(expected_task_ids) * expected_repeats
+        len(expected_task_ids) * expected_samples
     ):
         raise ValueError("calibration evidence changed planned row accounting")
     if evidence.reward_ref is None:
@@ -184,14 +184,14 @@ def run_anchor_calibration(
             f"missing={accounting.missing}, failed={accounting.failed}, "
             f"invalid={accounting.invalid})"
         )
-    repeats = subset_engine.sampling.sample_plan.num_samples
+    samples = subset_engine.sampling.sample_plan.num_samples
     reward_policy_hash = subset_engine.reward_policy_identity_hash
     for evaluated in (baseline, ceiling):
         _validate_anchor_evidence(
             evaluated=evaluated,
             expected_binding=subset_binding,
             expected_task_ids=calibration_task_ids,
-            expected_repeats=repeats,
+            expected_samples=samples,
             expected_reward_policy_hash=reward_policy_hash,
         )
     if baseline.evidence.graph_hash != ceiling.evidence.graph_hash:
@@ -208,7 +208,7 @@ def run_anchor_calibration(
         naive_per_task=baseline.evidence.per_task_values,
         ceiling_per_task=ceiling.evidence.per_task_values,
         pool_ceiling=pool_ceiling,
-        anchor_repeats=repeats,
+        anchor_samples=samples,
         config=power_config,
     )
     return AnchorCalibrationResult(

@@ -10,7 +10,6 @@ from whetstone.evaluation.analysis import (
     AnchorCalibrationResult,
     BootstrapCI,
     PowerConfig,
-    PowerRecommendation,
     PowerResult,
     PowerSurfacePoint,
     VarianceDecomposition,
@@ -51,32 +50,17 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
         PowerConfig(),
         VarianceDecomposition(
             base_rate=0.5,
-            within_repeat_var=0.25,
+            within_sample_var=0.25,
             interaction_var=0.1,
             between_task_var=0.2,
-            anchor_repeats=3,
+            anchor_samples=3,
             n_tasks_observed=2,
-        ),
-        PowerRecommendation(
-            target_gap=0.1,
-            achievable=True,
-            recommended_n_tasks=2,
-            recommended_repeats=1,
-            achieved_mdd=0.1,
-            recommended_calls=2,
-            recommended_usd=None,
-            best_achievable_mdd=0.1,
-            best_n_tasks=2,
-            best_repeats=1,
-            repeat_plateau=None,
-            pool_limited=False,
         ),
         PowerSurfacePoint(
             n_tasks=2,
             num_samples=1,
             calls=2,
             mdd_at_target=0.1,
-            simulated_rank_probability=0.8,
         ),
     )
     for value in value_objects:
@@ -87,11 +71,11 @@ def test_internal_value_objects_are_frozen_slotted_dataclasses() -> None:
     result = PowerResult(
         config=PowerConfig(),
         certified_headroom=0.0,
+        target_gap=0.0,
         naive_mean=0.5,
         ceiling_mean=0.5,
         pool_ceiling=1,
         decomposition=value_objects[2],
-        recommendation=value_objects[3],
     )
     assert is_dataclass(result)
     assert hasattr(type(result), "__slots__")
