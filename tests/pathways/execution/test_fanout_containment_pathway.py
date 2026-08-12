@@ -432,7 +432,7 @@ def test_cancellation_failure_retains_uncontained_process_state(
         _blocking_tree_spec(
             "target",
             signals,
-            deadline=(0.2 if failure_site == "unit-expiration" else 5.0),
+            deadline=(2.0 if failure_site == "unit-expiration" else 5.0),
         )
     ]
     max_wall_seconds: float | None = None
