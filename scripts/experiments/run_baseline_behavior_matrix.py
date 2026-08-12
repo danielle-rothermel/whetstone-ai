@@ -57,7 +57,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     run_code_comp_baseline_behavior_matrix(
-        provider_routes=_baseline_provider_routes()(),
+        provider_routes=_baseline_provider_routes(),
         evaluation_python=args.evaluation_python,
         snapshot_path=args.snapshot_path,
         output_dir=args.output_dir,

@@ -159,6 +159,9 @@ class EvaluationEngine:
     def task_model_identity_hash(self) -> str:
         """Identity of the exact task-model Provider Call Config route."""
         if isinstance(self.experiment, CodeCompExperiment):
+            if self.experiment.config.mode is CodeCompMode.DIRECT:
+                graph = self.experiment.generation_graph
+                return graph.provider_call_config.identity_hash
             models = self.experiment.config.models
             return models.encoder_call_config().identity_hash
         provider_config = self.experiment.generation_graph.provider_call_config

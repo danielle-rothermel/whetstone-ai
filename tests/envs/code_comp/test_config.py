@@ -219,6 +219,84 @@ def test_compression_level_affects_procedure_hash() -> None:
     )
 
 
+def test_direct_engine_task_model_identity_hash() -> None:
+    from dr_store import MemoryBackend, ObjectStore
+
+    from tests.envs.support import (
+        code_comp_direct_experiment,
+        in_process_direct_row_job_factory,
+    )
+    from whetstone.evaluation.engine import EvaluationEngine
+
+    custom_experiment = code_comp_direct_experiment(
+        task_count=1,
+        internal_n=1,
+        official_n=1,
+        model="openai/custom-direct",
+    )
+    custom_engine = EvaluationEngine(
+        store=ObjectStore(MemoryBackend()),
+        experiment=custom_experiment,
+        sampling=custom_experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=in_process_direct_row_job_factory(),
+    )
+    assert custom_engine.task_model_identity_hash == (
+        custom_experiment.generation_graph.provider_call_config.identity_hash
+    )
+
+    default_experiment = code_comp_direct_experiment(
+        task_count=1,
+        internal_n=1,
+        official_n=1,
+    )
+    default_engine = EvaluationEngine(
+        store=ObjectStore(MemoryBackend()),
+        experiment=default_experiment,
+        sampling=default_experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=in_process_direct_row_job_factory(),
+    )
+    assert (
+        custom_engine.task_model_identity_hash
+        != default_engine.task_model_identity_hash
+    )
+
+
+def test_encdec_engine_task_model_identity_hash_uses_encoder_route() -> None:
+    from dr_store import MemoryBackend, ObjectStore
+
+    from tests.envs.support import process_row_job_factory
+    from whetstone.evaluation.engine import EvaluationEngine
+
+    tasks = synthetic_code_comp_tasks(1)
+    config = default_code_comp_config(
+        CodeCompMode.ENCDEC,
+        pool={"tasks": tasks},
+        split={"internal_n": 1, "official_n": 1},
+        models=CodeCompModelRoutesConfig(
+            encoder=CodeCompModelRouteConfig(model="openai/custom-encoder"),
+            decoder=CodeCompModelRouteConfig(model="openai/custom-decoder"),
+        ),
+    )
+    experiment = config.build_experiment()
+    engine = EvaluationEngine(
+        store=ObjectStore(MemoryBackend()),
+        experiment=experiment,
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=process_row_job_factory(
+            "tests.envs.process_workers:drive_ed1_success"
+        ),
+    )
+    assert engine.task_model_identity_hash == (
+        config.models.encoder_call_config().identity_hash
+    )
+    assert engine.task_model_identity_hash != (
+        config.models.decoder_call_config().identity_hash
+    )
+
+
 def test_distinct_decoder_route_affects_graph_hash() -> None:
     tasks = synthetic_code_comp_tasks(1)
     shared = default_code_comp_config(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from whetstone_envs.core import Instance
@@ -10,9 +11,12 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.envs.code_comp.constants import (
+    CODE_COMP_BLENDED_REWARD_NAME,
     CODE_COMP_ENV_NAME,
     DECODER_TEMPLATE,
 )
+from whetstone.envs.code_comp.dataset import code_comp_task_hash
+from whetstone.envs.code_comp.experiment import EncDecExperiment
 from whetstone.envs.code_comp.generation_graph.direct import (
     render_direct_frame,
 )
@@ -36,7 +40,15 @@ from whetstone.evaluation.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
+from whetstone.evaluation.code.compression_selection import (
+    select_compression_reference,
+)
+from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
 from whetstone.evaluation.engine import EvaluationRequest
+from whetstone.evaluation.metrics.blended import blend_per_task
+from whetstone.evaluation.metrics.compression_measurements import (
+    compression_ratio_from_bytes,
+)
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
@@ -68,6 +80,38 @@ from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class _CompressionReferenceView:
+    gt_code_wo_comments: str
+
+
+def _encoder_text_from_output(output_text: str | None) -> str | None:
+    if output_text is None:
+        return None
+    prefix = "ENCODER:\n"
+    decoder_sep = "\n\nDECODER:\n"
+    if not output_text.startswith(prefix):
+        return None
+    body = output_text[len(prefix) :]
+    if decoder_sep in body:
+        return body.split(decoder_sep, 1)[0]
+    return body
+
+
+def _compression_ratio_from_encoder(
+    encoder_text: str,
+    input_code: str,
+) -> float | None:
+    reference = select_compression_reference(
+        _CompressionReferenceView(gt_code_wo_comments=input_code)
+    )
+    length = zstd_compressed_utf8_byte_length(encoder_text)
+    return compression_ratio_from_bytes(
+        numerator_bytes=length,
+        reference=reference,
+    )
 
 
 class EvaluationEvidenceValidation:
@@ -732,6 +776,28 @@ class EvaluationEvidenceValidation:
                 raise ValueError(
                     "Evaluation Evidence per-task values do not match outputs"
                 )
+        else:
+            experiment = self._engine.experiment
+            blend_config = (
+                experiment.blend_config
+                if isinstance(experiment, EncDecExperiment)
+                else None
+            )
+            if blend_config is not None:
+                expected_blended = blend_per_task(
+                    expected_per_task_values,
+                    self._encdec_per_task_compression(outputs),
+                    blend_config,
+                )
+                if evidence.per_task_values != expected_blended:
+                    raise ValueError(
+                        "Evaluation Evidence per-task blended values do not "
+                        "match outputs"
+                    )
+            elif evidence.per_task_values != expected_per_task_values:
+                raise ValueError(
+                    "Evaluation Evidence per-task values do not match outputs"
+                )
         if evidence.per_task_counts != expected_per_task_counts:
             raise ValueError(
                 "Evaluation Evidence per-task counts do not match outputs"
@@ -748,6 +814,100 @@ class EvaluationEvidenceValidation:
                 "Aggregate is not derived from the exact output rows"
             )
 
+    def _encdec_per_task_compression(
+        self,
+        outputs: EvaluationOutputsRecord,
+    ) -> tuple[float | None, ...]:
+        input_code_by_task = {
+            code_comp_task_hash(instance): str(
+                instance.prompt_inputs["input_code"]
+            )
+            for instance in self._engine.sampling.tasks
+        }
+        compression_by_task: dict[str, list[float]] = {
+            task_hash: [] for task_hash in outputs.task_hashes
+        }
+        for row in outputs.outputs:
+            if row.missing:
+                continue
+            if row.failed:
+                continue
+            encoder_text = _encoder_text_from_output(row.output_text)
+            if encoder_text is None:
+                continue
+            ratio = _compression_ratio_from_encoder(
+                encoder_text,
+                input_code_by_task[row.task_hash],
+            )
+            if ratio is None:
+                continue
+            compression_by_task[row.task_hash].append(float(ratio))
+        return tuple(
+            (sum(values) / len(values) if values else None)
+            for task_hash in outputs.task_hashes
+            for values in (compression_by_task[task_hash],)
+        )
+
+    def _load_linked_aggregate(
+        self,
+        aggregate_ref: TypedRef,
+        *,
+        evidence: EvaluationEvidence,
+        intent: EvaluationIntent,
+    ) -> Aggregate:
+        _record_ref, content = self._load_exact(
+            aggregate_ref,
+            expected_schema=AGGREGATE_SCHEMA,
+        )
+        aggregate = Aggregate(
+            name=content["name"],
+            graph_hash=content["graph_hash"],
+            eval_config_hash=content["eval_config_hash"],
+            evaluation_binding_hash=content["evaluation_binding_hash"],
+            task_count=content["task_count"],
+            num_samples=content["num_samples"],
+            aggregation_output=AggregationOutput.model_validate(
+                content["aggregation_output"]
+            ),
+            rows_present=content["rows_present"],
+            rows_missing=content["rows_missing"],
+            rows_failed=content["rows_failed"],
+            rows_invalid=content["rows_invalid"],
+        )
+        if aggregate.record_content() != content:
+            raise ValueError("Aggregate content is not canonical")
+        if aggregate.graph_hash != evidence.graph_hash:
+            raise ValueError("Evaluation Evidence graph hash is inconsistent")
+        if (
+            aggregate.graph_hash
+            != self._engine.experiment.generation_graph.graph_hash
+        ):
+            raise ValueError("Aggregate uses another generation graph")
+        if aggregate.eval_config_hash != intent.target_eval_config.config_hash:
+            raise ValueError("Aggregate uses another Eval Config")
+        if (
+            aggregate.evaluation_binding_hash
+            != intent.evaluation_binding.identity_hash()
+        ):
+            raise ValueError("Aggregate uses another Evaluation Binding")
+        if aggregate.task_count != len(evidence.task_hashes):
+            raise ValueError("Aggregate task count is inconsistent")
+        if aggregate.num_samples != evidence.num_samples:
+            raise ValueError("Aggregate repeat count is inconsistent")
+        row_accounting = evidence.row_accounting
+        if (
+            row_accounting.planned
+            != aggregate.task_count * aggregate.num_samples
+            or row_accounting.present != aggregate.rows_present
+            or row_accounting.missing != aggregate.rows_missing
+            or row_accounting.failed != aggregate.rows_failed
+            or row_accounting.invalid != aggregate.rows_invalid
+        ):
+            raise ValueError(
+                "Evaluation Evidence row accounting is inconsistent"
+            )
+        return aggregate
+
     def _load_reward(
         self,
         reward_ref: RewardRef,
@@ -755,6 +915,7 @@ class EvaluationEvidenceValidation:
         aggregate_ref: TypedRef,
         aggregate_name: str,
         aggregate_value: float | None,
+        compression_aggregate_ref: TypedRef | None = None,
     ) -> Reward:
         _record_ref, content = self._load_exact(
             reward_ref.record_ref,
@@ -766,13 +927,6 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "persisted Reward differs from its embedded record"
             )
-        if (
-            not reward.evidence_refs
-            or reward.evidence_refs[0] != aggregate_ref
-        ):
-            raise ValueError(
-                "Reward evidence must lead with the primary aggregate citation"
-            )
         if any(
             ref.schema_name != AGGREGATE_SCHEMA for ref in reward.evidence_refs
         ):
@@ -782,6 +936,37 @@ class EvaluationEvidenceValidation:
         if len(reward.input_citations) != 1:
             raise ValueError("evaluation Reward must have one aggregate input")
         citation = reward.input_citations[0]
+        if citation.name == CODE_COMP_BLENDED_REWARD_NAME:
+            if compression_aggregate_ref is None:
+                raise ValueError(
+                    "blended Reward requires a compression aggregate citation"
+                )
+            if reward.evidence_refs != (
+                aggregate_ref,
+                compression_aggregate_ref,
+            ):
+                raise ValueError(
+                    "blended Reward must cite primary and compression "
+                    "aggregates"
+                )
+            if aggregate_value is not None and citation.value is None:
+                raise ValueError(
+                    "blended Reward value must be present when primary "
+                    "aggregate is complete"
+                )
+            if aggregate_value is None and citation.value is not None:
+                raise ValueError(
+                    "blended Reward value must be absent when primary "
+                    "aggregate is incomplete"
+                )
+            return reward
+        if (
+            not reward.evidence_refs
+            or reward.evidence_refs[0] != aggregate_ref
+        ):
+            raise ValueError(
+                "Reward evidence must lead with the primary aggregate citation"
+            )
         if (
             citation.name != aggregate_name
             or citation.value != aggregate_value
@@ -853,15 +1038,66 @@ class EvaluationEvidenceValidation:
             )
         expected_reward_evidence: tuple[TypedRef, ...] = ()
         if evidence.reward_ref is not None:
+            reward_record_ref, reward_content = self._load_exact(
+                evidence.reward_ref.record_ref,
+                expected_schema=REWARD_SCHEMA,
+            )
+            reward_peek = Reward.model_validate(reward_content)
+            RewardRef(record=reward_peek, record_ref=reward_record_ref)
+            is_blended = (
+                len(reward_peek.input_citations) == 1
+                and reward_peek.input_citations[0].name
+                == CODE_COMP_BLENDED_REWARD_NAME
+            )
+            compression_aggregate_ref = (
+                reward_peek.evidence_refs[1]
+                if is_blended and len(reward_peek.evidence_refs) == 2
+                else None
+            )
+            if is_blended:
+                if compression_aggregate_ref is None:
+                    raise ValueError(
+                        "blended Reward must cite primary and compression "
+                        "aggregates"
+                    )
+                if reward_peek.evidence_refs[0] != evidence.aggregate_ref:
+                    raise ValueError(
+                        "blended Reward primary citation does not match "
+                        "Evaluation Evidence"
+                    )
+                self._load_linked_aggregate(
+                    compression_aggregate_ref,
+                    evidence=evidence,
+                    intent=intent,
+                )
             reward = self._load_reward(
                 evidence.reward_ref,
                 aggregate_ref=evidence.aggregate_ref,
                 aggregate_name=evidence.aggregate_name,
                 aggregate_value=evidence.aggregate_value,
+                compression_aggregate_ref=compression_aggregate_ref,
             )
             if reward.evidence_role is not intent.evaluation_binding.role:
                 raise ValueError("Reward uses another Evaluation Role")
-            expected_reward_evidence = (evidence.aggregate_ref,)
+            if is_blended:
+                expected_mean = (
+                    sum(evidence.per_task_values)
+                    / len(evidence.per_task_values)
+                    if evidence.per_task_values
+                    and evidence.aggregate_value is not None
+                    else None
+                )
+                if reward.input_citations[0].value != expected_mean:
+                    raise ValueError(
+                        "blended Reward value does not match per-task evidence"
+                    )
+                assert compression_aggregate_ref is not None
+                expected_reward_evidence = (
+                    evidence.aggregate_ref,
+                    compression_aggregate_ref,
+                )
+            else:
+                expected_reward_evidence = (evidence.aggregate_ref,)
         if resolution.reward_evidence_refs != expected_reward_evidence:
             raise ValueError(
                 "Intent Resolution Reward citations are not aggregate-only"

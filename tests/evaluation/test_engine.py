@@ -498,6 +498,51 @@ def test_ed1_trace_persists_encoder_output_and_decoder_failure_prefix(
 
 
 @pytest.mark.process_integration
+def test_internal_encdec_resolve_accepts_blended_reward_graph(
+    tmp_path,
+) -> None:
+    from tests.envs.support import synthetic_code_comp_tasks
+    from whetstone.envs.code_comp import (
+        CodeCompMode,
+        build_code_comp_experiment,
+    )
+    from whetstone.optimization.contracts import IntentOutcome
+
+    store = ObjectStore(
+        SqliteBackend(tmp_path / "encdec-blended-resolve.sqlite")
+    )
+    experiment = build_code_comp_experiment(
+        CodeCompMode.ENCDEC,
+        tasks=synthetic_code_comp_tasks(1),
+        internal_n=1,
+        official_n=1,
+        num_samples=1,
+    )
+    engine = EvaluationEngine(
+        store=store,
+        experiment=experiment,
+        sampling=experiment.eval_configs.internal,
+        execution_policy=execution_policy(),
+        row_job_factory=process_row_job_factory(
+            "tests.envs.process_workers:drive_ed1_success"
+        ),
+    )
+    intent = _intent(
+        engine,
+        intent_id="encdec-blended",
+        purpose="encdec-blended-resolve",
+    )
+    resolution = EngineEvaluationService(
+        store=store,
+        engine=engine,
+    ).resolve_evaluation_intent(intent)
+
+    assert resolution.outcome is IntentOutcome.COMPLETED
+    assert resolution.reward_ref is not None
+    assert len(resolution.reward_evidence_refs) == 2
+
+
+@pytest.mark.process_integration
 def test_engine_passes_exact_canonical_row_job_factory(
     tmp_path, monkeypatch
 ) -> None:
