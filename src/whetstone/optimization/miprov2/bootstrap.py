@@ -797,10 +797,10 @@ class BootstrapGenerationResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempt_identity_hash: StrictStr
-    source_generation_identity: StrictStr
-    source_trace_identity: StrictStr
-    source_output_identity: StrictStr
-    source_score_identity: StrictStr
+    source_generation_hash: StrictStr
+    source_trace_hash: StrictStr
+    source_output_hash: StrictStr
+    source_score_hash: StrictStr
     metric_present: StrictBool
     score: MetricValue | None
     trace_steps: tuple[ObservedTraceStep, ...] = ()
@@ -810,10 +810,10 @@ class BootstrapGenerationResult(BaseModel):
     def _validate_result(self) -> BootstrapGenerationResult:
         for field in (
             "attempt_identity_hash",
-            "source_generation_identity",
-            "source_trace_identity",
-            "source_output_identity",
-            "source_score_identity",
+            "source_generation_hash",
+            "source_trace_hash",
+            "source_output_hash",
+            "source_score_hash",
         ):
             require_full_hash(getattr(self, field), field=field)
         if self.error is not None:
@@ -1025,10 +1025,10 @@ def _apply_bootstrap_event_unchecked(
             outputs=chosen.outputs,
             augmented=True,
             source_task_hash=attempt.task_hash,
-            source_generation_identity=result.source_generation_identity,
-            source_trace_identity=result.source_trace_identity,
-            source_output_identity=result.source_output_identity,
-            source_score_identity=result.source_score_identity,
+            source_generation_hash=result.source_generation_hash,
+            source_trace_hash=result.source_trace_hash,
+            source_output_hash=result.source_output_hash,
+            source_score_hash=result.source_score_hash,
             source_trace_index=chosen.trace_index,
             score=result.score,
             acceptance_identity_hash=acceptance.identity_hash(),
@@ -1058,10 +1058,10 @@ def _acceptance_for(
 ) -> BootstrapAcceptance:
     return BootstrapAcceptance(
         source_task_hash=attempt.task_hash,
-        source_generation_identity=result.source_generation_identity,
-        source_trace_identity=result.source_trace_identity,
-        source_output_identity=result.source_output_identity,
-        source_score_identity=result.source_score_identity,
+        source_generation_hash=result.source_generation_hash,
+        source_trace_hash=result.source_trace_hash,
+        source_output_hash=result.source_output_hash,
+        source_score_hash=result.source_score_hash,
         metric_present=result.metric_present,
         score=result.score,
         metric_threshold=metric_threshold,
@@ -1091,10 +1091,10 @@ def _choose_trace_step(
     # ``Hasher.hash(tuple(demos))``. ``Hasher.hash`` is SHA-256 over the
     # standard-library pickle. Keep the exact hash algorithm and demo field
     # order while projecting away Whetstone-only trace/component metadata.
-    group_identity = hashlib.sha256(
+    group_hash = hashlib.sha256(
         _frozen_dspy_demo_tuple_pickle(steps)
     ).hexdigest()
-    rng = random.Random(group_identity)
+    rng = random.Random(group_hash)
     return rng.choice(steps[:-1]) if rng.random() < 0.5 else steps[-1]
 
 

@@ -475,20 +475,20 @@ def unweighted_task_mean(
     num_samples = plan.sample_plan.num_samples
     planned_task_hashes = plan.sample_plan.task_hashes
 
-    observed_by_identity: dict[str, TaskRows] = {}
+    observed_by_task_hash: dict[str, TaskRows] = {}
     for task in task_rows:
-        if task.task_hash in observed_by_identity:
+        if task.task_hash in observed_by_task_hash:
             raise ValueError(
                 f"duplicate observed task identity: {task.task_hash}"
             )
-        observed_by_identity[task.task_hash] = task
-    extra_identities = set(observed_by_identity) - set(planned_task_hashes)
-    if extra_identities:
-        extras = ", ".join(sorted(extra_identities))
+        observed_by_task_hash[task.task_hash] = task
+    extra_task_hashes = set(observed_by_task_hash) - set(planned_task_hashes)
+    if extra_task_hashes:
+        extras = ", ".join(sorted(extra_task_hashes))
         raise ValueError(f"observed unplanned task identities: {extras}")
 
     reconciled = tuple(
-        observed_by_identity.get(
+        observed_by_task_hash.get(
             task_hash,
             TaskRows(task_hash=task_hash, rows=()),
         )

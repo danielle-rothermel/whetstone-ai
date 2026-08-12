@@ -138,7 +138,7 @@ def build_encdec_graph_config(
     """
     definition = encdec_graph_definition()
     decoder_hash = decoder_call_config_hash or encoder_call_config_hash
-    budget_identity = (
+    budget_label = (
         _NO_BUDGET_IDENTITY
         if budget_ratio is None
         else CharacterBudgetRule(ratio=budget_ratio).identity_value()
@@ -147,7 +147,7 @@ def build_encdec_graph_config(
         ENCODER_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,
             provider_call_config_hash=encoder_call_config_hash,
-            character_budget_rule=budget_identity,
+            character_budget_rule=budget_label,
         ),
         DECODER_NODE_ID: llm_call_variable_assignment(
             provider_call_config_schema=PROVIDER_CALL_CONFIG_SCHEMA,

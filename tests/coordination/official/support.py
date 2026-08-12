@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from whetstone.coordination.official import (
+    OFFICIAL_EVALUATION_RECORD_SCHEMA,
     SelectedRecordMapping,
     SelectedRecordMappingEntry,
 )
@@ -54,7 +55,7 @@ def result_ref(char: str) -> TypedRef:
 
 
 def oer_ref(char: str) -> TypedRef:
-    return content_ref("whetstone.official_evaluation_record", char)
+    return content_ref(OFFICIAL_EVALUATION_RECORD_SCHEMA, char)
 
 
 def mapping_entry(

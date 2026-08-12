@@ -123,7 +123,7 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
         )
 
 
-def _canonical_eval_config_identity(eval_config: EvalConfigRef) -> str:
+def _canonical_eval_config_hash(eval_config: EvalConfigRef) -> str:
     record = eval_config.record
     return identity_hash_for(
         schema=SCHEMA_EVAL_CONFIG,
@@ -155,7 +155,7 @@ def _require_canonical_eval_config(
         ("config_hash", record.config_hash),
     ):
         require_full_hash(value, field=f"{field}.{nested_field}")
-    if eval_config.config_hash != _canonical_eval_config_identity(eval_config):
+    if eval_config.config_hash != _canonical_eval_config_hash(eval_config):
         raise ValueError(f"{field} has a non-canonical Eval Config identity")
     expected_reference = eval_config_reference(record)
     if eval_config.record_ref != expected_reference.record_ref:
@@ -164,7 +164,7 @@ def _require_canonical_eval_config(
         )
 
 
-def _canonical_sampling_config_identity(
+def _canonical_sampling_config_hash(
     sampling_config: SamplingConfig,
 ) -> str:
     return identity_hash_for(
@@ -198,10 +198,8 @@ def derive_eval_config_reference(
         sampling_config.config_hash,
         field="sampling_config.config_hash",
     )
-    expected_sampling_identity = _canonical_sampling_config_identity(
-        sampling_config
-    )
-    if sampling_config.config_hash != expected_sampling_identity:
+    expected_sampling_hash = _canonical_sampling_config_hash(sampling_config)
+    if sampling_config.config_hash != expected_sampling_hash:
         raise ValueError("sampling_config has a non-canonical identity")
     source = source_eval_config.record
     derived = source.model_copy(
@@ -259,7 +257,7 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
         for task_hash in self.task_batch_hashes:
             require_full_hash(
                 task_hash,
-                field="task_batch_identity",
+                field="task_batch_hash",
             )
         return self
 
@@ -310,16 +308,16 @@ class Miprov2EvalConfigBinding(BaseModel):
             or self.sample_plan.num_samples != self.request.num_samples
         ):
             raise ValueError("bound Sample Plan conflicts with request")
-        task_set_identity = self.task_set.identity_hash()
-        sample_plan_identity = self.sample_plan.identity_hash()
-        require_full_hash(task_set_identity, field="task_set.identity_hash")
+        task_set_hash = self.task_set.identity_hash()
+        sample_plan_hash = self.sample_plan.identity_hash()
+        require_full_hash(task_set_hash, field="task_set.identity_hash")
         require_full_hash(
-            sample_plan_identity,
+            sample_plan_hash,
             field="sample_plan.identity_hash",
         )
         expected_assignment = (
-            ("task_set_hash", task_set_identity),
-            ("sample_plan_hash", sample_plan_identity),
+            ("task_set_hash", task_set_hash),
+            ("sample_plan_hash", sample_plan_hash),
         )
         if self.sampling_config.assignment != expected_assignment:
             raise ValueError(
@@ -330,10 +328,10 @@ class Miprov2EvalConfigBinding(BaseModel):
             self.sampling_config.definition_ref.identity_hash,
             field="sampling_config.definition_ref.identity_hash",
         )
-        expected_sampling_identity = _canonical_sampling_config_identity(
+        expected_sampling_hash = _canonical_sampling_config_hash(
             self.sampling_config
         )
-        if self.sampling_config.config_hash != expected_sampling_identity:
+        if self.sampling_config.config_hash != expected_sampling_hash:
             raise ValueError("bound Sampling Config identity is not canonical")
         expected_eval_config = derive_eval_config_reference(
             self.request.source_eval_config,

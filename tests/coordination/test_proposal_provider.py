@@ -64,8 +64,8 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
         "retry_owner": "proposer_transport",
         "transport_durability_identity_hash": FULL_C,
     }
-    policy_identity = module._proposal_policy_identity(FULL_C)
-    assert policy_identity == (
+    policy_hash = module._proposal_policy_hash(FULL_C)
+    assert policy_hash == (
         "24299dd5ff03be2ca43e5fc26e5e5b03beb341dde296b2a03d548a35beeb088a"
     )
 
@@ -80,22 +80,22 @@ def test_persisted_durability_contract_literals_are_pinned() -> None:
     )
     workflow_payload = module._proposal_workflow_identity_payload(
         registry_key=FULL_C,
-        policy_identity_hash=policy_identity,
+        policy_identity_hash=policy_hash,
         config=stable_config,
         request=_request(),
         count=1,
     )
     assert workflow_payload == {
         "count": 1,
-        "policy_identity_hash": policy_identity,
+        "policy_identity_hash": policy_hash,
         "proposal_request_hash": _request().identity_hash(),
         "proposer_config_hash": stable_config.identity_hash(),
         "transport_durability_identity_hash": FULL_C,
     }
     assert (
-        module._proposal_workflow_identity(
+        module._proposal_workflow_hash(
             registry_key=FULL_C,
-            policy_identity_hash=policy_identity,
+            policy_identity_hash=policy_hash,
             config=stable_config,
             request=_request(),
             count=1,
@@ -114,7 +114,7 @@ def test_durability_contract_is_durable_workflow_recovery() -> None:
     contract = executor.durability_contract
     assert contract.recovery_policy is ReplayPolicy.DURABLE_WORKFLOW
     assert executor.recovery_policy is ReplayPolicy.DURABLE_WORKFLOW
-    assert contract.policy_identity_hash == module._proposal_policy_identity(
+    assert contract.policy_identity_hash == module._proposal_policy_hash(
         transport.durability_identity_hash
     )
     assert executor.policy_identity_hash == contract.policy_identity_hash

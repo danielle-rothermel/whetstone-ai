@@ -37,7 +37,7 @@ from whetstone.optimization.miprov2.runtime import (
     Miprov2EffectBudget,
     Miprov2EvaluationSpec,
     Miprov2State,
-    _input_data_identity,
+    _input_data_hash,
 )
 from whetstone.optimization.miprov2.study import (
     Miprov2EvaluationObservation,
@@ -270,7 +270,7 @@ def test_runtime_component_order_contract_is_consistent(
         field: getattr(state, field) for field in Miprov2State.model_fields
     }
     state_values["component_field_order"] = source
-    state_values["input_data_identity_hash"] = _input_data_identity(
+    state_values["input_data_identity_hash"] = _input_data_hash(
         control=state.control,
         labeled_trainset=state.labeled_trainset,
         proposal_components=state.proposal_components,
@@ -302,7 +302,7 @@ def test_runtime_copy_rejects_input_change_with_stale_identity_hash() -> None:
 def test_runtime_copy_accepts_coherent_input_identity_update() -> None:
     _driver, state = _runtime()
     source = MappingProxyType({state.control.component_ids[0]: ["query"]})
-    input_data_identity_hash = _input_data_identity(
+    input_data_identity_hash = _input_data_hash(
         control=state.control,
         labeled_trainset=state.labeled_trainset,
         proposal_components=state.proposal_components,

@@ -700,12 +700,12 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
             raise ValueError(
                 "assembled candidate differs from deterministic rendering"
             )
-        expected_program_identity = compute_identity_hash(
+        expected_program_hash = compute_identity_hash(
             schema=MIPROV2_CANDIDATE_PROGRAM_SCHEMA,
             schema_version=MIPROV2_CANDIDATE_PROGRAM_SCHEMA_VERSION,
             payload={"candidate": self.candidate.model_dump(mode="json")},
         )
-        if self.program_identity_hash != expected_program_identity:
+        if self.program_identity_hash != expected_program_hash:
             raise ValueError(
                 "program identity does not match canonical candidate rendering"
             )

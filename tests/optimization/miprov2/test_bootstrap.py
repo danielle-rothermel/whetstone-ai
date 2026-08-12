@@ -127,16 +127,16 @@ def _result(
 ) -> BootstrapGenerationResult:
     return BootstrapGenerationResult(
         attempt_identity_hash=attempt.identity_hash(),
-        source_generation_identity=_identity(
+        source_generation_hash=_identity(
             f"generation-{attempt.task_index}-{attempt.round_index}"
         ),
-        source_trace_identity=_identity(
+        source_trace_hash=_identity(
             f"trace-{attempt.task_index}-{attempt.round_index}"
         ),
-        source_output_identity=_identity(
+        source_output_hash=_identity(
             f"output-{attempt.task_index}-{attempt.round_index}"
         ),
-        source_score_identity=_identity(
+        source_score_hash=_identity(
             f"score-{attempt.task_index}-{attempt.round_index}"
         ),
         metric_present=metric_present,

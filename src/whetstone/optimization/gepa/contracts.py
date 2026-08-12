@@ -826,7 +826,7 @@ class GepaEffectRecorder:
             if result_ref is None:
                 raise AssertionError("loaded GEPA result has no binding")
             evidence_refs = self._effect_evidence_refs(result)
-            candidate_identity = compute_identity_hash(
+            candidate_hash = compute_identity_hash(
                 schema="whetstone.gepa.semantic_candidate",
                 schema_version=1,
                 payload=[
@@ -838,7 +838,7 @@ class GepaEffectRecorder:
                 GepaEffectTranscriptEntry(
                     invocation_ordinal=ordinal,
                     effect_kind=kind,
-                    semantic_candidate_identity_hash=candidate_identity,
+                    semantic_candidate_identity_hash=candidate_hash,
                     upstream_candidate_index=(
                         request.upstream_candidate_index
                     ),

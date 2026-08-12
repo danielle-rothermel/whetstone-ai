@@ -26,8 +26,8 @@ __all__ = [
 ]
 
 # dr-store record schemas (Content Hash addressing; no Identity Hash).
-OFFICIAL_EVALUATION_RECORD_SCHEMA = "whetstone.official_evaluation_record"
-OFFICIAL_PLOT_MANIFEST_SCHEMA = "whetstone.official_plot_manifest"
+OFFICIAL_EVALUATION_RECORD_SCHEMA = "whetstone.official_evaluation_record/v2"
+OFFICIAL_PLOT_MANIFEST_SCHEMA = "whetstone.official_plot_manifest/v2"
 
 
 class PlannedKeyResult(BaseModel):
@@ -164,7 +164,7 @@ class OfficialEvaluationRecord(BaseModel):
     # Record-local typed provenance fields.
     source_revisions: tuple[tuple[str, str], ...] = ()
     dependency_lock: tuple[tuple[str, str], ...] = ()
-    environment_identity: StrictStr | None = None
+    environment_label: StrictStr | None = None
     provenance_note: StrictStr | None = None
     provenance_ordinal: StrictInt | None = None
 
@@ -270,7 +270,7 @@ class OfficialPlotManifest(BaseModel):
     selection_policy: StrictStr
     source_revisions: tuple[tuple[str, str], ...]
     dependency_lock: tuple[tuple[str, str], ...]
-    environment_identity: StrictStr
+    environment_label: StrictStr
     selected_record_mapping: SelectedRecordMapping
     provenance_note: StrictStr | None = None
     provenance_ordinal: StrictInt | None = None
@@ -289,8 +289,8 @@ class OfficialPlotManifest(BaseModel):
             )
         if not self.selection_policy:
             raise ValueError("selection_policy must be non-empty")
-        if not self.environment_identity:
-            raise ValueError("environment_identity must be non-empty")
+        if not self.environment_label:
+            raise ValueError("environment_label must be non-empty")
         # The manifest's aggregate refs MUST cover every aggregate the ordered
         # mapping attributes, so a published plot cannot omit a curve slot.
         declared = set(self.aggregate_refs)
