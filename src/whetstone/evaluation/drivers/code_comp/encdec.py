@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
+from dr_graph import (
+    GraphRunResult,
+    NodeConfig,
+    NodeOutcomeStatus,
+    NodeOutput,
+)
 from dr_providers import (
     MessageRole,
     PromptMessage,
@@ -38,6 +44,8 @@ from whetstone.envs.code_comp.dataset import (
 from whetstone.envs.code_comp.generation_graph.encdec import (
     DECODER_NODE_ID,
     ENCODER_NODE_ID,
+    ENCODER_PROMPT_EXTERNAL_INPUT,
+    EVAL_NODE_ID,
 )
 from whetstone.envs.code_comp.modes.encdec import EncDecExperiment
 from whetstone.envs.code_comp.mutant.dataset import MutantRecord
@@ -77,6 +85,29 @@ from whetstone.evaluation.code.compression_selection import (
     select_compression_reference,
 )
 from whetstone.evaluation.compression import zstd_compressed_utf8_byte_length
+from whetstone.evaluation.drivers.graph_execution import (
+    METADATA_CACHE_HIT_KEY,
+    METADATA_CACHE_PROVENANCE_KEY,
+    METADATA_FAILURE_CODE_KEY,
+    METADATA_PROMPT_KEY,
+    METADATA_REDRIVABLE_KEY,
+    METADATA_SUBMISSION_RESULT_KEY,
+    GenerationNodeError,
+    cancelled_row_state,
+    external_input_field,
+    graph_run_cancelled,
+    metadata_prompt,
+    node_error_failure_code,
+    node_error_redrivable,
+    node_error_row_state,
+    node_text,
+    require_node_error,
+    require_node_success,
+    run_generation_graph,
+    single_node_input,
+    telemetry_from_metadata,
+    telemetry_metadata,
+)
 from whetstone.evaluation.drivers.row_common import (
     ProcessTask,
     RolloutOutput,
@@ -96,7 +127,12 @@ from whetstone.evaluation.traces import (
     _llm_component_values,
     validate_executed_component_trace,
 )
-from whetstone.execution.call_support import CallTelemetry, call_telemetry
+from whetstone.execution.call_support import (
+    CallTelemetry,
+    call_telemetry,
+    failure_code_of,
+    is_transient_transport_failure,
+)
 from whetstone.execution.fanout import (
     DEFAULT_CONCURRENCY,
     CallSpec,
@@ -121,6 +157,10 @@ from whetstone.experiment.binding import (
 )
 from whetstone.experiment.graph.character_budget import (
     derive_character_bound,
+)
+from whetstone.experiment.graph.nodes import (
+    EVAL_OUTPUT_FIELD,
+    PROVIDER_GENERATION_OUTPUT_FIELD,
 )
 from whetstone.experiment.reward import Reward
 from whetstone.provider.driver import TransportCall
@@ -638,7 +678,15 @@ def drive_encdec_row(
     cache_phase: str,
     cache_unit: str,
 ) -> EncDecRowOutcome | EncDecGeneratedRowOutcome:
-    """Run one encode/decode row, optionally scoring inside the worker."""
+    """Run one row by interpreting the enc-dec generation graph via dr-graph.
+
+    The generation executor delegates to ``execute_graph`` over the
+    experiment's ``graph_config``; the encoder/decoder provider calls and the
+    optional in-worker scoring run as node behaviors, carrying per-leg
+    prompts, telemetry, and cache provenance on ``NodeOutput.metadata``. The
+    graph-complete run result is then mapped onto the unchanged wire outcome
+    models (``EncDecRowOutcome`` / ``EncDecGeneratedRowOutcome``).
+    """
     input_code = instance.prompt_inputs["input_code"]
     rd = experiment.encdec_generation_graph
     assert rd is not None
@@ -654,6 +702,8 @@ def drive_encdec_row(
             candidate_template, input_code=input_code, max_budget=max_budget
         )
     except (KeyError, IndexError, ValueError):
+        # The rendered encoder prompt IS the graph external input, so a
+        # render failure precedes the graph run.
         return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
@@ -665,36 +715,155 @@ def drive_encdec_row(
             max_budget=max_budget,
             encoder_len=None,
         )
-    enc_exec = execute_call(
-        request=_request(provider_call_config, encoder_prompt),
-        policy=execution_policy,
-        transport=transport,
-        logical_call_id=f"{logical_call_id}:enc",
-        sample_index=sample_index,
-        drive_ordinal=drive_ordinal,
-        cache=cache,
-        phase=cache_phase,
-        unit=cache_unit,
-    )
-    enc = enc_exec.result
-    if not enc.succeeded or enc.provider_generation is None:
-        from whetstone.execution.call_support import (
-            failure_code_of,
-            is_transient_transport_failure,
+
+    def _call_leg(*, leg: str, prompt: str) -> NodeOutput:
+        execution = execute_call(
+            request=_request(provider_call_config, prompt),
+            policy=execution_policy,
+            transport=transport,
+            logical_call_id=f"{logical_call_id}:{leg}",
+            sample_index=sample_index,
+            drive_ordinal=drive_ordinal,
+            cache=cache,
+            phase=cache_phase,
+            unit=cache_unit,
+        )
+        result = execution.result
+        telemetry = call_telemetry(result)
+        if not result.succeeded or result.provider_generation is None:
+            # A failed call still carries whatever the transport measured (a
+            # failed call has no usage, so tokens stay None --
+            # coverage-honest -- but its accepted latency is real spend and
+            # is recorded).
+            raise GenerationNodeError(
+                f"ED1 {leg} provider call failed",
+                metadata={
+                    **telemetry_metadata(telemetry),
+                    METADATA_FAILURE_CODE_KEY: failure_code_of(result),
+                    METADATA_REDRIVABLE_KEY: (
+                        is_transient_transport_failure(result)
+                    ),
+                },
+            )
+        provenance = execution.provenance
+        return NodeOutput(
+            values={
+                PROVIDER_GENERATION_OUTPUT_FIELD: (
+                    result.provider_generation.text
+                )
+            },
+            metadata={
+                METADATA_PROMPT_KEY: prompt,
+                **telemetry_metadata(telemetry),
+                METADATA_CACHE_HIT_KEY: execution.cache_hit,
+                METADATA_CACHE_PROVENANCE_KEY: (
+                    None
+                    if provenance is None
+                    else provenance.model_dump(mode="json")
+                ),
+            },
         )
 
-        # A failed call still carries whatever the transport measured (a
-        # failed call has no usage, so tokens stay None -- coverage-honest --
-        # but its accepted latency is real spend and is recorded).
-        enc_tel = call_telemetry(enc)
+    def _eval_node(
+        node: NodeConfig, node_inputs: Mapping[str, Any]
+    ) -> NodeOutput:
+        decoder_text = single_node_input(node, node_inputs)
+        if scorer is None:
+            # Coordinator-side batch scoring: the graph run completes with an
+            # unscored terminal output; the generated row is scored later.
+            return NodeOutput(values={EVAL_OUTPUT_FIELD: None})
+        # Correctness (decoder output) -- may be an infrastructure-unknown,
+        # which fails the row (never scored 0). ed1 scores the HumanEval test
+        # suite; ed1m scores the mutant's per-input oracle (fidelity +
+        # attractor).
+        submission = _score_row(experiment, instance, decoder_text, scorer)
+        record = submission_result_to_record(submission)
+        record_json = (
+            None if record is None else record.model_dump(mode="json")
+        )
+        if submission.score.infrastructure_unknown:
+            raise GenerationNodeError(
+                "ED1 code eval infrastructure unknown",
+                metadata={
+                    METADATA_FAILURE_CODE_KEY: (
+                        "code_eval_infrastructure_unknown"
+                    ),
+                    METADATA_SUBMISSION_RESULT_KEY: record_json,
+                },
+            )
+        return NodeOutput(
+            values={EVAL_OUTPUT_FIELD: submission.score.row_value},
+            metadata={METADATA_SUBMISSION_RESULT_KEY: record_json},
+        )
+
+    def _run_node(
+        node: NodeConfig, node_inputs: Mapping[str, Any]
+    ) -> NodeOutput:
+        if node.node_id == ENCODER_NODE_ID:
+            return _call_leg(
+                leg="enc", prompt=single_node_input(node, node_inputs)
+            )
+        if node.node_id == DECODER_NODE_ID:
+            # The graph routes the encoder's provider generation into the
+            # decoder's prompt input; the node behavior renders the fixed
+            # decoder frame around it for the wire call.
+            decoder_prompt = DECODER_TEMPLATE.format(
+                encoder_output=single_node_input(node, node_inputs)
+            )
+            return _call_leg(leg="dec", prompt=decoder_prompt)
+        if node.node_id == EVAL_NODE_ID:
+            return _eval_node(node, node_inputs)
+        raise ValueError(f"unexpected ED1 graph node {node.node_id!r}")
+
+    run = run_generation_graph(
+        graph=rd.graph_config,
+        inputs={
+            external_input_field(ENCODER_PROMPT_EXTERNAL_INPUT): (
+                encoder_prompt
+            )
+        },
+        run_node=_run_node,
+    )
+    return _encdec_outcome_from_graph_run(
+        run,
+        scorer_deferred=scorer is None,
+        max_budget=max_budget,
+        input_code=input_code,
+    )
+
+
+def _encdec_outcome_from_graph_run(
+    run: GraphRunResult,
+    *,
+    scorer_deferred: bool,
+    max_budget: int | None,
+    input_code: str,
+) -> EncDecRowOutcome | EncDecGeneratedRowOutcome:
+    """Map one graph-complete ED1 run onto its wire row outcome."""
+    if graph_run_cancelled(run):
+        # Cancellation attributes to the missing cell (pinned F4 table);
+        # downstream nodes are BLOCKED, so the row carries no execution
+        # output.
         return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=None,
             decoder_text=None,
-            row_state=ExecutedRowState.FAILED,
+            row_state=cancelled_row_state(),
             executed_component_steps=(),
-            failure_code=failure_code_of(enc),
+        )
+    enc = run.outcomes[ENCODER_NODE_ID]
+    if enc.status is NodeOutcomeStatus.ERROR:
+        error = require_node_error(enc)
+        enc_tel = telemetry_from_metadata(error.metadata)
+        return EncDecRowOutcome(
+            primary_value=None,
+            compression_value=None,
+            encoder_text=None,
+            decoder_text=None,
+            row_state=node_error_row_state(error),
+            executed_component_steps=(),
+            failure_code=node_error_failure_code(error),
             prompt_tokens=enc_tel.prompt_tokens,
             completion_tokens=enc_tel.completion_tokens,
             total_tokens=enc_tel.total_tokens,
@@ -703,54 +872,39 @@ def drive_encdec_row(
             max_budget=max_budget,
             encoder_len=None,
             provider_error=enc_tel.provider_error,
-            redrivable=is_transient_transport_failure(enc),
+            redrivable=node_error_redrivable(error),
         )
-    encoder_text = enc.provider_generation.text
+    enc_output = require_node_success(enc)
+    encoder_text = node_text(
+        enc_output, field=PROVIDER_GENERATION_OUTPUT_FIELD
+    )
+    enc_tel = telemetry_from_metadata(enc_output.metadata)
     encoder_len = len(encoder_text)
     executed_component_steps = (
         _llm_component_step(
             trace_index=0,
             component_id=ENCODER_NODE_ID,
-            prompt=encoder_prompt,
+            prompt=metadata_prompt(enc_output.metadata),
             generation=encoder_text,
         ),
     )
-    decoder_prompt = DECODER_TEMPLATE.format(encoder_output=encoder_text)
-    dec_exec = execute_call(
-        request=_request(provider_call_config, decoder_prompt),
-        policy=execution_policy,
-        transport=transport,
-        logical_call_id=f"{logical_call_id}:dec",
-        sample_index=sample_index,
-        drive_ordinal=drive_ordinal,
-        cache=cache,
-        phase=cache_phase,
-        unit=cache_unit,
-    )
-    dec = dec_exec.result
-    # A DUAL row is a full cache hit only when BOTH legs were served (no wire
-    # call this time); the encoder entry is the row's primary provenance.
-    row_cache_hit = enc_exec.cache_hit and dec_exec.cache_hit
-    row_cache_prov = enc_exec.provenance if row_cache_hit else None
-    if not dec.succeeded or dec.provider_generation is None:
-        from whetstone.execution.call_support import (
-            failure_code_of,
-            is_transient_transport_failure,
-        )
-
+    dec = run.outcomes[DECODER_NODE_ID]
+    if dec.status is NodeOutcomeStatus.ERROR:
+        error = require_node_error(dec)
         # The ENCODER leg succeeded, so its token spend is fully known and is
-        # real spend regardless of the decoder's failure; summing in the failed
-        # decoder's telemetry adds its accepted latency (it has no usage).
-        dec_tel = call_telemetry(dec)
-        fail_tel = _sum_telemetry(call_telemetry(enc), dec_tel)
+        # real spend regardless of the decoder's failure; summing in the
+        # failed decoder's telemetry adds its accepted latency (it has no
+        # usage).
+        dec_tel = telemetry_from_metadata(error.metadata)
+        fail_tel = _sum_telemetry(enc_tel, dec_tel)
         return EncDecRowOutcome(
             primary_value=None,
             compression_value=None,
             encoder_text=encoder_text,
             decoder_text=None,
-            row_state=ExecutedRowState.FAILED,
+            row_state=node_error_row_state(error),
             executed_component_steps=executed_component_steps,
-            failure_code=failure_code_of(dec),
+            failure_code=node_error_failure_code(error),
             prompt_tokens=fail_tel.prompt_tokens,
             completion_tokens=fail_tel.completion_tokens,
             total_tokens=fail_tel.total_tokens,
@@ -759,23 +913,70 @@ def drive_encdec_row(
             max_budget=max_budget,
             encoder_len=encoder_len,
             provider_error=dec_tel.provider_error,
-            redrivable=is_transient_transport_failure(dec),
+            redrivable=node_error_redrivable(error),
         )
-    decoder_text = dec.provider_generation.text
+    dec_output = require_node_success(dec)
+    decoder_text = node_text(
+        dec_output, field=PROVIDER_GENERATION_OUTPUT_FIELD
+    )
+    dec_tel = telemetry_from_metadata(dec_output.metadata)
     executed_component_steps = (
         *executed_component_steps,
         _llm_component_step(
             trace_index=1,
             component_id=DECODER_NODE_ID,
-            prompt=decoder_prompt,
+            prompt=metadata_prompt(dec_output.metadata),
             generation=decoder_text,
         ),
     )
-    dec_tel = call_telemetry(dec)
-    tel = _sum_telemetry(call_telemetry(enc), dec_tel)
+    tel = _sum_telemetry(enc_tel, dec_tel)
+    # A DUAL row is a full cache hit only when BOTH legs were served (no wire
+    # call this time); the encoder entry is the row's primary provenance.
+    row_cache_hit = (
+        enc_output.metadata.get(METADATA_CACHE_HIT_KEY) is True
+        and dec_output.metadata.get(METADATA_CACHE_HIT_KEY) is True
+    )
+    row_cache_prov = (
+        CacheProvenance.model_validate(
+            enc_output.metadata[METADATA_CACHE_PROVENANCE_KEY]
+        )
+        if row_cache_hit
+        else None
+    )
+    # Compression (encoder output) is always computed at evaluation time from
+    # the encoder bytes (it does not depend on the sandbox); comp is not a
+    # separate graph-node output.
     compression = _compression_ratio(encoder_text, input_code)
-
-    if scorer is None:
+    ev = run.outcomes[EVAL_NODE_ID]
+    if ev.status is NodeOutcomeStatus.ERROR:
+        error = require_node_error(ev)
+        submission_record = error.metadata.get(METADATA_SUBMISSION_RESULT_KEY)
+        return EncDecRowOutcome(
+            primary_value=None,
+            compression_value=None,
+            encoder_text=encoder_text,
+            decoder_text=decoder_text,
+            row_state=node_error_row_state(error),
+            executed_component_steps=executed_component_steps,
+            failure_code=node_error_failure_code(error),
+            prompt_tokens=tel.prompt_tokens,
+            completion_tokens=tel.completion_tokens,
+            total_tokens=tel.total_tokens,
+            reasoning_tokens=tel.reasoning_tokens,
+            latency_s=tel.latency_s,
+            max_budget=max_budget,
+            encoder_len=encoder_len,
+            finish_reason=dec_tel.finish_reason,
+            cache_hit=row_cache_hit,
+            cache_provenance=row_cache_prov,
+            code_submission_result=(
+                None
+                if submission_record is None
+                else submission_result_from_record(submission_record)
+            ),
+        )
+    ev_output = require_node_success(ev)
+    if scorer_deferred:
         return EncDecGeneratedRowOutcome(
             compression_value=compression,
             encoder_text=encoder_text,
@@ -792,32 +993,15 @@ def drive_encdec_row(
             cache_hit=row_cache_hit,
             cache_provenance=row_cache_prov,
         )
-
-    # Correctness (decoder output) -- may be an infrastructure-unknown, which
-    # fails the row (never scored 0). ed1 scores the HumanEval test suite; ed1m
-    # scores the mutant's per-input oracle (fidelity + attractor). Compression
-    # (encoder output) is always computed (it does not depend on the sandbox).
-    submission = _score_row(experiment, instance, decoder_text, scorer)
-    if submission.score.infrastructure_unknown:
-        return EncDecRowOutcome(
-            primary_value=None,
-            compression_value=None,
-            encoder_text=encoder_text,
-            decoder_text=decoder_text,
-            row_state=ExecutedRowState.FAILED,
-            executed_component_steps=executed_component_steps,
-            failure_code="code_eval_infrastructure_unknown",
-            prompt_tokens=tel.prompt_tokens,
-            completion_tokens=tel.completion_tokens,
-            total_tokens=tel.total_tokens,
-            reasoning_tokens=tel.reasoning_tokens,
-            latency_s=tel.latency_s,
-            max_budget=max_budget,
-            encoder_len=encoder_len,
-            finish_reason=dec_tel.finish_reason,
-            cache_hit=row_cache_hit,
-            cache_provenance=row_cache_prov,
-            code_submission_result=submission,
+    submission_record = ev_output.metadata.get(METADATA_SUBMISSION_RESULT_KEY)
+    if submission_record is None:
+        raise AssertionError(
+            "a scored ED1 eval node must carry its submission result"
+        )
+    submission = submission_result_from_record(submission_record)
+    if submission is None:
+        raise AssertionError(
+            "a recorded submission result must restore to a submission"
         )
     return EncDecRowOutcome(
         primary_value=submission.score.row_value,

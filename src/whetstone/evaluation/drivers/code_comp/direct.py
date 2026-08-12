@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from dr_code.humaneval import HumanEvalTask
+from dr_graph import (
+    GraphRunResult,
+    NodeConfig,
+    NodeOutcomeStatus,
+    NodeOutput,
+)
 from dr_providers import (
     MessageRole,
     PromptMessage,
@@ -49,7 +55,11 @@ from whetstone.envs.code_comp.submission_result import (
     submission_result_from_record,
     submission_result_to_record,
 )
-from whetstone.envs.generation_graph import LLM_NODE_ID
+from whetstone.envs.generation_graph import (
+    EVAL_NODE_ID,
+    LLM_NODE_ID,
+    PROMPT_EXTERNAL_INPUT,
+)
 from whetstone.envs.sampling import (
     EnvSplitSampling,
     validate_evaluation_role_for_split,
@@ -61,6 +71,29 @@ from whetstone.evaluation.aggregate import (
     unweighted_task_mean,
 )
 from whetstone.evaluation.attribution import attribute_generated_row
+from whetstone.evaluation.drivers.graph_execution import (
+    METADATA_FAILURE_CODE_KEY,
+    METADATA_PROMPT_KEY,
+    METADATA_REDRIVABLE_KEY,
+    METADATA_SUBMISSION_RESULT_KEY,
+    GenerationNodeError,
+    cache_marks_from_metadata,
+    cache_marks_metadata,
+    cancelled_row_state,
+    external_input_field,
+    graph_run_cancelled,
+    metadata_prompt,
+    node_error_failure_code,
+    node_error_redrivable,
+    node_error_row_state,
+    node_text,
+    require_node_error,
+    require_node_success,
+    run_generation_graph,
+    single_node_input,
+    telemetry_from_metadata,
+    telemetry_metadata,
+)
 from whetstone.evaluation.drivers.row_common import (
     ProcessTask,
     RolloutOutput,
@@ -100,6 +133,10 @@ from whetstone.execution.resume import (
 from whetstone.experiment.binding import (
     EvaluationBinding,
     eval_config_reference,
+)
+from whetstone.experiment.graph.nodes import (
+    EVAL_OUTPUT_FIELD,
+    PROVIDER_GENERATION_OUTPUT_FIELD,
 )
 from whetstone.experiment.reward import Reward
 from whetstone.provider.driver import TransportCall
@@ -403,11 +440,21 @@ def drive_direct_row(
     cache_phase: str,
     cache_unit: str,
 ) -> DirectRowOutcome | DirectGeneratedRowOutcome:
-    """Run one direct generation, optionally scoring inside the worker."""
+    """Run one row by interpreting the d1 generation graph via dr-graph.
+
+    The generation executor delegates to ``execute_graph`` over the
+    experiment's ``graph_config``; the direct provider call and the optional
+    in-worker scoring run as node behaviors, carrying the wire prompt,
+    telemetry, and cache marks on ``NodeOutput.metadata``. The graph-complete
+    run result is then mapped onto the unchanged wire outcome models
+    (``DirectRowOutcome`` / ``DirectGeneratedRowOutcome``).
+    """
     input_arm, score_task = _input_arm_text(experiment, instance)
     try:
         prompt = render_direct_frame(candidate_body, input_arm=input_arm)
     except (KeyError, IndexError, ValueError):
+        # The rendered prompt IS the graph external input, so a render
+        # failure precedes the graph run.
         return DirectRowOutcome(
             submission_score=None,
             output_text=None,
@@ -415,46 +462,175 @@ def drive_direct_row(
             executed_component_steps=(),
             failure_code="d1_wrapper_render_error",
         )
-    execution = execute_call(
-        request=_request(provider_call_config, prompt),
-        policy=execution_policy,
-        transport=transport,
-        logical_call_id=logical_call_id,
-        sample_index=sample_index,
-        drive_ordinal=drive_ordinal,
-        cache=cache,
-        phase=cache_phase,
-        unit=cache_unit,
+    rd = experiment.generation_graph
+
+    def _llm_node(
+        node: NodeConfig, node_inputs: Mapping[str, Any]
+    ) -> NodeOutput:
+        wire_prompt = single_node_input(node, node_inputs)
+        execution = execute_call(
+            request=_request(provider_call_config, wire_prompt),
+            policy=execution_policy,
+            transport=transport,
+            logical_call_id=logical_call_id,
+            sample_index=sample_index,
+            drive_ordinal=drive_ordinal,
+            cache=cache,
+            phase=cache_phase,
+            unit=cache_unit,
+        )
+        result = execution.result
+        telemetry = execution.telemetry()
+        marks = execution.cache_marks()
+        if not result.succeeded or result.provider_generation is None:
+            raise GenerationNodeError(
+                "D1 provider call failed",
+                metadata={
+                    **telemetry_metadata(telemetry),
+                    **cache_marks_metadata(marks),
+                    METADATA_FAILURE_CODE_KEY: failure_code_of(result),
+                    METADATA_REDRIVABLE_KEY: (
+                        is_transient_transport_failure(result)
+                    ),
+                },
+            )
+        return NodeOutput(
+            values={
+                PROVIDER_GENERATION_OUTPUT_FIELD: (
+                    result.provider_generation.text
+                )
+            },
+            metadata={
+                METADATA_PROMPT_KEY: wire_prompt,
+                **telemetry_metadata(telemetry),
+                **cache_marks_metadata(marks),
+            },
+        )
+
+    def _eval_node(
+        node: NodeConfig, node_inputs: Mapping[str, Any]
+    ) -> NodeOutput:
+        output_text = single_node_input(node, node_inputs)
+        if scorer is None:
+            # Coordinator-side batch scoring: the graph run completes with an
+            # unscored terminal output; the generated row is scored later.
+            return NodeOutput(values={EVAL_OUTPUT_FIELD: None})
+        submission = scorer(raw_submission=output_text, task=score_task)
+        if not isinstance(submission, CodeSubmissionResult):
+            raise TypeError("D1 scorer returned an unsupported result")
+        record = submission_result_to_record(submission)
+        record_json = (
+            None if record is None else record.model_dump(mode="json")
+        )
+        if submission.score.infrastructure_unknown:
+            raise GenerationNodeError(
+                "D1 code eval infrastructure unknown",
+                metadata={
+                    METADATA_FAILURE_CODE_KEY: (
+                        "code_eval_infrastructure_unknown"
+                    ),
+                    METADATA_SUBMISSION_RESULT_KEY: record_json,
+                },
+            )
+        return NodeOutput(
+            values={EVAL_OUTPUT_FIELD: submission.score.row_value},
+            metadata={METADATA_SUBMISSION_RESULT_KEY: record_json},
+        )
+
+    def _run_node(
+        node: NodeConfig, node_inputs: Mapping[str, Any]
+    ) -> NodeOutput:
+        if node.node_id == LLM_NODE_ID:
+            return _llm_node(node, node_inputs)
+        if node.node_id == EVAL_NODE_ID:
+            return _eval_node(node, node_inputs)
+        raise ValueError(f"unexpected D1 graph node {node.node_id!r}")
+
+    run = run_generation_graph(
+        graph=rd.graph_config,
+        inputs={external_input_field(PROMPT_EXTERNAL_INPUT): prompt},
+        run_node=_run_node,
     )
-    result = execution.result
-    telemetry = execution.telemetry()
-    marks = execution.cache_marks()
-    if not result.succeeded or result.provider_generation is None:
+    return _direct_outcome_from_graph_run(run, scorer_deferred=scorer is None)
+
+
+def _direct_outcome_from_graph_run(
+    run: GraphRunResult,
+    *,
+    scorer_deferred: bool,
+) -> DirectRowOutcome | DirectGeneratedRowOutcome:
+    """Map one graph-complete D1 run onto its wire row outcome."""
+    if graph_run_cancelled(run):
+        # Cancellation attributes to the missing cell (pinned F4 table);
+        # downstream nodes are BLOCKED, so the row carries no execution
+        # output.
         return DirectRowOutcome(
             submission_score=None,
             output_text=None,
-            row_state=ExecutedRowState.FAILED,
+            row_state=cancelled_row_state(),
             executed_component_steps=(),
-            failure_code=failure_code_of(result),
+        )
+    llm = run.outcomes[LLM_NODE_ID]
+    if llm.status is NodeOutcomeStatus.ERROR:
+        error = require_node_error(llm)
+        telemetry = telemetry_from_metadata(error.metadata)
+        marks = cache_marks_from_metadata(error.metadata)
+        return DirectRowOutcome(
+            submission_score=None,
+            output_text=None,
+            row_state=node_error_row_state(error),
+            executed_component_steps=(),
+            failure_code=node_error_failure_code(error),
             latency_s=telemetry.latency_s,
             provider_error=telemetry.provider_error,
-            redrivable=is_transient_transport_failure(result),
+            redrivable=node_error_redrivable(error),
             cache_hit=marks.cache_hit,
             cache_source_phase=marks.cache_source_phase,
             cache_source_unit=marks.cache_source_unit,
             cache_source_call_id=marks.cache_source_call_id,
             cache_source_at=marks.cache_source_at,
         )
-    output_text = result.provider_generation.text
+    llm_output = require_node_success(llm)
+    output_text = node_text(llm_output, field=PROVIDER_GENERATION_OUTPUT_FIELD)
+    telemetry = telemetry_from_metadata(llm_output.metadata)
+    marks = cache_marks_from_metadata(llm_output.metadata)
     executed_component_steps = (
         _llm_component_step(
             trace_index=0,
             component_id=LLM_NODE_ID,
-            prompt=prompt,
+            prompt=metadata_prompt(llm_output.metadata),
             generation=output_text,
         ),
     )
-    if scorer is None:
+    ev = run.outcomes[EVAL_NODE_ID]
+    if ev.status is NodeOutcomeStatus.ERROR:
+        error = require_node_error(ev)
+        submission_record = error.metadata.get(METADATA_SUBMISSION_RESULT_KEY)
+        return DirectRowOutcome(
+            submission_score=None,
+            output_text=output_text,
+            row_state=node_error_row_state(error),
+            executed_component_steps=executed_component_steps,
+            failure_code=node_error_failure_code(error),
+            prompt_tokens=telemetry.prompt_tokens,
+            completion_tokens=telemetry.completion_tokens,
+            total_tokens=telemetry.total_tokens,
+            reasoning_tokens=telemetry.reasoning_tokens,
+            latency_s=telemetry.latency_s,
+            finish_reason=telemetry.finish_reason,
+            cache_hit=marks.cache_hit,
+            cache_source_phase=marks.cache_source_phase,
+            cache_source_unit=marks.cache_source_unit,
+            cache_source_call_id=marks.cache_source_call_id,
+            cache_source_at=marks.cache_source_at,
+            code_submission_result=(
+                None
+                if submission_record is None
+                else submission_result_from_record(submission_record)
+            ),
+        )
+    ev_output = require_node_success(ev)
+    if scorer_deferred:
         return DirectGeneratedRowOutcome(
             output_text=output_text,
             executed_component_steps=executed_component_steps,
@@ -470,28 +646,15 @@ def drive_direct_row(
             cache_source_call_id=marks.cache_source_call_id,
             cache_source_at=marks.cache_source_at,
         )
-    submission = scorer(raw_submission=output_text, task=score_task)
-    if not isinstance(submission, CodeSubmissionResult):
-        raise TypeError("D1 scorer returned an unsupported result")
-    if submission.score.infrastructure_unknown:
-        return DirectRowOutcome(
-            submission_score=None,
-            output_text=output_text,
-            row_state=ExecutedRowState.FAILED,
-            executed_component_steps=executed_component_steps,
-            failure_code="code_eval_infrastructure_unknown",
-            prompt_tokens=telemetry.prompt_tokens,
-            completion_tokens=telemetry.completion_tokens,
-            total_tokens=telemetry.total_tokens,
-            reasoning_tokens=telemetry.reasoning_tokens,
-            latency_s=telemetry.latency_s,
-            finish_reason=telemetry.finish_reason,
-            cache_hit=marks.cache_hit,
-            cache_source_phase=marks.cache_source_phase,
-            cache_source_unit=marks.cache_source_unit,
-            cache_source_call_id=marks.cache_source_call_id,
-            cache_source_at=marks.cache_source_at,
-            code_submission_result=submission,
+    submission_record = ev_output.metadata.get(METADATA_SUBMISSION_RESULT_KEY)
+    if submission_record is None:
+        raise AssertionError(
+            "a scored D1 eval node must carry its submission result"
+        )
+    submission = submission_result_from_record(submission_record)
+    if submission is None:
+        raise AssertionError(
+            "a recorded submission result must restore to a submission"
         )
     return DirectRowOutcome(
         submission_score=submission.score.row_value,
