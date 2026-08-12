@@ -49,22 +49,22 @@ def _calibration_task_hashes(
     hashes = engine.sampling.task_set.task_hashes
     if set(task_ids).issubset(hashes):
         return task_ids
-    by_instance = {
-        str(instance.id): task_hash
-        for instance, task_hash in zip(
+    by_task_id = {
+        str(task.id): task_hash
+        for task, task_hash in zip(
             engine.sampling.tasks,
             hashes,
             strict=True,
         )
     }
     unknown = tuple(
-        task_id for task_id in task_ids if task_id not in by_instance
+        task_id for task_id in task_ids if task_id not in by_task_id
     )
     if unknown:
         raise ValueError(
             f"baseline preview task IDs are unknown to sampling: {unknown!r}"
         )
-    return tuple(by_instance[task_id] for task_id in task_ids)
+    return tuple(by_task_id[task_id] for task_id in task_ids)
 
 
 class AnchorArmPreview(BaseModel):

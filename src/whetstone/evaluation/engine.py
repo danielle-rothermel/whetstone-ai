@@ -222,9 +222,9 @@ class EvaluationEngine:
                 f"derived sampling contains unknown task IDs: {unknown!r}"
             )
         selected = tuple(source_by_id[task_id] for task_id in task_ids)
-        identity_by_instance = {
-            id(instance): task_id
-            for task_id, instance in zip(task_ids, selected, strict=True)
+        task_hash_by_task = {
+            id(task): task_hash
+            for task_hash, task in zip(task_ids, selected, strict=True)
         }
         namespace, separator, role = source.task_set.manifest_id.rpartition(
             "."
@@ -238,7 +238,7 @@ class EvaluationEngine:
             dataset_revision=source.task_set.dataset_revision,
             split_role=source.split_role,
             tasks=selected,
-            task_hash_of=lambda instance: identity_by_instance[id(instance)],
+            task_hash_of=lambda task: task_hash_by_task[id(task)],
             procedure=source.procedure_config,
             aggregation=source.aggregation_config,
             num_samples=source.sample_plan.num_samples,
@@ -332,21 +332,19 @@ class EvaluationEngine:
         request: EvaluationRequest,
         result: InternalEvalResult,
     ) -> tuple[EvaluationComponentTraces, tuple[EvaluationOutputRow, ...]]:
-        task_ids = tuple(str(instance.id) for instance in self.sampling.tasks)
+        task_ids = tuple(str(task.id) for task in self.sampling.tasks)
         task_hashes = self.sampling.task_set.task_hashes
         if len(task_ids) != len(task_hashes):
             raise ValueError(
-                "sampling instances and task identities must align exactly"
+                "sampling tasks and task identities must align exactly"
             )
         if len(set(task_ids)) != len(task_ids):
-            raise ValueError("sampling instance IDs must be unique")
+            raise ValueError("sampling task IDs must be unique")
         if len(set(task_hashes)) != len(task_hashes):
             raise ValueError("sampling task identities must be unique")
 
-        task_hash_by_instance = dict(zip(task_ids, task_hashes, strict=True))
-        instance_by_id = {
-            str(instance.id): instance for instance in self.sampling.tasks
-        }
+        task_hash_by_task_id = dict(zip(task_ids, task_hashes, strict=True))
+        task_by_id = {str(task.id): task for task in self.sampling.tasks}
         task_index_by_id = {
             task_id: task_index for task_index, task_id in enumerate(task_ids)
         }
@@ -378,11 +376,11 @@ class EvaluationEngine:
                 )
             if ordinal <= prior_ordinal:
                 raise ValueError(
-                    "evaluation trace rows must follow sampling instance/"
+                    "evaluation trace rows must follow sampling task/"
                     "repeat order"
                 )
             prior_ordinal = ordinal
-            task_hash = task_hash_by_instance[output.task_id]
+            task_hash = task_hash_by_task_id[output.task_id]
             trace_rows.append(
                 EvaluationComponentTraceRow(
                     task_id=output.task_id,
@@ -406,7 +404,7 @@ class EvaluationEngine:
                     sample_index=output.sample_index,
                     rendered_prompt=self._rendered_prompt(
                         request.candidate,
-                        instance_by_id[output.task_id],
+                        task_by_id[output.task_id],
                         max_budget=output.max_budget,
                     ),
                     output_text=output.output_text,

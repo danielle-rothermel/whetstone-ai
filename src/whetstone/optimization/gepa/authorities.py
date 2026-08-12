@@ -165,23 +165,23 @@ class GepaDataRegistry:
         engine: EvaluationEngine,
     ) -> GepaDataRegistry:
         task_ids = tuple(engine.sampling.task_set.task_hashes)
-        instances = tuple(engine.sampling.tasks)
-        if len(task_ids) != len(instances):
+        tasks = tuple(engine.sampling.tasks)
+        if len(task_ids) != len(tasks):
             raise ValueError(
-                "GEPA engine task identities and instances do not align"
+                "GEPA engine task identities and tasks do not align"
             )
         entries: list[GepaDataInstance] = []
-        for index, (task_hash, instance) in enumerate(
-            zip(task_ids, instances, strict=True)
+        for index, (task_hash, task) in enumerate(
+            zip(task_ids, tasks, strict=True)
         ):
-            prompt_inputs = getattr(instance, "prompt_inputs", None)
-            instance_id = getattr(instance, "id", None)
+            prompt_inputs = getattr(task, "prompt_inputs", None)
+            task_id = getattr(task, "id", None)
             if not isinstance(prompt_inputs, dict) or not isinstance(
-                instance_id,
+                task_id,
                 str,
             ):
                 raise ValueError(
-                    "GEPA engine instance lacks canonical public inputs"
+                    "GEPA engine task lacks canonical public inputs"
                 )
             prompt_input_items: list[tuple[str, str]] = []
             for name, value in prompt_inputs.items():
@@ -193,7 +193,7 @@ class GepaDataRegistry:
             ordered_prompt_inputs = dict(sorted(prompt_input_items))
             record = _GepaDataRecord(
                 task_hash=task_hash,
-                task_id=instance_id,
+                task_id=task_id,
                 prompt_inputs=ordered_prompt_inputs,
             )
             ref, _ = store.put(

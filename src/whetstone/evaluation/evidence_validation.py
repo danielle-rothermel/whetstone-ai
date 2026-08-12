@@ -278,12 +278,10 @@ class EvaluationEvidenceValidation:
         if outputs.num_samples != expected_repeats:
             raise ValueError("evaluation outputs use another Sample Plan")
 
-        instances = tuple(self._engine.sampling.tasks)
-        expected_instance_by_task = {
-            task_hash: instance
-            for task_hash, instance in zip(
-                expected_tasks, instances, strict=True
-            )
+        tasks = tuple(self._engine.sampling.tasks)
+        expected_task_by_hash = {
+            task_hash: task
+            for task_hash, task in zip(expected_tasks, tasks, strict=True)
         }
         if self._engine.experiment.env_name != CODE_COMP_ENV_NAME:
             raise ValueError(
@@ -293,7 +291,7 @@ class EvaluationEvidenceValidation:
         return self._validate_code_comp_outputs(
             outputs,
             intent=intent,
-            expected_instance_by_task=expected_instance_by_task,
+            expected_task_by_hash=expected_task_by_hash,
         )
 
     def _validate_code_comp_outputs(
@@ -301,7 +299,7 @@ class EvaluationEvidenceValidation:
         outputs: EvaluationOutputsRecord,
         *,
         intent: EvaluationIntent,
-        expected_instance_by_task: dict[str, Instance],
+        expected_task_by_hash: dict[str, Instance],
     ) -> EvaluationOutputsRecord:
         experiment = self._engine.experiment
         mode = code_comp_mode_for(experiment)
@@ -315,14 +313,14 @@ class EvaluationEvidenceValidation:
         )
 
         for row in outputs.outputs:
-            instance = expected_instance_by_task[row.task_hash]
-            if row.task_id != str(instance.id):
+            task = expected_task_by_hash[row.task_hash]
+            if row.task_id != str(task.id):
                 raise ValueError(
-                    "evaluation output task and instance do not align"
+                    "evaluation output task_id and task do not align"
                 )
             if mode is CodeCompMode.DIRECT:
                 assert isinstance(experiment, DirectExperiment)
-                input_arm, _score_task = _input_arm_text(experiment, instance)
+                input_arm, _score_task = _input_arm_text(experiment, task)
                 expected_prompt = render_direct_frame(
                     body,
                     input_arm=input_arm,
@@ -330,7 +328,7 @@ class EvaluationEvidenceValidation:
             elif mode in {CodeCompMode.ENCDEC, CodeCompMode.ENCDEC_MUTANT}:
                 expected_prompt = render_encoder_frame(
                     body,
-                    input_code=instance.prompt_inputs["input_code"],
+                    input_code=task.prompt_inputs["input_code"],
                     max_budget=row.max_budget,
                 )
             else:
@@ -458,9 +456,9 @@ class EvaluationEvidenceValidation:
                 "generation graph uses an unsupported LLM component transition"
             )
 
-        expected_instance_by_task = {
-            task_hash: str(instance.id)
-            for task_hash, instance in zip(
+        expected_task_id_by_hash = {
+            task_hash: str(task.id)
+            for task_hash, task in zip(
                 expected_tasks,
                 self._engine.sampling.tasks,
                 strict=True,
@@ -479,10 +477,10 @@ class EvaluationEvidenceValidation:
                 )
             if (
                 trace_row.task_id
-                != expected_instance_by_task[trace_row.task_hash]
+                != expected_task_id_by_hash[trace_row.task_hash]
             ):
                 raise ValueError(
-                    "component trace task and instance do not align"
+                    "component trace task_id and task do not align"
                 )
             trace = trace_row.executed_component_trace
             if trace.row_state is ExecutedRowState.SUCCESS:
@@ -817,10 +815,8 @@ class EvaluationEvidenceValidation:
         outputs: EvaluationOutputsRecord,
     ) -> tuple[float | None, ...]:
         input_code_by_task = {
-            code_comp_task_hash(instance): str(
-                instance.prompt_inputs["input_code"]
-            )
-            for instance in self._engine.sampling.tasks
+            code_comp_task_hash(task): str(task.prompt_inputs["input_code"])
+            for task in self._engine.sampling.tasks
         }
         compression_by_task: dict[str, list[float]] = {
             task_hash: [] for task_hash in outputs.task_hashes
