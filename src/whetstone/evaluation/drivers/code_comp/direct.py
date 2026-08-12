@@ -60,6 +60,7 @@ from whetstone.evaluation.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
+from whetstone.evaluation.attribution import attribute_generated_row
 from whetstone.evaluation.drivers.row_common import (
     ProcessTask,
     RolloutOutput,
@@ -952,14 +953,12 @@ def run_direct_eval(
             outcome = driven[(task_id, index)]
             if not isinstance(outcome, DirectRowOutcome):
                 raise AssertionError("D1 row was not scored")
-            if outcome.missing:
-                task_submission_rows.append(RowValue(missing=True))
-            elif outcome.failed or outcome.submission_score is None:
-                task_submission_rows.append(RowValue(failed=True))
-            else:
-                task_submission_rows.append(
-                    RowValue(value=float(outcome.submission_score))
+            task_submission_rows.append(
+                attribute_generated_row(
+                    row_state=outcome.row_state,
+                    score=outcome.submission_score,
                 )
+            )
             outputs.append(
                 RolloutOutput(
                     candidate_id=candidate_id,

@@ -21,6 +21,7 @@ from whetstone.evaluation import (
     VariableSpec,
     aggregate,
 )
+from whetstone.evaluation.attribution import require_exclusive_row_state
 
 # Persisted-format contract for Aggregate. Exact wire fields are pinned
 # by a golden test; never derive them from dataclass fields.
@@ -197,20 +198,12 @@ class RowValue:
     invalid: bool = False
 
     def __post_init__(self) -> None:
-        flags = (self.failed, self.missing, self.invalid)
-        if sum(flags) > 1:
-            raise ValueError(
-                "a row is at most one of failed / missing / invalid"
-            )
-        if any(flags) and self.value is not None:
-            raise ValueError(
-                "a failed / missing / invalid row carries no value"
-            )
-        if not any(flags) and self.value is None:
-            raise ValueError(
-                "a present row requires a value (use missing/failed/invalid "
-                "to declare absence explicitly)"
-            )
+        require_exclusive_row_state(
+            scored=self.value is not None,
+            failed=self.failed,
+            missing=self.missing,
+            invalid=self.invalid,
+        )
 
     @property
     def is_present(self) -> bool:

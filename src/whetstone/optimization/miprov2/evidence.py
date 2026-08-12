@@ -20,6 +20,7 @@ from whetstone.core.identity import (
     require_full_hash,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.attribution import require_exhaustive_row_accounting
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EvaluationComponentTraces,
@@ -93,6 +94,17 @@ class Miprov2RowAccounting(BaseModel):
     missing: StrictInt
     failed: StrictInt
     invalid: StrictInt
+
+    @model_validator(mode="after")
+    def _validate_exhaustive(self) -> Miprov2RowAccounting:
+        require_exhaustive_row_accounting(
+            planned=self.planned,
+            present=self.present,
+            missing=self.missing,
+            failed=self.failed,
+            invalid=self.invalid,
+        )
+        return self
 
 
 class Miprov2IntentContext(BaseModel):
@@ -324,20 +336,9 @@ def load_miprov2_intent_context(
 
 
 def _row_accounting(evidence: EvaluationEvidence) -> Miprov2RowAccounting:
-    accounting = Miprov2RowAccounting.model_validate(
+    return Miprov2RowAccounting.model_validate(
         evidence.row_accounting.model_dump(mode="json")
     )
-    counts = (
-        accounting.present,
-        accounting.missing,
-        accounting.failed,
-        accounting.invalid,
-    )
-    if any(count < 0 for count in counts):
-        raise ValueError("evaluation row accounting cannot be negative")
-    if accounting.planned != sum(counts):
-        raise ValueError("evaluation row accounting is not exhaustive")
-    return accounting
 
 
 def _selected_step_identity(step: _ExecutedComponentStep) -> str:
