@@ -22,7 +22,7 @@ class SelectedRecordMappingEntry(BaseModel):
 
     Maps exactly one selected Materialization Record (by typed Object Reference
     plus Content Hash) through its ``graph_hash`` to the shared planned/result
-    Rollout Execution Key set and the aggregate reference (typed Object
+    Generation Execution Key set and the aggregate reference (typed Object
     Reference plus Content Hash). Two entries that converged on one
     ``graph_hash`` carry the *same* ``graph_hash``, ``planned_key_set``,
     ``result_key_set`` and ``aggregate_ref`` but remain distinct entries keyed
@@ -36,9 +36,10 @@ class SelectedRecordMappingEntry(BaseModel):
     record_ref: TypedRef
     #: The Graph Hash this record materialized to.
     graph_hash: StrictStr
-    #: The shared planned Rollout Execution Key set (canonical strings).
+    #: The shared planned Generation Execution Key set (canonical strings).
     planned_key_set: tuple[str, ...]
-    #: The shared result-bound Rollout Execution Key set (subset of planned).
+    #: The shared result-bound Generation Execution Key set (subset of
+    #: planned).
     result_key_set: tuple[str, ...]
     #: The aggregate this graph produced (typed ref + Content Hash).
     aggregate_ref: TypedRef

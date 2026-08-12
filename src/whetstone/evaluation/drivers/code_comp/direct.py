@@ -95,8 +95,8 @@ from whetstone.evaluation.drivers.graph_execution import (
     telemetry_metadata,
 )
 from whetstone.evaluation.drivers.row_common import (
+    GenerationRowOutput,
     ProcessTask,
-    RolloutOutput,
     _process_payload_hash,
     process_request_hash,
     remaining_phase_wall_seconds,
@@ -157,7 +157,7 @@ class DirectEvalResult:
     reward: Reward | None
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
-    outputs: tuple[RolloutOutput, ...]
+    outputs: tuple[GenerationRowOutput, ...]
     request_identities: frozenset[str] = frozenset()
 
 
@@ -1105,7 +1105,7 @@ def run_direct_eval(
                 )
 
     submission_rows: list[tuple[str, list[RowValue]]] = []
-    outputs: list[RolloutOutput] = []
+    outputs: list[GenerationRowOutput] = []
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
     for task_index, instance in enumerate(instances):
@@ -1124,7 +1124,7 @@ def run_direct_eval(
                 )
             )
             outputs.append(
-                RolloutOutput(
+                GenerationRowOutput(
                     candidate_id=candidate_id,
                     task_id=task_id,
                     task_index=task_index,

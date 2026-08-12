@@ -158,7 +158,7 @@ class EvaluationAuthority:
         Refuses internal-role evidence (relabeling refusal). Computes the
         completeness decision from the planned/present accounting so no planned
         key is silently dropped, and certifies only when the evaluation is
-        complete. The referenced ordinary Rollout Results become official by
+        complete. The referenced ordinary Generation Results become official by
         this certification; they are not copied or relabeled.
         """
         self._require_official_binding(evaluation_binding)

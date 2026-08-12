@@ -14,7 +14,7 @@ from whetstone.evaluation.traces import ExecutedComponentStep, ExecutedRowState
 
 
 @dataclass(frozen=True, slots=True)
-class RolloutOutput:
+class GenerationRowOutput:
     """One generation row's exact trace, display output, and score."""
 
     candidate_id: str
@@ -122,8 +122,8 @@ def remaining_phase_wall_seconds(deadline: float | None) -> float | None:
 
 
 __all__ = [
+    "GenerationRowOutput",
     "ProcessTask",
-    "RolloutOutput",
     "_process_payload_hash",
     "process_request_hash",
     "remaining_phase_wall_seconds",

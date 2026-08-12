@@ -203,7 +203,7 @@ def select_official(
     4. Persist the derivation, order, tie behavior, front, and selection as
        :class:`SelectionEvidence`.
 
-    No Reward is computed: Objectives derive only from Scores / Rollout
+    No Reward is computed: Objectives derive only from Scores / Generation
     Aggregates, and the reserved Reward name is refused by :class:`Objective`.
     """
     if not candidates:

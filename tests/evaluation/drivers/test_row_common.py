@@ -9,8 +9,8 @@ from whetstone.evaluation.drivers.eval_result import (
     per_task_score,
 )
 from whetstone.evaluation.drivers.row_common import (
+    GenerationRowOutput,
     ProcessTask,
-    RolloutOutput,
     process_request_hash,
     start_phase_deadline,
 )
@@ -33,8 +33,8 @@ def test_process_task_round_trips_instance() -> None:
     )
 
 
-def test_rollout_output_row_state_properties() -> None:
-    success = RolloutOutput(
+def test_generation_row_output_row_state_properties() -> None:
+    success = GenerationRowOutput(
         candidate_id="c1",
         task_id="task-1",
         task_index=0,
@@ -44,7 +44,7 @@ def test_rollout_output_row_state_properties() -> None:
         output_text="ok",
         score=1.0,
     )
-    failed = RolloutOutput(
+    failed = GenerationRowOutput(
         candidate_id="c1",
         task_id="task-1",
         task_index=0,
@@ -54,7 +54,7 @@ def test_rollout_output_row_state_properties() -> None:
         output_text=None,
         score=None,
     )
-    missing = RolloutOutput(
+    missing = GenerationRowOutput(
         candidate_id="c1",
         task_id="task-1",
         task_index=0,

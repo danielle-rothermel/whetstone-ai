@@ -188,7 +188,7 @@ class RowValue:
 
     #: The measured numeric value, when the row produced one.
     value: float | None = None
-    #: The row's Rollout failed (for example, an exhausted provider or
+    #: The row's generation failed (for example, an exhausted provider or
     #: execution-infrastructure failure).
     failed: bool = False
     #: The planned row is absent from the observed matrix.

@@ -109,8 +109,8 @@ from whetstone.evaluation.drivers.graph_execution import (
     telemetry_metadata,
 )
 from whetstone.evaluation.drivers.row_common import (
+    GenerationRowOutput,
     ProcessTask,
-    RolloutOutput,
     _process_payload_hash,
     process_request_hash,
     remaining_phase_wall_seconds,
@@ -225,7 +225,7 @@ class EncDecEvalResult:
     per_task_scores: tuple[float, ...]
     per_task_counts: tuple[int, ...]
     per_task_compression: tuple[float | None, ...]
-    outputs: tuple[RolloutOutput, ...]
+    outputs: tuple[GenerationRowOutput, ...]
     #: The raw per-task primary mean, always reported separately even when
     #: ``per_task_scores`` carries the blend.
     per_task_primary: tuple[float, ...] = ()
@@ -1582,7 +1582,7 @@ def run_encdec_eval(
     # order.
     primary_rows: list[tuple[str, list[RowValue]]] = []
     comp_rows: list[tuple[str, list[RowValue]]] = []
-    outputs: list[RolloutOutput] = []
+    outputs: list[GenerationRowOutput] = []
     row_diags: list[EncDecRowDiag] = []
     per_task_scores: list[float] = []
     per_task_counts: list[int] = []
@@ -1631,7 +1631,7 @@ def run_encdec_eval(
                 assert outcome.compression_value is not None
                 comp_vals.append(float(outcome.compression_value))
             outputs.append(
-                RolloutOutput(
+                GenerationRowOutput(
                     candidate_id=candidate_id,
                     task_id=task_id,
                     task_index=task_index,
