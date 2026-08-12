@@ -9,7 +9,8 @@ automated verdict; reading the surface is a human decision.
 
 ## Staging discipline for calibration samples (K_CAL)
 
-1. **Start at K_CAL = 4** samples per task for the calibration anchors.
+1. **Start at K_CAL = 4** samples per task for the calibration anchors
+   (`DEFAULT_CALIBRATION_SAMPLES`, `src/whetstone/envs/code_comp/behavior_matrix.py`).
 2. **Inspect the variance components** from the run's
    `VarianceDecomposition`: `within_sample_var` vs. `between_task_var` vs.
    `interaction_var`, and the resulting MDD surface against the target gap.

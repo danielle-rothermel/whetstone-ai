@@ -75,6 +75,7 @@ class MatrixProviderRoute(Protocol):
 
 
 MATRIX_SCHEMA_VERSION = 1
+DEFAULT_CALIBRATION_SAMPLES = 4
 DEFAULT_CONCURRENCY = 100
 TOKEN_LIMIT = 4096
 FULL_BUDGET_RATIOS: tuple[float | None, ...] = (
@@ -229,7 +230,7 @@ def build_matrix_plan(
 
     task_ids = task_selection.task_ids
     budget_ratios = (None,) if mode == "smoke" else FULL_BUDGET_RATIOS
-    num_samples = 1 if mode == "smoke" else 3
+    num_samples = 1 if mode == "smoke" else DEFAULT_CALIBRATION_SAMPLES
     rows = len(task_ids) * num_samples * 2
     treatments: list[CodeCompBehaviorMatrixTreatmentPlan] = []
     ordinal = 0
@@ -573,6 +574,7 @@ def run_code_comp_baseline_behavior_matrix(
 
 
 __all__ = [
+    "DEFAULT_CALIBRATION_SAMPLES",
     "DEFAULT_CONCURRENCY",
     "DEFAULT_TASK_MANIFEST",
     "EXCLUDED_TASK_IDS",

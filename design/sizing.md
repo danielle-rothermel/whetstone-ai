@@ -12,6 +12,7 @@ here in the same commit.
 | Row-execution fanout concurrency | 5 | `DEFAULT_CONCURRENCY`, `src/whetstone/execution/fanout.py` | `run_call_pool` default; leaks into `EvaluationEngine(concurrency=...)` (`evaluation/engine.py`) and both code_comp drivers (`evaluation/drivers/code_comp/direct.py`, `.../encdec.py`) |
 | Subprocess runtime rebuild concurrency | 5 | `CodeCompEvaluationRuntimeConfig.concurrency`, `src/whetstone/envs/code_comp/runtime_config.py` | duplicate of the fanout default carried on the persisted runtime config; the runtime home for the number once the fanout stack is deleted |
 | ED1 baseline behavior-matrix row concurrency | 100 | `DEFAULT_CONCURRENCY`, `src/whetstone/envs/code_comp/behavior_matrix.py` | `run_code_comp_baseline_behavior_matrix`, `scripts/experiments/run_baseline_behavior_matrix.py` |
+| ED1 calibration samples per task (initial K_CAL) | 4 | `DEFAULT_CALIBRATION_SAMPLES`, `src/whetstone/envs/code_comp/behavior_matrix.py` | `build_matrix_plan` full mode; staging discipline in `design/ed1-calibration-staging.md` |
 | Provider wire-call wall cap (seconds) | 600.0 | `DEFAULT_TIMEOUT_SECONDS`, `src/whetstone/runner/routes.py` | every canonical route builder in `runner/routes.py`; the dribble backstop — `DEFAULT_IDLE_SECONDS` is the real stall detector |
 
 The two `DEFAULT_CONCURRENCY = 5` copies are the same decision recorded twice;
