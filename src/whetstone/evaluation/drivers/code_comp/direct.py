@@ -957,6 +957,7 @@ def run_direct_eval(
                 attribute_generated_row(
                     row_state=outcome.row_state,
                     score=outcome.submission_score,
+                    failure_code=outcome.failure_code,
                 )
             )
             outputs.append(

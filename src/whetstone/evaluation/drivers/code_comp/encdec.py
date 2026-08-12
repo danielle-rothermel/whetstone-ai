@@ -1435,6 +1435,7 @@ def run_encdec_eval(
                 attribute_generated_row(
                     row_state=outcome.row_state,
                     score=outcome.primary_value,
+                    failure_code=outcome.failure_code,
                 )
             )
             comp_row = attribute_compression_row(

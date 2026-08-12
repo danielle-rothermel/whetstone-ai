@@ -63,23 +63,43 @@ def test_numeric_zero_remains_a_scored_value() -> None:
 
 
 @pytest.mark.parametrize(
-    ("row_state", "score", "expected"),
+    ("row_state", "score", "failure_code", "expected"),
     [
-        # The retired coordinator ladder, cell for cell:
-        # missing -> missing; failed or absent score -> failed; else scored.
-        (ExecutedRowState.MISSING, None, RowValue(missing=True)),
-        (ExecutedRowState.FAILED, None, RowValue(failed=True)),
-        (ExecutedRowState.SUCCESS, None, RowValue(failed=True)),
-        (ExecutedRowState.SUCCESS, 0.75, RowValue(value=0.75)),
+        (ExecutedRowState.MISSING, None, None, RowValue(missing=True)),
+        (
+            ExecutedRowState.FAILED,
+            None,
+            "transport-error",
+            RowValue(failed=True),
+        ),
+        (
+            ExecutedRowState.FAILED,
+            None,
+            "provider-rejection",
+            RowValue(invalid=True),
+        ),
+        (
+            ExecutedRowState.FAILED,
+            None,
+            "blank-provider-generation",
+            RowValue(invalid=True),
+        ),
+        (ExecutedRowState.FAILED, None, None, RowValue(failed=True)),
+        (ExecutedRowState.SUCCESS, None, None, RowValue(failed=True)),
+        (ExecutedRowState.SUCCESS, 0.75, None, RowValue(value=0.75)),
     ],
 )
-def test_generated_row_matches_the_retired_ladder(
+def test_generated_row_attributes_through_the_pinned_table(
     row_state: ExecutedRowState,
     score: float | None,
+    failure_code: str | None,
     expected: RowValue,
 ) -> None:
     assert (
-        attribute_generated_row(row_state=row_state, score=score) == expected
+        attribute_generated_row(
+            row_state=row_state, score=score, failure_code=failure_code
+        )
+        == expected
     )
 
 

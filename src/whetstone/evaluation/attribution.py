@@ -13,8 +13,7 @@ missing, failed, or invalid.
 Outcome kinds not yet produced by the current flows (cancellation,
 empty candidate set, token-limit truncation, vanished published evidence,
 crash, abandonment) are pinned now so later executor and provider wiring
-maps into the same table; wiring repinned dependency enums onto these kinds
-is a mechanical follow-through and does not change the table.
+maps into the same table.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from whetstone.evaluation.traces import ExecutedRowState
+from whetstone.provider.classification import SemanticFailureClass
 
 if TYPE_CHECKING:
     from whetstone.evaluation.aggregate import RowValue
@@ -123,23 +123,38 @@ def _unscored_row_value(outcome: AttributedOutcome) -> RowValue:
     )
 
 
+def _outcome_for_generated_failure(
+    failure_code: str | None,
+) -> AttributedOutcome:
+    """Map a coordinator failure code to the pinned unscored outcome kind."""
+    if failure_code == SemanticFailureClass.PROVIDER_REJECTION.value:
+        return AttributedOutcome.SEMANTIC_REJECTION
+    if failure_code == SemanticFailureClass.BLANK_PROVIDER_GENERATION.value:
+        return AttributedOutcome.EMPTY_OUTPUT
+    return AttributedOutcome.INFRASTRUCTURE
+
+
 def attribute_generated_row(
     *,
     row_state: ExecutedRowState,
     score: float | None,
+    failure_code: str | None = None,
 ) -> RowValue:
     """Attribute one generated primary row (direct and encdec flows).
 
-    A planned row that never produced evidence is missing; an executed row
-    without a score failed on infrastructure; otherwise the row is scored
-    with its measured value (numeric zero included).
+    A planned row that never produced evidence is missing. An executed row
+    without a score attributes through the pinned table using the row's
+    provider failure class when present; otherwise it failed on
+    infrastructure. A measured value — numeric zero included — is scored.
     """
     from whetstone.evaluation.aggregate import RowValue
 
     if row_state is ExecutedRowState.MISSING:
         return _unscored_row_value(AttributedOutcome.ZERO_EVIDENCE)
     if row_state is ExecutedRowState.FAILED or score is None:
-        return _unscored_row_value(AttributedOutcome.INFRASTRUCTURE)
+        return _unscored_row_value(
+            _outcome_for_generated_failure(failure_code)
+        )
     return RowValue(value=float(score))
 
 
