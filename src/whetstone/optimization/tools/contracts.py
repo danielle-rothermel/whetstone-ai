@@ -73,7 +73,6 @@ STEP_CAPACITY_SUBJECT_SCHEMA = "whetstone.optimization_step_request"
 
 
 def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
-    """Accept only the deliberate Python representations of a JSON array."""
     if type(value) not in (list, tuple):
         raise ValueError(
             f"{info.field_name} must be an ordered tuple or JSON array"
@@ -83,8 +82,6 @@ def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
 
 @verify(UNIQUE)
 class RefusalClass(StrEnum):
-    """Closed pre-execution refusal taxonomy."""
-
     AUTHORIZATION = "authorization"
     CAPACITY = "capacity"
     BUDGET = "budget"
@@ -93,16 +90,12 @@ class RefusalClass(StrEnum):
 
 @verify(UNIQUE)
 class ToolCapacityScope(StrEnum):
-    """Identity domain within which accepted-call capacity is counted."""
-
     GLOBAL = "global"
     RUN = "run"
     STEP = "step"
 
 
 class ToolCapacityBinding(BaseModel):
-    """Exact authority subject whose accepted calls share one capacity."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     scope: ToolCapacityScope
@@ -149,8 +142,6 @@ def tool_capacity_binding(
 
 
 class ToolDefinition(BaseModel):
-    """Versioned interface definition for one Tool."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tool_name: NonEmptyId
@@ -190,7 +181,7 @@ class ToolDefinition(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are a pinned wire contract.
+
         return {
             "tool_name": self.tool_name,
             "version": self.version,
@@ -214,8 +205,6 @@ class ToolDefinition(BaseModel):
 
 
 class ToolDefinitionRef(BaseModel):
-    """An exact Tool Definition record plus both addressing dimensions."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: ToolDefinition
@@ -251,8 +240,6 @@ def tool_definition_reference(
 
 
 class ToolCapacity(BaseModel):
-    """Accepted-call ceiling and its explicit identity scope."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     max_accepted_calls: NonNegativeInt
@@ -260,8 +247,6 @@ class ToolCapacity(BaseModel):
 
 
 class ToolConfig(BaseModel):
-    """Complete serializable config materialized from one exact Definition."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     definition: ToolDefinitionRef
@@ -273,6 +258,7 @@ class ToolConfig(BaseModel):
     operational_policy_refs: tuple[TypedRef, ...] = ()
     store_namespace_key: OpaqueKey
     idempotent_replay: StrictBool = True
+    candidate_template_field: NonEmptyId
 
     @field_validator("operational_policy_refs", mode="before")
     @classmethod
@@ -307,7 +293,7 @@ class ToolConfig(BaseModel):
         return IdentityHash(self.eval_config.config_hash)
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are a pinned wire contract.
+
         return {
             "definition": {
                 "record": self.definition.record.identity_payload(),
@@ -364,6 +350,7 @@ class ToolConfig(BaseModel):
             ],
             "store_namespace_key": self.store_namespace_key,
             "idempotent_replay": self.idempotent_replay,
+            "candidate_template_field": self.candidate_template_field,
         }
 
     def identity_hash(self) -> IdentityHash:
@@ -378,8 +365,6 @@ class ToolConfig(BaseModel):
 
 
 class ToolConfigRef(BaseModel):
-    """An exact Tool Config record plus both addressing dimensions."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: ToolConfig
@@ -413,8 +398,6 @@ def tool_config_reference(config: ToolConfig) -> ToolConfigRef:
 
 
 class RuntimeToolHandle:
-    """Non-serializable callable constructed only at execution."""
-
     __slots__ = ("_binding", "_config", "_execute")
 
     def __init__(
@@ -460,8 +443,6 @@ class RuntimeToolHandle:
 
 
 class ToolCall(BaseModel):
-    """One exact config-bound Tool Call and its immutable arguments."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     call_id: NonEmptyId
@@ -510,8 +491,6 @@ class ToolCall(BaseModel):
 
 
 class ToolCallRef(BaseModel):
-    """An exact persisted Tool Call record."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: ToolCall
@@ -539,8 +518,6 @@ def tool_call_reference(call: ToolCall) -> ToolCallRef:
 
 
 class ToolRefusal(BaseModel):
-    """Typed pre-execution outcome; it never consumes capacity."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     refusal_class: RefusalClass
@@ -548,8 +525,6 @@ class ToolRefusal(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """Exactly success, pre-execution refusal, or terminal failure."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     call: ToolCallRef
@@ -659,8 +634,6 @@ class ToolResult(BaseModel):
 
 
 class ToolResultRef(BaseModel):
-    """An exact persisted terminal Tool Result."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: ToolResult

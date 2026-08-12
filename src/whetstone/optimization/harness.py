@@ -139,9 +139,9 @@ class EvaluationService(Protocol):
         self, intent: EvaluationIntent
     ) -> IntentResolution: ...
 
-    def validate_resolution_graph(self, resolution: IntentResolution) -> None:
-        """Validate service-owned references without executing evaluation."""
-        ...
+    def validate_resolution_graph(
+        self, resolution: IntentResolution
+    ) -> None: ...
 
 
 class ToolExecutor(Protocol):
@@ -154,8 +154,6 @@ class ToolExecutor(Protocol):
 
 
 class OptimizationHarness(OptimizationRunStore):
-    """Durable coordinator with all algorithm behavior behind a registry."""
-
     def __init__(
         self,
         *,
@@ -203,13 +201,6 @@ class OptimizationHarness(OptimizationRunStore):
     def run_step(
         self, request: OptimizationStepRequest
     ) -> tuple[OptimizationStepResult, TypedRef]:
-        """Validate and execute one exact step.
-
-        Sampleing an identical ``(run_id, step_index)`` request replays its
-        bound result; a different request for that position raises
-        :class:`StepResultConflictError`. Effectful work follows the configured
-        replay policy.
-        """
         validated_request = OptimizationStepRequest.model_validate(
             request.model_dump(mode="json")
         )
@@ -465,7 +456,7 @@ class OptimizationHarness(OptimizationRunStore):
                     )
                 }
             )
-        else:  # pragma: no cover - closed enum
+        else:
             raise ValueError(f"unsupported effectful mode {request.mode!r}")
         output = AdapterOutput.model_validate(output.model_dump(mode="json"))
         self._validate_output(request, output)
@@ -553,8 +544,7 @@ class OptimizationHarness(OptimizationRunStore):
         request_ref: TypedRef,
         replay_policy: ReplayPolicy,
     ) -> EffectRequest:
-        # Persisted-format contract: key schema, version, prefix, and payload
-        # literals are pinned by golden tests.
+
         payload = {
             "step_request_ref": request_ref.model_dump(mode="json"),
             "adapter_key": str(request.adapter_key),
@@ -709,7 +699,7 @@ class OptimizationHarness(OptimizationRunStore):
                         "candidate as its base"
                     )
                 try:
-                    diff_check(base=base, proposed=candidate)
+                    diff_check(base=base, proposed=candidate, run=request.run)
                 except ValueError as error:
                     raise ValueError(
                         f"every {label} candidate must satisfy the canonical "
@@ -899,8 +889,7 @@ class OptimizationHarness(OptimizationRunStore):
     ) -> EffectRequest:
         if self._evaluation_replay_policy is None:
             raise RuntimeError("EvaluationService is not configured")
-        # Persisted-format contract: key schema, version, prefix, and payload
-        # literals are pinned by golden tests.
+
         key_payload = {
             "step_request_ref": step_request_reference(
                 request
@@ -974,7 +963,6 @@ class OptimizationHarness(OptimizationRunStore):
         step_results: tuple[OptimizationStepResultRef, ...],
         cost: dict[str, object] | None = None,
     ) -> tuple[OptimizationResult, TypedRef]:
-        """Persist and bind the one terminal Optimization Result."""
         if self._bound_run is None:
             raise ValueError("bind_run must be called before terminalize")
         exact_run = OptimizationRunRef.model_validate(

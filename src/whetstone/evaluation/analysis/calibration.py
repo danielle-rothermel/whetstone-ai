@@ -14,13 +14,14 @@ from whetstone.evaluation.analysis.statistics import (
     BootstrapCI,
     bootstrap_paired_delta_ci,
 )
-from whetstone.evaluation.engine import (
+from whetstone.evaluation.protocol import (
     EngineEvaluation,
     EvaluationEngine,
     EvaluationRequest,
 )
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.sampling import INTERNAL_EVAL
 
 __all__ = [
     "AnchorCalibrationResult",
@@ -30,8 +31,6 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class AnchorCalibrationResult:
-    """Persisted anchor evaluations and their paired planning result."""
-
     evaluation_binding: EvaluationBinding
     baseline: EngineEvaluation
     ceiling: EngineEvaluation
@@ -103,14 +102,6 @@ def run_anchor_calibration(
     ceiling_log_label: str = "comparison anchor",
     log: Callable[[str], None] | None = None,
 ) -> AnchorCalibrationResult:
-    """Evaluate both anchors on one exact task/sample binding.
-
-    Callers must supply per-task values suitable for :func:`analyze_power`
-    (typically bounded observations in ``[0, 1]``). The returned paired
-    bootstrap is empirical over the aligned per-task vectors from both
-    anchor configs.
-    """
-    experiment = engine.experiment
     if evaluation_binding.role is not EvaluationRole.INTERNAL:
         raise ValueError("anchor calibration requires an internal binding")
     if evaluation_binding.eval_config != engine.eval_config_ref:
@@ -125,10 +116,7 @@ def run_anchor_calibration(
             "calibration binding must name the engine's exact Provider "
             "Execution Policy"
         )
-    if (
-        engine.sampling.split_role
-        != experiment.eval_configs.internal.split_role
-    ):
+    if engine.sampling.split_role != INTERNAL_EVAL:
         raise ValueError(
             "anchor calibration requires the internal sampling split"
         )
@@ -141,9 +129,9 @@ def run_anchor_calibration(
     if bootstrap_resamples < 1:
         raise ValueError("bootstrap_resamples must be at least 1")
 
-    from whetstone.evaluation.preview.anchor import _calibration_task_hashes
+    from whetstone.evaluation.preview.anchor import calibration_task_hashes
 
-    calibration_task_ids = _calibration_task_hashes(engine, task_ids)
+    calibration_task_ids = calibration_task_hashes(engine, task_ids)
     subset_engine = engine.for_task_ids(calibration_task_ids)
     subset_binding = _subset_binding(evaluation_binding, subset_engine)
     baseline_request = EvaluationRequest(
@@ -157,12 +145,11 @@ def run_anchor_calibration(
         purpose=ceiling_purpose,
     )
 
-    # Validate both anchors before the first paid evaluation starts.
     subset_engine.validate_request(baseline_request)
     subset_engine.validate_request(ceiling_request)
 
     planned_rows = (
-        len(task_ids) * subset_engine.sampling.sample_plan.num_samples
+        len(task_ids) * subset_engine.sampling.num_samples
     )
     if log is not None:
         log(f"Starting {baseline_log_label} evaluation ({planned_rows} rows)")
@@ -185,8 +172,8 @@ def run_anchor_calibration(
             f"missing={accounting.missing}, failed={accounting.failed}, "
             f"invalid={accounting.invalid})"
         )
-    samples = subset_engine.sampling.sample_plan.num_samples
-    reward_policy_hash = subset_engine.reward_policy_identity_hash
+    samples = subset_engine.sampling.num_samples
+    reward_policy_hash = subset_engine.reward_policy_identity_hash()
     for evaluated in (baseline, ceiling):
         _validate_anchor_evidence(
             evaluated=evaluated,

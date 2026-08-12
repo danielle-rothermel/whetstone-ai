@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from types import MappingProxyType
-from typing import Any, ClassVar, Self
+from typing import Any, ClassVar, Self, TypeVar
 
 from dr_serialize import (
     StrictJsonError,
@@ -28,12 +28,15 @@ __all__ = [
     "OpaqueKey",
     "TerminalFailure",
     "TypedRef",
+    "assert_materialized_ref_matches",
     "canonical_json_equal",
     "compute_identity_hash",
     "compute_prefixed_identity_key",
     "freeze_json_object",
+    "identity_ref_from_config_variable",
     "reject_non_json",
     "require_full_hash",
+    "store_config_resolver",
     "typed_ref_for_record",
 ]
 
@@ -41,7 +44,6 @@ _HEX = frozenset("0123456789abcdef")
 
 
 def require_full_hash(value: object, *, field: str) -> str:
-    """Require a full lowercase SHA-256 hex digest."""
     if not isinstance(value, str):
         raise TypeError(f"{field} must be a string")
     if len(value) != 64 or any(char not in _HEX for char in value):
@@ -53,8 +55,6 @@ def require_full_hash(value: object, *, field: str) -> str:
 
 
 class _ValidatedString(str):
-    """Nominal strict-string boundary with Pydantic integration."""
-
     _field_name: ClassVar[str]
 
     def __new__(cls, value: str) -> Self:
@@ -79,8 +79,6 @@ class _ValidatedString(str):
 
 
 class IdentityHash(_ValidatedString):
-    """Nominal full SHA-256 Identity Hash."""
-
     _field_name = "identity hash"
 
     @classmethod
@@ -89,8 +87,6 @@ class IdentityHash(_ValidatedString):
 
 
 class ContentHash(_ValidatedString):
-    """Nominal full SHA-256 Content Hash."""
-
     _field_name = "content hash"
 
     @classmethod
@@ -99,8 +95,6 @@ class ContentHash(_ValidatedString):
 
 
 class NonEmptyId(_ValidatedString):
-    """Nominal exact identifier that cannot be empty."""
-
     _field_name = "ID"
 
     @classmethod
@@ -110,8 +104,6 @@ class NonEmptyId(_ValidatedString):
 
 
 class OpaqueKey(_ValidatedString):
-    """Nominal non-empty key used only for runtime lookup."""
-
     _field_name = "opaque key"
 
     @classmethod
@@ -121,8 +113,6 @@ class OpaqueKey(_ValidatedString):
 
 
 class NonNegativeInt(int):
-    """Nominal strict integer greater than or equal to zero."""
-
     def __new__(cls, value: int) -> Self:
         if type(value) is not int:
             raise TypeError("nonnegative integer must be a strict integer")
@@ -141,8 +131,6 @@ class NonNegativeInt(int):
 
 
 class FiniteFloat(float):
-    """Nominal finite numeric value serialized as a JSON float."""
-
     def __new__(cls, value: int | float) -> Self:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise TypeError("finite float must be a number, not a boolean")
@@ -188,13 +176,6 @@ def _json_value(value: ImmutableJsonValue) -> Any:
 
 
 class ImmutableJsonObject(Mapping[str, ImmutableJsonValue]):
-    """A defensive, deeply immutable strict-JSON object.
-
-    Nested JSON objects become this mapping and nested arrays become tuples.
-    Serialization always returns fresh ordinary dictionaries and lists, so
-    mutating caller input or a dumped value cannot affect the model.
-    """
-
     __slots__ = ("_items", "_lookup")
 
     _items: tuple[tuple[str, ImmutableJsonValue], ...]
@@ -246,11 +227,6 @@ class ImmutableJsonObject(Mapping[str, ImmutableJsonValue]):
     def __reduce__(
         self,
     ) -> tuple[type[ImmutableJsonObject], tuple[dict[str, Any]]]:
-        """Pickle through the validating constructor.
-
-        Slot state holds a ``MappingProxyType`` that pickle cannot copy, and
-        ``__setattr__`` refuses restoration, so rebuild from ordinary JSON.
-        """
         return (type(self), (self.to_json(),))
 
     def __eq__(self, other: object) -> bool:
@@ -284,7 +260,6 @@ class ImmutableJsonObject(Mapping[str, ImmutableJsonValue]):
         )
 
     def to_json(self) -> dict[str, Any]:
-        """Return a fresh ordinary strict-JSON object."""
         return _json_value(self)
 
 
@@ -293,7 +268,6 @@ def freeze_json_object(
     *,
     field: str,
 ) -> ImmutableJsonObject:
-    """Validate and defensively freeze one strict-JSON object."""
     if isinstance(value, ImmutableJsonObject):
         return value
     try:
@@ -303,11 +277,6 @@ def freeze_json_object(
 
 
 def reject_non_json(value: Any, *, field: str) -> None:
-    """Reject any value that is not strict, finite JSON.
-
-    Wraps the canonical strict-JSON encoder so callers validating a whole
-    payload raise the same way as the frozen JSON containers do.
-    """
 
     def unwrapped(item: Any) -> Any:
         if isinstance(item, ImmutableJsonObject):
@@ -325,7 +294,6 @@ def reject_non_json(value: Any, *, field: str) -> None:
 
 
 def canonical_json_equal(left: Any, right: Any) -> bool:
-    """Compare values by strict canonical JSON, preserving JSON types."""
 
     def normalized(value: Any) -> Any:
         if isinstance(value, ImmutableJsonObject):
@@ -342,7 +310,6 @@ def canonical_json_equal(left: Any, right: Any) -> bool:
 def compute_identity_hash(
     *, schema: str, schema_version: int, payload: Any
 ) -> IdentityHash:
-    """Compute a versioned canonical Identity Hash."""
     document = build_identity_document(
         schema=schema, schema_version=schema_version, payload=payload
     )
@@ -352,16 +319,6 @@ def compute_identity_hash(
 def compute_prefixed_identity_key(
     *, schema: str, schema_version: int, prefix: str, payload: Any
 ) -> OpaqueKey:
-    """Derive one prefixed semantic key from a versioned identity payload.
-
-    This is the canonical payload -> Identity Hash -> prefixed-key
-    derivation: the key is exactly ``prefix`` followed by the full
-    :func:`compute_identity_hash` digest of the payload under the given
-    schema and version. Every prefixed binding or effect key derives
-    through this one helper; callers own their schema, version, prefix,
-    and payload-key literals, which are persisted format pinned by golden
-    tests.
-    """
     digest = compute_identity_hash(
         schema=schema, schema_version=schema_version, payload=payload
     )
@@ -369,8 +326,6 @@ def compute_prefixed_identity_key(
 
 
 class TypedRef(BaseModel):
-    """An exact typed persisted-record reference."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_name: NonEmptyId
@@ -384,8 +339,6 @@ class TypedRef(BaseModel):
 
 
 class IdentityRef(BaseModel):
-    """Both addressing dimensions for one identity-bearing stored record."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record_ref: TypedRef
@@ -393,8 +346,6 @@ class IdentityRef(BaseModel):
 
 
 class TerminalFailure(BaseModel):
-    """Shared terminal failure record for every generic failed outcome."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     code: NonEmptyId
@@ -405,8 +356,74 @@ class TerminalFailure(BaseModel):
 
 
 def typed_ref_for_record(schema: str, record: Any) -> TypedRef:
-    """Build the exact typed Content-Hash reference for a record."""
     reference = ObjectReference.for_record(schema, record)
     return TypedRef(
         schema_name=reference.schema, content_hash=reference.content_hash
     )
+
+
+def assert_materialized_ref_matches(
+    *,
+    record: BaseModel | Mapping[str, Any],
+    ref: IdentityRef,
+    schema: str,
+) -> None:
+    if isinstance(record, BaseModel):
+        content = record.model_dump(mode="json")
+        identity_hash = getattr(record, "identity_hash", None)
+    else:
+        content = dict(record)
+        identity_hash = content.get("identity_hash")
+    materialized_ref = typed_ref_for_record(schema, content)
+    if materialized_ref != ref.record_ref:
+        raise ValueError(
+            f"resolved {schema!r} record reference does not match IdentityRef"
+        )
+    valid_hashes = {str(materialized_ref.content_hash)}
+    if identity_hash is not None:
+        valid_hashes.add(str(identity_hash))
+    if str(ref.record_hash) not in valid_hashes:
+        raise ValueError(
+            f"resolved {schema!r} record hash does not match IdentityRef"
+        )
+
+
+def identity_ref_from_config_variable(variable: Mapping[str, Any]) -> IdentityRef:
+    schema_name = variable.get("schema_name")
+    identity_hash = variable.get("identity_hash")
+    if not isinstance(schema_name, str) or not schema_name.strip():
+        raise ValueError("config reference schema_name must be non-empty")
+    resolved_hash = require_full_hash(
+        identity_hash, field="config reference identity_hash"
+    )
+    return IdentityRef(
+        record_ref=TypedRef(
+            schema_name=schema_name,
+            content_hash=ContentHash(resolved_hash),
+        ),
+        record_hash=IdentityHash(resolved_hash),
+    )
+
+
+_T = TypeVar("_T", bound=BaseModel)
+
+
+def store_config_resolver(
+    store: Any,
+    schema: str,
+    model: type[_T],
+) -> Callable[[IdentityRef], _T]:
+    def resolve(ref: IdentityRef) -> _T:
+        if ref.record_ref.schema_name != schema:
+            raise ValueError(
+                f"expected config schema {schema!r}, "
+                f"got {ref.record_ref.schema_name!r}"
+            )
+        content = store.get(ref.record_ref.reference)
+        if not isinstance(content, dict):
+            raise ValueError("stored config content must be a JSON object")
+        instance = model.model_validate(content)
+        assert_materialized_ref_matches(record=instance, ref=ref, schema=schema)
+        return instance
+
+    return resolve

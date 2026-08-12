@@ -47,7 +47,6 @@ __all__ = [
 def require_provider_generation_text(
     text: str | None, *, output_field: str
 ) -> str:
-    """Require a nonblank generation before it becomes a result field."""
     if text is None or not text.strip():
         raise EmptyProviderGenerationError(
             f"empty generation for output field {output_field!r}",
@@ -57,8 +56,6 @@ def require_provider_generation_text(
 
 
 class ProviderResult(BaseModel):
-    """Structured provider outcome surfaced to callers."""
-
     model_config = ConfigDict(extra="forbid")
 
     text: StrictStr
@@ -71,8 +68,6 @@ class ProviderResult(BaseModel):
 
 
 class PlainPromptAdapter(BaseModel):
-    """Minimal prompt adapter with no hidden framework formatting."""
-
     model_config = ConfigDict(extra="forbid")
 
     output_field: StrictStr = OUTPUT_FIELD_TEXT
@@ -101,8 +96,6 @@ class PlainPromptAdapter(BaseModel):
 
 
 class _TransientStructuredPromptMessage(PromptMessage):
-    """Ephemeral kernel bridge; durable state uses strict JSON envelopes."""
-
     content: StrictStr | tuple[dict[str, Any], ...]
 
     def provider_dict(self) -> dict[str, Any]:
@@ -113,8 +106,6 @@ class _TransientStructuredPromptMessage(PromptMessage):
 
 
 class StructuredPromptAdapter(PlainPromptAdapter):
-    """Identity-bound text or ordered structured-content adapter."""
-
     content_mode: Literal["text_and_structured_parts/v1"] = (
         "text_and_structured_parts/v1"
     )
@@ -152,13 +143,6 @@ class StructuredPromptAdapter(PlainPromptAdapter):
 
 
 def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
-    """Coerce a ``reasoning`` parameter into a typed effort level.
-
-    Accepts a ``ReasoningEffort`` or a bare effort string. Absent or
-    empty values mean "no reasoning override" (``None``); an
-    unrecognized effort fails loudly, consistent with the kernel's
-    no-silent-defaults stance.
-    """
     if value is None or value == "":
         return None
     if isinstance(value, ReasoningEffort):
@@ -176,15 +160,6 @@ def provider_call_config_with_parameters(
     config: ProviderCallConfig,
     parameters: Mapping[str, Any],
 ) -> ProviderCallConfig:
-    """Fold caller generation parameters into the Config's controls.
-
-    Under the released dr-providers contract, output-affecting controls
-    (temperature/token-limit/reasoning) and body extensions are part of the
-    Provider Call Config identity, not loose request fields. This projects a
-    caller's merged parameters onto a base Config, re-materializing it
-    through its owning Definition so the assignment stays validated. Only set
-    parameters override the base control; absent ones leave it unchanged.
-    """
     controls = config.controls
     updates: dict[str, Any] = {}
     if TEMPERATURE_PARAMETER in parameters:
@@ -199,8 +174,7 @@ def provider_call_config_with_parameters(
     extra_body = dict(parameters.get(EXTRA_BODY_PARAMETER) or {})
     if extra_body:
         extensions = ProviderBodyExtensions(extra_body=extra_body)
-        # Extension body keys are Definition-declared Variables; declare any
-        # caller-supplied keys so the re-materialized Config stays validated.
+
         definition = config.definition.model_copy(
             update={
                 "extension_keys": (
@@ -223,12 +197,6 @@ def provider_call_request_from_parameters(
     messages: tuple[PromptMessage, ...],
     parameters: Mapping[str, Any],
 ) -> ProviderCallRequest:
-    """Build the native Provider Call Request from caller parameters.
-
-    The request references exactly one Provider Call Config (with the
-    caller's generation parameters folded into its controls) plus one
-    Transcript. It carries no copied controls and no transport policy.
-    """
     return ProviderCallRequest(
         config=provider_call_config_with_parameters(config, parameters),
         transcript=Transcript(messages=messages),
@@ -240,13 +208,6 @@ def provider_result_from_response(
     *,
     output_field: str = OUTPUT_FIELD_TEXT,
 ) -> ProviderResult:
-    """Project a native Provider Transport Response onto the whetstone
-    ``ProviderResult`` surface.
-
-    The transport response's decoded ``response_body`` becomes the base
-    of ``response_metadata``; conformance warnings and Responses diagnostics
-    ride alongside it. Usage and cost are read from the native typed fields.
-    """
     metadata: dict[str, Any] = dict(response.response_body)
     if response.diagnostics is not None:
         metadata["diagnostics"] = response.diagnostics.model_dump(mode="json")
@@ -270,21 +231,15 @@ def provider_result_from_response(
         ),
         response_id=response.response_id,
         model=response.model,
-        finish_reason=response.finish_reason,
+        finish_reason=response.stop_reason,
     )
 
 
 def translate_provider_failure(
     error: ProviderFailureError,
 ) -> EvalFailureError:
-    """Wrap a kernel failure carrier in whetstone's eval-failure family.
-
-    The failure class carries over 1:1; the kernel failure record rides
-    in the exception metadata so persisted failure rows keep the full
-    provider diagnostics.
-    """
     exception_type = failure_exception_type_for_class(
-        error.failure.failure_class
+        error.failure.recoverability
     )
     return exception_type(
         error.failure.message,

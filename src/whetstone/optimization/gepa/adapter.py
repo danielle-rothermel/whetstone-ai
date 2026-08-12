@@ -18,12 +18,7 @@ GEPA_ADAPTER_KEY = "gepa"
 
 
 class GepaAdapterFactory(Protocol):
-    """Construct a fresh, identity-bound adapter for one engine replay."""
-
-    def create(self, *, control: GepaControl) -> GepaEngineAdapter:
-        """Return an ordinal-zero adapter bound to control and source."""
-
-        ...
+    def create(self, *, control: GepaControl) -> GepaEngineAdapter: ...
 
     def persist_result(
         self,
@@ -31,15 +26,10 @@ class GepaAdapterFactory(Protocol):
         control: GepaControl,
         adapter: GepaEngineAdapter,
         detailed_result: GepaDetailedResult,
-    ) -> TypedRef:
-        """Idempotently persist detail plus its effect transcript."""
-
-        ...
+    ) -> TypedRef: ...
 
 
 class GepaPersistedRun(BaseModel):
-    """Full engine result paired with its durable canonical artifact."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     detailed_result: GepaDetailedResult
@@ -47,8 +37,6 @@ class GepaPersistedRun(BaseModel):
 
 
 class GepaTerminalResult(BaseModel):
-    """DSPy-compatible terminal exposure after durable detail persistence."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     best_candidate: dict[StrictStr, StrictStr]
@@ -79,7 +67,6 @@ def project_gepa_terminal(
     detailed_result: GepaDetailedResult,
     artifact_ref: TypedRef,
 ) -> GepaTerminalResult:
-    """Expose stats only when the frozen DSPy control requests them."""
 
     if detailed_result.control_identity_hash != control.identity_hash():
         raise ValueError("GEPA detailed result conflicts with GepaControl")
@@ -95,8 +82,6 @@ def project_gepa_terminal(
 
 @dataclass(frozen=True, slots=True)
 class GepaOptimizer:
-    """Bind canonical controls to a durable upstream-adapter factory."""
-
     control: GepaControl
     adapter_factory: GepaAdapterFactory
 
@@ -107,7 +92,6 @@ class GepaOptimizer:
         trainset: Sequence[DataInst],
         valset: Sequence[DataInst] | None = None,
     ) -> GepaPersistedRun:
-        """Return full detail for persistence before terminal projection."""
 
         adapter = self.adapter_factory.create(control=self.control)
         detailed_result = run_gepa_engine(
@@ -134,7 +118,6 @@ class GepaOptimizer:
         trainset: Sequence[DataInst],
         valset: Sequence[DataInst] | None = None,
     ) -> GepaTerminalResult:
-        """Run and apply DSPy's ``track_stats`` exposure rule."""
 
         persisted = self.run_detailed(
             seed_candidate=seed_candidate,

@@ -78,78 +78,27 @@ class CacheEvidence(BaseModel):
     source_call_ids: tuple[str, ...] = ()
 
 
-class CodeScoreRecord(BaseModel):
-    """Persisted reward-facing scalar for one code submission."""
+class SubmissionScoreRecord(BaseModel):
+    """Persisted reward-facing scalar for one submission."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     passed: StrictBool
-    infrastructure_unknown: StrictBool
-    outcome: StrictStr
-    fidelity_to_mutant: StrictFloat | None = None
-    attractor_pull: StrictFloat | None = None
+    infrastructure_unknown: StrictBool = False
+    outcome: StrictStr = ""
 
 
-class CodeCaseResultRecord(BaseModel):
-    """Persisted HumanEval per-case outcome."""
+class SubmissionResultRecord(BaseModel):
+    """Opaque persisted submission result with caller-defined detail payload."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    case_id: StrictStr
-    status: StrictStr
-    message: StrictStr
-    input_repr: StrictStr
-    expected_output_repr: StrictStr
-    actual_output_repr: StrictStr
-
-
-class MutantInputResultRecord(BaseModel):
-    """Persisted mutant-oracle per-input outcome."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    input_index: StrictInt
-    input_repr: StrictStr
-    expected_mutant_repr: StrictStr
-    expected_canonical_repr: StrictStr
-    actual_kind: StrictStr
-    actual_output_repr: StrictStr
-    matched_mutant: StrictBool
-    matched_canonical: StrictBool
-    is_distinct: StrictBool
-
-
-class HumanEvalSubmissionResultRecord(BaseModel):
-    """Persisted HumanEval submission result with per-case detail."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["humaneval"] = "humaneval"
-    score: CodeScoreRecord
-    outcome: StrictStr
-    function_names: tuple[StrictStr, ...]
-    best_function_name: StrictStr | None
-    total_cases: StrictInt
-    cases: tuple[CodeCaseResultRecord, ...] = ()
-
-
-class MutantSubmissionResultRecord(BaseModel):
-    """Persisted mutant-oracle submission result with per-input detail."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    kind: Literal["mutant"] = "mutant"
-    score: CodeScoreRecord
-    outcome: StrictStr
-    function_names: tuple[StrictStr, ...]
-    best_function_name: StrictStr | None
-    total_cases: StrictInt
-    input_results: tuple[MutantInputResultRecord, ...] = ()
-
-
-CodeSubmissionResultRecord = (
-    HumanEvalSubmissionResultRecord | MutantSubmissionResultRecord
-)
+    kind: StrictStr
+    score: SubmissionScoreRecord
+    outcome: StrictStr = ""
+    details: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
 
 
 class EvaluationOutputRow(BaseModel):
@@ -177,7 +126,7 @@ class EvaluationOutputRow(BaseModel):
     provider_error: ImmutableJsonObject | None
     max_budget: StrictInt | None
     over_budget: StrictBool | None
-    code_submission_result: CodeSubmissionResultRecord | None = None
+    submission_result: SubmissionResultRecord | None = None
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationOutputRow:
@@ -555,9 +504,6 @@ __all__ = [
     "EVALUATION_OUTPUTS_SCHEMA",
     "EVALUATION_OUTPUTS_SCHEMA_VERSION",
     "CacheEvidence",
-    "CodeCaseResultRecord",
-    "CodeScoreRecord",
-    "CodeSubmissionResultRecord",
     "EvaluationComponentTraceRow",
     "EvaluationComponentTraces",
     "EvaluationComponentTracesRef",
@@ -567,8 +513,7 @@ __all__ = [
     "EvaluationFailureEvidenceRef",
     "EvaluationOutputRow",
     "EvaluationOutputsRecord",
-    "HumanEvalSubmissionResultRecord",
-    "MutantInputResultRecord",
-    "MutantSubmissionResultRecord",
     "RowAccounting",
+    "SubmissionResultRecord",
+    "SubmissionScoreRecord",
 ]

@@ -96,7 +96,6 @@ OPTIMIZATION_RESULT_SCHEMA = "whetstone.optimization_result"
 
 
 def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
-    """Accept only the two deliberate Python representations of JSON arrays."""
     if type(value) not in (list, tuple):
         raise ValueError(
             f"{info.field_name} must be an ordered tuple or JSON array"
@@ -174,8 +173,6 @@ def _budget_dict(values: ImmutableJsonObject) -> dict[str, int]:
 
 
 class BudgetDelta(BaseModel):
-    """The adapter-reported nonnegative consumption for one invocation."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     consumed: ImmutableJsonObject = Field(
@@ -200,8 +197,7 @@ class BudgetState(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> BudgetState:
-        # Validate the two maps independently: overlapping labels must never
-        # let a valid remaining value mask an invalid consumed value.
+
         _validate_budget_values(self.consumed, field="consumed")
         _validate_budget_values(self.remaining, field="remaining")
         return self
@@ -228,8 +224,6 @@ class BudgetState(BaseModel):
 
 
 class EvaluationIntent(BaseModel):
-    """Measurement request with exact candidate, config, and policy binding."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     intent_id: NonEmptyId
@@ -262,8 +256,6 @@ class EvaluationIntent(BaseModel):
 
 
 class OptimizationRun(BaseModel):
-    """An immutable run envelope independent of harness binding."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: NonEmptyId
@@ -272,6 +264,7 @@ class OptimizationRun(BaseModel):
     mode: StepMode
     terminal_output_contract: OutputContract
     template_render_contract: _candidate.TemplateRenderContract
+    mutation_field: NonEmptyId = "user_prompt_template"
     reward_policy: _reward.RewardPolicy | None = None
     tool_configs: tuple[ToolConfigRef, ...] = ()
 
@@ -301,8 +294,7 @@ class OptimizationRun(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # These persisted identity keys are an explicit wire contract. Never
-        # derive them by iterating over model fields.
+
         return {
             "run_id": self.run_id,
             "optimizer_config": self.optimizer_config.model_dump(mode="json"),
@@ -314,6 +306,7 @@ class OptimizationRun(BaseModel):
             "template_render_contract": (
                 self.template_render_contract.model_dump(mode="json")
             ),
+            "mutation_field": str(self.mutation_field),
             "reward_policy": (
                 None
                 if self.reward_policy is None
@@ -336,8 +329,6 @@ class OptimizationRun(BaseModel):
 
 
 class OptimizationRunRef(BaseModel):
-    """Exact Optimization Run record and identity."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: OptimizationRun
@@ -371,8 +362,6 @@ def optimization_run_reference(run: OptimizationRun) -> OptimizationRunRef:
 
 
 class OptimizationStepRequest(BaseModel):
-    """One step bound to the exact immutable Optimization Run."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run: OptimizationRunRef
@@ -456,8 +445,6 @@ class OptimizationStepRequest(BaseModel):
 
 
 class OptimizationStepRequestRef(BaseModel):
-    """Exact Optimization Step Request record and content reference."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: OptimizationStepRequest
@@ -483,8 +470,6 @@ class ResolutionDetail(BaseModel):
 
 
 class IntentResolution(BaseModel):
-    """Typed terminal outcome for one exact Evaluation Intent."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[2]
@@ -605,12 +590,6 @@ class IntentResolution(BaseModel):
 
 
 class ToolEvidence(BaseModel):
-    """Exact Tool Result composed with one terminal store projection.
-
-    This model proves internal composition only. ToolCallStore owns I/O
-    verification that the EffectTerminal came from its effect authority.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     result: ToolResultRef
@@ -790,7 +769,11 @@ class OptimizationStepResult(BaseModel):
                         "exact request base"
                     )
                 try:
-                    diff_check(base=base, proposed=proposed.record)
+                    diff_check(
+                        base=base,
+                        proposed=proposed.record,
+                        run=request.run,
+                    )
                 except DiffCheckError as error:
                     raise ValueError(
                         "every effectful proposed candidate must satisfy the "
@@ -968,8 +951,6 @@ class OptimizationStepResult(BaseModel):
 
 
 class OptimizationStepResultRef(BaseModel):
-    """Exact Optimization Step Result record and content reference."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: OptimizationStepResult
@@ -988,8 +969,6 @@ class OptimizationStepResultRef(BaseModel):
 
 
 class OptimizationProposal(BaseModel):
-    """An ordered terminal proposal composed from a persisted candidate."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: _candidate.CandidateRef

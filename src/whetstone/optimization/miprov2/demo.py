@@ -35,7 +35,6 @@ def _component_fields(
     *,
     field: str,
 ) -> dict[str, Any]:
-    """Return one component's field mapping as a fresh strict-JSON object."""
 
     try:
         fields = by_component[component_id]
@@ -52,11 +51,6 @@ def _require_disjoint_fields(
     inputs: Mapping[str, Any],
     outputs: Mapping[str, Any],
 ) -> None:
-    """Require input and output field names to name distinct prompt fields.
-
-    Demonstration rendering merges inputs and outputs into one flat field
-    mapping, so an overlapping name silently discards the input value.
-    """
 
     duplicate_fields = set(inputs) & set(outputs)
     if duplicate_fields:
@@ -67,21 +61,11 @@ def _require_disjoint_fields(
 
 
 class DemoSourceKind(StrEnum):
-    """How a demonstration entered a component's prompt."""
-
     BOOTSTRAPPED = "bootstrapped"
     LABELED = "labeled"
 
 
 class BootstrapAcceptance(BaseModel):
-    """The exact metric decision attached to one bootstrap generation.
-
-    ``metric_threshold`` deliberately uses DSPy's truthiness rule.  In
-    particular, ``0.0`` takes the truthiness branch rather than the numeric
-    comparison branch, while positive *and negative* non-zero thresholds take
-    the comparison branch.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_task_hash: StrictStr
@@ -143,7 +127,6 @@ def bootstrap_accepts(
     score: bool | float | None,
     metric_threshold: float | None,
 ) -> bool:
-    """Return the frozen DSPy bootstrap acceptance decision."""
 
     if not metric_present:
         return True
@@ -155,12 +138,6 @@ def bootstrap_accepts(
 
 
 class ObservedTraceStep(BaseModel):
-    """One normalized trace entry emitted by the task-model executor.
-
-    ``component_id=None`` represents a trace predictor that is not part of the
-    student/teacher component mapping.  DSPy silently skips such entries.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     trace_index: StrictInt
@@ -214,8 +191,6 @@ class ObservedTraceStep(BaseModel):
 
 
 class ComponentDemo(BaseModel):
-    """One prompt-ready demonstration for one Whetstone component."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
@@ -318,8 +293,6 @@ class ComponentDemo(BaseModel):
 
 
 class LabeledTaskDemo(BaseModel):
-    """A raw labeled task adapted into component-addressed prompt fields."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source_task_hash: StrictStr
@@ -361,14 +334,12 @@ class LabeledTaskDemo(BaseModel):
         return self
 
     def inputs_for(self, component_id: str) -> dict[str, Any]:
-        """Return one component's labeled input fields as fresh strict JSON."""
 
         return _component_fields(
             self.inputs_by_component, component_id, field="inputs_by_component"
         )
 
     def outputs_for(self, component_id: str) -> dict[str, Any]:
-        """Return one component's labeled outputs as fresh strict JSON."""
 
         return _component_fields(
             self.outputs_by_component,
@@ -377,7 +348,6 @@ class LabeledTaskDemo(BaseModel):
         )
 
     def for_component(self, component_id: str) -> ComponentDemo:
-        """Adapt this task to one component without fake trace data."""
 
         if component_id not in self.inputs_by_component:
             raise ValueError(f"labeled task has no component {component_id!r}")
@@ -420,8 +390,6 @@ class LabeledTaskDemo(BaseModel):
 
 
 class ComponentDemoSequence(BaseModel):
-    """Ordered demos for exactly one component."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
@@ -437,8 +405,6 @@ class ComponentDemoSequence(BaseModel):
 
 
 class ComponentDemoSet(BaseModel):
-    """A predictor-major, prompt-format-neutral MIPROv2 demo candidate."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate_seed: StrictInt
@@ -485,12 +451,6 @@ def proposal_demo_context(
     *,
     zeroshot_opt: bool,
 ) -> tuple[ComponentDemoSet, ...]:
-    """Preserve proposal grounding even during zero-shot optimization.
-
-    DSPy always passes the bootstrapped candidates into instruction proposal.
-    ``zeroshot_opt`` is accepted here so the durable orchestrator can make the
-    phase boundary explicit without changing proposal behavior.
-    """
 
     del zeroshot_opt
     return demo_candidates
@@ -501,7 +461,6 @@ def study_demo_context(
     *,
     zeroshot_opt: bool,
 ) -> tuple[ComponentDemoSet, ...] | None:
-    """Discard demonstrations only after instruction proposal in zero-shot."""
 
     return None if zeroshot_opt else demo_candidates
 

@@ -53,12 +53,6 @@ def _require_lease_duration(value: timedelta) -> timedelta:
 
 @verify(UNIQUE)
 class ReplayPolicy(StrEnum):
-    """Whether an expired effect may be assigned to a new physical attempt.
-
-    These values are persisted contract literals. Never iterate over this
-    enum to construct a persisted payload.
-    """
-
     IDEMPOTENT = "idempotent"
     DURABLE_WORKFLOW = "durable_workflow"
     NO_REDRIVE = "no_redrive"
@@ -66,8 +60,6 @@ class ReplayPolicy(StrEnum):
 
 @verify(UNIQUE)
 class TerminalOutcome(StrEnum):
-    """Persisted terminal state; never iterate it to construct a payload."""
-
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     RECOVERY_REQUIRED = "recovery_required"
@@ -75,8 +67,6 @@ class TerminalOutcome(StrEnum):
 
 @verify(UNIQUE)
 class AcquireOutcome(StrEnum):
-    """Serialized acquisition result; never iterate it to build a payload."""
-
     ACQUIRED = "acquired"
     BUSY = "busy"
     SUCCEEDED = "succeeded"
@@ -94,8 +84,6 @@ class _StoredState(StrEnum):
 
 
 class EffectRequest(BaseModel):
-    """Immutable identity of one semantic effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     semantic_key: OpaqueKey
@@ -109,8 +97,6 @@ class EffectRequest(BaseModel):
 
 
 class EffectLease(BaseModel):
-    """Exact authority token required for renewal and terminalization."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     request: EffectRequest
@@ -134,8 +120,6 @@ class EffectLease(BaseModel):
 
 
 class EffectTerminal(BaseModel):
-    """Immutable authoritative terminal outcome."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     request: EffectRequest
@@ -170,8 +154,6 @@ class EffectTerminal(BaseModel):
 
 
 class AcquireResult(BaseModel):
-    """Typed result of acquiring or replaying one semantic effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     request: EffectRequest
@@ -235,19 +217,19 @@ class AcquireResult(BaseModel):
 
 
 class EffectAuthorityError(RuntimeError):
-    """Base error for non-acquisition authority transitions."""
+    pass
 
 
 class EffectAuthoritySchemaMismatchError(EffectAuthorityError):
-    """The durable authority schema does not match its exact contract."""
+    pass
 
 
 class StaleLeaseError(EffectAuthorityError):
-    """The supplied owner/fence is no longer authorized."""
+    pass
 
 
 class TerminalConflictError(EffectAuthorityError):
-    """A different immutable terminal outcome is already authoritative."""
+    pass
 
 
 class _AuthorityCorruptionError(EffectAuthorityError):

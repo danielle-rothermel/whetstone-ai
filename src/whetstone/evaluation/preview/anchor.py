@@ -11,7 +11,7 @@ from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
     BootstrapCI,
 )
-from whetstone.evaluation.engine import EngineEvaluation, EvaluationEngine
+from whetstone.evaluation.protocol import EngineEvaluation, EvaluationEngine
 from whetstone.evaluation.preview.persisted import (
     load_component_traces,
     load_evaluation_outputs,
@@ -28,34 +28,30 @@ from whetstone.evaluation.schema import (
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.task_selection import TaskRoleSelection
-from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 
 __all__ = [
-    "AnchorConfigPreview",
+    "AnchorArmPreview",
     "BaselinePreviewTranscript",
     "BaselineSweepTranscript",
     "PreviewMetadata",
     "ScoringPreflight",
+    "calibration_task_hashes",
     "run_baseline_preview",
     "run_baseline_sweep",
 ]
 
 
-def _calibration_task_hashes(
+def calibration_task_hashes(
     engine: EvaluationEngine,
     task_ids: tuple[str, ...],
 ) -> tuple[str, ...]:
     """Map caller task IDs to the engine sampling's canonical task hashes."""
-    hashes = engine.sampling.task_set.task_hashes
+    hashes = engine.sampling.task_hashes
     if set(task_ids).issubset(hashes):
         return task_ids
     by_task_id = {
-        str(task.id): task_hash
-        for task, task_hash in zip(
-            engine.sampling.tasks,
-            hashes,
-            strict=True,
-        )
+        task.task_id: task_hash
+        for task, task_hash in zip(engine.sampling.tasks, hashes, strict=True)
     }
     unknown = tuple(
         task_id for task_id in task_ids if task_id not in by_task_id
@@ -67,9 +63,7 @@ def _calibration_task_hashes(
     return tuple(by_task_id[task_id] for task_id in task_ids)
 
 
-class AnchorConfigPreview(BaseModel):
-    """One anchor config with its exact evaluation and rendered rows."""
-
+class AnchorArmPreview(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     label: StrictStr
@@ -80,8 +74,6 @@ class AnchorConfigPreview(BaseModel):
 
 
 class BaselinePreviewTranscript(BaseModel):
-    """Serializable two-anchor calibration, bootstrap, and power preview."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task_ids: tuple[StrictStr, ...]
@@ -92,15 +84,13 @@ class BaselinePreviewTranscript(BaseModel):
     preflight: ScoringPreflight
     metadata: PreviewMetadata
     evaluation_binding: EvaluationBinding
-    baseline: AnchorConfigPreview
-    ceiling: AnchorConfigPreview
+    baseline: AnchorArmPreview
+    ceiling: AnchorArmPreview
     paired_delta_ci: BootstrapCI
     power: PowerResult
 
 
 class BaselineSweepTranscript(BaseModel):
-    """All budget modes in one launch-ready baseline calibration sweep."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task_ids: tuple[StrictStr, ...]
@@ -109,16 +99,19 @@ class BaselineSweepTranscript(BaseModel):
     previews: tuple[BaselinePreviewTranscript, ...]
 
 
-def _anchor_config_preview(
+def _arm(
     *,
     label: str,
     store: ObjectStore,
     evaluated: EngineEvaluation,
-) -> AnchorConfigPreview:
-    instruction = evaluated.evidence.candidate.record.payload[MUTATION_FIELD]
+    instruction_field: str,
+) -> AnchorArmPreview:
+    instruction = evaluated.evidence.candidate.record.payload.get(
+        instruction_field
+    )
     if not isinstance(instruction, str):
         raise ValueError("baseline anchor instruction must be text")
-    return AnchorConfigPreview(
+    return AnchorArmPreview(
         label=label,
         instruction=instruction,
         evidence=evaluated.evidence,
@@ -138,6 +131,7 @@ def run_baseline_preview(
     pool_ceiling: int,
     preflight: ScoringPreflight,
     metadata: PreviewMetadata,
+    instruction_field: str,
     task_selection: TaskRoleSelection | None = None,
     budget_ratio: float | None = None,
     concurrency: int = 1,
@@ -151,8 +145,6 @@ def run_baseline_preview(
     bootstrap_seed: int = 0,
     log: Callable[[str], None] | None = None,
 ) -> BaselinePreviewTranscript:
-    """Evaluate both anchor candidates on one exact shared binding."""
-
     if not task_ids:
         raise ValueError("baseline preview requires at least one task ID")
     if len(set(task_ids)) != len(task_ids):
@@ -168,7 +160,7 @@ def run_baseline_preview(
         if budget_ratio is None
         else f"budget ratio {budget_ratio:g}"
     )
-    calibration_task_ids = _calibration_task_hashes(engine, task_ids)
+    calibration_task_ids = calibration_task_hashes(engine, task_ids)
     calibration = run_anchor_calibration(
         engine=engine,
         evaluation_binding=evaluation_binding,
@@ -199,15 +191,17 @@ def run_baseline_preview(
         preflight=preflight,
         metadata=metadata,
         evaluation_binding=calibration.evaluation_binding,
-        baseline=_anchor_config_preview(
+        baseline=_arm(
             label=baseline_log_label,
             store=store,
             evaluated=calibration.baseline,
+            instruction_field=instruction_field,
         ),
-        ceiling=_anchor_config_preview(
+        ceiling=_arm(
             label=ceiling_log_label,
             store=store,
             evaluated=calibration.ceiling,
+            instruction_field=instruction_field,
         ),
         paired_delta_ci=calibration.paired_delta_ci,
         power=calibration.power,
@@ -221,7 +215,6 @@ def run_baseline_sweep(
     budget_ratios: tuple[float | None, ...],
     task_selection: TaskRoleSelection | None = None,
 ) -> BaselineSweepTranscript:
-    """Evaluate both anchors under each requested budget framing."""
     if not budget_ratios:
         raise ValueError("baseline sweep requires at least one budget mode")
     if len(set(budget_ratios)) != len(budget_ratios):

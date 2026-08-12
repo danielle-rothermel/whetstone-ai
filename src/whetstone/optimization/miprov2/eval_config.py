@@ -47,8 +47,6 @@ MIPROV2_EVAL_BINDING_SCHEMA_VERSION = 1
 
 
 class Miprov2EvaluationExecutionPolicy(BaseModel):
-    """Effect-specific, identity-bearing evaluator and provider controls."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     num_threads: StrictInt | None
@@ -184,7 +182,6 @@ def derive_eval_config_reference(
     source_eval_config: EvalConfigRef,
     sampling_config: SamplingConfig,
 ) -> EvalConfigRef:
-    """Derive the exact Eval Config obtained by replacing only sampling."""
 
     _require_canonical_eval_config(
         source_eval_config,
@@ -222,8 +219,6 @@ def derive_eval_config_reference(
 
 
 class Miprov2EvalConfigBindingRequest(BaseModel):
-    """Request for one exact ordered-task Eval Config derivation."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     control_identity_hash: StrictStr
@@ -262,8 +257,7 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract. Exact refs
-        # and the nested policy use their canonical identity projections.
+
         return {
             "control_identity_hash": self.control_identity_hash,
             "source_eval_config": self.source_eval_config.model_dump(
@@ -285,8 +279,6 @@ class Miprov2EvalConfigBindingRequest(BaseModel):
 
 
 class Miprov2EvalConfigBinding(BaseModel):
-    """Auditable derivation of one exact ordered-task Eval Config."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request: Miprov2EvalConfigBindingRequest
@@ -344,8 +336,7 @@ class Miprov2EvalConfigBinding(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract. Nested
-        # records and exact refs use their canonical JSON projections.
+
         return {
             "request": self.request.identity_payload(),
             "task_set": self.task_set.model_dump(mode="json"),
@@ -363,8 +354,6 @@ class Miprov2EvalConfigBinding(BaseModel):
 
 
 class Miprov2EvalConfigResolver(Protocol):
-    """Injected authority that materializes ordered-task Eval Configs."""
-
     def resolve(
         self,
         request: Miprov2EvalConfigBindingRequest,

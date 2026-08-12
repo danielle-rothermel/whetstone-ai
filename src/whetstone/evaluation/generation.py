@@ -10,8 +10,6 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class GenerationIndex:
-    """The position of one planned generation slot in the evaluation matrix."""
-
     task_index: int
     sample_index: int
 
@@ -24,6 +22,4 @@ class GenerationIndex:
 
 @dataclass(frozen=True, slots=True)
 class Generation:
-    """One run of the generation graph for a planned slot."""
-
     index: GenerationIndex

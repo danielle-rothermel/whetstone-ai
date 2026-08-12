@@ -50,12 +50,6 @@ class CodexRunner(Protocol):
 
 
 class CodexAdapter:
-    """Persist the typed artifact and enforce its proposal-shape contract.
-
-    MCP measurement is optional; tool admission and spend remain owned by the
-    tool store rather than being matched to individual proposals here.
-    """
-
     def __init__(
         self,
         runner: CodexRunner,
@@ -167,6 +161,7 @@ class CodexAdapter:
                 diff_check(
                     base=base_by_ref[proposal.base_ref],
                     proposed=proposal,
+                    run=request.run,
                 )
             except DiffCheckError:
                 return None

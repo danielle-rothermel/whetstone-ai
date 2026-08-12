@@ -26,7 +26,6 @@ def _report_failure(descriptor: int) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Kill the guarded process group when scheduler authority reaches EOF."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) != 4:
         sys.stderr.write(

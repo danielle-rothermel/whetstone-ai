@@ -15,23 +15,26 @@ from whetstone.core.identity import (
     NonEmptyId,
     NonNegativeInt,
     TerminalFailure,
+    assert_materialized_ref_matches,
     compute_identity_hash,
     require_full_hash,
     typed_ref_for_record,
 )
 from whetstone.experiment.candidate import CandidateRef
-from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.provider.driver import (
     Clock,
     Sleep,
     TransportCall,
-    run_provider_call,
 )
 from whetstone.provider.language_model import (
     PlainPromptAdapter,
     StructuredPromptAdapter,
-    provider_call_request_from_parameters,
     provider_result_from_response,
+)
+from whetstone.provider.llm_call import (
+    LlmCallContext,
+    build_provider_request,
+    execute_llm_call,
 )
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -76,21 +79,13 @@ PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION = 1
 
 
 class ProposerConfig(BaseModel):
-    """Exact provider-backed proposer configuration.
-
-    ``temperature=None`` leaves sampling controls entirely with the referenced
-    Provider Call Config. That is the COPRO path: the optimizer does not force
-    a control that the selected provider or model may not support.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     provider_call_config: IdentityRef
     temperature: FiniteFloat | None = FiniteFloat(1.0)
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity contract: spell every key explicitly and pin the
-        # complete payload plus digest in golden tests.
+
         return {
             "provider_call_config": {
                 "record_ref": {
@@ -117,21 +112,18 @@ class ProposerConfig(BaseModel):
 
 
 class ProposerRouteConfig(Protocol):
-    """Minimum identity contract shared by supported proposer routes."""
-
     def identity_payload(self) -> dict[str, Any]: ...
 
     def identity_hash(self) -> str: ...
 
 
 class ProposalRequest(BaseModel):
-    """One proposer request with exact base and immutable JSON context."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     proposal_mode: NonEmptyId
     request_ordinal: NonNegativeInt
     proposal_authority_identity_hash: IdentityHash
+    mutation_field: NonEmptyId
     base_candidate: CandidateRef
     context: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
@@ -144,29 +136,29 @@ class ProposalRequest(BaseModel):
 
     @property
     def base_template(self) -> str:
+        field = self.mutation_field
         try:
-            value = self.base_candidate.record.payload[MUTATION_FIELD]
+            value = self.base_candidate.record.payload[field]
         except KeyError as error:
             raise ValueError(
                 "base candidate payload must contain the "
-                f"{MUTATION_FIELD!r} mutation field"
+                f"{field!r} mutation field"
             ) from error
         if type(value) is not str:
             raise ValueError(
-                f"base candidate {MUTATION_FIELD!r} mutation field "
-                "must be a string"
+                f"base candidate {field!r} mutation field must be a string"
             )
         return value
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity contract: spell every key explicitly and pin the
-        # complete payload plus digest in golden tests.
+
         return {
             "proposal_mode": str(self.proposal_mode),
             "request_ordinal": int(self.request_ordinal),
             "proposal_authority_identity_hash": str(
                 self.proposal_authority_identity_hash
             ),
+            "mutation_field": str(self.mutation_field),
             "base_candidate": {
                 "record_ref": {
                     "schema_name": str(
@@ -190,7 +182,6 @@ class ProposalRequest(BaseModel):
 
 
 def prompt_adapter_identity_hash(adapter: PlainPromptAdapter) -> str:
-    """Identify the exact plain-text projection used for proposer prompts."""
 
     return compute_identity_hash(
         schema=PROMPT_ADAPTER_SCHEMA,
@@ -200,8 +191,6 @@ def prompt_adapter_identity_hash(adapter: PlainPromptAdapter) -> str:
 
 
 class ProposalDraft(BaseModel):
-    """Exactly one successful draft or one shared terminal failure."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     template: str = ""
@@ -255,8 +244,6 @@ class ProposalDraft(BaseModel):
 
 
 class ProposerTransport(Protocol):
-    """Draft exactly ``count`` proposals without performing evaluation."""
-
     @property
     def execution_policy_hash(self) -> str: ...
 
@@ -273,8 +260,6 @@ class ProposerTransport(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class ProposalExecutorDurabilityContract:
-    """Immutable identity of one deliberately durable executor boundary."""
-
     recovery_policy: ReplayPolicy
     policy_identity_hash: str
 
@@ -305,14 +290,6 @@ _DURABLE_PROPOSAL_EXECUTOR_TOKEN = object()
 
 @dataclass(frozen=True, slots=True, init=False)
 class DurableProposalExecutor:
-    """Exact owned capability for the canonical durable proposal executor.
-
-    The capability value is created only by the canonical durable provider
-    factory in :mod:`whetstone.coordination.proposal_provider`; a token
-    guard keeps its declared durability contract inseparable from the
-    behavior actually invoked.
-    """
-
     __durability_contract: ProposalExecutorDurabilityContract
     __execute: _ProposalExecution
 
@@ -340,7 +317,6 @@ class DurableProposalExecutor:
 
     @property
     def durability_contract(self) -> ProposalExecutorDurabilityContract:
-        """Return the frozen contract snapshot stored by the capability."""
 
         return self.__durability_contract
 
@@ -360,7 +336,6 @@ class DurableProposalExecutor:
         transport: ProposerTransport,
         count: int,
     ) -> tuple[ProposalDraft, ...]:
-        """Execute one proposal call inside the durable effect authority."""
 
         return self.__execute(
             config=config,
@@ -375,7 +350,6 @@ def _durable_proposal_executor(
     durability_contract: ProposalExecutorDurabilityContract,
     execute: _ProposalExecution,
 ) -> DurableProposalExecutor:
-    """Mint the capability from its canonical durable provider factory."""
 
     return DurableProposalExecutor(
         durability_contract=durability_contract,
@@ -389,25 +363,6 @@ ProviderCallConfigResolver = Callable[[IdentityRef], "ProviderCallConfig"]
 
 @dataclass(frozen=True, slots=True)
 class ProviderProposerTransport:
-    """Production proposer route over the Whetstone provider kernel.
-
-    dr-providers currently projects one semantic generation from one
-    :class:`ProviderCallRequest`; it has no typed multi-generation result.
-    Therefore one algorithm-level ``draft(..., count=N)`` invocation is
-    transparently materialized as ``N`` deterministic logical provider calls
-    carrying the identical prompt and controls. This transport-level shape
-    differs from DSPy's use of ``n=N``, while preserving COPRO's one proposer
-    invocation, exact requested candidate count, completion order, and
-    temperature.
-
-    Provider config resolution, physical transport, semantic attempt policy,
-    clock, and sleep are all injected. No ambient provider registry,
-    credential lookup, retry policy, or network client is consulted here.
-    Every slot returns either one raw instruction or one explicit failed
-    :class:`ProposalDraft`; a partial or invalid provider batch can therefore
-    never be mistaken for a successful, underfilled candidate batch.
-    """
-
     _resolve_provider_call_config: ProviderCallConfigResolver
     _transport: TransportCall
     _execution_policy: ProviderExecutionPolicy
@@ -451,10 +406,7 @@ class ProviderProposerTransport:
 
     @property
     def durability_identity_hash(self) -> str:
-        """Identify the exact capability a durable executor may invoke."""
 
-        # Persisted identity contract: spell every key explicitly and pin the
-        # complete payload plus digest in golden tests.
         return compute_identity_hash(
             schema=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
             schema_version=(
@@ -492,23 +444,11 @@ class ProviderProposerTransport:
         )
         from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA
 
-        materialized_ref = typed_ref_for_record(
-            PROVIDER_CALL_CONFIG_SCHEMA,
-            provider_config.model_dump(mode="json"),
+        assert_materialized_ref_matches(
+            record=provider_config,
+            ref=config.provider_call_config,
+            schema=PROVIDER_CALL_CONFIG_SCHEMA,
         )
-        if materialized_ref != config.provider_call_config.record_ref:
-            raise ValueError(
-                "resolved Provider Call Config record does not match "
-                "Proposer Config"
-            )
-        if (
-            provider_config.identity_hash
-            != config.provider_call_config.record_hash
-        ):
-            raise ValueError(
-                "resolved Provider Call Config hash does not match "
-                "Proposer Config"
-            )
 
         raw_messages = request.context.get("proposal_messages")
         if raw_messages is None:
@@ -542,10 +482,11 @@ class ProviderProposerTransport:
             if config.temperature is None
             else {"temperature": config.temperature}
         )
-        provider_request = provider_call_request_from_parameters(
-            config=provider_config,
+        provider_request = build_provider_request(
+            provider_config=provider_config,
             messages=messages,
             parameters=parameters,
+            prompt_adapter=self._prompt_adapter,
         )
 
         drafts = tuple(
@@ -579,14 +520,19 @@ class ProviderProposerTransport:
             f"{self.prompt_adapter_identity_hash}:"
             f"{proposal_request.identity_hash()}:{slot}"
         )
-        result = run_provider_call(
+        execution = execute_llm_call(
+            context=LlmCallContext(
+                execution_policy=self._execution_policy,
+                transport=self._transport,
+                prompt_adapter=self._prompt_adapter,
+                clock=self._clock,
+                sleep=self._sleep,
+                prompt_cache=None,
+            ),
             request=provider_request,
-            policy=self._execution_policy,
-            transport=self._transport,
             logical_call_id=logical_call_id,
-            clock=self._clock,
-            sleep=self._sleep,
         )
+        result = execution.result
         request_evidence = {
             "logical_call_id": logical_call_id,
             "logical_batch_size": count,
@@ -647,7 +593,6 @@ class ProviderProposerTransport:
 
 
 def _response_accounting(response: Any) -> tuple[dict[str, Any], float | None]:
-    """Retain usage/cost from a rejected response, when one exists."""
 
     if response is None:
         return {}, None
@@ -661,14 +606,6 @@ def _response_accounting(response: Any) -> tuple[dict[str, Any], float | None]:
 
 
 class FakeProposerTransport:
-    """A scripted, deterministic proposer transport for harness tests.
-
-    Responses are keyed by ``(proposal_mode, request_ordinal)`` -> a tuple of
-    template strings. A short script produces explicit failed slots instead
-    of invented candidates. Every call records the configured execution-policy
-    and prompt-adapter identities.
-    """
-
     def __init__(
         self,
         script: dict[tuple[str, int], tuple[str, ...]],
@@ -701,8 +638,7 @@ class FakeProposerTransport:
 
     @property
     def durability_identity_hash(self) -> str:
-        # Persisted identity contract: spell every key explicitly and pin the
-        # complete payload plus digest in golden tests.
+
         return compute_identity_hash(
             schema=PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA,
             schema_version=(

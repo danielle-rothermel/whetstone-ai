@@ -91,8 +91,6 @@ _FRAME_FIELDS = frozenset({"schema", "checksum", "record"})
 
 
 class PartialCallRecord(BaseModel):
-    """One current-schema completed-call persistence record."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -191,7 +189,6 @@ class PartialCallRecord(BaseModel):
         )
 
     def as_dict(self) -> dict[str, object]:
-        """Return the canonical current persisted row."""
         return {
             "schema": self.schema_name,
             "phase": self.phase,
@@ -224,7 +221,6 @@ class PartialCallRecord(BaseModel):
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Self:
-        """Validate and load one complete current-schema row."""
         fields = frozenset(data)
         if fields != _PERSISTED_FIELDS:
             missing = sorted(_PERSISTED_FIELDS - fields)
@@ -248,7 +244,6 @@ def partial_key(
     sample_index: int,
     request_hash: str,
 ) -> tuple[str, str, str, int, str]:
-    """Return the stable identity of one persisted call observation."""
     return (phase, task_id, unit, sample_index, request_hash)
 
 
@@ -318,7 +313,7 @@ def _canonical_json_bytes(value: object) -> bytes:
 def _encode_frame(record: PartialCallRecord) -> bytes:
     record_body = record.as_dict()
     checksum = hashlib.sha256(_canonical_json_bytes(record_body)).hexdigest()
-    # Frame field names and schema are a pinned persisted-format contract.
+
     frame = {
         "schema": PARTIAL_FRAME_SCHEMA,
         "checksum": checksum,
@@ -657,9 +652,7 @@ def _publish_entry(
                     f"partial publication rollback failed: {path}"
                 ) from rollback_error
             raise
-        # This final visible assertion closes the cooperating-writer
-        # publication protocol. It does not authenticate the file against a
-        # same-UID actor, which can rewrite it at any time.
+
     finally:
         if not replaced and _entry_exists(directory, temporary):
             _verified_unlink(
@@ -676,7 +669,7 @@ def _write_all(fd: int, body: bytes) -> None:
             written = os.write(fd, remaining)
         except InterruptedError:
             continue
-        if written == 0:  # pragma: no cover - kernel contract failure
+        if written == 0:
             raise OSError("partial frame write made no progress")
         remaining = remaining[written:]
 
@@ -699,15 +692,6 @@ def _open_record_directory(
 
 @dataclass(slots=True)
 class PartialLog:
-    """Durable per-key records with an explicit cooperative-user boundary.
-
-    Operations provide crash durability, atomic publication, structural and
-    content-integrity checks, and sidecar-lock serialization for cooperating
-    writers. Checksums detect accidental, malformed, or torn corruption; they
-    do not provide authenticity or tamper resistance against a same-UID actor
-    that can rewrite managed files concurrently or between operations.
-    """
-
     path: Path
 
     @property
@@ -718,7 +702,6 @@ class PartialLog:
         return self.path / _entry_name(record)
 
     def append(self, record: PartialCallRecord) -> None:
-        """Durably append one complete current-schema frame."""
         validated = PartialCallRecord.from_dict(record.as_dict())
         stamped = validated
         if validated.at is None:
@@ -749,7 +732,6 @@ class PartialLog:
                 )
 
     def load(self) -> list[PartialCallRecord]:
-        """Load all committed records, failing closed on invalid entries."""
         with FileLock(self._lock_path, shared=True) as lock:
             try:
                 directory = _open_record_directory(
@@ -788,7 +770,6 @@ class PartialLog:
         return {record.key() for record in self.load()}
 
     def delete(self) -> None:
-        """Clear managed entries durably while retaining the private store."""
         with FileLock(self._lock_path) as lock:
             try:
                 directory = _open_record_directory(

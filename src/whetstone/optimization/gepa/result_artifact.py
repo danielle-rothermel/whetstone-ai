@@ -19,8 +19,6 @@ GEPA_RUN_RESULT_ARTIFACT_SCHEMA = "whetstone.gepa.run_result_artifact"
 
 
 class GepaRunResultArtifact(BaseModel):
-    """Pair upstream result fidelity with the external-effect transcript."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     context: GepaEffectContext
@@ -55,8 +53,6 @@ class GepaRunResultArtifact(BaseModel):
 
 
 class GepaResultArtifactStore:
-    """Idempotently persist a paired terminal artifact under run identity."""
-
     def __init__(self, store: ObjectStore) -> None:
         self._store = store
 

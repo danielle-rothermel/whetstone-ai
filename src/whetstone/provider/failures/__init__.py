@@ -1,12 +1,11 @@
-from dr_providers import (
-    RECOVERABLE_FAILURE_CLASSES,
-    RETRYABLE_FAILURE_CLASSES,
-    FailureClass,
-)
+from dr_providers import ProviderFailureError, RecoverabilityClass
 
 from whetstone.provider.failures.exceptions import (
+    RECOVERABLE_FAILURE_CLASSES,
+    RETRYABLE_FAILURE_CLASSES,
     EmptyProviderGenerationError,
     EvalFailureError,
+    FailureClass,
     PermanentFailureError,
     RateLimitedFailureError,
     RecordingFailureError,

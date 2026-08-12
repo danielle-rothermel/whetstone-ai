@@ -51,16 +51,12 @@ __all__ = [
 
 @verify(UNIQUE)
 class TemplateRenderKind(StrEnum):
-    """Pinned renderer semantics for an exact optimization run."""
-
     PYTHON_FORMAT_V1 = "python_format/v1"
     LITERAL_REPLACE_V1 = "literal_replace/v1"
     LITERAL_BODY_V1 = "literal_body/v1"
 
 
 class TemplateRenderContract(BaseModel):
-    """Frozen rendering authority composed once into an exact run."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: TemplateRenderKind
@@ -120,7 +116,6 @@ class TemplateRenderContract(BaseModel):
         return template
 
     def placeholder_fields(self, template: object) -> tuple[str, ...]:
-        """Extract active fields under this contract's pinned syntax."""
         text = self._validate_template_text(template)
         if self.kind is TemplateRenderKind.LITERAL_BODY_V1:
             return ()
@@ -165,7 +160,6 @@ class TemplateRenderContract(BaseModel):
         return tuple(fields)
 
     def validate_template(self, template: object) -> tuple[str, ...]:
-        """Validate availability and required multiplicity."""
         observed = self.placeholder_fields(template)
         unknown = tuple(
             dict.fromkeys(
@@ -197,7 +191,6 @@ class TemplateRenderContract(BaseModel):
         return observed
 
     def render(self, template: object, values: Mapping[str, object]) -> str:
-        """Render text without selecting semantics at the call site."""
         observed = self.validate_template(template)
         text = self._validate_template_text(template)
         if self.kind is TemplateRenderKind.LITERAL_BODY_V1:
@@ -232,8 +225,6 @@ class TemplateRenderContract(BaseModel):
 
 
 class Candidate(BaseModel):
-    """Identity-bearing candidate with exact ancestry and immutable payload."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate_id: NonEmptyId
@@ -243,8 +234,7 @@ class Candidate(BaseModel):
     )
 
     def identity_payload(self) -> dict[str, Any]:
-        # These persisted identity keys are an explicit wire contract. Never
-        # derive them by iterating over model fields.
+
         return {
             "candidate_id": self.candidate_id,
             "base_ref": self.base_ref.model_dump(mode="json"),
@@ -263,8 +253,6 @@ class Candidate(BaseModel):
 
 
 class CandidateRef(BaseModel):
-    """Exact typed candidate record and its Identity Hash."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: Candidate

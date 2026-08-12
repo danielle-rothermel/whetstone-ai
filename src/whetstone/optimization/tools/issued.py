@@ -53,8 +53,6 @@ ISSUED_TOOL_CALL_TERMINAL_KEY_PREFIX = (
 
 
 class IssuedToolCallConflictError(ValueError):
-    """A step-local call ID was already claimed by another exact call."""
-
     def __init__(self, *, call_id: str) -> None:
         self.call_id = call_id
         super().__init__(
@@ -123,9 +121,7 @@ def _issued_tool_call_binding_key(
     request: OptimizationStepRequestRef,
     call_id: str,
 ) -> str:
-    # Persisted-format contract: schema, version, prefix, and payload keys are
-    # pinned by golden tests. Never derive these payload keys from model
-    # fields.
+
     return compute_prefixed_identity_key(
         schema=ISSUED_TOOL_CALL_KEY_SCHEMA,
         schema_version=ISSUED_TOOL_CALL_KEY_SCHEMA_VERSION,
@@ -141,7 +137,7 @@ def _issued_tool_call_slot_binding_key(
     request: OptimizationStepRequestRef,
     ordinal: int,
 ) -> str:
-    # Persisted-format contract; literals are pinned by golden tests.
+
     return compute_prefixed_identity_key(
         schema=ISSUED_TOOL_CALL_SLOT_KEY_SCHEMA,
         schema_version=ISSUED_TOOL_CALL_SLOT_KEY_SCHEMA_VERSION,
@@ -156,7 +152,7 @@ def _issued_tool_call_slot_binding_key(
 def _issued_tool_call_terminal_binding_key(
     claim: _IssuedToolCallClaimRef,
 ) -> str:
-    # Persisted-format contract; literals are pinned by golden tests.
+
     return compute_prefixed_identity_key(
         schema=ISSUED_TOOL_CALL_TERMINAL_KEY_SCHEMA,
         schema_version=ISSUED_TOOL_CALL_TERMINAL_KEY_SCHEMA_VERSION,
@@ -170,8 +166,6 @@ def _issued_tool_call_terminal_binding_key(
 
 
 class _IssuedToolCallLedger:
-    """Harness-owned durable issuance, ordering, spend, and evidence."""
-
     def __init__(
         self,
         *,
@@ -295,10 +289,7 @@ class _IssuedToolCallLedger:
             raise IssuedToolCallConflictError(call_id=call_id)
 
     def _slots(self) -> tuple[_IssuedToolCallSlot, ...]:
-        # The supported writer can reserve only ordinals below _limit. Reading
-        # the first impossible ordinal is therefore a complete bounded
-        # overflow sentinel; arbitrary higher-key scans are neither required
-        # nor supported by ObjectStore's binding interface.
+
         overflow = self._resolve(
             _issued_tool_call_slot_binding_key(self._request, self._limit)
         )
@@ -326,7 +317,7 @@ class _IssuedToolCallLedger:
         slots: list[_IssuedToolCallSlot] = []
         seen_claims: set[TypedRef] = set()
         for ordinal, ref in enumerate(refs[:first_gap]):
-            if ref is None:  # pragma: no cover - established by first_gap
+            if ref is None:
                 raise AssertionError("contiguous slot prefix contains a gap")
             slot = self._load_slot(ref, ordinal=ordinal)
             if slot.claim.record_ref in seen_claims:
@@ -336,8 +327,6 @@ class _IssuedToolCallLedger:
             seen_claims.add(slot.claim.record_ref)
             slots.append(slot)
         for slot in slots:
-            # The slot is the durable reservation. Publishing it first makes
-            # the claim recoverable if the process dies before this binding.
             self._validate_or_reconcile_claim_binding(slot.claim)
         return tuple(slots)
 
@@ -373,8 +362,6 @@ class _IssuedToolCallLedger:
         try:
             self._store.bind(key, slot_ref.reference)
         except BindingConflictError:
-            # Distinct calls may reserve concurrently. The durable binding
-            # winner determines the ordinal; retry against the next slot.
             return self._reserve(claim)
         bound = self._resolve(key)
         if bound != slot_ref:
@@ -567,7 +554,6 @@ class _IssuedToolCallLedger:
                 self._active_call_ids.remove(call_id)
 
     def validate_replay_complete(self) -> None:
-        """Require an invoked recovery attempt to observe its whole prefix."""
         with self._lock:
             if self._replay_ordinal == len(self._replay_prefix):
                 return

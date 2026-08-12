@@ -18,6 +18,7 @@ from whetstone.core.identity import (
     IdentityHash,
     TypedRef,
 )
+from whetstone.evaluation.protocol import EvaluationEngine
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     EvaluationIntent,
@@ -32,8 +33,6 @@ EVALUATION_INTENT_CLAIM_SCHEMA = "whetstone.evaluation_intent_claim"
 
 
 class EvaluationIntentClaim(BaseModel):
-    """One event in an intent's globally ordered lease stream."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     intent_ref: TypedRef
@@ -46,8 +45,6 @@ class EvaluationIntentClaim(BaseModel):
 
 
 class EvaluationResultAttestation(BaseModel):
-    """The exact terminal evaluator result won through claim arbitration."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     graph_hash: IdentityHash
@@ -91,7 +88,7 @@ def _ignore_renewal_publication(
 
 class EvaluationClaims:
     _store: Any
-    _engine: Any
+    _engine: EvaluationEngine
     _owner_id: str
     _clock: Any
     _sleep: Any
@@ -155,10 +152,7 @@ class EvaluationClaims:
             raise ValueError(
                 "Evaluation Result Attestation belongs to another Intent"
             )
-        if (
-            attestation.graph_hash
-            != self._engine.experiment.generation_graph.graph_hash
-        ):
+        if attestation.graph_hash != self._engine.plan_snapshot.graph_hash:
             raise ValueError(
                 "Evaluation Result Attestation uses another generation graph"
             )
@@ -295,7 +289,7 @@ class EvaluationClaims:
             require_attestation=False,
         )
         attestation = EvaluationResultAttestation(
-            graph_hash=self._engine.experiment.generation_graph.graph_hash,
+            graph_hash=self._engine.plan_snapshot.graph_hash,
             resolution=resolution,
         )
         persisted, _ = self._store.put(
@@ -405,13 +399,6 @@ class EvaluationClaims:
             )
 
     def _claim(self, intent: EvaluationIntent) -> _OwnedClaim | None:
-        """Acquire the current durable lease or await its resolution.
-
-        After a crashed owner's persisted lease expires, a fresh resolver
-        claims the next append-only generation and safely retries. Concurrent
-        live resolvers observe the winning unexpired claim and wait for its
-        terminal resolution.
-        """
         intent_ref = self._intent_ref(intent)
         while True:
             if self._store.resolve(self._key(intent)) is not None:
@@ -454,13 +441,6 @@ class EvaluationClaims:
         intent: EvaluationIntent,
         owned: _OwnedClaim,
     ) -> IntentResolution:
-        """Evaluate under a renewed lease, keeping any durable binding.
-
-        A heartbeat failure only aborts when nothing was bound: once
-        :meth:`_evaluate_and_bind` has durably committed a resolution, that
-        paid evaluation is the answer and a transient renewal error must not
-        discard it.
-        """
         stop = threading.Event()
         heartbeat_errors: list[Exception] = []
 

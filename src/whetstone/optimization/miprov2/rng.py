@@ -24,8 +24,6 @@ MIPROV2_DEMO_BRIDGE_VERSION = "whetstone_component_demo_bridge/v1"
 
 
 class Miprov2RandomState(BaseModel):
-    """JSON-safe snapshot of Python's MT19937 state."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     version: StrictInt
@@ -55,8 +53,6 @@ class Miprov2RandomState(BaseModel):
 
 
 class Miprov2RngDraw(BaseModel):
-    """One ordered, replay-verifiable draw from MIPROv2's shared RNG."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     ordinal: StrictInt
@@ -104,8 +100,6 @@ class Miprov2RngDraw(BaseModel):
 
 
 class Miprov2RngCheckpoint(BaseModel):
-    """The one durable shared-RNG cursor and its append-only transcript."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     seed: StrictInt
@@ -118,8 +112,7 @@ class Miprov2RngCheckpoint(BaseModel):
             range(len(self.draws))
         ):
             raise ValueError("RNG draw ordinals must be contiguous from zero")
-        # Replay from the originating seed.  A serialized terminal MT state and
-        # a self-consistent-looking draw list are not independently trusted.
+
         rng = random.Random(self.seed)
         for draw in self.draws:
             actual = _replay_draw(rng, draw)
@@ -145,11 +138,6 @@ class Miprov2RngCheckpoint(BaseModel):
         population_size: int,
         sample_indices: tuple[int, ...] | None,
     ) -> Miprov2RngCheckpoint:
-        """Reconstruct the shared cursor from resolved MIPROv2 control.
-
-        Auto mode records its ordered validation sample in control; manual
-        mode supplies ``None`` and consumes no draw.
-        """
 
         rng = random.Random(seed)
         checkpoint = cls.seeded(seed)
@@ -208,8 +196,6 @@ class Miprov2RngCheckpoint(BaseModel):
 
 
 class Miprov2DurableBindings(BaseModel):
-    """Immutable authorities shared by every MIPROv2 pure request and state."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     control_identity_hash: StrictStr
@@ -243,7 +229,6 @@ class Miprov2DurableBindings(BaseModel):
 
 
 def _replay_draw(rng: random.Random, draw: Miprov2RngDraw) -> Any:
-    """Execute one draw with its exact Python ``Random`` semantics."""
 
     allowed = {
         "dataset": {"sample"},
@@ -301,7 +286,6 @@ def _lists_for_tuples(value: Any) -> Any:
 
 
 def _freeze_json_value(value: Any) -> Any:
-    """Defensively freeze one strict JSON value without changing its shape."""
 
     if isinstance(value, ImmutableJsonObject):
         return value

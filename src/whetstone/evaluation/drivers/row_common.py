@@ -7,9 +7,7 @@ import time
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, JsonValue
-from whetstone_envs.core import Instance
 
-from whetstone.envs.code_comp.submission_result import CodeSubmissionResult
 from whetstone.evaluation.traces import ExecutedComponentStep, ExecutedRowState
 
 
@@ -30,7 +28,7 @@ class GenerationRowOutput:
     provider_error: dict[str, object] | None = None
     max_budget: int | None = None
     over_budget: bool | None = None
-    code_submission_result: CodeSubmissionResult | None = None
+    submission_result: object | None = None
 
     @property
     def failed(self) -> bool:
@@ -46,7 +44,7 @@ class GenerationRowOutput:
 
 
 class ProcessTask(BaseModel):
-    """JSON-safe form of the frozen environment Instance value object."""
+    """JSON-safe task payload submitted to a row process worker."""
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
@@ -55,25 +53,6 @@ class ProcessTask(BaseModel):
     strata: tuple[str, ...]
     prompt_inputs: dict[str, str]
     gold: str
-
-    @classmethod
-    def from_instance(cls, instance: Instance) -> ProcessTask:
-        return cls(
-            id=str(instance.id),
-            seed=instance.seed,
-            strata=instance.strata,
-            prompt_inputs=dict(instance.prompt_inputs),
-            gold=instance.gold,
-        )
-
-    def to_instance(self) -> Instance:
-        return Instance(
-            id=self.id,
-            seed=self.seed,
-            strata=self.strata,
-            prompt_inputs=self.prompt_inputs,
-            gold=self.gold,
-        )
 
 
 def _process_payload_hash(payload: JsonValue) -> str:

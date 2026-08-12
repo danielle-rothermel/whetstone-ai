@@ -74,12 +74,10 @@ type EvaluationPurpose = Literal[
 
 
 class StudyTranscriptMismatch(ValueError):
-    """A durable transcript cannot reproduce the frozen study contract."""
+    pass
 
 
 class _IdentityRecord(BaseModel):
-    """Frozen strict-JSON record with a canonical versioned identity."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     _identity_schema: ClassVar[str]
@@ -97,8 +95,6 @@ class _IdentityRecord(BaseModel):
 
 
 class Miprov2ParameterSpace(_IdentityRecord):
-    """Exact candidate pools in predictor-major suggestion order."""
-
     _identity_schema = "whetstone.miprov2_parameter_space"
 
     instruction_pool_identity_hashes: tuple[tuple[StrictStr, ...], ...]
@@ -281,8 +277,6 @@ class Miprov2ParameterSpace(_IdentityRecord):
 
 
 class Miprov2StudySchedule(_IdentityRecord):
-    """Persisted controls from which objective and promotion timing derives."""
-
     _identity_schema = "whetstone.miprov2_study_schedule"
 
     num_trials: StrictInt
@@ -339,8 +333,6 @@ class Miprov2StudySchedule(_IdentityRecord):
 
 
 class Miprov2EvaluationObservation(_IdentityRecord):
-    """Algorithm evidence composed from canonical evaluation records."""
-
     _identity_schema = "whetstone.miprov2_evaluation_observation"
 
     run_id: StrictStr
@@ -461,8 +453,6 @@ class Miprov2EvaluationObservation(_IdentityRecord):
 
 
 class BaselineObservation(_IdentityRecord):
-    """Trial-zero candidate and its full-validation evidence."""
-
     _identity_schema = "whetstone.miprov2_baseline_observation"
 
     categorical_combination_identity_hash: StrictStr
@@ -510,8 +500,6 @@ class BaselineObservation(_IdentityRecord):
 
 
 class Miprov2ComponentSelection(BaseModel):
-    """One exact instruction and demonstration selection."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
@@ -556,8 +544,6 @@ class Miprov2ComponentSelection(BaseModel):
 
 
 class Miprov2CandidateRendering(_IdentityRecord):
-    """Exact selections composed into the sole candidate mutation field."""
-
     _identity_schema = MIPROV2_CANDIDATE_RENDERING_SCHEMA
     _identity_schema_version = MIPROV2_CANDIDATE_RENDERING_SCHEMA_VERSION
 
@@ -627,8 +613,6 @@ def _require_run_authorities(
 
 
 class Miprov2CandidateAssemblyBinding(_IdentityRecord):
-    """Canonical params-to-native-program assembly persisted for evaluation."""
-
     _identity_schema = MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA
     _identity_schema_version = MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION
 
@@ -676,6 +660,7 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
         diff_check(
             base=self.base_candidate.record,
             proposed=self.candidate.record,
+            run=self.run,
         )
         if self.candidate.record.base_ref != self.base_candidate.record_ref:
             raise ValueError("assembled candidate must bind its exact base")
@@ -713,8 +698,6 @@ class Miprov2CandidateAssemblyBinding(_IdentityRecord):
 
 
 class Promotion(_IdentityRecord):
-    """A full evaluation inserted while its sampled trial remains open."""
-
     _identity_schema = "whetstone.miprov2_promotion"
 
     trial_number: StrictInt
@@ -786,8 +769,6 @@ class Promotion(_IdentityRecord):
 
 
 class SampleObservation(_IdentityRecord):
-    """One Optuna-sampled combination and its exact evaluation provenance."""
-
     _identity_schema = "whetstone.miprov2_sample_observation"
 
     trial_number: StrictInt
@@ -858,8 +839,6 @@ class SampleObservation(_IdentityRecord):
 
 
 class StudyTranscript(_IdentityRecord):
-    """Complete information required to reconstruct and verify the study."""
-
     _identity_schema = MIPROV2_STUDY_SCHEMA
     _identity_schema_version = MIPROV2_STUDY_SCHEMA_VERSION
 
@@ -1191,7 +1170,6 @@ def _require_candidate_assembly(
     program_layout: Miprov2ProgramLayout,
     run: OptimizationRunRef,
 ) -> None:
-    """Verify one rendered program against its exact durable study inputs."""
 
     if assembly.params != expected_params:
         raise ValueError(
@@ -1266,12 +1244,11 @@ def _require_candidate_assembly(
     diff_check(
         base=expected_base_candidate.record,
         proposed=assembly.candidate.record,
+        run=run,
     )
 
 
 class StudySuggestion(_IdentityRecord):
-    """The next replay-stable categorical suggestion."""
-
     _identity_schema = "whetstone.miprov2_study_suggestion"
 
     trial_number: StrictInt
@@ -1299,8 +1276,6 @@ class StudySuggestion(_IdentityRecord):
 
 
 class PromotionCandidate(_IdentityRecord):
-    """The highest-mean combination not previously promoted."""
-
     _identity_schema = "whetstone.miprov2_promotion_candidate"
 
     params: TrialParams
@@ -1350,8 +1325,6 @@ class PromotionCandidate(_IdentityRecord):
 
 
 class FullEvaluation(_IdentityRecord):
-    """A candidate eligible for DSPy's strict winner update."""
-
     _identity_schema = "whetstone.miprov2_full_evaluation"
 
     source: Literal["baseline", "sample", "promotion"]
@@ -1394,7 +1367,6 @@ class FullEvaluation(_IdentityRecord):
 def select_promotion(
     samples: Sequence[SampleObservation],
 ) -> PromotionCandidate:
-    """Match DSPy's stable highest-average combination selection."""
 
     scores: OrderedDict[str, list[float]] = OrderedDict()
     first_observation: dict[str, SampleObservation] = {}
@@ -1430,8 +1402,6 @@ def select_promotion(
 
 
 class Miprov2Study:
-    """Replay-only ownership seam around frozen Optuna 4.8.0."""
-
     def __init__(
         self,
         *,
@@ -1474,7 +1444,6 @@ class Miprov2Study:
         baseline_score: float,
         baseline_evaluation: Miprov2EvaluationObservation,
     ) -> StudyTranscript:
-        """Create the bound trial-zero durability record."""
 
         baseline = BaselineObservation(
             categorical_combination_identity_hash=(
@@ -1533,7 +1502,6 @@ class Miprov2Study:
         evaluation: Miprov2EvaluationObservation,
         candidate_assembly: Miprov2CandidateAssemblyBinding,
     ) -> PromotionCandidate | None:
-        """Return the exact candidate requiring a promotion effect, if due."""
 
         self._validate_next_suggestion(transcript, suggestion)
         provisional = self._provisional_sample(
@@ -1559,7 +1527,6 @@ class Miprov2Study:
         promotion_full_score: float | None = None,
         promotion_evaluation: Miprov2EvaluationObservation | None = None,
     ) -> StudyTranscript:
-        """Append a sample using DSPy's promotion-before-tell ordering."""
 
         self._validate_next_suggestion(transcript, suggestion)
         study = self._reconstruct(transcript)
@@ -1640,7 +1607,6 @@ class Miprov2Study:
                 evaluation=promotion_evaluation,
             )
 
-        # The sampled objective is told only after an optional promotion trial.
         study.tell(trial, score)
         completed = provisional.model_copy(update={"promotion": promotion})
         return StudyTranscript.model_validate(
@@ -1657,7 +1623,6 @@ class Miprov2Study:
         )
 
     def reconstruct_study(self, transcript: StudyTranscript) -> Any:
-        """Return a verified in-memory study, primarily for diagnostics."""
 
         self._require_bound_transcript(transcript)
         return self._reconstruct(transcript)
@@ -1666,7 +1631,6 @@ class Miprov2Study:
         self,
         transcript: StudyTranscript,
     ) -> FullEvaluation:
-        """Return the best eligible full result, retaining the first tie."""
 
         self._require_bound_transcript(transcript)
         best = FullEvaluation(
@@ -1682,8 +1646,6 @@ class Miprov2Study:
             score=transcript.baseline.score,
         )
         for sample in transcript.samples:
-            # Batch-size full_eval classification does not make a minibatch
-            # objective winner-eligible, including size == validation size.
             if not self.schedule.minibatch and sample.score > best.score:
                 best = FullEvaluation(
                     source="sample",

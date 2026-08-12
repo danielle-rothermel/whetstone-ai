@@ -23,11 +23,11 @@ from whetstone.evaluation.analysis.statistics import (
 )
 
 __all__ = [
+    "AnchorCalibrationResult",
     "DEFAULT_ALPHA",
     "DEFAULT_RESAMPLES",
     "DEFAULT_SAMPLE_CAP",
     "DEFAULT_TARGET_PROB",
-    "AnchorCalibrationResult",
     "BootstrapCI",
     "PowerConfig",
     "PowerResult",

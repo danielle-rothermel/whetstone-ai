@@ -195,8 +195,6 @@ def run_lock(path: Path) -> Iterator[None]:
 
 
 def raise_open_file_limit(concurrency: int) -> int:
-    """Raise RLIMIT_NOFILE to the matrix fanout requirement and return it."""
-
     if concurrency < 1:
         raise ValueError("concurrency must be positive")
     required = max(4096, concurrency * 64)
@@ -214,8 +212,6 @@ def raise_open_file_limit(concurrency: int) -> int:
 def map_openai_credential(
     environment: dict[str, str] | os._Environ[str],
 ) -> None:
-    """Expose the mise OpenAI credential only when runtime naming is absent."""
-
     if (
         "OPENAI_API_KEY" not in environment
         and "MARIMO_OPENAI_API_KEY" in environment
@@ -243,8 +239,6 @@ def run_behavior_matrix[
     hooks: BehaviorMatrixHooks[TPlan, TTreatment, TResult, TShared],
     progress: Callable[[str], None] | None = None,
 ) -> TPlan:
-    """Run or exactly resume one persisted behavior matrix."""
-
     output_dir = output_dir.expanduser().absolute()
     output_dir.mkdir(parents=True, exist_ok=True)
     launched_at = perf_counter()

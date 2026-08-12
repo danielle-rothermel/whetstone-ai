@@ -76,7 +76,7 @@ PromptCacheKey = NewType("PromptCacheKey", str)
 
 
 class PromptCacheError(RuntimeError):
-    """A cache entry was unreadable or failed current-schema validation."""
+    pass
 
 
 def _validate_cache_key(key: str) -> PromptCacheKey:
@@ -104,7 +104,6 @@ def prompt_cache_key(
     sample_index: int,
     drive_ordinal: int,
 ) -> PromptCacheKey:
-    """Hash every semantic identity component of one physical call drive."""
     return _prompt_cache_key_from_components(
         request_hash=request.identity_payload(),
         execution_policy_hash=policy.identity_hash,
@@ -132,8 +131,6 @@ def _prompt_cache_key_from_components(
         schema=PROMPT_CACHE_KEY_SCHEMA,
         schema_version=PROMPT_CACHE_KEY_SCHEMA_VERSION,
         payload={
-            # Persisted identity keys are a pinned wire contract. Do not
-            # derive or enumerate them from model field names.
             "request_hash": request_hash,
             "execution_policy_hash": execution_policy_hash,
             "sample_index": sample_index,
@@ -144,8 +141,6 @@ def _prompt_cache_key_from_components(
 
 
 class CacheProvenance(BaseModel):
-    """Persistent reference to the call that originally populated an entry."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     key: StrictStr
@@ -157,8 +152,6 @@ class CacheProvenance(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class PartialCacheMarks:
-    """Cache provenance columns for one partial call record."""
-
     cache_hit: bool = False
     cache_source_phase: str | None = None
     cache_source_unit: str | None = None
@@ -170,7 +163,6 @@ def partial_cache_marks(
     cache_hit: bool,
     provenance: CacheProvenance | None,
 ) -> PartialCacheMarks:
-    """Return honest partial-row marks for a cache miss or hit."""
     if cache_hit and provenance is None:
         raise ValueError("a cache hit requires original-entry provenance")
     if not cache_hit:
@@ -187,8 +179,6 @@ def partial_cache_marks(
 
 @dataclass(frozen=True, slots=True)
 class CallExecution:
-    """One freshly executed or cache-served provider result."""
-
     result: ProviderCallResult
     cache_hit: bool = False
     provenance: CacheProvenance | None = None
@@ -203,7 +193,6 @@ class CallExecution:
         return partial_cache_marks(self.cache_hit, self.provenance)
 
     def telemetry(self) -> CallTelemetry:
-        """Return telemetry without attributing original latency to a hit."""
         telemetry = call_telemetry(self.result)
         if not self.cache_hit:
             return telemetry
@@ -294,8 +283,6 @@ class _StoredStats(BaseModel):
 
 
 class _AccountingJournal(BaseModel):
-    """Recovery record bridging entry publication and stats persistence."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -323,8 +310,6 @@ def _default_log(message: str) -> None:
 
 @dataclass(slots=True)
 class PromptResultCache:
-    """Content-addressed prompt results safe for threads and peer processes."""
-
     root: Path
     log: Callable[[str], None] = _default_log
 
@@ -360,7 +345,7 @@ class PromptResultCache:
         self,
         key: str,
     ) -> tuple[PromptCacheKey, Path]:
-        # Key validation must precede every key-derived filesystem path.
+
         validated = _validate_cache_key(key)
         ensure_private_directory(self.store_dir)
         shard = self.store_dir / validated[:2]
@@ -392,7 +377,6 @@ class PromptResultCache:
         unit: str,
         logical_call_id: str,
     ) -> CacheProvenance:
-        """Store once per key and preserve the winning writer's provenance."""
         validated = _validate_cache_key(key)
         expected_key = _prompt_cache_key_from_components(
             request_hash=request_hash,
@@ -475,7 +459,7 @@ class PromptResultCache:
             raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return _StoredStats()
-        except OSError as exc:  # pragma: no cover - filesystem failure
+        except OSError as exc:
             raise PromptCacheError(
                 f"prompt-cache stats unreadable at {path}: {exc}"
             ) from exc
@@ -509,12 +493,6 @@ class PromptResultCache:
         result: ProviderCallResult,
         misses: Literal[0, 1],
     ) -> None:
-        """Publish one entry with restart-recoverable accounting.
-
-        The files are individually atomic, not a cross-file transaction.
-        ``misses=1`` means an execute_call-owned provider result was durably
-        published; direct ``put`` publication records a store but no miss.
-        """
         publication_id = uuid4().hex
         journal = _AccountingJournal(
             key=key,
@@ -668,7 +646,7 @@ class PromptResultCache:
     ) -> _AccountingJournal:
         try:
             raw = self._read_private_bytes(path)
-        except OSError as exc:  # pragma: no cover - filesystem failure
+        except OSError as exc:
             raise PromptCacheError(
                 f"prompt-cache accounting journal unreadable at {path}: {exc}"
             ) from exc
@@ -760,7 +738,7 @@ class PromptResultCache:
             raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return None
-        except OSError as exc:  # pragma: no cover - filesystem failure
+        except OSError as exc:
             raise PromptCacheError(
                 f"prompt-cache entry unreadable at {path}: {exc}"
             ) from exc
@@ -851,7 +829,6 @@ def execute_call(
     clock: Clock | None = None,
     sleep: Sleep | None = None,
 ) -> CallExecution:
-    """Execute a provider call, optionally serving a trusted cached result."""
     if cache is None:
         return CallExecution(
             result=run_provider_call(

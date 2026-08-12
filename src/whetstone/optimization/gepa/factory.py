@@ -15,11 +15,6 @@ from whetstone.optimization.gepa.contracts import (
     GepaEffectRecorder,
 )
 from whetstone.optimization.gepa.control import GepaControl
-from whetstone.optimization.gepa.effect_runtime import (
-    DbosGepaEffectBroker,
-    register_gepa_evaluation_authority,
-    register_gepa_proposal_authority,
-)
 from whetstone.optimization.gepa.engine import GepaDetailedResult
 from whetstone.optimization.gepa.prompts import GepaPromptServices
 from whetstone.optimization.gepa.result_artifact import (
@@ -35,8 +30,6 @@ GEPA_ADAPTER_FACTORY_SCHEMA_VERSION = 1
 
 
 class CanonicalGepaAdapterFactory:
-    """Create fresh adapters and persist their terminal paired artifacts."""
-
     def __init__(
         self,
         *,
@@ -107,6 +100,12 @@ class CanonicalGepaAdapterFactory:
         )
 
     def create(self, *, control: GepaControl) -> WhetstoneGepaAdapter:
+        from whetstone.optimization.gepa.effect_runtime import (
+            DbosGepaEffectBroker,
+            register_gepa_evaluation_authority,
+            register_gepa_proposal_authority,
+        )
+
         self._require_control(control)
         register_gepa_evaluation_authority(
             self._evaluation_authority.runtime_hash,

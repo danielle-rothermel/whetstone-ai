@@ -1,5 +1,3 @@
-# ruff: noqa: E501
-
 from __future__ import annotations
 
 import re
@@ -53,8 +51,6 @@ Read all the assistant responses and the corresponding feedback. Identify all ni
 
 
 class GepaComponentFormat(BaseModel):
-    """One independently evolvable native prompt component."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_name: StrictStr
@@ -120,7 +116,6 @@ class GepaComponentFormat(BaseModel):
         )
 
     def validate_replacement(self, text: str) -> str:
-        """Validate native placeholder syntax before returning to GEPA."""
 
         if not text:
             raise ValueError("GEPA replacement component must be non-empty")
@@ -149,8 +144,6 @@ class GepaComponentFormat(BaseModel):
 
 
 class GepaPromptFormatDescriptor(BaseModel):
-    """Ordered native prompt format bound to a GEPA run."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     format_name: StrictStr
@@ -193,8 +186,6 @@ class GepaPromptFormatDescriptor(BaseModel):
 
 
 class GepaReflectionRequest(BaseModel):
-    """Pure semantic inputs received from upstream ``propose_new_texts``."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: dict[StrictStr, StrictStr]
@@ -220,8 +211,6 @@ class GepaReflectionRequest(BaseModel):
 
 
 class GepaRenderedPrompt(BaseModel):
-    """Rendered reflection request and optional structured content parts."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     text: StrictStr
@@ -229,8 +218,6 @@ class GepaRenderedPrompt(BaseModel):
 
 
 class GepaPromptBinding(BaseModel):
-    """Exact format/builder/parser identities persisted in ``GepaControl``."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_format_identity_hash: StrictStr
@@ -273,9 +260,6 @@ class GepaReflectionResponseParser(Protocol):
     def parse(self, raw_response: str) -> str: ...
 
 
-#: Keys that carry an actual media payload. A media ``type`` alone does not
-#: make a dict media: typed-but-textual parts must render as text rather than
-#: being projected into structured content and dropped from the prompt.
 _MEDIA_PAYLOAD_KEYS = frozenset({"image_url", "url", "data", "input_audio"})
 _MEDIA_PART_TYPES = frozenset(
     {"image", "image_url", "input_image", "input_audio", "video"}
@@ -283,7 +267,6 @@ _MEDIA_PART_TYPES = frozenset(
 
 
 def _structured_content_part(value: Any) -> dict[str, Any] | None:
-    """Recognize already-serialized provider content without stringifying it."""
 
     if not isinstance(value, dict):
         return None
@@ -297,7 +280,6 @@ def _structured_content_part(value: Any) -> dict[str, Any] | None:
 def _format_examples(
     examples: Sequence[Mapping[str, Any]],
 ) -> tuple[str, tuple[dict[str, Any], ...]]:
-    """Match GEPA 0.1.1 markdown ordering and preserve structured media."""
 
     content_parts: list[dict[str, Any]] = []
 
@@ -339,8 +321,6 @@ def _format_examples(
 
 @dataclass(frozen=True, slots=True)
 class NativeGepaReflectionPromptBuilder:
-    """GEPA-semantic reflection prompt with native-format constraints."""
-
     @property
     def identity_hash(self) -> str:
         return compute_identity_hash(
@@ -428,14 +408,6 @@ class NativeGepaReflectionPromptBuilder:
 
 @dataclass(frozen=True, slots=True)
 class NativeGepaReflectionResponseParser:
-    """GEPA 0.1.1 fence extraction plus native-candidate validity.
-
-    Upstream's extractor can return an empty string.  Whetstone prompt
-    components cannot execute an empty instruction, so empty output is a
-    terminal proposal-format failure before the candidate reaches GEPA.  The
-    divergence is explicit in this parser's identity.
-    """
-
     @property
     def identity_hash(self) -> str:
         return compute_identity_hash(
@@ -507,7 +479,6 @@ class GepaPromptServices:
         component_name: str,
         parsed_replacement: str,
     ) -> str:
-        """Validate broker-parsed text without applying the parser twice."""
 
         return self.descriptor.component(component_name).validate_replacement(
             parsed_replacement
@@ -515,8 +486,6 @@ class GepaPromptServices:
 
 
 class MappingGepaPromptRegistry:
-    """Resolve one exact builder/parser binding by prompt-format identity."""
-
     def __init__(self, services: Sequence[GepaPromptServices]) -> None:
         self._services: dict[str, GepaPromptServices] = {}
         for item in services:

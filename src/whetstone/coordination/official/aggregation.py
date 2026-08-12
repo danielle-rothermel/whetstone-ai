@@ -20,29 +20,11 @@ __all__ = [
 
 
 class OfficialFailurePolicy(StrEnum):
-    """How the official account treats a missing planned key.
-
-    ``STRICT`` — a missing planned key is a hard incompleteness: the account is
-    incomplete and its missing keys are recorded for audit.
-    ``RECORD_MISSING`` — missing keys are recorded and stay visible in the
-    account; the account is still incomplete (certification refuses it), but
-    the account is produced rather than raising, so the operator sees exactly
-    which keys are missing.
-
-    Neither policy drops a planned key: the difference is only how the
-    account labels the incompleteness. Whether a missing key also *raises* is
-    the separate, policy-independent ``raise_on_missing`` switch on
-    :func:`account_planned_keys` — either policy may ask to record everything
-    and then fail loudly.
-    """
-
     STRICT = "strict"
     RECORD_MISSING = "record_missing"
 
 
 class MissingPlannedKeysError(ValueError):
-    """Planned keys were missing under a strict, raising official policy."""
-
     def __init__(self, missing: Sequence[str]) -> None:
         self.missing = tuple(missing)
         super().__init__(
@@ -55,14 +37,6 @@ class MissingPlannedKeysError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class OfficialAggregationAccount:
-    """A complete account of every planned key: present or missing, all shown.
-
-    ``planned_results`` has exactly one entry per planned key in planned order.
-    ``missing_keys`` lists the planned keys with no bound Result. The counts
-    always satisfy ``present + missing == planned`` so the account provably
-    covers the complete planned matrix with nothing dropped.
-    """
-
     policy: OfficialFailurePolicy
     planned_results: tuple[PlannedKeyResult, ...]
     missing_keys: tuple[str, ...]
@@ -81,7 +55,7 @@ class OfficialAggregationAccount:
             raise ValueError(
                 "missing_keys must exactly match the missing planned rows"
             )
-        # The complete-matrix guarantee: nothing is dropped.
+
         if len(present) + len(missing) != len(self.planned_results):
             raise ValueError("planned rows must all be accounted for")
 
@@ -99,7 +73,6 @@ class OfficialAggregationAccount:
 
     @property
     def complete(self) -> bool:
-        """Complete iff every planned key resolved to a bound Result."""
         return self.missing_count == 0
 
 
@@ -110,21 +83,6 @@ def account_planned_keys(
     policy: OfficialFailurePolicy = OfficialFailurePolicy.STRICT,
     raise_on_missing: bool = False,
 ) -> OfficialAggregationAccount:
-    """Account for every planned key under the configured failure policy.
-
-    ``planned_keys`` is the complete planned set of canonical Generation
-    Execution Key strings; ``resolve`` maps one such key to its bound
-    ordinary Generation
-    Result Object Reference (or ``None`` when unbound). Every planned key
-    produces exactly one :class:`PlannedKeyResult`; a missing key is recorded
-    as an explicit missing row, never dropped.
-
-    ``raise_on_missing`` is independent of ``policy``: with it set, any missing
-    key raises :class:`MissingPlannedKeysError` under either policy, after the
-    full account is computed, so the caller still sees the complete missing set
-    in the exception. Combining ``RECORD_MISSING`` with ``raise_on_missing`` is
-    a coherent "record everything, then fail loudly" request.
-    """
     if not planned_keys:
         raise ValueError("account_planned_keys requires >=1 planned key")
     if len(set(planned_keys)) != len(planned_keys):

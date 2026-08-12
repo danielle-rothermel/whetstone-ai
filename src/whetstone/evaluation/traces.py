@@ -25,13 +25,14 @@ __all__ = [
     "ExecutedComponentStep",
     "ExecutedComponentTracePayload",
     "ExecutedRowState",
+    "llm_component_step",
+    "llm_component_values",
     "validate_executed_component_trace",
 ]
 
 RENDER_FAILURE_CODE = "render_key_error"
 
-# Executed-component traces cross worker and partial-log JSON boundaries. The
-# fixed limits keep this audit payload finite independently of provider limits.
+
 MAX_EXECUTED_COMPONENT_STEPS = 16
 MAX_EXECUTED_COMPONENT_FIELDS = 32
 MAX_EXECUTED_COMPONENT_JSON_BYTES = 4 * 1024 * 1024
@@ -41,16 +42,12 @@ _COMPONENT_PROMPT_FIELD = "prompt"
 
 @verify(UNIQUE)
 class ExecutedRowState(StrEnum):
-    """The explicit execution state of one planned environment row."""
-
     SUCCESS = "success"
     FAILED = "failed"
     MISSING = "missing"
 
 
 class _JsonByteCounter:
-    """Exact bounded UTF-8 byte counter for compact strict JSON."""
-
     __slots__ = ("limit", "total")
 
     def __init__(self, limit: int) -> None:
@@ -64,7 +61,6 @@ class _JsonByteCounter:
 
 
 def _add_json_string_bytes(counter: _JsonByteCounter, value: str) -> None:
-    """Count the compact ``ensure_ascii=False`` JSON spelling of a string."""
     counter.add(2)
     for character in value:
         codepoint = ord(character)
@@ -87,7 +83,6 @@ def _add_json_string_bytes(counter: _JsonByteCounter, value: str) -> None:
 
 
 def _bounded_canonical_json_size(value: object, *, max_bytes: int) -> int:
-    """Count compact strict-JSON bytes incrementally and stop at the bound."""
     counter = _JsonByteCounter(max_bytes)
 
     def add_value(current: object, *, depth: int) -> None:
@@ -149,7 +144,6 @@ def _bounded_trace_json_size(
     *,
     max_bytes: int = MAX_EXECUTED_COMPONENT_JSON_BYTES,
 ) -> int:
-    """Add cached sizes and abort when the trace array is too big."""
     counter = _JsonByteCounter(max_bytes)
     counter.add(2)
     for index, step_size in enumerate(step_sizes):
@@ -160,8 +154,6 @@ def _bounded_trace_json_size(
 
 
 class ExecutedComponentStep(BaseModel):
-    """One observed component execution crossing a strict JSON boundary."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     trace_index: int
@@ -236,14 +228,12 @@ class ExecutedComponentStep(BaseModel):
 
     @property
     def canonical_json_bytes(self) -> int:
-        """The exact cached compact-JSON size of this immutable step."""
         return self._canonical_json_bytes
 
 
 def validate_executed_component_trace(
     steps: tuple[ExecutedComponentStep, ...],
 ) -> tuple[ExecutedComponentStep, ...]:
-    """Validate one bounded, authoritatively ordered execution trace."""
     if len(steps) > MAX_EXECUTED_COMPONENT_STEPS:
         raise ValueError("executed-component step count exceeds its bound")
     for expected_index, step in enumerate(steps):
@@ -256,8 +246,6 @@ def validate_executed_component_trace(
 
 
 class ExecutedComponentTracePayload(BaseModel):
-    """Strict row-state and trace payload persisted beside generic fields."""
-
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
 
     row_state: ExecutedRowState
@@ -279,8 +267,28 @@ class ExecutedComponentTracePayload(BaseModel):
     def from_json_value(
         cls, payload: JsonValue | None
     ) -> ExecutedComponentTracePayload:
-        """Validate a decoded partial payload using strict JSON semantics."""
         return cls.model_validate_json(json.dumps(payload))
+
+
+def llm_component_step(
+    *,
+    trace_index: int,
+    component_id: str,
+    prompt: str,
+    generation: str,
+) -> ExecutedComponentStep:
+    return _llm_component_step(
+        trace_index=trace_index,
+        component_id=component_id,
+        prompt=prompt,
+        generation=generation,
+    )
+
+
+def llm_component_values(
+    step: ExecutedComponentStep, *, component_id: str
+) -> tuple[str, str]:
+    return _llm_component_values(step, component_id=component_id)
 
 
 def _llm_component_step(
@@ -290,7 +298,6 @@ def _llm_component_step(
     prompt: str,
     generation: str,
 ) -> ExecutedComponentStep:
-    """Capture the exact semantic input and accepted output of one LLM node."""
     return ExecutedComponentStep(
         trace_index=trace_index,
         component_id=component_id,
@@ -306,7 +313,6 @@ def _llm_component_step(
 def _llm_component_values(
     step: ExecutedComponentStep, *, component_id: str
 ) -> tuple[str, str]:
-    """Validate and return one closed LLM node's prompt and generation."""
     if step.component_id != component_id:
         raise ValueError(
             f"executed component must be graph node {component_id!r}"

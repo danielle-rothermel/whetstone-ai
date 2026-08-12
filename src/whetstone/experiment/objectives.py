@@ -30,25 +30,20 @@ RESERVED_OBJECTIVE_NAMES = frozenset({"reward"})
 
 
 class Direction(StrEnum):
-    """The optimization direction carried by an objective."""
-
     MAXIMIZE = "maximize"
     MINIMIZE = "minimize"
 
 
 class ObjectiveDerivationSource(StrEnum):
-    """The complete set of evidence from which an objective may derive."""
-
     SCORE = "score"
     AGGREGATE = "aggregate"
 
 
 class RewardIsNotAnObjectiveError(ValueError):
-    """A Reward name was offered as an official-selection objective."""
+    pass
 
 
 def reject_reward_name(name: str) -> None:
-    """Reject names reserved for optimizer-facing Reward values."""
 
     if name.lower() in RESERVED_OBJECTIVE_NAMES:
         raise RewardIsNotAnObjectiveError(
@@ -60,8 +55,6 @@ def reject_reward_name(name: str) -> None:
 
 @dataclass(frozen=True, slots=True)
 class ObjectiveDerivation:
-    """Deterministic lineage from one eligible evidence value."""
-
     source: ObjectiveDerivationSource
     source_name: str
     graph_hash: str | None = None
@@ -79,8 +72,6 @@ class ObjectiveDerivation:
 
 @dataclass(frozen=True, slots=True)
 class Objective:
-    """One named, direction-bearing, deterministically derived criterion."""
-
     name: str
     value: float
     direction: Direction
@@ -104,7 +95,6 @@ class Objective:
         reject_reward_name(self.name)
 
     def is_better_than(self, other_value: float) -> bool:
-        """Whether this objective value beats ``other_value``."""
 
         if self.direction is Direction.MAXIMIZE:
             return self.value > other_value
@@ -113,8 +103,6 @@ class Objective:
 
 @dataclass(frozen=True, slots=True)
 class ObjectiveVector:
-    """An ordered, non-empty tuple of uniquely named objectives."""
-
     objectives: tuple[Objective, ...]
 
     def __post_init__(self) -> None:
@@ -142,13 +130,10 @@ class ObjectiveVector:
 
 
 class TieBehavior(StrEnum):
-    """Declared tie behavior for front ordering and official selection."""
-
     STABLE_INDEX = "stable_index"
 
 
 def dominates(a: ObjectiveVector, b: ObjectiveVector) -> bool:
-    """Whether ``a`` is no worse everywhere and better somewhere than ``b``."""
 
     if a.names != b.names:
         raise ValueError(
@@ -181,8 +166,6 @@ def dominates(a: ObjectiveVector, b: ObjectiveVector) -> bool:
 
 @dataclass(frozen=True, slots=True)
 class ParetoMember:
-    """One non-dominated candidate in stable input order."""
-
     original_index: int
     candidate_id: str
     vector: ObjectiveVector
@@ -196,8 +179,6 @@ class ParetoMember:
 
 @dataclass(frozen=True, slots=True)
 class ParetoFront:
-    """A stable, direction-aware set of non-dominated candidates."""
-
     objective_names: tuple[str, ...]
     objective_directions: tuple[Direction, ...]
     tie_behavior: TieBehavior
@@ -235,7 +216,6 @@ def pareto_front(
     *,
     tie_behavior: TieBehavior = TieBehavior.STABLE_INDEX,
 ) -> ParetoFront:
-    """Construct the stable, deterministic Pareto front over ``candidates``."""
 
     if not candidates:
         raise ValueError("pareto_front requires at least one candidate")
@@ -285,7 +265,6 @@ def objective_from_aggregate_value(
     eval_config_hash: str | None = None,
     derivation_id: str = "identity",
 ) -> Objective:
-    """Derive an objective from one Aggregate value."""
 
     reject_reward_name(name)
     return Objective(
@@ -312,7 +291,6 @@ def objective_from_score_value(
     eval_config_hash: str | None = None,
     derivation_id: str = "identity",
 ) -> Objective:
-    """Derive an objective from one named Score value."""
 
     reject_reward_name(name)
     return Objective(

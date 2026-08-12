@@ -19,7 +19,8 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.evaluation.engine import EvaluationEngine
+from whetstone.evaluation.preview.binding import preview_evaluation_binding
+from whetstone.evaluation.protocol import EvaluationEngine
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
@@ -53,8 +54,12 @@ from whetstone.optimization.gepa.contracts import (
     GepaTrajectoryProjection,
 )
 from whetstone.optimization.gepa.control import GepaControl
+
+from whetstone.optimization.gepa.submission_projection import (
+    DefaultGepaSubmissionProjector,
+    GepaSubmissionProjector,
+)
 from whetstone.optimization.gepa.prompts import GepaPromptServices
-from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.optimization.proposal.proposer import (
     DurableProposalExecutor,
     ProposalRequest,
@@ -85,8 +90,8 @@ GEPA_EVALUATION_ROW_FAILURE_SCHEMA = "whetstone.gepa.evaluation_row_failure"
 GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA = (
     "whetstone.gepa.proposal_provider_attempt/v2"
 )
-#: Persisted contract literal naming the coarsest evidence boundary GEPA
-#: records: one whole logical proposal call.
+
+
 GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY = "whole_call"
 GEPA_EVALUATION_RESPONSE_PARSER_IDENTITY_HASH = compute_identity_hash(
     schema="whetstone.gepa.evaluation_response_projection",
@@ -102,8 +107,6 @@ GEPA_EVALUATION_RESPONSE_PARSER_IDENTITY_HASH = compute_identity_hash(
 
 
 class GepaCandidateFieldBinding(BaseModel):
-    """Map one GEPA component name to one native Candidate payload field."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_name: StrictStr
@@ -125,8 +128,6 @@ class _GepaDataRecord(BaseModel):
 
 
 class GepaDataRegistry:
-    """Immutable ordered task identity-to-record authority for one run."""
-
     def __init__(
         self,
         *,
@@ -164,8 +165,8 @@ class GepaDataRegistry:
         store: ObjectStore,
         engine: EvaluationEngine,
     ) -> GepaDataRegistry:
-        task_ids = tuple(engine.sampling.task_set.task_hashes)
-        tasks = tuple(engine.sampling.tasks)
+        task_ids = engine.sampling.task_hashes
+        tasks = engine.sampling.tasks
         if len(task_ids) != len(tasks):
             raise ValueError(
                 "GEPA engine task identities and tasks do not align"
@@ -174,15 +175,12 @@ class GepaDataRegistry:
         for index, (task_hash, task) in enumerate(
             zip(task_ids, tasks, strict=True)
         ):
-            prompt_inputs = getattr(task, "prompt_inputs", None)
-            task_id = getattr(task, "id", None)
-            if not isinstance(prompt_inputs, dict) or not isinstance(
-                task_id,
-                str,
-            ):
+            if task.task_hash != task_hash:
                 raise ValueError(
-                    "GEPA engine task lacks canonical public inputs"
+                    "GEPA engine task surface disagrees with task hash order"
                 )
+            prompt_inputs = task.prompt_inputs
+            task_id = task.task_id
             prompt_input_items: list[tuple[str, str]] = []
             for name, value in prompt_inputs.items():
                 if not isinstance(name, str) or not isinstance(value, str):
@@ -255,8 +253,6 @@ class GepaDataRegistry:
 
 
 class CanonicalGepaCandidateAssembler:
-    """Build content-addressed native Candidates without algorithm choices."""
-
     def __init__(
         self,
         *,
@@ -325,135 +321,6 @@ class CanonicalGepaCandidateAssembler:
         )
 
 
-_GEPA_FEEDBACK_CASE_CAP = 5
-
-
-def _parse_submission_score_record(
-    submission_result: object,
-) -> dict[str, object] | None:
-    if not isinstance(submission_result, dict):
-        return None
-    score = submission_result.get("score")
-    if not isinstance(score, dict):
-        return None
-    return cast(dict[str, object], score)
-
-
-def _gepa_prediction_failed(
-    *,
-    failure_code: object,
-    submission_result: object,
-) -> bool:
-    if type(failure_code) is str and bool(failure_code):
-        return True
-    score = _parse_submission_score_record(submission_result)
-    if score is None:
-        return False
-    if (
-        score.get("passed") is False
-        and score.get("infrastructure_unknown") is not True
-    ):
-        return True
-    return False
-
-
-def _gepa_feedback(*, score: float, submission_result: object) -> str:
-    base = f"This trajectory got a score of {score}."
-    if not isinstance(submission_result, dict):
-        return base
-    score_record = _parse_submission_score_record(submission_result)
-    if score_record is None:
-        return base
-    if score_record.get("passed") is True:
-        return base
-    outcome = score_record.get("outcome")
-    summaries: list[str] = []
-    kind = submission_result.get("kind")
-    if kind == "humaneval":
-        cases = submission_result.get("cases")
-        if isinstance(cases, list):
-            for case in cases:
-                if (
-                    not isinstance(case, dict)
-                    or case.get("status") == "passed"
-                ):
-                    continue
-                actual = case.get("actual_output_repr") or case.get(
-                    "message", "?"
-                )
-                summaries.append(
-                    f"{case.get('case_id', '?')}: expected "
-                    f"{case.get('expected_output_repr', '?')} got {actual}"
-                )
-    elif kind == "mutant":
-        input_results = submission_result.get("input_results")
-        if isinstance(input_results, list):
-            for item in input_results:
-                if (
-                    not isinstance(item, dict)
-                    or item.get("matched_mutant") is True
-                ):
-                    continue
-                summaries.append(
-                    f"input {item.get('input_index', '?')} "
-                    f"({item.get('input_repr', '?')}): expected mutant "
-                    f"{item.get('expected_mutant_repr', '?')} got "
-                    f"{item.get('actual_output_repr', '?')}"
-                )
-    if summaries:
-        shown = summaries[:_GEPA_FEEDBACK_CASE_CAP]
-        overflow = len(summaries) - len(shown)
-        detail = "; ".join(shown)
-        if overflow > 0:
-            detail += f"; ... and {overflow} more failed case(s)"
-        return f"{base} Failed cases: {detail}."
-    if isinstance(outcome, str) and outcome:
-        return f"{base} Outcome: {outcome}."
-    return base
-
-
-def _gepa_generated_outputs(
-    *,
-    output_text: object,
-    failure_code: object,
-    submission_result: object,
-) -> dict[str, object]:
-    generated: dict[str, object] = {
-        "output_text": output_text,
-        "failure_code": failure_code,
-    }
-    if not isinstance(submission_result, dict):
-        return generated
-    kind = submission_result.get("kind")
-    if kind == "humaneval":
-        cases = submission_result.get("cases")
-        if isinstance(cases, list):
-            generated["test_results"] = [
-                {
-                    "case_id": case.get("case_id"),
-                    "status": case.get("status"),
-                    "expected": case.get("expected_output_repr"),
-                    "actual": case.get("actual_output_repr"),
-                    "message": case.get("message"),
-                }
-                for case in cases
-                if isinstance(case, dict)
-            ]
-    elif kind == "mutant":
-        input_results = submission_result.get("input_results")
-        if isinstance(input_results, list):
-            generated["test_results"] = [
-                {
-                    "input_index": item.get("input_index"),
-                    "matched_mutant": item.get("matched_mutant"),
-                    "expected_mutant": item.get("expected_mutant_repr"),
-                    "actual": item.get("actual_output_repr"),
-                }
-                for item in input_results
-                if isinstance(item, dict)
-            ]
-    return generated
-
 
 def _load_component_trace_index(
     store: ObjectStore,
@@ -495,8 +362,6 @@ def _load_component_trace_index(
 
 
 class CanonicalGepaEvaluationAuthority:
-    """Project canonical EvaluationService evidence into GEPA row effects."""
-
     def __init__(
         self,
         *,
@@ -505,6 +370,7 @@ class CanonicalGepaEvaluationAuthority:
         control: GepaControl,
         candidate_assembler: CanonicalGepaCandidateAssembler,
         data_registry: GepaDataRegistry,
+        submission_projector: GepaSubmissionProjector | None = None,
     ) -> None:
         if engine.eval_config_ref != control.metric:
             raise ValueError(
@@ -525,10 +391,8 @@ class CanonicalGepaEvaluationAuthority:
             raise ValueError(
                 "GEPA evaluation engine conflicts with reward policy"
             )
-        # The single-repeat contract is pinned into the response-parser
-        # identity; enforce it here so a multi-repeat engine cannot reach a
-        # paid evaluation before failing.
-        if engine.sampling.sample_plan.num_samples != 1:
+
+        if engine.sampling.num_samples != 1:
             raise ValueError(
                 "GEPA evaluation engine must use a single-repeat plan"
             )
@@ -542,7 +406,7 @@ class CanonicalGepaEvaluationAuthority:
         )
         if (
             data_registry.data_ids != expected_data_ids
-            or engine.sampling.task_set.task_hashes != expected_data_ids
+            or engine.sampling.task_hashes != expected_data_ids
         ):
             raise ValueError(
                 "GEPA data registry/engine sampling conflicts with control"
@@ -560,6 +424,18 @@ class CanonicalGepaEvaluationAuthority:
         self._control = control
         self._candidate_assembler = candidate_assembler
         self._data_registry = data_registry
+        self._submission_projector = submission_projector or (
+            DefaultGepaSubmissionProjector(
+                submission_result_field=control.submission_result_field,
+            )
+        )
+        if (
+            self._submission_projector.submission_result_field()
+            != control.submission_result_field
+        ):
+            raise ValueError(
+                "GEPA submission projector field conflicts with control"
+            )
         authority_hash = compute_identity_hash(
             schema=GEPA_EVALUATION_AUTHORITY_SCHEMA,
             schema_version=GEPA_EVALUATION_AUTHORITY_SCHEMA_VERSION,
@@ -582,6 +458,9 @@ class CanonicalGepaEvaluationAuthority:
                 ),
                 "response_parser_identity_hash": (
                     GEPA_EVALUATION_RESPONSE_PARSER_IDENTITY_HASH
+                ),
+                "submission_projector_identity_hash": (
+                    self._submission_projector.projector_identity_hash()
                 ),
             },
         )
@@ -633,14 +512,10 @@ class CanonicalGepaEvaluationAuthority:
         candidate = self._candidate_assembler.assemble(request.candidate)
         task_ids = tuple(item.data_id for item in request.data)
         subset_engine = self._engine.for_task_ids(task_ids)
-        evaluation_binding = EvaluationBinding(
-            schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
-            eval_config=subset_engine.eval_config_ref,
-            role=EvaluationRole.INTERNAL,
+        evaluation_binding = preview_evaluation_binding(
+            subset_engine,
             campaign=request.slot.context.run_id,
-            provider_execution_policy_ref=(
-                subset_engine.provider_execution_policy_ref
-            ),
+            provenance_note="gepa_metric",
         )
         intent = EvaluationIntent(
             intent_id=(
@@ -827,10 +702,13 @@ class CanonicalGepaEvaluationAuthority:
                 "GEPA evaluation output row order/identity drifted"
             )
         failed = type(failure_code) is str and bool(failure_code)
-        submission_result = raw.get("code_submission_result")
-        prediction_failed = _gepa_prediction_failed(
+        submission_field = self._submission_projector.submission_result_field()
+        submission_result = raw.get(submission_field)
+        if submission_result is None and submission_field != "submission_result":
+            submission_result = raw.get("submission_result")
+        prediction_failed = self._submission_projector.prediction_failed(
             failure_code=failure_code,
-            submission_result=submission_result,
+            submission=submission_result,
         )
         failure_ref = None
         row_evidence_refs = evidence_refs
@@ -858,8 +736,8 @@ class CanonicalGepaEvaluationAuthority:
             str,
             list[GepaComponentTraceProjection],
         ] = defaultdict(list)
-        feedback = _gepa_feedback(
-            score=score, submission_result=submission_result
+        feedback = self._submission_projector.feedback_text(
+            score=score, submission=submission_result
         )
         candidate_components = {
             component.name for component in request.candidate
@@ -879,11 +757,7 @@ class CanonicalGepaEvaluationAuthority:
                     source_refs=row_evidence_refs,
                 )
             )
-        if failed and failure_code in {
-            "format_failure",
-            "output_parse_failure",
-            "render_key_error",
-        }:
+        if failed and failure_code in set(self._control.format_failure_codes):
             data_inputs = data_record["prompt_inputs"]
             for component in request.candidate:
                 component_records[component.name].append(
@@ -901,15 +775,20 @@ class CanonicalGepaEvaluationAuthority:
                         source_refs=row_evidence_refs,
                     )
                 )
+        generated_outputs = {
+            "output_text": output_text,
+            "failure_code": failure_code,
+        }
+        projected = self._submission_projector.test_results(
+            submission=submission_result
+        )
+        if projected is not None:
+            generated_outputs.update(projected)
         trajectory = (
             GepaTrajectoryProjection(
                 data_id=data.data_id,
                 inputs=data_record["prompt_inputs"],
-                generated_outputs=_gepa_generated_outputs(
-                    output_text=output_text,
-                    failure_code=failure_code,
-                    submission_result=submission_result,
-                ),
+                generated_outputs=generated_outputs,
                 feedback=feedback,
                 component_records={
                     name: tuple(records)
@@ -933,18 +812,6 @@ class CanonicalGepaEvaluationAuthority:
 
 
 class CanonicalGepaProposalAuthority:
-    """Invoke the Whetstone proposer route for one GEPA reflection effect.
-
-    The authority runs inside GEPA's semantic-effect child workflow, which
-    guarantees that one effect ordinal binds one semantic proposal request.
-    The paid reflection call itself is delegated to the injected
-    :class:`DurableProposalExecutor`, whose own durability contract is
-    best-effort ``at_least_once``.  Nesting the executor inside the semantic
-    workflow does not strengthen that guarantee: a crash between the provider
-    serving the call and the executor's checkpoint landing still re-executes
-    and re-pays for the whole logical call.
-    """
-
     def __init__(
         self,
         *,
@@ -1053,20 +920,14 @@ class CanonicalGepaProposalAuthority:
     def proposal_executor(self) -> DurableProposalExecutor:
         return self._proposal_executor
 
-    @staticmethod
     def _reflection_base_candidate(
+        self,
         request: GepaProposalEffectRequest,
         current: str,
     ) -> CandidateRef:
-        """Address the reflected component as a canonical base candidate.
-
-        The generic proposer route reads its base template from the mutation
-        field of an exact candidate record, so the component under reflection
-        is carried there and the record is anchored to the effect request that
-        produced it.
-        """
 
         request_hash = request.identity_hash()
+        field = self._control.mutation_field
         return candidate_reference(
             Candidate(
                 candidate_id=f"gepa-reflection-{request_hash[:24]}",
@@ -1077,7 +938,7 @@ class CanonicalGepaProposalAuthority:
                         "request_hash": request_hash,
                     },
                 ),
-                payload={MUTATION_FIELD: current},
+                payload={field: current},
             )
         )
 
@@ -1105,6 +966,7 @@ class CanonicalGepaProposalAuthority:
                 request.authority.authority_identity_hash
             ),
             base_candidate=self._reflection_base_candidate(request, current),
+            mutation_field=self._control.mutation_field,
             context={
                 "proposal_prompt": request.rendered_prompt.text,
                 "proposal_messages": (
@@ -1187,13 +1049,6 @@ class CanonicalGepaProposalAuthority:
         self,
         response_evidence: dict[str, Any],
     ) -> tuple[TypedRef, ...]:
-        """Persist the provider attempts observed inside one logical call.
-
-        A transport that reports structured provider-call results yields one
-        record per physical provider attempt.  Otherwise the whole logical
-        call is the finest boundary the evidence supports, and one record is
-        persisted under :data:`GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY`.
-        """
 
         result = response_evidence.get("provider_call_result")
         if not isinstance(result, dict):

@@ -41,15 +41,6 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class ObjectiveSpec:
-    """A frozen declaration of one Objective to derive during selection.
-
-    Names the aggregate to read (``aggregate_name``), the Objective name to
-    publish it under, and the direction. The spec fixes the deterministic
-    derivation; it carries no Reward source (there is no such option), and the
-    Objective name is validated against the reserved Reward name when the
-    Objective is built.
-    """
-
     objective_name: str
     aggregate_name: str
     direction: Direction
@@ -65,16 +56,6 @@ class ObjectiveSpec:
 
 @dataclass(frozen=True, slots=True)
 class SelectionCandidate:
-    """One candidate's certified aggregate evidence for selection.
-
-    A candidate is one admitted Graph Hash / curve slot. ``aggregates`` maps
-    aggregate name -> :class:`Aggregate`; ``candidate_id`` is the opaque
-    identifier the front carries (typically the selected Materialization Record
-    reference or the ``graph_hash``). This is a plain value holder — not a
-    persisted record — so it is a lightweight class, not a pydantic model, and
-    is validated when consumed by :func:`select_official`.
-    """
-
     candidate_id: str
     graph_hash: str
     aggregates: Mapping[str, Aggregate]
@@ -91,42 +72,26 @@ class SelectionCandidate:
 
 
 class IncompleteEvidenceError(ValueError):
-    """A candidate's aggregate evidence is missing or not complete/certified.
-
-    Selection runs only over COMPLETE certified evidence; an aggregate that is
-    absent, does not account for the complete planned matrix, or whose pure
-    reduction is not ``OK`` is refused here rather than silently dropped.
-    """
+    pass
 
 
 class SelectionEvidence(BaseModel):
-    """Persisted, canonical evidence of one official-selection run.
-
-    A complete, self-describing record capturing everything needed to reproduce
-    and audit the selection: the ordered objective specs (derivation +
-    direction), the ordered candidate list and each candidate's derived
-    Objective Vector, the tie behavior, the constructed Pareto Front, and the
-    single official selection. It carries a Content Hash (via
-    :meth:`record_content`), never an Identity Hash, and computes no Reward.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    #: Ordered objective specs (the deterministic derivation + direction).
     objective_specs: tuple[ObjectiveSpec, ...]
-    #: Ordered candidate ids, in the exact input order (stable ordering).
+
     candidate_order: tuple[str, ...]
-    #: Each candidate's derived Objective Vector, aligned to candidate_order.
+
     candidate_vectors: tuple[ObjectiveVector, ...]
-    #: The declared, explicit tie behavior.
+
     tie_behavior: TieBehavior
-    #: The deterministic Pareto Front over the derived vectors.
+
     front: ParetoFront
-    #: The single officially selected candidate id.
+
     selected_candidate_id: StrictStr
-    #: The selected candidate's original index (tie resolution is explicit).
+
     selected_index: int
-    #: True when the front had >1 member and the tie rule broke the choice.
+
     selected_by_tie_rule: StrictBool
 
     @model_validator(mode="after")
@@ -164,12 +129,6 @@ class SelectionEvidence(BaseModel):
 def _certified_value(
     aggregate: Aggregate,
 ) -> float:
-    """Return the certified numeric value of a complete aggregate.
-
-    Refuses any aggregate whose pure reduction is not ``OK``: a non-OK status
-    (missing data, zero denominator, not applicable) is exactly the incomplete
-    evidence official selection must never select over.
-    """
     output = aggregate.aggregation_output
     if output.status is not AggregationStatus.OK or output.value is None:
         raise IncompleteEvidenceError(
@@ -186,26 +145,6 @@ def select_official(
     objective_specs: Sequence[ObjectiveSpec],
     tie_behavior: TieBehavior = TieBehavior.STABLE_INDEX,
 ) -> SelectionEvidence:
-    """Run official selection over complete certified aggregate evidence.
-
-    Deterministic end to end:
-
-    1. For every candidate, derive one Objective per spec from that candidate's
-       named certified aggregate (refusing missing / non-OK / incomplete
-       evidence), forming an ordered :class:`ObjectiveVector`. Every aggregate
-       across every candidate must share one ``eval_config_hash``: candidates
-       evaluated under different Eval Configs are incomparable evidence and
-       are refused, not silently ranked against each other.
-    2. Construct the deterministic :class:`ParetoFront` over those vectors in
-       stable input order with the explicit ``tie_behavior``.
-    3. Officially select the front's first member (lowest original index) under
-       the ``STABLE_INDEX`` tie rule, recording whether a tie rule broke it.
-    4. Persist the derivation, order, tie behavior, front, and selection as
-       :class:`SelectionEvidence`.
-
-    No Reward is computed: Objectives derive only from Scores / Generation
-    Aggregates, and the reserved Reward name is refused by :class:`Objective`.
-    """
     if not candidates:
         raise ValueError("select_official requires at least one candidate")
     specs = tuple(objective_specs)
@@ -219,9 +158,7 @@ def select_official(
     candidate_vectors: list[ObjectiveVector] = []
     front_input: list[tuple[str, ObjectiveVector]] = []
     seen_ids: set[str] = set()
-    # Every aggregate entering one selection must be bound to the same Eval
-    # Config identity: comparing candidates evaluated under different eval
-    # configs would compare incomparable evidence.
+
     eval_config_hashes: set[str] = set()
 
     for candidate in candidates:
@@ -269,9 +206,7 @@ def select_official(
         front_input.append((candidate.candidate_id, vector))
 
     front = pareto_front(front_input, tie_behavior=tie_behavior)
-    # Stable tie rule: the official selection is the front's first member
-    # (lowest original index). A tie broke the choice when the front holds
-    # more than one non-dominated candidate.
+
     selected = front.members[0]
     selected_by_tie_rule = len(front.members) > 1
 

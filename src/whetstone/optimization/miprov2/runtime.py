@@ -140,8 +140,6 @@ _COMPONENT_FIELD_ORDER_ADAPTER = TypeAdapter(Miprov2ComponentFieldOrder)
 
 @dataclass(frozen=True)
 class Miprov2ReplayProjection:
-    """All redundant runtime fields derived from immutable inputs/evidence."""
-
     rng_checkpoint: Miprov2RngCheckpoint
     bootstrap: tuple[
         int,
@@ -183,7 +181,6 @@ def _component_demo_projection(
     demo_set: ComponentDemoSet,
     component_id: str,
 ) -> ComponentDemoSet:
-    """Return the exact predictor-specific categorical demo value."""
 
     return ComponentDemoSet(
         candidate_seed=demo_set.candidate_seed,
@@ -197,8 +194,6 @@ def _component_demo_projection(
 
 
 class Miprov2EvaluationEffect(BaseModel):
-    """One identity-bound evaluation to be executed by the durable harness."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
@@ -255,8 +250,7 @@ class Miprov2EvaluationEffect(BaseModel):
         return self
 
     def identity_hash(self) -> str:
-        # Eval Config derivation is itself keyed by this identity, so the
-        # identity is exactly the pre-derivation evaluation specification.
+
         return Miprov2EvaluationSpec(
             run_id=self.run_id,
             ordinal=self.ordinal,
@@ -274,8 +268,6 @@ class Miprov2EvaluationEffect(BaseModel):
 
 
 class Miprov2EvaluationSpec(BaseModel):
-    """Evaluation identity before its exact subset Eval Config is derived."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
@@ -320,7 +312,7 @@ class Miprov2EvaluationSpec(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract.
+
         return {
             "run_id": self.run_id,
             "ordinal": self.ordinal,
@@ -357,8 +349,6 @@ class Miprov2EvaluationSpec(BaseModel):
 
 
 class Miprov2EffectBudget(BaseModel):
-    """Hard effect ceilings checked immediately before every external call."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bootstrap_generations: StrictInt
@@ -382,8 +372,6 @@ class Miprov2EffectBudget(BaseModel):
 
 
 class Miprov2CompletedEffect(BaseModel):
-    """Append-only proof that one planned external effect was folded."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     kind: Literal["bootstrap_generations", "proposal_calls", "evaluations"]
@@ -401,8 +389,6 @@ class Miprov2CompletedEffect(BaseModel):
 
 
 class Miprov2ScoreObservation(BaseModel):
-    """One DSPy ``score_data`` row in execution order."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source: Literal["baseline", "sample", "promotion"]
@@ -422,8 +408,6 @@ class Miprov2ScoreObservation(BaseModel):
 
 
 class Miprov2TrialLog(BaseModel):
-    """Reference-equivalent ordered trial log without filesystem paths."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     log_key: StrictInt
@@ -461,8 +445,6 @@ class Miprov2TrialLog(BaseModel):
 
 
 class Miprov2ScoredCandidate(BaseModel):
-    """One stable score-sorted DSPy candidate-program projection."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: CandidateRef
@@ -478,8 +460,6 @@ class Miprov2ScoredCandidate(BaseModel):
 
 
 class Miprov2TerminalStats(BaseModel):
-    """Detailed DSPy-style run artifacts retained only with track_stats."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     study_transcript: StudyTranscript
@@ -569,8 +549,6 @@ class Miprov2TerminalStats(BaseModel):
 
 
 class Miprov2TerminalResult(BaseModel):
-    """Typed terminal projection matching the public track_stats control."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_name: Literal["whetstone.miprov2_result"] = MIPROV2_RESULT_SCHEMA
@@ -592,8 +570,6 @@ class Miprov2TerminalResult(BaseModel):
 
 
 class Miprov2PendingSample(BaseModel):
-    """Sample evidence retained while a promotion runs before ``tell``."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     suggestion: StudySuggestion
@@ -614,8 +590,6 @@ class Miprov2PendingSample(BaseModel):
 
 
 class Miprov2State(BaseModel):
-    """Complete immutable state of one MIPROv2 run."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_name: Literal["whetstone.miprov2_runtime"] = MIPROV2_RUNTIME_SCHEMA
@@ -720,7 +694,6 @@ class Miprov2State(BaseModel):
         _fields_set: set[str] | None = None,
         **values: Any,
     ) -> Self:
-        """Validate construction and defensively freeze all containers."""
 
         del _fields_set
         if "component_field_order" in values:
@@ -1071,8 +1044,7 @@ class Miprov2State(BaseModel):
         )
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract. Never derive
-        # them by iterating over model fields.
+
         return {
             "schema_name": self.schema_name,
             "schema_version": self.schema_version,
@@ -1214,8 +1186,6 @@ class Miprov2State(BaseModel):
 
 
 class Miprov2DriverPlan(BaseModel):
-    """One pure planning checkpoint with zero or one external effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: Miprov2State
@@ -1283,7 +1253,6 @@ def _provider_parameters(
     *,
     temperature: float | None = None,
 ) -> dict[str, object]:
-    """Translate DSPy LM kwargs to Whetstone's typed provider parameters."""
 
     parameters: dict[str, object] = {}
     extra_body: dict[str, object] = {}
@@ -1355,7 +1324,6 @@ def _execution_policy(
 
 
 def _terminal_statistics(state: Miprov2State) -> Miprov2TerminalStats:
-    """Project the frozen DSPy statistics surface from durable evidence."""
 
     transcript = state.study_transcript
     if transcript is None:
@@ -1524,7 +1492,6 @@ def _canonical_bootstrap_projection(
     tuple[ComponentDemoSet, ...],
     BootstrapAttemptPlan | None,
 ]:
-    """Replay all bootstrap evidence and validate cursor/demo checkpoints."""
 
     plans = planning.plans
     events = state.bootstrap_evidence
@@ -1795,7 +1762,6 @@ def _canonical_pending_evaluation_spec(
     state: Miprov2State,
     planning: FewshotCandidatePlanningResult,
 ) -> Miprov2EvaluationSpec | None:
-    """Derive the only evaluation spec the study may expose next."""
 
     if state.pending_evaluation_spec is None:
         return None
@@ -1928,7 +1894,6 @@ def replay_miprov2_state(
     state: Miprov2State,
     planning: FewshotCandidatePlanningResult,
 ) -> Miprov2ReplayProjection:
-    """Replay the canonical projection from immutable inputs and evidence."""
 
     instruction_pools = (
         ()
@@ -2016,7 +1981,6 @@ def _materialize_bootstrap_teacher(
     plan: FewshotCandidatePlan,
     attempt: BootstrapAttemptPlan,
 ) -> CandidateRef:
-    """Apply the teacher plan through the sole candidate mutation surface."""
 
     teacher_plan = plan.teacher
     if teacher_plan is None:
@@ -2087,7 +2051,6 @@ def render_miprov2_candidate(
     params: TrialParams,
     categorical_combination_identity_hash: str,
 ) -> Candidate:
-    """Render one categorical program into ``user_prompt_template`` only."""
 
     rendering = _miprov2_candidate_rendering(
         control=control,
@@ -2114,7 +2077,6 @@ def _miprov2_candidate_rendering(
     params: TrialParams,
     categorical_combination_identity_hash: str,
 ) -> Miprov2CandidateRendering:
-    """Bind exact categorical selections before candidate composition."""
 
     values = dict(params)
     specs = control.component_specs
@@ -2197,8 +2159,6 @@ def _miprov2_candidate_rendering(
 
 
 class Miprov2Driver:
-    """Pure, crash-safe orchestration over the exact algorithm primitives."""
-
     def start(
         self,
         *,
@@ -2211,7 +2171,6 @@ class Miprov2Driver:
         component_field_order: dict[str, tuple[str, ...]],
         budget: Miprov2EffectBudget,
     ) -> Miprov2State:
-        """Bind resolved control and consume no external effects."""
 
         if len(control.component_ids) != 1:
             raise ValueError(
@@ -2259,7 +2218,6 @@ class Miprov2Driver:
         )
 
     def plan(self, state: Miprov2State) -> Miprov2DriverPlan:
-        """Advance pure phases until one effect or the strict winner."""
 
         state = self._validated(state)
         if state.phase == "failed":
@@ -2332,7 +2290,6 @@ class Miprov2Driver:
         state: Miprov2State,
         binding: Miprov2EvalConfigBinding,
     ) -> Miprov2State:
-        """Fold the exact ordered-subset config before issuing its Intent."""
 
         state = self._validated(state)
         request = state.pending_eval_binding_request
@@ -2420,7 +2377,6 @@ class Miprov2Driver:
         state: Miprov2State,
         resolved: Miprov2ResolvedEvaluation,
     ) -> Miprov2State:
-        """Fold canonical evidence using DSPy's ``round(score*100, 2)``."""
 
         state = self._validated(state)
         effect = state.pending_evaluation
@@ -2712,9 +2668,7 @@ class Miprov2Driver:
         space = self._space(state)
         params = space.baseline_params
         combination = space.combination_identity_hash(params)
-        # DSPy evaluates an untouched deepcopy of the original program before
-        # any trial.  Trial-zero params remain all-zero categorical values,
-        # but the exact evaluated record is the bound base Candidate.
+
         candidate = state.control.base_candidate.record
         spec = Miprov2EvaluationSpec(
             run_id=state.run_id,

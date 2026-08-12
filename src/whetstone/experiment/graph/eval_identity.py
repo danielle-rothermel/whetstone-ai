@@ -14,18 +14,14 @@ if TYPE_CHECKING:
 
 
 class EvalIdentityMismatchError(ValueError):
-    """The composite Eval Config's Procedure identity does not match the
-    Eval Node's statically assigned Evaluation Procedure Config reference."""
+    pass
 
 
 class EvalNodeError(ValueError):
-    """The Graph Config does not contain exactly one Eval Node, or the Eval
-    Node is malformed."""
+    pass
 
 
 def eval_node_procedure_hashes(graph: GraphConfig) -> list[str]:
-    """Return the Evaluation Procedure Config Identity Hash of every Eval
-    Node in ``graph`` (in graph node order)."""
     return [
         eval_node_procedure_hash(node.variables)
         for node in graph.nodes
@@ -34,8 +30,6 @@ def eval_node_procedure_hashes(graph: GraphConfig) -> list[str]:
 
 
 def sole_eval_node_procedure_hash(graph: GraphConfig) -> str:
-    """Return the single Eval Node's Evaluation Procedure Config Identity
-    Hash, requiring exactly one Eval Node in the Graph Config."""
     hashes = eval_node_procedure_hashes(graph)
     if len(hashes) != 1:
         raise EvalNodeError(
@@ -45,11 +39,6 @@ def sole_eval_node_procedure_hash(graph: GraphConfig) -> str:
 
 
 def eval_config_hash(eval_config: EvalConfig) -> str:
-    """The composite Eval Config Identity Hash (``eval_config_hash``).
-
-    This is the Eval Config's native ``config_hash``; Whetstone adds
-    no second identity for it.
-    """
     return eval_config.config_hash
 
 
@@ -57,12 +46,6 @@ def validate_eval_identity_partition(
     graph: GraphConfig,
     eval_config: EvalConfig,
 ) -> None:
-    """Validate the Eval identity partition invariant.
-
-    The composite Eval Config's Evaluation Procedure Config identity MUST
-    exactly match the Eval Node / Graph Config reference. Raises
-    :class:`EvalIdentityMismatchError` on any mismatch.
-    """
     node_procedure_hash = sole_eval_node_procedure_hash(graph)
     config_procedure_hash = eval_config.evaluation_procedure_config_hash
     if node_procedure_hash != config_procedure_hash:

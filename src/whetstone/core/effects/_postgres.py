@@ -300,8 +300,6 @@ ORDER BY cls.relname, constraint_record.contype, constraint_record.conname
 _POSTGRES_INIT_LOCK = """
 SELECT pg_advisory_xact_lock(1465141076, 1)
 """
-# This stable two-key namespace serializes first-use schema creation. Changing
-# it would let different releases initialize the same table concurrently.
 
 
 class _Cursor(Protocol):
@@ -447,7 +445,13 @@ class _PostgreSQLStore:
         _require_text(dsn, field="PostgreSQL DSN", maximum=16_384)
         self._dsn = dsn
         if connect is None:
-            from psycopg import connect as psycopg_connect
+            try:
+                from psycopg import connect as psycopg_connect
+            except ImportError as exc:
+                raise ImportError(
+                    "PostgreSQL effects require the optional postgres extra: "
+                    "pip install 'whetstone-ai[postgres]'"
+                ) from exc
 
             self._connect = cast(_Connect, psycopg_connect)
         else:

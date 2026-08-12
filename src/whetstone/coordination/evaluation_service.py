@@ -21,7 +21,7 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
+from whetstone.evaluation.protocol import EvaluationEngine, EvaluationRequest
 from whetstone.evaluation.evidence_validation import (
     EvaluationEvidenceValidation,
 )
@@ -43,10 +43,6 @@ _EVALUATION_SERVICE_NAMESPACE = "whetstone.evaluation_service.v3"
 
 
 class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
-    """Persist one authoritative resolution per immutable intent across
-    processes and restarts; an expired uncommitted attempt may be retried.
-    """
-
     def __init__(
         self,
         *,
@@ -76,11 +72,9 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
 
     @property
     def replay_policy(self) -> ReplayPolicy:
-        """Return the recovery policy of the durable evaluator workflow."""
         return ReplayPolicy.DURABLE_WORKFLOW
 
     def validate_resolution_graph(self, resolution: IntentResolution) -> None:
-        """Validate one exact result graph without mutating durable state."""
         self._validate_result_graph(
             resolution,
             expected_intent=resolution.intent,

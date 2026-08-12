@@ -20,7 +20,6 @@ def ensure_recordable(
     *,
     max_bytes: int = POSTGRES_JSONB_PAYLOAD_MAX_BYTES,
 ) -> Any:
-    """Shared path for all storable JSON/JSONB values."""
     try:
         return Serializer(limits=postgres_jsonb_limits(max_bytes)).to_jsonable(
             value
@@ -30,7 +29,6 @@ def ensure_recordable(
 
 
 def recordable_text(value: Any) -> str:
-    """Convert a payload to canonical text for metrics recording."""
     if isinstance(value, str):
         return value
     from dr_serialize import canonical_json
@@ -41,11 +39,7 @@ def recordable_text(value: Any) -> str:
 def failure_metadata_dict_from_exception(
     error: BaseException,
 ) -> dict[str, Any]:
-    """Extract SerializationError diagnostics or EvalFailureError metadata."""
-    # Exceptions can carry several links at once (a raise inside an
-    # except block sets __context__ even when an ``underlying`` was
-    # attached), so walk all of them depth-first, __cause__ subtree
-    # before __context__ before ``underlying``.
+
     stack: list[BaseException] = [error]
     seen: set[int] = set()
     eval_failure_metadata: dict[str, Any] | None = None

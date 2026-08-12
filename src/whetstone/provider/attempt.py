@@ -36,29 +36,21 @@ PROVIDER_CALL_RESULT_SCHEMA_VERSION = 2
 
 
 class ProviderCallAttempt(BaseModel):
-    """Serializable Whetstone logical-attempt wrapper.
-
-    One completed logical attempt: identity, attempt number, execution-policy
-    identity, timing, one Provider Invocation Evidence artifact, and its
-    semantic classification. This type is infrastructure-free and fully
-    serializable on its own.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[2] = PROVIDER_CALL_ATTEMPT_SCHEMA_VERSION
-    #: Stable identity of the logical call, constant across its attempts.
+
     logical_call_id: StrictStr
-    #: 1-based attempt number within the logical call.
+
     attempt_number: StrictInt
-    #: Identity Hash of the composing Provider Execution Policy.
+
     execution_policy_hash: StrictStr
-    #: Wall-clock timing of the attempt (seconds, injectable clock).
+
     started_at: float
     ended_at: float
-    #: Exactly one stable transport evidence artifact (provider bodies here).
+
     evidence: ProviderInvocationEvidence
-    #: The Whetstone semantic classification of this attempt.
+
     provider_generation: ProviderGeneration | None = None
     semantic_failure: ProviderSemanticFailure | None = None
 
@@ -77,7 +69,7 @@ class ProviderCallAttempt(BaseModel):
             raise ValueError("ended_at must be finite and non-negative")
         if self.ended_at < self.started_at:
             raise ValueError("ended_at cannot precede started_at")
-        # Exactly one classification side is present.
+
         has_provider_generation = self.provider_generation is not None
         has_failure = self.semantic_failure is not None
         if has_provider_generation == has_failure:
@@ -116,27 +108,18 @@ class ProviderCallAttempt(BaseModel):
         return self.semantic_failure.failure_class
 
     def to_stable_dict(self) -> dict[str, Any]:
-        """Stable serialized form for checkpointing/persistence."""
         return self.model_dump(mode="json")
 
 
 class ProviderCallResult(BaseModel):
-    """Terminal semantic Result for one logical provider call.
-
-    Request identity, ordered completed attempts, and the final
-    ProviderGeneration or
-    Provider Semantic Failure. An exhausted Provider Semantic Failure is a
-    valid terminal Result, not an exception.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[2] = PROVIDER_CALL_RESULT_SCHEMA_VERSION
     logical_call_id: StrictStr
-    #: Provider Call Request identity payload (config-ref + transcript).
+
     request_hash: dict[str, Any]
     execution_policy_hash: StrictStr
-    #: Ordered completed attempts (attempt 1 .. N).
+
     attempts: tuple[ProviderCallAttempt, ...]
     provider_generation: ProviderGeneration | None = None
     semantic_failure: ProviderSemanticFailure | None = None
@@ -150,7 +133,7 @@ class ProviderCallResult(BaseModel):
         require_full_hash(
             self.execution_policy_hash, field="execution_policy_hash"
         )
-        # Attempts are ordered, contiguous, 1-based, and share identity.
+
         for index, attempt in enumerate(self.attempts, start=1):
             if attempt.attempt_number != index:
                 raise ValueError(
@@ -164,7 +147,7 @@ class ProviderCallResult(BaseModel):
                 raise ValueError(
                     "every attempt shares the Result's execution_policy_hash"
                 )
-        # Exactly one terminal side is present.
+
         has_provider_generation = self.provider_generation is not None
         has_failure = self.semantic_failure is not None
         if has_provider_generation == has_failure:
@@ -172,7 +155,7 @@ class ProviderCallResult(BaseModel):
                 "a ProviderCallResult holds exactly one of "
                 "provider_generation or semantic_failure"
             )
-        # The terminal outcome must equal the last attempt's classification.
+
         last = self.attempts[-1]
         if (
             has_provider_generation
@@ -186,25 +169,14 @@ class ProviderCallResult(BaseModel):
             raise ValueError(
                 "terminal failure must equal the final attempt's failure"
             )
-        first_evidence_identities = self.attempts[0].evidence.model_dump(
-            mode="json",
-            include={"request_identity", "policy_identity"},
-        )
-        expected_policy_document = first_evidence_identities["policy_identity"]
+        first_request_hash = self.attempts[0].evidence.request_identity_hash
+        first_policy = self.attempts[0].evidence.policy_identity
         for attempt in self.attempts:
-            evidence_identities = attempt.evidence.model_dump(
-                mode="json",
-                include={"request_identity", "policy_identity"},
-            )
-            if evidence_identities["request_identity"] != self.request_hash:
+            if attempt.evidence.request_identity_hash != first_request_hash:
                 raise ValueError(
-                    "every attempt evidence request identity must equal the "
-                    "Result's request_hash"
+                    "every attempt evidence request identity must agree"
                 )
-            if (
-                evidence_identities["policy_identity"]
-                != expected_policy_document
-            ):
+            if attempt.evidence.policy_identity != first_policy:
                 raise ValueError(
                     "every attempt evidence policy identity must agree"
                 )
@@ -219,5 +191,4 @@ class ProviderCallResult(BaseModel):
         return len(self.attempts)
 
     def to_stable_dict(self) -> dict[str, Any]:
-        """Stable serialized form for checkpointing/persistence."""
         return self.model_dump(mode="json")

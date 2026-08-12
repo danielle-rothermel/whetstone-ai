@@ -46,7 +46,6 @@ from whetstone.optimization.miprov2.proposal import (
     MIPROV2_PROPOSAL_SCHEMA_VERSION,
     PROGRAM_DESCRIPTION_SCHEMA_TAG,
 )
-from whetstone.optimization.proposal.mutation import MUTATION_FIELD
 from whetstone.optimization.proposal.proposer import (
     ProposerConfig,
     prompt_adapter_identity_hash,
@@ -230,7 +229,8 @@ class Miprov2ProgramLayout(BaseModel):
             raise ValueError("Whetstone safety: component_ids must be unique")
         if component_ids[0] not in {"generate", "encode"}:
             raise ValueError(
-                "MIPROv2 optimizes generate (Internal/D1) or encode (ED1)"
+                "MIPROv2 requires exactly one optimizable component "
+                "(generate or encode)"
             )
         return self
 
@@ -276,6 +276,7 @@ class Miprov2InjectedDefaults(BaseModel):
     task_model_identity_hash: StrictStr
     prompt_adapter: PlainPromptAdapter
     template_render_contract: TemplateRenderContract
+    mutation_field: StrictStr = "user_prompt_template"
     max_errors: StrictInt
     validation_eval_source_is_metric_authority: StrictBool = False
 
@@ -317,6 +318,7 @@ class Miprov2Control(BaseModel):
     task_model_identity_hash: StrictStr
     prompt_adapter_identity_hash: StrictStr
     template_render_contract: TemplateRenderContract
+    mutation_field: StrictStr = "user_prompt_template"
     metric_authority: Literal["explicit", "injected_default"]
 
     teacher_settings: ImmutableJsonObject = Field(
@@ -411,18 +413,20 @@ class Miprov2Control(BaseModel):
         _validate_candidate_components(
             self.base_candidate,
             self.component_specs,
+            mutation_field=self.mutation_field,
             role="base candidate",
         )
         _validate_candidate_components(
             self.teacher_candidate,
             self.component_specs,
+            mutation_field=self.mutation_field,
             role="teacher candidate",
         )
         self.template_render_contract.validate_template(
-            self.base_candidate.record.payload.get(MUTATION_FIELD)
+            self.base_candidate.record.payload.get(self.mutation_field)
         )
         self.template_render_contract.validate_template(
-            self.teacher_candidate.record.payload.get(MUTATION_FIELD)
+            self.teacher_candidate.record.payload.get(self.mutation_field)
         )
         for field, identities in (
             (
@@ -904,14 +908,15 @@ def _normalize_program_layout(
     *,
     base_candidate: CandidateRef,
     prompt_format_identity_hash: str,
+    mutation_field: str,
 ) -> Miprov2ProgramLayout:
     if program_layout is None:
-        field = MUTATION_FIELD
+        field = mutation_field
         template = base_candidate.record.payload.get(field)
         if type(template) is not str or not template:
             raise ValueError(
                 "Whetstone safety: base candidate requires a non-empty "
-                "string user_prompt_template"
+                f"{field!r} mutation field"
             )
         return Miprov2ProgramLayout(
             layout_id="canonical-mutation-surface",
@@ -931,15 +936,16 @@ def _validate_candidate_components(
     candidate: CandidateRef,
     component_specs: tuple[Miprov2ComponentSpec, ...],
     *,
+    mutation_field: str,
     role: str,
 ) -> None:
     if len(component_specs) != 1:
         raise ValueError("MIPROv2 requires exactly one optimizable component")
-    template = candidate.record.payload.get(MUTATION_FIELD)
+    template = candidate.record.payload.get(mutation_field)
     if type(template) is not str or not template:
         raise ValueError(
             f"Whetstone safety: {role} component field "
-            f"{MUTATION_FIELD!r} must be a non-empty string"
+            f"{mutation_field!r} must be a non-empty string"
         )
 
 
@@ -1194,6 +1200,7 @@ def configure_miprov2(
         program_layout,
         base_candidate=base_candidate,
         prompt_format_identity_hash=adapter_identity_hash,
+        mutation_field=defaults.mutation_field,
     )
     resolved_component_specs = resolved_program_layout.component_specs
 
@@ -1242,11 +1249,13 @@ def configure_miprov2(
     _validate_candidate_components(
         base_candidate,
         resolved_component_specs,
+        mutation_field=defaults.mutation_field,
         role="base candidate",
     )
     _validate_candidate_components(
         resolved_teacher,
         resolved_component_specs,
+        mutation_field=defaults.mutation_field,
         role="teacher candidate",
     )
 
@@ -1297,6 +1306,7 @@ def configure_miprov2(
         task_model_identity_hash=resolved_task_model_hash,
         prompt_adapter_identity_hash=adapter_identity_hash,
         template_render_contract=defaults.template_render_contract,
+        mutation_field=defaults.mutation_field,
         metric_authority=metric_authority,
         teacher_settings=ImmutableJsonObject(deepcopy(teacher_settings or {})),
         max_bootstrapped_demos=effective_max_bootstrapped_demos,

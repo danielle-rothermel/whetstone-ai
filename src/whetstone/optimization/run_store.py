@@ -166,11 +166,6 @@ class OptimizationRunStore:
     def bind_run(
         self, run: OptimizationRun | OptimizationRunRef
     ) -> OptimizationRunRef:
-        """Bind one exact immutable run to its run ID.
-
-        Rebinding the same record is idempotent; a different record for that
-        ID raises :class:`OptimizationRunConflictError`.
-        """
         if isinstance(run, OptimizationRunRef):
             exact = OptimizationRunRef.model_validate(
                 run.model_dump(mode="json")
@@ -345,7 +340,6 @@ class OptimizationRunStore:
         return self._resolve_binding(self._terminal_binding_key(run_id))
 
     def resolve_adapter(self, adapter_key: str) -> OptimizerAdapter:
-        """Resolve the exact configured adapter for controller validation."""
         return self._resolve_compatible_adapter(adapter_key).adapter
 
     def _resolve_compatible_adapter(

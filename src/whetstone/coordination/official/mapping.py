@@ -18,30 +18,16 @@ __all__ = [
 
 
 class SelectedRecordMappingEntry(BaseModel):
-    """One ordered entry: selected record -> graph -> keys -> aggregate.
-
-    Maps exactly one selected Materialization Record (by typed Object Reference
-    plus Content Hash) through its ``graph_hash`` to the shared planned/result
-    Generation Execution Key set and the aggregate reference (typed Object
-    Reference plus Content Hash). Two entries that converged on one
-    ``graph_hash`` carry the *same* ``graph_hash``, ``planned_key_set``,
-    ``result_key_set`` and ``aggregate_ref`` but remain distinct entries keyed
-    by their own ``record_ref`` — that is what keeps them separately
-    attributable.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    #: The selected Materialization Record (typed ref + Content Hash).
     record_ref: TypedRef
-    #: The Graph Hash this record materialized to.
+
     graph_hash: StrictStr
-    #: The shared planned Generation Execution Key set (canonical strings).
+
     planned_key_set: tuple[str, ...]
-    #: The shared result-bound Generation Execution Key set (subset of
-    #: planned).
+
     result_key_set: tuple[str, ...]
-    #: The aggregate this graph produced (typed ref + Content Hash).
+
     aggregate_ref: TypedRef
 
     @model_validator(mode="after")
@@ -55,8 +41,7 @@ class SelectedRecordMappingEntry(BaseModel):
         results = set(self.result_key_set)
         if len(results) != len(self.result_key_set):
             raise ValueError("result_key_set must have no duplicates")
-        # Every result key MUST be a planned key: an official record can never
-        # attribute a result to a graph it did not plan.
+
         extra = results - planned
         if extra:
             raise ValueError(
@@ -67,16 +52,6 @@ class SelectedRecordMappingEntry(BaseModel):
 
 
 class SelectedRecordMapping(BaseModel):
-    """The mandatory ordered mapping preserved by official records/manifests.
-
-    An ordered tuple of :class:`SelectedRecordMappingEntry`, one per selected
-    Materialization Record, in selection order. Record references are unique
-    (each selected record appears exactly once); ``graph_hash`` /
-    ``aggregate_ref`` MAY repeat across entries (convergence), and when they do
-    the shared entries MUST agree on the planned/result key sets and aggregate
-    reference so a shared graph is never given two conflicting attributions.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     entries: tuple[SelectedRecordMappingEntry, ...]
@@ -93,8 +68,6 @@ class SelectedRecordMapping(BaseModel):
                 "once in the ordered mapping"
             )
 
-        # Convergence consistency: entries sharing a graph_hash MUST share the
-        # same planned key set, result key set, and aggregate reference.
         by_graph: dict[str, SelectedRecordMappingEntry] = {}
         for entry in self.entries:
             prior = by_graph.get(entry.graph_hash)
@@ -123,7 +96,6 @@ class SelectedRecordMapping(BaseModel):
 
     @property
     def distinct_graph_hashes(self) -> tuple[str, ...]:
-        """First-seen-ordered distinct graph hashes across the mapping."""
         seen: set[str] = set()
         out: list[str] = []
         for entry in self.entries:
@@ -135,10 +107,4 @@ class SelectedRecordMapping(BaseModel):
     def entries_for_graph(
         self, graph_hash: str
     ) -> tuple[SelectedRecordMappingEntry, ...]:
-        """Every ordered entry attributed to one ``graph_hash``.
-
-        More than one entry here means multiple selected records converged on
-        that graph and stay separately attributable through their own
-        ``record_ref``.
-        """
         return tuple(e for e in self.entries if e.graph_hash == graph_hash)

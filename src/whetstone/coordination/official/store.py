@@ -25,18 +25,13 @@ __all__ = [
     "store_selection_evidence",
 ]
 
-# dr-store record schema for persisted official selection evidence.
+
 SELECTION_EVIDENCE_SCHEMA = "whetstone.selection_evidence"
 
 
 def official_evaluation_record_reference(
     record: OfficialEvaluationRecord,
 ) -> ObjectReference:
-    """The typed Object Reference an Official Evaluation Record resolves under.
-
-    Addressed by Content Hash under the official-record schema; no Identity
-    Hash is ever computed for an official record.
-    """
     return ObjectReference.for_record(
         OFFICIAL_EVALUATION_RECORD_SCHEMA, record.record_content()
     )
@@ -45,7 +40,6 @@ def official_evaluation_record_reference(
 def official_plot_manifest_reference(
     manifest: OfficialPlotManifest,
 ) -> ObjectReference:
-    """The typed Object Reference an Official Plot Manifest resolves under."""
     return ObjectReference.for_record(
         OFFICIAL_PLOT_MANIFEST_SCHEMA, manifest.record_content()
     )
@@ -70,7 +64,6 @@ def store_official_evaluation_record(
     store: ObjectStore,
     record: OfficialEvaluationRecord,
 ) -> ObjectReference:
-    """Immutably persist an Official Evaluation Record; return its ref."""
     return _put_checked(
         store,
         OFFICIAL_EVALUATION_RECORD_SCHEMA,
@@ -83,7 +76,6 @@ def store_official_plot_manifest(
     store: ObjectStore,
     manifest: OfficialPlotManifest,
 ) -> ObjectReference:
-    """Immutably persist an Official Plot Manifest; return its ref."""
     return _put_checked(
         store,
         OFFICIAL_PLOT_MANIFEST_SCHEMA,
@@ -96,7 +88,6 @@ def store_selection_evidence(
     store: ObjectStore,
     evidence: SelectionEvidence,
 ) -> ObjectReference:
-    """Immutably persist official selection evidence; return its ref."""
     content = evidence.record_content()
     expected = ObjectReference.for_record(SELECTION_EVIDENCE_SCHEMA, content)
     return _put_checked(store, SELECTION_EVIDENCE_SCHEMA, content, expected)
