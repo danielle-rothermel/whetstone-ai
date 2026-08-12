@@ -69,6 +69,10 @@ from whetstone.evaluation.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
+from whetstone.evaluation.attribution import (
+    attribute_compression_row,
+    attribute_generated_row,
+)
 from whetstone.evaluation.code.compression_selection import (
     select_compression_reference,
 )
@@ -1427,24 +1431,20 @@ def run_encdec_eval(
                     over_budget=outcome.over_budget,
                 )
             )
-            if outcome.missing:
-                task_primary_rows.append(RowValue(missing=True))
-            elif outcome.failed or outcome.primary_value is None:
-                task_primary_rows.append(RowValue(failed=True))
-            else:
-                task_primary_rows.append(
-                    RowValue(value=float(outcome.primary_value))
+            task_primary_rows.append(
+                attribute_generated_row(
+                    row_state=outcome.row_state,
+                    score=outcome.primary_value,
+                    failure_code=outcome.failure_code,
                 )
-            if outcome.missing:
-                c_rows.append(RowValue(missing=True))
-            elif outcome.compression_value is None:
-                c_rows.append(
-                    RowValue(failed=True)
-                    if outcome.failed
-                    else RowValue(invalid=True)
-                )
-            else:
-                c_rows.append(RowValue(value=float(outcome.compression_value)))
+            )
+            comp_row = attribute_compression_row(
+                row_state=outcome.row_state,
+                compression_value=outcome.compression_value,
+            )
+            c_rows.append(comp_row)
+            if comp_row.is_present:
+                assert outcome.compression_value is not None
                 comp_vals.append(float(outcome.compression_value))
             outputs.append(
                 RolloutOutput(

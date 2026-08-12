@@ -40,6 +40,7 @@ from whetstone.evaluation.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
+from whetstone.evaluation.attribution import attribute_published_row
 from whetstone.evaluation.code.compression_selection import (
     select_compression_reference,
 )
@@ -733,15 +734,12 @@ class EvaluationEvidenceValidation:
             task_hash: [] for task_hash in outputs.task_hashes
         }
         for row in outputs.outputs:
-            if row.failed:
-                value = RowValue(failed=True)
-            elif row.missing:
-                value = RowValue(missing=True)
-            elif row.invalid:
-                value = RowValue(invalid=True)
-            else:
-                assert row.score is not None
-                value = RowValue(value=row.score)
+            value = attribute_published_row(
+                score=row.score,
+                failed=row.failed,
+                missing=row.missing,
+                invalid=row.invalid,
+            )
             rows_by_task[row.task_hash].append(value)
         task_rows = tuple(
             TaskRows(

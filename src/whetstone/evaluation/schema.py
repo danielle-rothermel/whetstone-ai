@@ -20,6 +20,10 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.attribution import (
+    require_exclusive_row_state,
+    require_exhaustive_row_accounting,
+)
 from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA as _EVALUATION_EVIDENCE_SCHEMA,
@@ -51,6 +55,17 @@ class RowAccounting(BaseModel):
     missing: StrictInt
     failed: StrictInt
     invalid: StrictInt
+
+    @model_validator(mode="after")
+    def _validate_exhaustive(self) -> RowAccounting:
+        require_exhaustive_row_accounting(
+            planned=self.planned,
+            present=self.present,
+            missing=self.missing,
+            failed=self.failed,
+            invalid=self.invalid,
+        )
+        return self
 
 
 class CacheEvidence(BaseModel):
@@ -175,13 +190,12 @@ class EvaluationOutputRow(BaseModel):
             raise ValueError("task_index must be non-negative")
         if self.max_budget is not None and self.max_budget < 0:
             raise ValueError("max_budget must be non-negative")
-        state_count = sum((self.failed, self.missing, self.invalid))
-        if self.score is not None and state_count:
-            raise ValueError("a scored output row must be present")
-        if self.score is None and state_count != 1:
-            raise ValueError(
-                "an unscored output row requires exactly one absent state"
-            )
+        require_exclusive_row_state(
+            scored=self.score is not None,
+            failed=self.failed,
+            missing=self.missing,
+            invalid=self.invalid,
+        )
         return self
 
     def generation_index(self) -> GenerationIndex:

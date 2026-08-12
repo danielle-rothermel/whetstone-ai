@@ -30,6 +30,7 @@ __all__ = [
     "TypedRef",
     "canonical_json_equal",
     "compute_identity_hash",
+    "compute_prefixed_identity_key",
     "freeze_json_object",
     "reject_non_json",
     "require_full_hash",
@@ -346,6 +347,25 @@ def compute_identity_hash(
         schema=schema, schema_version=schema_version, payload=payload
     )
     return IdentityHash(identity_document_hash(document))
+
+
+def compute_prefixed_identity_key(
+    *, schema: str, schema_version: int, prefix: str, payload: Any
+) -> OpaqueKey:
+    """Derive one prefixed semantic key from a versioned identity payload.
+
+    This is the canonical payload -> Identity Hash -> prefixed-key
+    derivation: the key is exactly ``prefix`` followed by the full
+    :func:`compute_identity_hash` digest of the payload under the given
+    schema and version. Every prefixed binding or effect key derives
+    through this one helper; callers own their schema, version, prefix,
+    and payload-key literals, which are persisted format pinned by golden
+    tests.
+    """
+    digest = compute_identity_hash(
+        schema=schema, schema_version=schema_version, payload=payload
+    )
+    return OpaqueKey(f"{prefix}{digest}")
 
 
 class TypedRef(BaseModel):

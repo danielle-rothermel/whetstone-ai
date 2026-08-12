@@ -208,3 +208,21 @@ Failing before either boundary keeps replay accounting and candidate meaning \
 stable."""
 date = "2026-08-06"
 check = "uv run pytest -q tests/optimization/miprov2/test_adapter.py tests/optimization/miprov2/test_replay_policy.py tests/optimization/miprov2/test_runtime.py"
+
+[[contracts]]
+title = "Row attribution derives through one pinned table"
+statement = """
+Every row cell derives through the named attribution derivations over the \
+pinned outcome table: cancellation and zero evidence are missing; \
+infrastructure, crash, and abandonment are failed; semantic rejection, \
+empty output, empty candidate sets, and token-limit truncation are invalid; \
+vanished published evidence is missing; and numeric zero remains a scored \
+value."""
+rationale = """
+Independent flag ladders previously assigned cells site-by-site, so a \
+locally plausible edit could silently reclassify outcomes and change \
+aggregate denominators. One table with pinned literals keeps attribution \
+identical across generation, read-back, and accounting flows, and keeps the \
+exclusivity and exhaustiveness invariants in one authoritative place."""
+date = "2026-08-12"
+check = "uv run pytest -q tests/evaluation/test_attribution.py"
