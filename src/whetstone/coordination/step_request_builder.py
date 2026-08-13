@@ -18,6 +18,7 @@ from whetstone.optim.contracts import (
 
 if TYPE_CHECKING:
     from whetstone.optim.copro.control import CoproControl
+    from whetstone.optim.gepa.control import GepaControl
 
 
 def _copro_total_proposal_calls(control: CoproControl) -> int:
@@ -86,10 +87,40 @@ class StepRequestBuilder:
         run: OptimRunRef,
         adapter_key: str,
         initial_candidate: Candidate,
-        control: CoproControl | None = None,
+        control: CoproControl | GepaControl | None = None,
         extra_pools: dict[str, Any] | None = None,
     ) -> OptimStepRequest:
         from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
+        from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+
+        if adapter_key == GEPA_ADAPTER_KEY:
+            if control is None:
+                raise ValueError("GEPA initial step requires the exact control")
+            from whetstone.optim.gepa.control import GepaControl
+
+            if not isinstance(control, GepaControl):
+                raise TypeError("GEPA initial step requires GepaControl")
+            pools: dict[str, Any] = {}
+            if extra_pools:
+                pools.update(extra_pools)
+            return OptimStepRequest(
+                run=run,
+                step_id=f"{run.record.run_id}:gepa:0",
+                kind=StepKind.PROPOSAL,
+                kind_label="gepa_iteration",
+                step_index=0,
+                candidates=(initial_candidate,),
+                pools=ImmutableJsonObject(pools),
+                hyperparameters=ImmutableJsonObject(
+                    control.step_hyperparameters(iteration=0)
+                ),
+                budget=BudgetState(
+                    remaining=ImmutableJsonObject(
+                        {"metric_calls": control.resolved_max_metric_calls}
+                    ),
+                ),
+                step_output_contract=OutputContract(returned_proposal_count=0),
+            )
 
         if adapter_key != COPRO_ADAPTER_KEY:
             raise ValueError(
@@ -129,14 +160,45 @@ class StepRequestBuilder:
         prior: OptimStepResult,
         prior_ref: TypedRef,
         prior_results: tuple[OptimStepResult, ...],
-        control: CoproControl,
+        control: CoproControl | GepaControl,
         mutation_field: str,
     ) -> OptimStepRequest:
         from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
+        from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+        from whetstone.optim.gepa.step_engine import GEPA_STATE_KEY
 
         if prior_ref != step_result_reference(prior).record_ref:
             raise ValueError("prior step result ref is not exact")
         adapter_key = prior.request.record.run.record.adapter_key
+        if adapter_key == GEPA_ADAPTER_KEY:
+            from whetstone.optim.gepa.control import GepaControl
+
+            if not isinstance(control, GepaControl):
+                raise TypeError("GEPA continuation requires GepaControl")
+            step_index = prior.step_index + 1
+            prior_state = (
+                {}
+                if prior.state_ref is None
+                else self._store.get(prior.state_ref.reference)
+            )
+            checkpoint = prior_state.get(GEPA_STATE_KEY, {})
+            return OptimStepRequest(
+                run=prior.request.record.run,
+                step_id=f"{prior.run_id}:gepa:{step_index}",
+                kind=StepKind.PROPOSAL,
+                kind_label="gepa_iteration",
+                step_index=step_index,
+                prior_step_result_ref=prior_ref,
+                prior_state_ref=prior.state_ref,
+                prior_history_ref=prior.history_ref,
+                candidates=(prior.request.record.candidates[0],),
+                pools=ImmutableJsonObject({GEPA_STATE_KEY: checkpoint}),
+                hyperparameters=ImmutableJsonObject(
+                    control.step_hyperparameters(iteration=step_index)
+                ),
+                budget=prior.budget,
+                step_output_contract=OutputContract(returned_proposal_count=0),
+            )
         if adapter_key != COPRO_ADAPTER_KEY:
             raise ValueError(
                 f"unsupported adapter key for continuation: {adapter_key!r}"
