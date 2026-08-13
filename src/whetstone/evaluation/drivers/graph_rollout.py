@@ -43,7 +43,7 @@ from whetstone.provider.language_model import (
     PlainPromptAdapter,
     StructuredPromptAdapter,
 )
-from whetstone.provider.llm_call import LlmCallContext
+from whetstone.provider.llm_call import LlmCallContext, derive_rng_seed
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = ["GraphRolloutEvaluationDriver", "run_graph_evaluation_row"]
@@ -97,6 +97,11 @@ def run_graph_evaluation_row(
             context=llm_context,
             resolve_provider_call_config=resolve_provider_call_config,
             graph_hash=generation_graph.graph_hash,
+            rng_seed=derive_rng_seed(
+                candidate.candidate_id,
+                _task_id(task),
+                sample_index,
+            ),
             sample_index=sample_index,
             drive_ordinal=0,
             phase=split_role,

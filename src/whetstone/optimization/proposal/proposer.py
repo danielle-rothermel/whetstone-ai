@@ -34,12 +34,14 @@ from whetstone.provider.language_model import (
 from whetstone.provider.llm_call import (
     LlmCallContext,
     build_provider_request,
+    derive_rng_seed,
     execute_llm_call,
 )
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 if TYPE_CHECKING:
     from dr_providers import (
+        PromptMessage,
         ProviderCallConfig,
         ProviderCallRequest,
     )
@@ -482,18 +484,14 @@ class ProviderProposerTransport:
             if config.temperature is None
             else {"temperature": config.temperature}
         )
-        provider_request = build_provider_request(
-            provider_config=provider_config,
-            messages=messages,
-            parameters=parameters,
-            prompt_adapter=self._prompt_adapter,
-        )
 
         drafts = tuple(
             self._draft_slot(
                 config=config,
                 proposal_request=request,
-                provider_request=provider_request,
+                provider_config=provider_config,
+                messages=messages,
+                parameters=parameters,
                 count=count,
                 slot=slot,
             )
@@ -510,7 +508,9 @@ class ProviderProposerTransport:
         *,
         config: ProposerConfig,
         proposal_request: ProposalRequest,
-        provider_request: ProviderCallRequest,
+        provider_config: ProviderCallConfig,
+        messages: tuple[PromptMessage, ...],
+        parameters: dict[str, object],
         count: int,
         slot: int,
     ) -> ProposalDraft:
@@ -519,6 +519,14 @@ class ProviderProposerTransport:
             f"{self.execution_policy_hash}:"
             f"{self.prompt_adapter_identity_hash}:"
             f"{proposal_request.identity_hash()}:{slot}"
+        )
+        rng_seed = derive_rng_seed(proposal_request.identity_hash(), slot)
+        provider_request = build_provider_request(
+            provider_config=provider_config,
+            rng_seed=rng_seed,
+            messages=messages,
+            parameters=parameters,
+            prompt_adapter=self._prompt_adapter,
         )
         execution = execute_llm_call(
             context=LlmCallContext(

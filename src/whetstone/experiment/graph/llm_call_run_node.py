@@ -51,6 +51,7 @@ class LlmCallRunNodeDeps:
     context: LlmCallContext
     resolve_provider_call_config: ProviderCallConfigResolver
     graph_hash: str
+    rng_seed: int
     sample_index: int = 0
     drive_ordinal: int = 0
     phase: str = ""
@@ -85,6 +86,7 @@ def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
         )
         request = build_provider_request(
             provider_config=provider_config,
+            rng_seed=deps.rng_seed,
             prompt=prompt,
             prompt_adapter=deps.context.prompt_adapter,
         )
