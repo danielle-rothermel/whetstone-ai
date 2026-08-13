@@ -53,7 +53,7 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.experiment.env import Experiment
-from whetstone.experiment.reward import REWARD_SCHEMA, reward_reference
+from whetstone.experiment.reward import REWARD_SCHEMA, apply_reward_policy, reward_reference
 from whetstone.experiment.sampling import EvalSplit, derive_eval_split, evaluation_role_for_split
 from whetstone.core.roles import EvalRole
 from whetstone.provider.policy import (
@@ -490,11 +490,21 @@ class RuntimeEvalEngine:
                 raise ValueError(
                     "persisted supplemental aggregate reference diverged"
                 )
+        reward = result.reward
+        if reward is None and self._eval_role() is EvalRole.INTERNAL:
+            reward = apply_reward_policy(
+                self._experiment.reward_policy,
+                aggregates={
+                    aggregate.name: aggregate.aggregation_output.value,
+                },
+                evidence_role=EvalRole.INTERNAL,
+                evidence_refs=(aggregate_ref,),
+            )
         reward_ref = None
-        if result.reward is not None:
-            reward_ref = reward_reference(result.reward)
+        if reward is not None:
+            reward_ref = reward_reference(reward)
             persisted_reward = self._put(
-                REWARD_SCHEMA, result.reward.record_content()
+                REWARD_SCHEMA, reward.record_content()
             )
             if persisted_reward != reward_ref.record_ref:
                 raise ValueError("persisted Reward reference diverged")

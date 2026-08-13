@@ -21,11 +21,19 @@ dependencies = [
 [project.optional-dependencies]
 dbos = ["dbos>=2.25.0"]
 postgres = ["psycopg[binary]>=3.3.4"]
-dev = ["rich>=15.0.0", "typer>=0.26.8"]
+dev = ["rich>=15.0.0", "typer>=0.26.8", "pytest>=8.0", "dbos>=2.25.0"]
 [dependency-groups]
 dev = [
     "rich>=15.0.0",
+    "pytest>=8.0",
 ]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires postgres + dbos + dr-platform",
+    "slow: long-running",
+]
+addopts = "-m 'not integration and not slow'"
 [project.scripts]
 whetstone-mcp-eval = "whetstone.optim.codex.mcp_server:main"
 whetstone-sandbox = "whetstone.sandbox.cli:main"
