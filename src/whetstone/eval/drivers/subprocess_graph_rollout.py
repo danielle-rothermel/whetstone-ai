@@ -81,6 +81,7 @@ def _build_graph_row_request(
         mutation_field=mutation_field,
         graph_external_input_field=graph_external_input_field,
         eval_procedure_config_hash=rollout_graph.procedure_config_hash,
+        execution_policy=execution_policy.model_dump(mode="json"),
         execution_policy_hash=execution_policy.identity_hash,
         prompt_inputs={
             str(key): str(value)

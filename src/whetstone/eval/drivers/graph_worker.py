@@ -18,7 +18,7 @@ from whetstone.experiment.graph.llm_call_run_node import (
 from whetstone.experiment.graph.run_node_registry import build_run_node
 from whetstone.provider.language_model import PlainPromptAdapter
 from whetstone.provider.llm_call import LlmCallContext
-from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
+from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
 from whetstone.testing.fakes.transport import FakeLlmTransport
 
@@ -93,10 +93,8 @@ def _rollout_row_output_for_request(
 def run_row(payload: JsonValue) -> JsonValue:
     """Subprocess entrypoint for one graph rollout row."""
     request = GraphRowRequest.model_validate(payload)
-    execution_policy = ProviderExecutionPolicy(
-        transport_policy=default_transport_policy(
-            api_key_env=request.transport_api_key_env
-        )
+    execution_policy = ProviderExecutionPolicy.model_validate(
+        request.execution_policy
     )
     if execution_policy.identity_hash != request.execution_policy_hash:
         raise ValueError("execution_policy_hash does not match worker policy")

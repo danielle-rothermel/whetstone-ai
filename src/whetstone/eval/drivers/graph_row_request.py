@@ -36,6 +36,7 @@ class GraphRowRequest(BaseModel):
     mutation_field: StrictStr
     graph_external_input_field: StrictStr = "prompt"
     eval_procedure_config_hash: StrictStr
+    execution_policy: JsonValue
     execution_policy_hash: StrictStr
     prompt_inputs: dict[str, StrictStr] = {}
     gold: StrictStr = ""
