@@ -9,7 +9,7 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.evaluation import SCHEMA_EVAL_CONFIG, EvalConfig
+from whetstone.eval import SCHEMA_EVAL_CONFIG, EvalConfig
 
 EVAL_CONFIG_RECORD_SCHEMA = SCHEMA_EVAL_CONFIG
 

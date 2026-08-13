@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from whetstone.evaluation.drivers.eval_result import (
+from whetstone.eval.drivers.eval_result import (
     InternalEvalResult,
     per_task_count,
     per_task_score,
 )
-from whetstone.evaluation.drivers.row_common import GenerationRowOutput
-from whetstone.evaluation.protocol import EvalRequest
-from whetstone.evaluation.schema import SubmissionResultRecord
-from whetstone.evaluation.traces import ExecutedRowState
-from whetstone.evaluation.aggregate import RowValue, TaskRows, unweighted_task_mean
-from whetstone.evaluation.driver import EvaluationDriver
+from whetstone.eval.drivers.row_common import RolloutRowOutput
+from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.schema import SubmissionResultRecord
+from whetstone.eval.traces import ExecutedRowState
+from whetstone.eval.aggregate import RowValue, TaskRows, unweighted_task_mean
+from whetstone.eval.driver import EvalDriver
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.candidate import Candidate, TemplateRenderContract
 from whetstone.experiment.env import Experiment
-from whetstone.experiment.sampling import SplitSampling
+from whetstone.experiment.sampling import EvalSplit
 from whetstone.provider.policy import ProviderExecutionPolicy
 from whetstone.testing.toy.experiment import TOY_MUTATION_FIELD
 from whetstone.testing.toy.scoring import score_generation
 
-__all__ = ["FakeEvaluationDriver"]
+__all__ = ["FakeEvalDriver"]
 
 
 def _task_id(task: object) -> str:
@@ -42,7 +42,7 @@ def _task_gold(task: object) -> str:
     return gold if isinstance(gold, str) else ""
 
 
-class FakeEvaluationDriver:
+class FakeEvalDriver:
     """Deterministic evaluation driver for toy experiments (no network)."""
 
     def __init__(
@@ -84,11 +84,11 @@ class FakeEvaluationDriver:
         return None
 
     def task_model_identity_hash(self, experiment: Experiment) -> str:
-        provider = experiment.generation_graph.provider_call_config
+        provider = experiment.rollout_graph.provider_call_config
         return str(provider.identity_hash)
 
     def expected_model_route(self, experiment: Experiment) -> str:
-        route = experiment.generation_graph.provider_call_config.route
+        route = experiment.rollout_graph.provider_call_config.route
         return (
             f"{route.provider.value}/{route.protocol.value}/{route.model}"
         )
@@ -97,7 +97,7 @@ class FakeEvaluationDriver:
         self,
         *,
         experiment: Experiment,
-        sampling: SplitSampling,
+        sampling: EvalSplit,
         request: EvalRequest,
         eval_config_hash: str,
         execution_policy: ProviderExecutionPolicy,
@@ -114,15 +114,15 @@ class FakeEvaluationDriver:
             prompt_cache,
         )
         self.preflight(request.candidate)
-        num_samples = sampling.sample_plan.num_samples
-        outputs: list[GenerationRowOutput] = []
+        num_seeds = sampling.seed_plan.num_seeds
+        outputs: list[RolloutRowOutput] = []
         task_rows: list[TaskRows] = []
         task_hashes = sampling.task_set.task_hashes
         for task_index, (task, task_hash) in enumerate(
             zip(sampling.tasks, task_hashes, strict=True)
         ):
             row_values: list[RowValue] = []
-            for sample_index in range(num_samples):
+            for seed_index in range(num_seeds):
                 prompt = self.rendered_prompt(request.candidate, task, max_budget=None)
                 generation = prompt
                 score = score_generation(
@@ -131,13 +131,13 @@ class FakeEvaluationDriver:
                     task_id=_task_id(task),
                 )
                 outputs.append(
-                    GenerationRowOutput(
+                    RolloutRowOutput(
                         candidate_id=request.candidate.candidate_id,
                         task_id=_task_id(task),
                         task_index=task_index,
-                        sample_index=sample_index,
+                        seed_index=seed_index,
                         row_state=ExecutedRowState.SUCCESS,
-                        executed_component_steps=(),
+                        trace_steps=(),
                         output_text=generation,
                         score=score,
                         submission_result=None,
@@ -149,15 +149,15 @@ class FakeEvaluationDriver:
         matrix_plan = sampling.evaluation_matrix_plan
         aggregate = unweighted_task_mean(
             aggregate_name=self._aggregate_name,
-            graph_hash=experiment.generation_graph.graph_hash,
+            graph_hash=experiment.rollout_graph.graph_hash,
             task_rows=tuple(task_rows),
             plan=matrix_plan,
         )
         per_task_scores = tuple(
-            per_task_score(task_row, num_samples) for task_row in task_rows
+            per_task_score(task_row, num_seeds) for task_row in task_rows
         )
         per_task_counts = tuple(
-            per_task_count(task_row, num_samples) for task_row in task_rows
+            per_task_count(task_row, num_seeds) for task_row in task_rows
         )
         return InternalEvalResult(
             aggregate=aggregate,

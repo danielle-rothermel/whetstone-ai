@@ -27,7 +27,7 @@ dev = [
     "rich>=15.0.0",
 ]
 [project.scripts]
-whetstone-mcp-eval = "whetstone.optimization.codex.mcp_server:main"
+whetstone-mcp-eval = "whetstone.optim.codex.mcp_server:main"
 whetstone-sandbox = "whetstone.sandbox.cli:main"
 
 [build-system]

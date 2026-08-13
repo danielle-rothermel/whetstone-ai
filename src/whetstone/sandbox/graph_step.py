@@ -21,7 +21,7 @@ def run_toy_graph_preview(
     *,
     prompt: str = "hello sandbox",
 ) -> GraphRunPreview:
-    from whetstone.evaluation.drivers.graph_rollout import run_graph_evaluation_row
+    from whetstone.eval.drivers.graph_rollout import run_rollout_row
     from whetstone.experiment.graph.rollout_template import (
         EVAL_NODE_ID,
         LLM_NODE_ID,
@@ -38,10 +38,10 @@ def run_toy_graph_preview(
         TOY_MUTATION_FIELD,
     )
 
-    experiment = build_toy_experiment(num_samples=1)
-    generation_graph = experiment.generation_graph
-    provider_config = generation_graph.provider_call_config
-    graph_hash_value = generation_graph.graph_hash
+    experiment = build_toy_experiment(num_seeds=1)
+    rollout_graph = experiment.rollout_graph
+    provider_config = rollout_graph.provider_call_config
+    graph_hash_value = rollout_graph.graph_hash
     task = ToyTask(task_id="graph-task", prompt_inputs={"prompt": prompt}, gold=prompt)
     candidate = experiment.initial_candidate
 
@@ -54,12 +54,12 @@ def run_toy_graph_preview(
         transport=FakeLlmTransport(transport_policy=transport_policy),
         prompt_adapter=PlainPromptAdapter(),
     )
-    row = run_graph_evaluation_row(
+    row = run_rollout_row(
         experiment=experiment,
         candidate=candidate,
         task=task,
         task_index=0,
-        sample_index=0,
+        seed_index=0,
         split_role="internal_eval",
         llm_context=llm_context,
         eval_runner=FakeEvalProcedureRunner(),

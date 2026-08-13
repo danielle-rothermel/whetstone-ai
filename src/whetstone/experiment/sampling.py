@@ -5,26 +5,26 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
-from whetstone.core.roles import EvaluationRole
-from whetstone.evaluation import (
+from whetstone.core.roles import EvalRole
+from whetstone.eval import (
     AggregationConfig,
     EvalConfig,
     EvalDefinition,
-    EvaluationProcedureConfig,
-    SamplePlan,
+    EvalProcedureConfig,
+    SeedPlan,
     SamplingConfig,
     SamplingDefinition,
     TaskSet,
 )
-from whetstone.evaluation.aggregate import (
+from whetstone.eval.aggregate import (
     CompletenessPolicy,
-    EvaluationMatrixPlan,
+    EvalMatrixPlan,
     RowPolicy,
 )
 
 _DEFINITION_VERSION = "1"
 
-DEFAULT_NUM_SAMPLES = 3
+DEFAULT_NUM_SEEDS = 3
 
 INTERNAL_EVAL = "internal_eval"
 OFFICIAL = "official"
@@ -38,17 +38,17 @@ class SamplingTaskLike(Protocol):
     def task_id(self) -> str: ...
 
 
-def evaluation_role_for_split(split_role: str) -> EvaluationRole:
+def evaluation_role_for_split(split_role: str) -> EvalRole:
     """Return the exact evidence role owned by a sampling split."""
     if split_role == INTERNAL_EVAL:
-        return EvaluationRole.INTERNAL
+        return EvalRole.INTERNAL
     if split_role == OFFICIAL:
-        return EvaluationRole.OFFICIAL
+        return EvalRole.OFFICIAL
     raise ValueError(f"unknown evaluation split role {split_role!r}")
 
 
 def validate_evaluation_role_for_split(
-    *, split_role: str, evaluation_role: EvaluationRole
+    *, split_role: str, evaluation_role: EvalRole
 ) -> None:
     """Require the exact evidence role owned by a sampling split."""
     expected = evaluation_role_for_split(split_role)
@@ -79,15 +79,15 @@ class Completeness(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class SplitSampling:
+class EvalSplit:
     """The sampling artifacts for one split (internal_eval or official)."""
 
     split_role: str
     tasks: tuple[SamplingTaskLike, ...]
     task_set: TaskSet
-    sample_plan: SamplePlan
+    seed_plan: SeedPlan
     sampling_config: SamplingConfig
-    procedure_config: EvaluationProcedureConfig
+    procedure_config: EvalProcedureConfig
     aggregation_config: AggregationConfig
     eval_config: EvalConfig
 
@@ -102,12 +102,12 @@ class SplitSampling:
         )
 
     @property
-    def evaluation_matrix_plan(self) -> EvaluationMatrixPlan:
-        return EvaluationMatrixPlan(
+    def evaluation_matrix_plan(self) -> EvalMatrixPlan:
+        return EvalMatrixPlan(
             eval_config=self.eval_config,
             sampling_config=self.sampling_config,
             task_set=self.task_set,
-            sample_plan=self.sample_plan,
+            seed_plan=self.seed_plan,
             aggregation_config=self.aggregation_config,
         )
 
@@ -118,8 +118,8 @@ class EvalConfigs:
 
     env_name: str
     procedure_config_hash: str
-    internal: SplitSampling
-    official: SplitSampling
+    internal: EvalSplit
+    official: EvalSplit
     held_out_task_hashes: tuple[str, ...]
 
     def eval_config_for(self, split_role: str) -> EvalConfig:
@@ -130,20 +130,20 @@ class EvalConfigs:
         raise KeyError(f"no eval config for split role {split_role!r}")
 
 
-def derive_split_sampling(
+def derive_eval_split(
     *,
     namespace: str,
     dataset_revision: str,
     split_role: str,
     tasks: tuple[SamplingTaskLike, ...],
     task_hash_of: Callable[[SamplingTaskLike], str],
-    procedure: EvaluationProcedureConfig,
+    procedure: EvalProcedureConfig,
     aggregation: AggregationConfig,
-    num_samples: int,
-) -> SplitSampling:
+    num_seeds: int,
+) -> EvalSplit:
     """Derive one exact sampling and EvalConfig contract."""
-    if num_samples < 1:
-        raise ValueError(f"num_samples must be at least 1; got {num_samples}")
+    if num_seeds < 1:
+        raise ValueError(f"num_seeds must be at least 1; got {num_seeds}")
     task_hashes = tuple(task_hash_of(task) for task in tasks)
     task_set = TaskSet(
         manifest_id=f"{namespace}.{split_role}",
@@ -151,11 +151,11 @@ def derive_split_sampling(
         dataset_revision=dataset_revision,
         task_hashes=task_hashes,
     )
-    sample_plan = SamplePlan(
+    seed_plan = SeedPlan(
         plan_id=f"{namespace}.{split_role}",
         version=_DEFINITION_VERSION,
         task_hashes=task_hashes,
-        num_samples=num_samples,
+        num_seeds=num_seeds,
     )
     sampling = SamplingDefinition(
         definition_id=f"{namespace}.{split_role}.sampling",
@@ -163,7 +163,7 @@ def derive_split_sampling(
     ).materialize(
         {
             "task_set_hash": task_set.identity_hash(),
-            "sample_plan_hash": sample_plan.identity_hash(),
+            "seed_plan_hash": seed_plan.identity_hash(),
         }
     )
     eval_config = EvalDefinition(
@@ -174,11 +174,11 @@ def derive_split_sampling(
         evaluation_procedure=procedure,
         aggregation=aggregation,
     )
-    return SplitSampling(
+    return EvalSplit(
         split_role=split_role,
         tasks=tasks,
         task_set=task_set,
-        sample_plan=sample_plan,
+        seed_plan=seed_plan,
         sampling_config=sampling,
         procedure_config=procedure,
         aggregation_config=aggregation,
@@ -195,15 +195,15 @@ class SplitOverlapError(AssertionError):
 
 
 __all__ = [
-    "DEFAULT_NUM_SAMPLES",
+    "DEFAULT_NUM_SEEDS",
     "INTERNAL_EVAL",
     "OFFICIAL",
     "Completeness",
     "EvalConfigs",
-    "SplitSampling",
+    "EvalSplit",
     "HeldOutReferencedError",
     "SamplingTaskLike",
     "SplitOverlapError",
-    "derive_split_sampling",
+    "derive_eval_split",
     "validate_evaluation_role_for_split",
 ]

@@ -2,9 +2,9 @@ from enum import UNIQUE, StrEnum, verify
 
 
 @verify(UNIQUE)
-class EvaluationRole(StrEnum):
+class EvalRole(StrEnum):
     INTERNAL = "internal"
     OFFICIAL = "official"
 
 
-__all__ = ["EvaluationRole"]
+__all__ = ["EvalRole"]

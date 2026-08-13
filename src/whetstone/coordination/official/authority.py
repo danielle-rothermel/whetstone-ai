@@ -11,7 +11,7 @@ from whetstone.coordination.official.records import (
     RecordRevision,
 )
 from whetstone.core.identity import IdentityRef, TypedRef
-from whetstone.core.roles import EvaluationRole
+from whetstone.core.roles import EvalRole
 from whetstone.experiment.binding import EvalConfigRef
 
 if TYPE_CHECKING:
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from whetstone.coordination.official.mapping import SelectedRecordMapping
 
 __all__ = [
-    "EvaluationAuthority",
+    "EvalAuthority",
     "RelabelingRefusedError",
     "UnauthorizedOfficialWriteError",
 ]
@@ -35,7 +35,7 @@ class UnauthorizedOfficialWriteError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class EvaluationAuthority:
+class EvalAuthority:
     name: str
 
     def __post_init__(self) -> None:
@@ -45,10 +45,10 @@ class EvaluationAuthority:
     def _require_official_context(
         self,
         *,
-        eval_role: EvaluationRole,
+        eval_role: EvalRole,
         authority_principal: str | None,
     ) -> None:
-        if eval_role is not EvaluationRole.OFFICIAL:
+        if eval_role is not EvalRole.OFFICIAL:
             raise RelabelingRefusedError(
                 "internal evaluation evidence can never be certified or "
                 "relabeled as official; matching config Identity Hashes "
@@ -66,7 +66,7 @@ class EvaluationAuthority:
         self,
         *,
         eval_config: EvalConfigRef,
-        eval_role: EvaluationRole,
+        eval_role: EvalRole,
         authority_principal: str | None = None,
         planned_results: Sequence[PlannedKeyResult],
         aggregate_refs: Sequence[TypedRef],

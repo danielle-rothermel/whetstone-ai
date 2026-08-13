@@ -16,11 +16,11 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
-from whetstone.optimization.codex.proposer import (
+from whetstone.optim.codex.proposer import (
     CodexCliProposerConfig,
     CodexCliProposerTransport,
 )
-from whetstone.optimization.proposal.proposer import (
+from whetstone.optim.proposal.proposer import (
     DurableProposalExecutor,
     ProposalDraft,
     ProposalExecutorDurabilityContract,

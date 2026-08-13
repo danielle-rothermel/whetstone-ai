@@ -6,13 +6,13 @@ from typing import Protocol
 from dr_graph import GraphConfig
 from dr_providers import ProviderCallConfig
 
-from whetstone.evaluation.aggregate import CompletenessPolicy
+from whetstone.eval.aggregate import CompletenessPolicy
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.experiment.sampling import EvalConfigs
 
 
-class GenerationGraphLike(Protocol):
+class RolloutGraphLike(Protocol):
     """The structural generation graph contract evaluation reads."""
 
     @property
@@ -33,7 +33,7 @@ class Experiment:
     """Identity-bound components required to evaluate one environment."""
 
     env_name: str
-    generation_graph: GenerationGraphLike
+    rollout_graph: RolloutGraphLike
     initial_candidate: Candidate
     ceiling_candidate: Candidate
     eval_configs: EvalConfigs
@@ -44,7 +44,7 @@ class Experiment:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "generation_graph": self.generation_graph,
+            "rollout_graph": self.rollout_graph,
             "initial_candidate": self.initial_candidate,
             "ceiling_candidate": self.ceiling_candidate,
             "eval_configs": self.eval_configs,
@@ -54,5 +54,5 @@ class Experiment:
 
 __all__ = [
     "Experiment",
-    "GenerationGraphLike",
+    "RolloutGraphLike",
 ]

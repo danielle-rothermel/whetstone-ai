@@ -12,7 +12,7 @@ from dr_providers import (
     ProviderCallRequest,
 )
 
-from whetstone.evaluation.drivers.graph_execution import (
+from whetstone.eval.drivers.graph_execution import (
     cache_marks_metadata,
     telemetry_metadata,
 )
@@ -136,7 +136,7 @@ def execute_llm_call(
     context: LlmCallContext,
     request: ProviderCallRequest,
     logical_call_id: str,
-    sample_index: int = 0,
+    seed_index: int = 0,
     drive_ordinal: int = 0,
     phase: str = "",
     unit: str = "",
@@ -146,7 +146,7 @@ def execute_llm_call(
         policy=context.execution_policy,
         transport=context.transport,
         logical_call_id=logical_call_id,
-        sample_index=sample_index,
+        seed_index=seed_index,
         drive_ordinal=drive_ordinal,
         cache=context.prompt_cache,
         phase=phase,

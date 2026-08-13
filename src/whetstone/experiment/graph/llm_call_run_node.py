@@ -12,14 +12,14 @@ from whetstone.core.identity import (
     assert_materialized_ref_matches,
     identity_ref_from_config_variable,
 )
-from whetstone.evaluation.drivers.graph_execution import (
+from whetstone.eval.drivers.graph_execution import (
     METADATA_PROMPT_KEY,
     METADATA_SUBMISSION_RESULT_KEY,
     GenerationNodeError,
     single_node_input,
 )
-from whetstone.evaluation.eval_procedure import EvalProcedureRunner
-from whetstone.evaluation.protocol import EvaluationTaskView
+from whetstone.eval.eval_procedure import EvalProcedureRunner
+from whetstone.eval.protocol import EvalTaskView
 from whetstone.experiment.graph.nodes import (
     EVAL_NODE_TYPE,
     EVAL_OUTPUT_FIELD,
@@ -52,7 +52,7 @@ class LlmCallRunNodeDeps:
     resolve_provider_call_config: ProviderCallConfigResolver
     graph_hash: str
     rng_seed: int
-    sample_index: int = 0
+    seed_index: int = 0
     drive_ordinal: int = 0
     phase: str = ""
     unit: str = ""
@@ -61,7 +61,7 @@ class LlmCallRunNodeDeps:
 @dataclass(frozen=True, slots=True)
 class EvalRunNodeDeps:
     runner: EvalProcedureRunner
-    task: EvaluationTaskView
+    task: EvalTaskView
 
 
 def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
@@ -99,7 +99,7 @@ def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
                 context=deps.context,
                 request=request,
                 logical_call_id=logical_call_id,
-                sample_index=deps.sample_index,
+                seed_index=deps.seed_index,
                 drive_ordinal=deps.drive_ordinal,
                 phase=deps.phase,
                 unit=deps.unit,
