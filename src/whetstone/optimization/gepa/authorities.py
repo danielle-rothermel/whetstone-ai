@@ -20,7 +20,8 @@ from whetstone.core.identity import (
 )
 from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.preview.binding import preview_evaluation_binding
-from whetstone.evaluation.protocol import EvaluationEngine
+from whetstone.evaluation.metadata import metadata_with_purpose
+from whetstone.evaluation.protocol import EvalRequest, EvaluationEngine
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
@@ -37,7 +38,7 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.optimization.contracts import (
-    EvaluationIntent,
+    OptimEvalRequest,
     IntentOutcome,
 )
 from whetstone.optimization.gepa.contracts import (
@@ -517,22 +518,25 @@ class CanonicalGepaEvaluationAuthority:
             campaign=request.slot.context.run_id,
             provenance_note="gepa_metric",
         )
-        intent = EvaluationIntent(
-            intent_id=(
-                f"{request.slot.context.run_id}:gepa:{request.identity_hash()}"
-            ),
-            candidate=candidate,
+        optim_eval_request = OptimEvalRequest(
+            optim_run_id=request.slot.context.run_id,
+            optim_step_index=request.slot.invocation_ordinal,
             target_eval_config=subset_engine.eval_config_ref,
-            evaluation_binding=evaluation_binding,
-            purpose="gepa_metric",
-            run_id=request.slot.context.run_id,
-            step_index=request.slot.invocation_ordinal,
+            eval_request=EvalRequest(
+                request_id=(
+                    f"{request.slot.context.run_id}:gepa:"
+                    f"{request.identity_hash()}"
+                ),
+                candidate=candidate.record,
+                evaluation_binding=evaluation_binding,
+                metadata=metadata_with_purpose("gepa_metric"),
+            ),
             expected_reward_policy_hash=self._control.reward_policy_hash,
         )
         resolution = EngineEvaluationService(
             store=self._store,
             engine=subset_engine,
-        ).resolve_evaluation_intent(intent)
+        ).resolve_optim_eval_request(optim_eval_request)
         if resolution.outcome is not IntentOutcome.COMPLETED:
             return self._failed_result(request, resolution)
         return self._completed_result(request, candidate, resolution)

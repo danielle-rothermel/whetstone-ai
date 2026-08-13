@@ -21,7 +21,7 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.evaluation.protocol import EvaluationEngine, EvaluationRequest
+from whetstone.evaluation.protocol import EvalRequest, EvaluationEngine
 from whetstone.evaluation.evidence_validation import (
     EvaluationEvidenceValidation,
 )
@@ -30,11 +30,13 @@ from whetstone.evaluation.schema import (
     EvaluationFailureEvidenceRef,
 )
 from whetstone.evaluation.schema_names import EVALUATION_FAILURE_SCHEMA
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.contracts import (
+    INTENT_RESOLUTION_SCHEMA,
     INTENT_RESOLUTION_SCHEMA_VERSION,
-    EvaluationIntent,
     IntentOutcome,
     IntentResolution,
+    OptimEvalRequest,
     ResolutionClass,
     ResolutionDetail,
 )
@@ -77,31 +79,58 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
     def validate_resolution_graph(self, resolution: IntentResolution) -> None:
         self._validate_result_graph(
             resolution,
-            expected_intent=resolution.intent,
+            expected_optim_eval_request=resolution.optim_eval_request,
         )
 
+    def _load(
+        self,
+        reference: Any,
+        *,
+        expected_optim_eval_request: OptimEvalRequest,
+    ) -> IntentResolution:
+        record_ref = self._typed_ref(reference)
+        if record_ref.schema_name != INTENT_RESOLUTION_SCHEMA:
+            raise ValueError("Intent Resolution ref has the wrong schema")
+        resolution = IntentResolution.model_validate(
+            self._store.get(record_ref.reference)
+        )
+        if (
+            typed_ref_for_record(
+                INTENT_RESOLUTION_SCHEMA,
+                resolution.model_dump(mode="json"),
+            )
+            != record_ref
+        ):
+            raise ValueError("persisted Intent Resolution ref is not exact")
+        self._validate_result_graph(
+            resolution,
+            expected_optim_eval_request=expected_optim_eval_request,
+        )
+        return resolution
+
     @staticmethod
-    def _intent_ref(intent: EvaluationIntent) -> TypedRef:
+    def _intent_ref(optim_eval_request: OptimEvalRequest) -> TypedRef:
         return typed_ref_for_record(
-            "whetstone.evaluation_intent", intent.model_dump(mode="json")
+            "whetstone.optim_eval_request",
+            optim_eval_request.model_dump(mode="json"),
         )
 
     @classmethod
-    def _key(cls, intent: EvaluationIntent) -> str:
+    def _key(cls, optim_eval_request: OptimEvalRequest) -> str:
         return (
             f"{_EVALUATION_SERVICE_NAMESPACE}.intent_resolution:"
-            f"{cls._intent_ref(intent).content_hash}"
+            f"{cls._intent_ref(optim_eval_request).content_hash}"
         )
 
     @classmethod
     def _claim_key(
         cls,
-        intent: EvaluationIntent,
+        optim_eval_request: OptimEvalRequest,
         event_ordinal: int,
     ) -> str:
         return (
             f"{_EVALUATION_SERVICE_NAMESPACE}.intent_claim:"
-            f"{cls._intent_ref(intent).content_hash}"
+            f"{cls._intent_ref(optim_eval_request).content_hash}"
             f"#{event_ordinal}"
         )
 
@@ -116,58 +145,62 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
 
     def _evaluate_and_bind(
         self,
-        intent: EvaluationIntent,
+        optim_eval_request: OptimEvalRequest,
         owned: _OwnedClaim,
     ) -> IntentResolution:
-        self._persist_intent_targets(intent)
-        if intent.target_eval_config != self._engine.eval_config_ref:
+        self._persist_intent_targets(optim_eval_request)
+        if optim_eval_request.target_eval_config != self._engine.eval_config_ref:
             return self._bind_if_owned(
-                intent,
+                optim_eval_request,
                 IntentResolution(
                     schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                    intent=intent,
+                    optim_eval_request=optim_eval_request,
                     outcome=IntentOutcome.REJECTED,
                     detail=ResolutionDetail(
                         classification=ResolutionClass.VALIDATION,
                         message=(
-                            "intent target Eval Config is not the engine's "
-                            "exact sampling binding"
+                            "Optim Eval Request target Eval Config is not the "
+                            "engine's exact sampling binding"
                         ),
                     ),
-                    resolved_eval_config=intent.target_eval_config,
+                    resolved_eval_config=optim_eval_request.target_eval_config,
                 ),
                 owned,
             )
-        request = EvaluationRequest(
-            candidate=intent.candidate.record,
-            evaluation_binding=intent.evaluation_binding,
-            purpose=intent.purpose,
+        request = EvalRequest(
+            request_id=optim_eval_request.eval_request.request_id,
+            candidate=optim_eval_request.eval_request.candidate,
+            evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
+            metadata=optim_eval_request.eval_request.metadata,
         )
         try:
             self._engine.validate_request(request)
         except (KeyError, TypeError, ValueError) as exc:
             return self._bind_if_owned(
-                intent,
+                optim_eval_request,
                 IntentResolution(
                     schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                    intent=intent,
+                    optim_eval_request=optim_eval_request,
                     outcome=IntentOutcome.REJECTED,
                     detail=ResolutionDetail(
                         classification=ResolutionClass.VALIDATION,
                         message=str(exc) or type(exc).__name__,
                     ),
-                    resolved_eval_config=intent.target_eval_config,
+                    resolved_eval_config=optim_eval_request.target_eval_config,
                 ),
                 owned,
             )
         try:
-            self._assert_generation_current(intent, owned)
+            self._assert_generation_current(optim_eval_request, owned)
             evaluated = self._engine.evaluate(request)
         except Exception as exc:
+            candidate_ref = candidate_reference(
+                optim_eval_request.eval_request.candidate
+            )
             failure = EvaluationFailureEvidence(
-                candidate=intent.candidate,
-                evaluation_binding=intent.evaluation_binding,
-                purpose=intent.purpose,
+                candidate=candidate_ref,
+                evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
+                metadata=optim_eval_request.eval_request.metadata,
                 exception_type=type(exc).__name__,
                 message=str(exc) or type(exc).__name__,
             )
@@ -189,10 +222,10 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
                 },
             )
             return self._bind_if_owned(
-                intent,
+                optim_eval_request,
                 IntentResolution(
                     schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                    intent=intent,
+                    optim_eval_request=optim_eval_request,
                     outcome=IntentOutcome.FAILED,
                     detail=ResolutionDetail(
                         classification=ResolutionClass.INFRASTRUCTURE,
@@ -200,7 +233,7 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
                     ),
                     evaluation_result_ref=failure_ref.record_ref,
                     reward_evidence_refs=(),
-                    resolved_eval_config=intent.target_eval_config,
+                    resolved_eval_config=optim_eval_request.target_eval_config,
                     terminal_failure=terminal_failure,
                 ),
                 owned,
@@ -210,10 +243,10 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
             () if reward_ref is None else reward_ref.record.evidence_refs
         )
         return self._bind_if_owned(
-            intent,
+            optim_eval_request,
             IntentResolution(
                 schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                intent=intent,
+                optim_eval_request=optim_eval_request,
                 outcome=IntentOutcome.COMPLETED,
                 detail=ResolutionDetail(
                     classification=ResolutionClass.MEASURED,
@@ -221,7 +254,7 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
                 ),
                 evaluation_result_ref=evaluated.evidence_ref,
                 reward_evidence_refs=reward_evidence_refs,
-                resolved_eval_config=intent.target_eval_config,
+                resolved_eval_config=optim_eval_request.target_eval_config,
                 reward_ref=reward_ref,
             ),
             owned,

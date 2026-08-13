@@ -1,29 +1,30 @@
 from __future__ import annotations
 
+from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import (
     EngineEvaluation,
+    EvalRequest,
     EvaluationEngine,
-    EvaluationRequest,
 )
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA_VERSION,
-    EvaluationIntent,
     IntentOutcome,
     IntentResolution,
+    OptimEvalRequest,
     ResolutionClass,
     ResolutionDetail,
 )
 
 __all__ = [
-    "build_evaluation_intent",
     "build_measured_resolution",
+    "build_optim_eval_request",
     "evaluate_and_resolve",
 ]
 
 
-def build_evaluation_intent(
+def build_optim_eval_request(
     evaluated: EngineEvaluation,
     binding: EvaluationBinding,
     *,
@@ -31,28 +32,30 @@ def build_evaluation_intent(
     run_id: str,
     step_index: int,
     occurrence_ordinal: int,
-) -> EvaluationIntent:
+) -> OptimEvalRequest:
     reward_ref = evaluated.evidence.reward_ref
     if reward_ref is None:
         raise RuntimeError("internal evaluation returned no Reward")
-    return EvaluationIntent(
-        intent_id=(
-            f"{run_id}:{step_index}:{occurrence_ordinal}:"
-            f"{evaluated.evidence.candidate.identity_hash}"
-        ),
-        candidate=evaluated.evidence.candidate,
+    return OptimEvalRequest(
+        optim_run_id=run_id,
+        optim_step_index=step_index,
         target_eval_config=binding.eval_config,
-        evaluation_binding=binding,
-        purpose=purpose,
-        run_id=run_id,
-        step_index=step_index,
+        eval_request=EvalRequest(
+            request_id=(
+                f"{run_id}:{step_index}:{occurrence_ordinal}:"
+                f"{evaluated.evidence.candidate.identity_hash}"
+            ),
+            candidate=evaluated.evidence.candidate.record,
+            evaluation_binding=binding,
+            metadata=metadata_with_purpose(purpose),
+        ),
         expected_reward_policy_hash=reward_ref.record.reward_policy_hash,
     )
 
 
 def build_measured_resolution(
     evaluated: EngineEvaluation,
-    intent: EvaluationIntent,
+    optim_eval_request: OptimEvalRequest,
     *,
     message: str,
 ) -> IntentResolution:
@@ -61,7 +64,7 @@ def build_measured_resolution(
         raise RuntimeError("internal evaluation returned no Reward")
     return IntentResolution(
         schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-        intent=intent,
+        optim_eval_request=optim_eval_request,
         outcome=IntentOutcome.COMPLETED,
         detail=ResolutionDetail(
             classification=ResolutionClass.MEASURED,
@@ -69,7 +72,7 @@ def build_measured_resolution(
         ),
         evaluation_result_ref=evaluated.evidence_ref,
         reward_evidence_refs=reward_ref.record.evidence_refs,
-        resolved_eval_config=intent.evaluation_binding.eval_config,
+        resolved_eval_config=optim_eval_request.target_eval_config,
         reward_ref=reward_ref,
     )
 
@@ -86,13 +89,16 @@ def evaluate_and_resolve(
     message: str,
 ) -> tuple[EngineEvaluation, IntentResolution]:
     evaluated = engine.evaluate(
-        EvaluationRequest(
+        EvalRequest(
+            request_id=(
+                f"{run_id}:{step_index}:{occurrence_ordinal}:{purpose}"
+            ),
             candidate=candidate,
             evaluation_binding=binding,
-            purpose=purpose,
+            metadata=metadata_with_purpose(purpose),
         )
     )
-    intent = build_evaluation_intent(
+    optim_eval_request = build_optim_eval_request(
         evaluated,
         binding,
         purpose=purpose,
@@ -101,6 +107,6 @@ def evaluate_and_resolve(
         occurrence_ordinal=occurrence_ordinal,
     )
     resolution = build_measured_resolution(
-        evaluated, intent, message=message
+        evaluated, optim_eval_request, message=message
     )
     return evaluated, resolution

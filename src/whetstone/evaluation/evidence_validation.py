@@ -12,7 +12,6 @@ from whetstone.evaluation.aggregate import (
     TaskRows,
 )
 from whetstone.evaluation.attribution import attribute_published_row
-from whetstone.evaluation.protocol import EvaluationEngine, EvaluationRequest
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EVALUATION_OUTPUTS_SCHEMA,
@@ -31,10 +30,11 @@ from whetstone.evaluation.schema_names import (
 from whetstone.experiment.binding import EVAL_CONFIG_RECORD_SCHEMA
 from whetstone.experiment.candidate import CANDIDATE_RECORD_SCHEMA
 from whetstone.experiment.reward import REWARD_SCHEMA, Reward, RewardRef
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.contracts import (
-    EvaluationIntent,
     IntentOutcome,
     IntentResolution,
+    OptimEvalRequest,
     ResolutionClass,
 )
 from whetstone.provider.policy import (
@@ -84,20 +84,25 @@ class EvaluationEvidenceValidation:
     ) -> tuple[TypedRef, dict[str, Any]]:
         return self._load_exact(reference, expected_schema=expected_schema)
 
-    def _persist_intent_targets(self, intent: EvaluationIntent) -> None:
+    def _persist_intent_targets(
+        self, optim_eval_request: OptimEvalRequest
+    ) -> None:
         candidate, _ = self._store.put(
             CANDIDATE_RECORD_SCHEMA,
-            intent.candidate.record.record_content(),
+            optim_eval_request.eval_request.candidate.record_content(),
         )
-        if self._typed_ref(candidate) != intent.candidate.record_ref:
+        candidate_ref = candidate_reference(
+            optim_eval_request.eval_request.candidate
+        )
+        if self._typed_ref(candidate) != candidate_ref.record_ref:
             raise ValueError("persisted candidate reference diverged")
         eval_config, _ = self._store.put(
             EVAL_CONFIG_RECORD_SCHEMA,
-            intent.target_eval_config.record.model_dump(mode="json"),
+            optim_eval_request.target_eval_config.record.model_dump(mode="json"),
         )
         if (
             self._typed_ref(eval_config)
-            != intent.target_eval_config.record_ref
+            != optim_eval_request.target_eval_config.record_ref
         ):
             raise ValueError("persisted Eval Config reference diverged")
         policy, _ = self._store.put(
@@ -112,34 +117,47 @@ class EvaluationEvidenceValidation:
                 "persisted Provider Execution Policy reference diverged"
             )
 
-    def _validate_target_objects(self, intent: EvaluationIntent) -> None:
+    def _validate_target_objects(
+        self, optim_eval_request: OptimEvalRequest
+    ) -> None:
+        candidate_ref = candidate_reference(
+            optim_eval_request.eval_request.candidate
+        )
         _candidate_ref, candidate_content = self._load_exact(
-            intent.candidate.record_ref,
+            candidate_ref.record_ref,
             expected_schema=CANDIDATE_RECORD_SCHEMA,
         )
-        if candidate_content != intent.candidate.record.record_content():
+        if candidate_content != candidate_ref.record.record_content():
             raise ValueError(
-                "durable candidate does not equal the Intent candidate"
+                "durable candidate does not equal the Optim Eval Request "
+                "candidate"
             )
         _eval_config_ref, eval_config_content = self._load_exact(
-            intent.target_eval_config.record_ref,
+            optim_eval_request.target_eval_config.record_ref,
             expected_schema=EVAL_CONFIG_RECORD_SCHEMA,
         )
-        if eval_config_content != intent.target_eval_config.record.model_dump(
-            mode="json"
+        if eval_config_content != (
+            optim_eval_request.target_eval_config.record.model_dump(mode="json")
         ):
             raise ValueError(
-                "durable Eval Config does not equal the Intent target"
+                "durable Eval Config does not equal the Optim Eval Request "
+                "target"
             )
 
-    def _validate_execution_contract(self, intent: EvaluationIntent) -> None:
-        request = EvaluationRequest(
-            candidate=intent.candidate.record,
-            evaluation_binding=intent.evaluation_binding,
-            purpose=intent.purpose,
+    def _validate_execution_contract(
+        self, optim_eval_request: OptimEvalRequest
+    ) -> None:
+        request = EvalRequest(
+            request_id=optim_eval_request.eval_request.request_id,
+            candidate=optim_eval_request.eval_request.candidate,
+            evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
+            metadata=optim_eval_request.eval_request.metadata,
         )
         self._engine.validate_request(request)
-        policy_ref = intent.evaluation_binding.provider_execution_policy_ref
+        policy_ref = (
+            optim_eval_request.eval_request.evaluation_binding
+            .provider_execution_policy_ref
+        )
         if policy_ref is None:
             raise ValueError(
                 "Evaluation Binding must name a Provider Execution Policy"
@@ -162,9 +180,10 @@ class EvaluationEvidenceValidation:
     def _load_outputs(
         self,
         evidence: EvaluationEvidence,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
     ) -> EvaluationOutputsRecord:
         plan = self._plan()
+        candidate_ref = candidate_reference(intent.eval_request.candidate)
         _outputs_ref, content = self._load_exact(
             evidence.outputs_ref,
             expected_schema=EVALUATION_OUTPUTS_SCHEMA,
@@ -174,17 +193,23 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "evaluation outputs and evidence disagree on component traces"
             )
-        if outputs.candidate != intent.candidate:
+        if outputs.candidate != candidate_ref:
             raise ValueError("evaluation outputs belong to another candidate")
-        if outputs.evaluation_binding != intent.evaluation_binding:
+        if (
+            outputs.evaluation_binding
+            != intent.eval_request.evaluation_binding
+        ):
             raise ValueError(
                 "evaluation outputs use another Evaluation Binding"
             )
-        if outputs.evaluation_role is not intent.evaluation_binding.role:
+        if (
+            outputs.evaluation_role
+            is not intent.eval_request.evaluation_binding.role
+        ):
             raise ValueError("evaluation outputs use another Evaluation Role")
         if outputs.graph_hash != plan.graph_hash:
             raise ValueError("evaluation outputs use another generation graph")
-        if outputs.purpose != intent.purpose:
+        if outputs.metadata != intent.eval_request.metadata:
             raise ValueError("evaluation outputs use another purpose")
         if outputs.split_role != plan.split_role:
             raise ValueError("evaluation outputs use another sampling split")
@@ -202,10 +227,11 @@ class EvaluationEvidenceValidation:
     def _load_component_traces(
         self,
         evidence: EvaluationEvidence,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         outputs: EvaluationOutputsRecord,
     ) -> EvaluationComponentTraces:
         plan = self._plan()
+        candidate_ref = candidate_reference(intent.eval_request.candidate)
         traces_ref, content = self._load_exact(
             evidence.component_traces_ref,
             expected_schema=EVALUATION_COMPONENT_TRACES_SCHEMA,
@@ -216,15 +242,21 @@ class EvaluationEvidenceValidation:
         if traces.record_content() != content:
             raise ValueError("component trace content is not canonical")
         EvaluationComponentTracesRef(record=traces, record_ref=traces_ref)
-        if traces.candidate != intent.candidate:
+        if traces.candidate != candidate_ref:
             raise ValueError("component traces belong to another candidate")
-        if traces.evaluation_binding != intent.evaluation_binding:
+        if (
+            traces.evaluation_binding
+            != intent.eval_request.evaluation_binding
+        ):
             raise ValueError("component traces use another Evaluation Binding")
-        if traces.evaluation_role is not intent.evaluation_binding.role:
+        if (
+            traces.evaluation_role
+            is not intent.eval_request.evaluation_binding.role
+        ):
             raise ValueError("component traces use another Evaluation Role")
         if traces.graph_hash != plan.graph_hash:
             raise ValueError("component traces use another generation graph")
-        if traces.purpose != intent.purpose:
+        if traces.metadata != intent.eval_request.metadata:
             raise ValueError("component traces use another purpose")
         if traces.split_role != plan.split_role:
             raise ValueError("component traces use another sampling split")
@@ -252,7 +284,7 @@ class EvaluationEvidenceValidation:
     def _load_aggregate(
         self,
         evidence: EvaluationEvidence,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
     ) -> Aggregate:
         plan = self._plan()
         _aggregate_ref, content = self._load_exact(
@@ -303,7 +335,7 @@ class EvaluationEvidenceValidation:
             raise ValueError("Aggregate uses another Eval Config")
         if (
             aggregate.evaluation_binding_hash
-            != intent.evaluation_binding.identity_hash()
+            != intent.eval_request.evaluation_binding.identity_hash()
         ):
             raise ValueError("Aggregate uses another Evaluation Binding")
         if aggregate.task_count != len(evidence.task_hashes):
@@ -339,7 +371,7 @@ class EvaluationEvidenceValidation:
         outputs: EvaluationOutputsRecord,
         evidence: EvaluationEvidence,
         aggregate: Aggregate,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
     ) -> None:
         rows_by_task: dict[str, list[RowValue]] = {
             task_hash: [] for task_hash in outputs.task_hashes
@@ -405,8 +437,9 @@ class EvaluationEvidenceValidation:
         self,
         resolution: IntentResolution,
     ) -> None:
-        intent = resolution.intent
+        intent = resolution.optim_eval_request
         plan = self._plan()
+        candidate_ref = candidate_reference(intent.eval_request.candidate)
         assert resolution.evaluation_result_ref is not None
         evidence_ref, content = self._load_exact(
             resolution.evaluation_result_ref,
@@ -414,15 +447,18 @@ class EvaluationEvidenceValidation:
         )
         evidence = EvaluationEvidence.model_validate(content)
         EvaluationEvidenceRef(record=evidence, record_ref=evidence_ref)
-        if evidence.candidate != intent.candidate:
+        if evidence.candidate != candidate_ref:
             raise ValueError(
                 "Evaluation Evidence belongs to another candidate"
             )
-        if evidence.evaluation_binding != intent.evaluation_binding:
+        if (
+            evidence.evaluation_binding
+            != intent.eval_request.evaluation_binding
+        ):
             raise ValueError(
                 "Evaluation Evidence uses another Evaluation Binding"
             )
-        if evidence.purpose != intent.purpose:
+        if evidence.metadata != intent.eval_request.metadata:
             raise ValueError("Evaluation Evidence uses another purpose")
         if evidence.dataset_hash != plan.dataset_hash:
             raise ValueError("Evaluation Evidence uses another dataset")
@@ -466,7 +502,7 @@ class EvaluationEvidenceValidation:
                 aggregate_name=evidence.aggregate_name,
                 aggregate_value=evidence.aggregate_value,
             )
-            if reward.evidence_role is not intent.evaluation_binding.role:
+            if reward.evidence_role is not intent.eval_request.evaluation_binding.role:
                 raise ValueError("Reward uses another Evaluation Role")
             expected_reward_evidence = (evidence.aggregate_ref,)
         if resolution.reward_evidence_refs != expected_reward_evidence:
@@ -475,21 +511,25 @@ class EvaluationEvidenceValidation:
             )
 
     def _validate_failed_graph(self, resolution: IntentResolution) -> None:
-        intent = resolution.intent
+        intent = resolution.optim_eval_request
         assert resolution.evaluation_result_ref is not None
+        candidate_ref = candidate_reference(intent.eval_request.candidate)
         failure_ref, content = self._load_exact(
             resolution.evaluation_result_ref,
             expected_schema=EVALUATION_FAILURE_SCHEMA,
         )
         failure = EvaluationFailureEvidence.model_validate(content)
         EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
-        if failure.candidate != intent.candidate:
+        if failure.candidate != candidate_ref:
             raise ValueError("Evaluation Failure belongs to another candidate")
-        if failure.evaluation_binding != intent.evaluation_binding:
+        if (
+            failure.evaluation_binding
+            != intent.eval_request.evaluation_binding
+        ):
             raise ValueError(
                 "Evaluation Failure uses another Evaluation Binding"
             )
-        if failure.purpose != intent.purpose:
+        if failure.metadata != intent.eval_request.metadata:
             raise ValueError("Evaluation Failure uses another purpose")
         if (
             resolution.detail.classification
@@ -518,24 +558,24 @@ class EvaluationEvidenceValidation:
         self,
         resolution: IntentResolution,
         *,
-        expected_intent: EvaluationIntent,
+        expected_optim_eval_request: OptimEvalRequest,
         require_attestation: bool = True,
     ) -> None:
-        if resolution.intent != expected_intent:
+        if resolution.optim_eval_request != expected_optim_eval_request:
             raise ValueError(
-                "durable Intent Resolution belongs to another intent"
+                "durable Intent Resolution belongs to another Optim Eval Request"
             )
-        self._validate_target_objects(expected_intent)
+        self._validate_target_objects(expected_optim_eval_request)
         if resolution.outcome in {
             IntentOutcome.COMPLETED,
             IntentOutcome.FAILED,
         }:
-            self._validate_execution_contract(expected_intent)
+            self._validate_execution_contract(expected_optim_eval_request)
         if require_attestation and resolution.outcome in {
             IntentOutcome.COMPLETED,
             IntentOutcome.FAILED,
         }:
-            attested = self._attested_resolution(expected_intent)
+            attested = self._attested_resolution(expected_optim_eval_request)
             if attested != resolution:
                 raise ValueError(
                     "Intent Resolution does not equal the exact terminal "

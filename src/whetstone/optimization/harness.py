@@ -37,7 +37,7 @@ from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     OPTIMIZATION_RESULT_SCHEMA,
     BudgetState,
-    EvaluationIntent,
+    OptimEvalRequest,
     IntentResolution,
     OptimizationProposal,
     OptimizationResult,
@@ -135,8 +135,8 @@ class EvaluationService(Protocol):
     @property
     def replay_policy(self) -> ReplayPolicy: ...
 
-    def resolve_evaluation_intent(
-        self, intent: EvaluationIntent
+    def resolve_optim_eval_request(
+        self, optim_eval_request: OptimEvalRequest
     ) -> IntentResolution: ...
 
     def validate_resolution_graph(
@@ -351,7 +351,7 @@ class OptimizationHarness(OptimizationRunStore):
         output = AdapterOutput.model_validate(
             raw_output.model_dump(mode="json")
         )
-        if output.evaluation_intents:
+        if output.optim_eval_requests:
             raise ValueError("a pure Step emits no measurement requests")
         return output
 
@@ -443,7 +443,7 @@ class OptimizationHarness(OptimizationRunStore):
                 guarded_handles,
             )
             ledger.validate_replay_complete()
-            if output.evaluation_intents:
+            if output.optim_eval_requests:
                 raise ValueError(
                     "tool-using Steps carry measurement in Tool Results"
                 )
@@ -617,12 +617,13 @@ class OptimizationHarness(OptimizationRunStore):
     def _validate_output(
         request: OptimizationStepRequest, output: AdapterOutput
     ) -> None:
-        intent_ids = [
-            str(intent.intent_id) for intent in output.evaluation_intents
+        request_ids = [
+            str(optim_eval_request.eval_request.request_id)
+            for optim_eval_request in output.optim_eval_requests
         ]
-        if len(set(intent_ids)) != len(intent_ids):
+        if len(set(request_ids)) != len(request_ids):
             raise ValueError(
-                "Evaluation Intent IDs must be unique within a Step"
+                "Optim Eval Request IDs must be unique within a Step"
             )
         contract = request.step_output_contract
         expected_count = (
@@ -726,36 +727,51 @@ class OptimizationHarness(OptimizationRunStore):
             )
         }
         reward_policy = request.run.record.reward_policy
-        for intent in output.evaluation_intents:
-            if intent.run_id != request.run_id:
-                raise ValueError("Intent belongs to another optimization run")
-            if intent.step_index != request.step_index:
-                raise ValueError("Intent belongs to another optimization step")
-            exact_candidate = allowed.get(str(intent.candidate.identity_hash))
-            if exact_candidate is None or exact_candidate != intent.candidate:
+        for optim_eval_request in output.optim_eval_requests:
+            if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(
-                    "Intent candidate is not an exact Step output candidate"
+                    "Optim Eval Request belongs to another optimization run"
                 )
+            if optim_eval_request.optim_step_index != request.step_index:
+                raise ValueError(
+                    "Optim Eval Request belongs to another optimization step"
+                )
+            candidate_ref = candidate_reference(
+                optim_eval_request.eval_request.candidate
+            )
+            exact_candidate = allowed.get(str(candidate_ref.identity_hash))
             if (
-                intent.target_eval_config
-                != intent.evaluation_binding.eval_config
+                exact_candidate is None
+                or exact_candidate != candidate_ref
             ):
                 raise ValueError(
-                    "Intent target Eval Config must match its exact "
+                    "Optim Eval Request candidate is not an exact Step output "
+                    "candidate"
+                )
+            if (
+                optim_eval_request.target_eval_config
+                != optim_eval_request.eval_request.evaluation_binding.eval_config
+            ):
+                raise ValueError(
+                    "Optim Eval Request target Eval Config must match its exact "
                     "Evaluation Binding"
                 )
-            if intent.evaluation_binding.role is EvaluationRole.INTERNAL:
+            if (
+                optim_eval_request.eval_request.evaluation_binding.role
+                is EvaluationRole.INTERNAL
+            ):
                 if (
                     reward_policy is None
-                    or intent.expected_reward_policy_hash
+                    or optim_eval_request.expected_reward_policy_hash
                     != reward_policy.identity_hash()
                 ):
                     raise ValueError(
-                        "Intent must expect the exact run Reward Policy"
+                        "Optim Eval Request must expect the exact run Reward "
+                        "Policy"
                     )
-            elif intent.expected_reward_policy_hash is not None:
+            elif optim_eval_request.expected_reward_policy_hash is not None:
                 raise ValueError(
-                    "official Intent must not expect a Reward Policy"
+                    "official Optim Eval Request must not expect a Reward Policy"
                 )
 
     def _resolve_intents(
@@ -765,12 +781,13 @@ class OptimizationHarness(OptimizationRunStore):
         proposed: tuple[CandidateRef, ...],
         accepted: tuple[CandidateRef, ...],
     ) -> tuple[IntentResolution, ...]:
-        if not output.evaluation_intents:
+        if not output.optim_eval_requests:
             return ()
         self._validate_output_intents(request, output)
         if self._evaluation_service is None:
             raise ValueError(
-                "proposal-only Step with Intents requires EvaluationService"
+                "proposal-only Step with Optim Eval Requests requires "
+                "EvaluationService"
             )
         allowed = {
             str(candidate.identity_hash): candidate
@@ -781,21 +798,32 @@ class OptimizationHarness(OptimizationRunStore):
             )
         }
         resolutions: list[IntentResolution] = []
-        for intent in output.evaluation_intents:
-            if intent.run_id != request.run_id:
-                raise ValueError("Intent belongs to another optimization run")
-            if intent.step_index != request.step_index:
-                raise ValueError("Intent belongs to another optimization step")
-            exact_candidate = allowed.get(str(intent.candidate.identity_hash))
-            if exact_candidate is None or exact_candidate != intent.candidate:
+        for optim_eval_request in output.optim_eval_requests:
+            if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(
-                    "Intent candidate is not an exact Step output candidate"
+                    "Optim Eval Request belongs to another optimization run"
                 )
-            self._persist_intent_records(intent)
+            if optim_eval_request.optim_step_index != request.step_index:
+                raise ValueError(
+                    "Optim Eval Request belongs to another optimization step"
+                )
+            candidate_ref = candidate_reference(
+                optim_eval_request.eval_request.candidate
+            )
+            exact_candidate = allowed.get(str(candidate_ref.identity_hash))
+            if (
+                exact_candidate is None
+                or exact_candidate != candidate_ref
+            ):
+                raise ValueError(
+                    "Optim Eval Request candidate is not an exact Step output "
+                    "candidate"
+                )
+            self._persist_intent_records(optim_eval_request)
             resolutions.append(
                 self._resolve_one_intent(
                     request=request,
-                    intent=intent,
+                    optim_eval_request=optim_eval_request,
                 )
             )
         return tuple(resolutions)
@@ -804,7 +832,7 @@ class OptimizationHarness(OptimizationRunStore):
         self,
         *,
         request: OptimizationStepRequest,
-        intent: EvaluationIntent,
+        optim_eval_request: OptimEvalRequest,
     ) -> IntentResolution:
         if (
             self._evaluation_service is None
@@ -818,7 +846,7 @@ class OptimizationHarness(OptimizationRunStore):
             raise ValueError(
                 "EvaluationService replay_policy changed after construction"
             )
-        effect_request = self._intent_effect_request(request, intent)
+        effect_request = self._intent_effect_request(request, optim_eval_request)
         acquisition = self._effect_authority.acquire(
             effect_request,
             owner_id=self._owner_id,
@@ -835,7 +863,7 @@ class OptimizationHarness(OptimizationRunStore):
                     "terminal Intent effect has no exact resolution ref"
                 )
             resolution = self._load_intent_resolution(terminal.result_ref)
-            self._validate_resolution(intent, resolution)
+            self._validate_resolution(optim_eval_request, resolution)
             if acquisition.outcome is AcquireOutcome.FAILED:
                 if (
                     resolution.terminal_failure is None
@@ -855,11 +883,13 @@ class OptimizationHarness(OptimizationRunStore):
         with self._effect_authority.maintain(
             lease, lease_duration=self._lease_duration
         ) as maintenance:
-            raw = self._evaluation_service.resolve_evaluation_intent(intent)
+            raw = self._evaluation_service.resolve_optim_eval_request(
+                optim_eval_request
+            )
             resolution = IntentResolution.model_validate(
                 raw.model_dump(mode="json")
             )
-            self._validate_resolution(intent, resolution)
+            self._validate_resolution(optim_eval_request, resolution)
             self._evaluation_service.validate_resolution_graph(resolution)
             resolution_ref = self._put(
                 INTENT_RESOLUTION_SCHEMA,
@@ -885,7 +915,7 @@ class OptimizationHarness(OptimizationRunStore):
     def _intent_effect_request(
         self,
         request: OptimizationStepRequest,
-        intent: EvaluationIntent,
+        optim_eval_request: OptimEvalRequest,
     ) -> EffectRequest:
         if self._evaluation_replay_policy is None:
             raise RuntimeError("EvaluationService is not configured")
@@ -894,7 +924,7 @@ class OptimizationHarness(OptimizationRunStore):
             "step_request_ref": step_request_reference(
                 request
             ).record_ref.model_dump(mode="json"),
-            "intent_id": intent.intent_id,
+            "eval_request_id": optim_eval_request.eval_request.request_id,
         }
         return EffectRequest(
             semantic_key=compute_prefixed_identity_key(
@@ -907,7 +937,9 @@ class OptimizationHarness(OptimizationRunStore):
                 schema=INTENT_EFFECT_SCHEMA,
                 schema_version=INTENT_EFFECT_SCHEMA_VERSION,
                 payload={
-                    "intent": intent.model_dump(mode="json"),
+                    "optim_eval_request": optim_eval_request.model_dump(
+                        mode="json"
+                    ),
                 },
             ),
             replay_policy=self._evaluation_replay_policy,
@@ -931,12 +963,17 @@ class OptimizationHarness(OptimizationRunStore):
 
     def _validate_resolution(
         self,
-        intent: EvaluationIntent,
+        optim_eval_request: OptimEvalRequest,
         resolution: IntentResolution,
     ) -> None:
-        if resolution.intent != intent:
-            raise ValueError("EvaluationService resolved another exact Intent")
-        if resolution.resolved_eval_config != intent.target_eval_config:
+        if resolution.optim_eval_request != optim_eval_request:
+            raise ValueError(
+                "EvaluationService resolved another exact Optim Eval Request"
+            )
+        if (
+            resolution.resolved_eval_config
+            != optim_eval_request.target_eval_config
+        ):
             raise ValueError(
                 "Intent Resolution used another exact Eval Config"
             )

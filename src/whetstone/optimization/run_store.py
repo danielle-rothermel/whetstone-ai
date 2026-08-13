@@ -34,7 +34,7 @@ from whetstone.optimization.contracts import (
     OPTIMIZATION_RUN_SCHEMA,
     STEP_REQUEST_SCHEMA,
     STEP_RESULT_SCHEMA,
-    EvaluationIntent,
+    OptimEvalRequest,
     OptimizationResult,
     OptimizationRun,
     OptimizationRunRef,
@@ -263,17 +263,28 @@ class OptimizationRunStore:
             )
         return expected
 
-    def _persist_intent_records(self, intent: EvaluationIntent) -> None:
-        candidate = self._persist_candidate(intent.candidate.record)
-        if candidate != intent.candidate:
-            raise ValueError("Intent candidate ref is not its exact record")
+    def _persist_intent_records(
+        self, optim_eval_request: OptimEvalRequest
+    ) -> None:
+        candidate = self._persist_candidate(
+            optim_eval_request.eval_request.candidate
+        )
+        expected = candidate_reference(optim_eval_request.eval_request.candidate)
+        if candidate != expected:
+            raise ValueError(
+                "Optim Eval Request candidate ref is not its exact record"
+            )
         persisted_eval = self._put(
             EVAL_CONFIG_RECORD_SCHEMA,
-            intent.target_eval_config.record.model_dump(mode="json"),
+            optim_eval_request.target_eval_config.record.model_dump(mode="json"),
         )
-        if persisted_eval != intent.target_eval_config.record_ref:
-            raise ValueError("Intent Eval Config ref is not its exact record")
-        binding_content = intent.evaluation_binding.record_content()
+        if persisted_eval != optim_eval_request.target_eval_config.record_ref:
+            raise ValueError(
+                "Optim Eval Request Eval Config ref is not its exact record"
+            )
+        binding_content = (
+            optim_eval_request.eval_request.evaluation_binding.record_content()
+        )
         persisted_binding = self._put(
             EVALUATION_BINDING_SCHEMA, binding_content
         )
@@ -281,7 +292,8 @@ class OptimizationRunStore:
             EVALUATION_BINDING_SCHEMA, binding_content
         ):
             raise ValueError(
-                "Intent Evaluation Binding ref failed content validation"
+                "Optim Eval Request Evaluation Binding ref failed content "
+                "validation"
             )
 
     def _persist_snapshot(

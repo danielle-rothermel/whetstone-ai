@@ -6,7 +6,7 @@ from whetstone.evaluation.drivers.eval_result import (
     per_task_score,
 )
 from whetstone.evaluation.drivers.row_common import GenerationRowOutput
-from whetstone.evaluation.protocol import EvaluationRequest
+from whetstone.evaluation.protocol import EvalRequest
 from whetstone.evaluation.schema import SubmissionResultRecord
 from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.evaluation.aggregate import RowValue, TaskRows, unweighted_task_mean
@@ -98,7 +98,7 @@ class FakeEvaluationDriver:
         *,
         experiment: Experiment,
         sampling: SplitSampling,
-        request: EvaluationRequest,
+        request: EvalRequest,
         execution_policy: ProviderExecutionPolicy,
         concurrency: int,
         max_wall_seconds: float | None,

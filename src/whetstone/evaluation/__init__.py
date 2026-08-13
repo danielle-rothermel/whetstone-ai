@@ -45,9 +45,9 @@ from whetstone.evaluation.plan import (
 )
 from whetstone.evaluation.protocol import (
     EngineEvaluation,
+    EvalRequest,
     EvaluationEngine,
     EvaluationPlanSnapshot,
-    EvaluationRequest,
     EvaluationRuntimeConfig,
     EvaluationSamplingView,
     EvaluationTaskView,
@@ -107,7 +107,7 @@ __all__ = [
     "EvaluationPlanSnapshot",
     "EvaluationProcedureConfig",
     "EvaluationProcedureDefinition",
-    "EvaluationRequest",
+    "EvalRequest",
     "EvaluationRuntimeConfig",
     "EvaluationSamplingView",
     "EvaluationTaskView",

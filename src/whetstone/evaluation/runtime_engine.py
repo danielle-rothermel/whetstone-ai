@@ -13,7 +13,7 @@ from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.protocol import (
     EngineEvaluation,
     EvaluationPlanSnapshot,
-    EvaluationRequest,
+    EvalRequest,
     EvaluationSamplingView,
 )
 from whetstone.evaluation.schema import (
@@ -216,11 +216,11 @@ class RuntimeEvaluationEngine:
     def preflight(self, candidate: Candidate) -> None:
         self._driver.preflight(candidate)
 
-    def validate_request(self, request: EvaluationRequest) -> None:
+    def validate_request(self, request: EvalRequest) -> None:
         self._validate_binding(request.evaluation_binding)
         self.preflight(request.candidate)
 
-    def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
+    def evaluate(self, request: EvalRequest) -> EngineEvaluation:
         self.validate_request(request)
         result = self._driver.run(
             experiment=self._experiment,
@@ -293,7 +293,7 @@ class RuntimeEvaluationEngine:
 
     def _evaluation_outputs_record(
         self,
-        request: EvaluationRequest,
+        request: EvalRequest,
         rows: tuple[EvaluationOutputRow, ...],
         *,
         component_traces_ref: TypedRef,
@@ -304,7 +304,7 @@ class RuntimeEvaluationEngine:
             evaluation_binding=request.evaluation_binding,
             evaluation_role=request.evaluation_binding.role,
             graph_hash=self._experiment.generation_graph.graph_hash,
-            purpose=request.purpose,
+            metadata=request.metadata,
             split_role=self._sampling.split_role,
             task_hashes=self._sampling.task_set.task_hashes,
             num_samples=self._sampling.sample_plan.num_samples,
@@ -314,7 +314,7 @@ class RuntimeEvaluationEngine:
 
     def _evaluation_records(
         self,
-        request: EvaluationRequest,
+        request: EvalRequest,
         result: InternalEvalResult,
     ) -> tuple[EvaluationComponentTraces, tuple[EvaluationOutputRow, ...]]:
         task_ids = tuple(_task_id(task) for task in self._sampling.tasks)
@@ -409,7 +409,7 @@ class RuntimeEvaluationEngine:
                 evaluation_binding=request.evaluation_binding,
                 evaluation_role=request.evaluation_binding.role,
                 graph_hash=self._experiment.generation_graph.graph_hash,
-                purpose=request.purpose,
+                metadata=request.metadata,
                 split_role=self._sampling.split_role,
                 task_hashes=task_hashes,
                 num_samples=num_samples,
@@ -419,7 +419,7 @@ class RuntimeEvaluationEngine:
         )
 
     def _persist(
-        self, request: EvaluationRequest, result: InternalEvalResult
+        self, request: EvalRequest, result: InternalEvalResult
     ) -> EngineEvaluation:
         candidate_ref = candidate_reference(request.candidate)
         persisted_candidate = self._put(
@@ -483,7 +483,7 @@ class RuntimeEvaluationEngine:
             evaluation_binding=request.evaluation_binding,
             graph_hash=aggregate.graph_hash,
             graph_config_ref=aggregate.graph_hash,
-            purpose=request.purpose,
+            metadata=request.metadata,
             dataset_hash=self._sampling.task_set.dataset_revision,
             task_hashes=self._sampling.task_set.task_hashes,
             num_samples=self._sampling.sample_plan.num_samples,

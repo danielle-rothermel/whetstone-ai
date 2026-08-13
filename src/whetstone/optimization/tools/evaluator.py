@@ -4,7 +4,8 @@ from collections.abc import Sequence
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
 from whetstone.evaluation.preview.binding import preview_evaluation_binding
-from whetstone.evaluation.protocol import EvaluationEngine, EvaluationRequest
+from whetstone.evaluation.metadata import metadata_with_purpose
+from whetstone.evaluation.protocol import EvaluationEngine, EvalRequest
 from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.tools.contracts import ToolCall, ToolConfig
 from whetstone.optimization.tools.execution import (
@@ -68,14 +69,15 @@ class EngineToolEvaluator:
             payload=payload,
         )
         evaluated = engine.evaluate(
-            EvaluationRequest(
+            EvalRequest(
+                request_id=f"tool:{call.call_id}",
                 candidate=candidate,
                 evaluation_binding=preview_evaluation_binding(
                     engine,
                     campaign=config.store_namespace_key,
                     provenance_note=config.tool_name,
                 ),
-                purpose=config.tool_name,
+                metadata=metadata_with_purpose(config.tool_name),
             )
         )
         evidence = evaluated.evidence

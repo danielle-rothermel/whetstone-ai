@@ -37,6 +37,7 @@ from whetstone.evaluation.schema_names import (
 from whetstone.experiment import binding as _binding
 from whetstone.experiment import candidate as _candidate
 from whetstone.experiment import reward as _reward
+from whetstone.evaluation.protocol import EvalRequest
 from whetstone.optimization.proposal.mutation import (
     DiffCheckError,
     diff_check,
@@ -62,7 +63,7 @@ __all__ = [
     "STEP_RESULT_SCHEMA",
     "BudgetDelta",
     "BudgetState",
-    "EvaluationIntent",
+    "OptimEvalRequest",
     "IntentOutcome",
     "IntentResolution",
     "OptimizationProposal",
@@ -87,7 +88,7 @@ __all__ = [
 ]
 
 INTENT_RESOLUTION_SCHEMA = "whetstone.optimization_intent_resolution"
-INTENT_RESOLUTION_SCHEMA_VERSION = 2
+INTENT_RESOLUTION_SCHEMA_VERSION = -1
 OPTIMIZATION_RUN_SCHEMA = "whetstone.optimization_run"
 OPTIMIZATION_RUN_SCHEMA_VERSION = 1
 STEP_REQUEST_SCHEMA = "whetstone.optimization_step_request"
@@ -223,34 +224,32 @@ class BudgetState(BaseModel):
         return BudgetState(consumed=consumed, remaining=remaining)
 
 
-class EvaluationIntent(BaseModel):
+class OptimEvalRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    intent_id: NonEmptyId
-    candidate: _candidate.CandidateRef
+    optim_run_id: NonEmptyId
+    optim_step_index: NonNegativeInt
     target_eval_config: _binding.EvalConfigRef
-    evaluation_binding: _binding.EvaluationBinding
-    purpose: NonEmptyId
-    run_id: NonEmptyId
-    step_index: NonNegativeInt
+    eval_request: EvalRequest
     expected_reward_policy_hash: IdentityHash | None = None
 
     @model_validator(mode="after")
-    def _validate(self) -> EvaluationIntent:
-        if self.target_eval_config != self.evaluation_binding.eval_config:
+    def _validate(self) -> OptimEvalRequest:
+        binding = self.eval_request.evaluation_binding
+        if self.target_eval_config != binding.eval_config:
             raise ValueError(
-                "Evaluation Intent target Eval Config must match its exact "
+                "Optim Eval Request target Eval Config must match its exact "
                 "Evaluation Binding"
             )
-        if self.evaluation_binding.role is EvaluationRole.INTERNAL:
+        if binding.role is EvaluationRole.INTERNAL:
             if self.expected_reward_policy_hash is None:
                 raise ValueError(
-                    "an internal proposal Evaluation Intent requires its "
+                    "an internal proposal Optim Eval Request requires its "
                     "expected Reward Policy hash"
                 )
         elif self.expected_reward_policy_hash is not None:
             raise ValueError(
-                "an official Evaluation Intent must not expect a Reward Policy"
+                "an official Optim Eval Request must not expect a Reward Policy"
             )
         return self
 
@@ -472,8 +471,8 @@ class ResolutionDetail(BaseModel):
 class IntentResolution(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2]
-    intent: EvaluationIntent
+    schema_version: Literal[-1]
+    optim_eval_request: OptimEvalRequest
     outcome: IntentOutcome
     detail: ResolutionDetail
     evaluation_result_ref: TypedRef | None = None
@@ -491,7 +490,7 @@ class IntentResolution(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> IntentResolution:
-        if self.resolved_eval_config != self.intent.target_eval_config:
+        if self.resolved_eval_config != self.optim_eval_request.target_eval_config:
             raise ValueError(
                 "an Intent may resolve only under its exact target Eval Config"
             )
@@ -552,7 +551,7 @@ class IntentResolution(BaseModel):
                 "only a completed Intent Resolution may carry a Reward"
             )
         if (
-            self.intent.evaluation_binding.role is EvaluationRole.OFFICIAL
+            self.optim_eval_request.eval_request.evaluation_binding.role is EvaluationRole.OFFICIAL
             and self.reward_ref is not None
         ):
             raise ValueError(
@@ -560,7 +559,7 @@ class IntentResolution(BaseModel):
             )
         if (
             self.outcome is IntentOutcome.COMPLETED
-            and self.intent.evaluation_binding.role is EvaluationRole.INTERNAL
+            and self.optim_eval_request.eval_request.evaluation_binding.role is EvaluationRole.INTERNAL
             and self.reward_ref is None
         ):
             raise ValueError(
@@ -580,7 +579,7 @@ class IntentResolution(BaseModel):
                 )
             if (
                 reward.reward_policy_hash
-                != self.intent.expected_reward_policy_hash
+                != self.optim_eval_request.expected_reward_policy_hash
             ):
                 raise ValueError(
                     "Reward Policy must match the Evaluation Intent expected "
@@ -780,35 +779,39 @@ class OptimizationStepResult(BaseModel):
                         f"canonical Mutation Surface: {error}"
                     ) from error
         allowed_candidates = request_candidate_refs + self.proposed_candidates
-        intent_ids = tuple(
-            resolution.intent.intent_id for resolution in self.resolved_intents
-        )
-        if len(set(intent_ids)) != len(intent_ids):
-            raise ValueError(
-                "a Step Result must not carry duplicate Evaluation Intent IDs"
-            )
-        exact_intents = tuple(
-            resolution.intent.model_dump_json()
+        request_ids = tuple(
+            resolution.optim_eval_request.eval_request.request_id
             for resolution in self.resolved_intents
         )
-        if len(set(exact_intents)) != len(exact_intents):
+        if len(set(request_ids)) != len(request_ids):
+            raise ValueError(
+                "a Step Result must not carry duplicate Eval Request IDs"
+            )
+        exact_requests = tuple(
+            resolution.optim_eval_request.model_dump_json()
+            for resolution in self.resolved_intents
+        )
+        if len(set(exact_requests)) != len(exact_requests):
             raise ValueError(
                 "a Step Result must not carry duplicate Intent Resolutions"
             )
         for resolution in self.resolved_intents:
-            intent = resolution.intent
-            if intent.run_id != request.run_id:
+            optim_request = resolution.optim_eval_request
+            if optim_request.optim_run_id != request.run_id:
                 raise ValueError(
                     "every resolved Intent must belong to the exact request "
                     "run"
                 )
-            if intent.step_index != request.step_index:
+            if optim_request.optim_step_index != request.step_index:
                 raise ValueError(
                     "every resolved Intent must belong to the exact request "
                     "step"
                 )
+            candidate_ref = _candidate.candidate_reference(
+                optim_request.eval_request.candidate
+            )
             if not any(
-                intent.candidate == candidate
+                candidate_ref == candidate
                 for candidate in allowed_candidates
             ):
                 raise ValueError(
@@ -822,8 +825,9 @@ class OptimizationStepResult(BaseModel):
                     "Policy"
                 )
             if (
-                intent.evaluation_binding.role is EvaluationRole.INTERNAL
-                and intent.expected_reward_policy_hash
+                optim_request.eval_request.evaluation_binding.role
+                is EvaluationRole.INTERNAL
+                and optim_request.expected_reward_policy_hash
                 != reward_policy.identity_hash()
             ):
                 raise ValueError(

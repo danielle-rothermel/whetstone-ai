@@ -10,6 +10,8 @@ from whetstone.core.identity import (
     TypedRef,
     require_full_hash,
 )
+from whetstone.evaluation.metadata import metadata_with_purpose
+from whetstone.evaluation.protocol import EvalRequest
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.adapters import AdapterOutput
@@ -17,7 +19,7 @@ from whetstone.optimization.contracts import (
     STEP_RESULT_SCHEMA,
     BudgetDelta,
     BudgetState,
-    EvaluationIntent,
+    OptimEvalRequest,
     IntentOutcome,
     IntentResolution,
     OptimizationRunRef,
@@ -384,14 +386,16 @@ class Miprov2Adapter:
                 optimizable_trace_index=0,
             )
             persist_miprov2_intent_context(self._store, context)
-            intent = EvaluationIntent(
-                intent_id=intent_id,
-                candidate=teacher_candidate,
+            optim_eval_request = OptimEvalRequest(
+                optim_run_id=request.run_id,
+                optim_step_index=request.step_index,
                 target_eval_config=context.eval_config,
-                evaluation_binding=evaluation_binding,
-                purpose="miprov2_bootstrap",
-                run_id=request.run_id,
-                step_index=request.step_index,
+                eval_request=EvalRequest(
+                    request_id=intent_id,
+                    candidate=teacher_candidate.record,
+                    evaluation_binding=evaluation_binding,
+                    metadata=metadata_with_purpose("miprov2_bootstrap"),
+                ),
                 expected_reward_policy_hash=(
                     request.run.record.reward_policy.identity_hash()
                     if request.run.record.reward_policy is not None
@@ -400,7 +404,7 @@ class Miprov2Adapter:
             )
             return AdapterOutput(
                 proposed_candidates=(teacher_candidate.record,),
-                evaluation_intents=(intent,),
+                optim_eval_requests=(optim_eval_request,),
                 budget_delta=BudgetDelta(
                     consumed={"bootstrap_generations": 1, "task_rows": 1}
                 ),
@@ -449,14 +453,16 @@ class Miprov2Adapter:
             reward_policy_hash=state.control.reward_policy_hash,
         )
         persist_miprov2_intent_context(self._store, context)
-        intent = EvaluationIntent(
-            intent_id=intent_id,
-            candidate=candidate_reference(effect.candidate),
+        optim_eval_request = OptimEvalRequest(
+            optim_run_id=request.run_id,
+            optim_step_index=request.step_index,
             target_eval_config=effect.eval_config,
-            evaluation_binding=evaluation_binding,
-            purpose=effect.purpose,
-            run_id=request.run_id,
-            step_index=request.step_index,
+            eval_request=EvalRequest(
+                request_id=intent_id,
+                candidate=effect.candidate,
+                evaluation_binding=evaluation_binding,
+                metadata=metadata_with_purpose(effect.purpose),
+            ),
             expected_reward_policy_hash=(
                 request.run.record.reward_policy.identity_hash()
                 if request.run.record.reward_policy is not None
@@ -467,7 +473,7 @@ class Miprov2Adapter:
             proposed_candidates=(
                 () if effect_kind == "baseline" else (effect.candidate,)
             ),
-            evaluation_intents=(intent,),
+            optim_eval_requests=(optim_eval_request,),
             budget_delta=BudgetDelta(
                 consumed={
                     "evaluations": 1,
@@ -600,7 +606,9 @@ class Miprov2Adapter:
         resolution: IntentResolution,
     ) -> Miprov2State:
 
-        context = load_miprov2_intent_context(self._store, resolution.intent)
+        context = load_miprov2_intent_context(
+            self._store, resolution.optim_eval_request
+        )
         if context.control_identity_hash != state.control.identity_hash():
             raise ValueError("Intent Resolution belongs to another control")
         if resolution.outcome is IntentOutcome.REJECTED:

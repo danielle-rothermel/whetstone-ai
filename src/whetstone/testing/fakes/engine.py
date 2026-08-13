@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from whetstone.evaluation.protocol import (
+    EvalRequest,
     EvaluationEngine,
     EvaluationPlanSnapshot,
-    EvaluationRequest,
     EvaluationSamplingView,
 )
 from whetstone.experiment.binding import EvalConfigRef
@@ -65,10 +65,10 @@ class FakeEvaluationEngine:
     def expected_model_route(self) -> str:
         return self._model_route
 
-    def validate_request(self, request: EvaluationRequest) -> None:
+    def validate_request(self, request: EvalRequest) -> None:
         _ = request
 
-    def evaluate(self, request: EvaluationRequest) -> Any:
+    def evaluate(self, request: EvalRequest) -> Any:
         raise NotImplementedError(
             "FakeEvaluationEngine is a protocol stub; use "
             "ReferenceEvaluationRuntimeConfig.build_engine() for evaluation"

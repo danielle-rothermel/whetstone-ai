@@ -4,7 +4,7 @@ from typing import Protocol, runtime_checkable
 
 from whetstone.evaluation.drivers.eval_result import InternalEvalResult
 from whetstone.evaluation.drivers.row_common import GenerationRowOutput
-from whetstone.evaluation.protocol import EvaluationRequest
+from whetstone.evaluation.protocol import EvalRequest
 from whetstone.evaluation.schema import SubmissionResultRecord
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
@@ -27,7 +27,7 @@ class EvaluationDriver(Protocol):
         *,
         experiment: Experiment,
         sampling: SplitSampling,
-        request: EvaluationRequest,
+        request: EvalRequest,
         execution_policy: ProviderExecutionPolicy,
         concurrency: int,
         max_wall_seconds: float | None,

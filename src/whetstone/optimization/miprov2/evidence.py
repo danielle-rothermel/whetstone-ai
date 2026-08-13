@@ -21,6 +21,7 @@ from whetstone.core.identity import (
 )
 from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.attribution import require_exhaustive_row_accounting
+from whetstone.evaluation.metadata import eval_purpose
 from whetstone.evaluation.schema import (
     EVALUATION_COMPONENT_TRACES_SCHEMA,
     EvaluationComponentTraces,
@@ -38,10 +39,10 @@ from whetstone.experiment.binding import (
     EvalConfigRef,
     EvaluationBinding,
 )
-from whetstone.experiment.candidate import CandidateRef
+from whetstone.experiment.candidate import CandidateRef, candidate_reference
 from whetstone.experiment.reward import REWARD_SCHEMA, RewardRef
 from whetstone.optimization.contracts import (
-    EvaluationIntent,
+    OptimEvalRequest,
     IntentOutcome,
     IntentResolution,
 )
@@ -299,22 +300,25 @@ def persist_miprov2_intent_context(
 
 def load_miprov2_intent_context(
     store: ObjectStore,
-    intent: EvaluationIntent,
+    optim_eval_request: OptimEvalRequest,
 ) -> Miprov2IntentContext:
     key = (
-        f"whetstone.miprov2_intent_context:{intent.run_id}:{intent.intent_id}"
+        "whetstone.miprov2_intent_context:"
+        f"{optim_eval_request.optim_run_id}:"
+        f"{optim_eval_request.eval_request.request_id}"
     )
     resolved = store.resolve(key)
     if resolved is None:
         raise ValueError("MIPROv2 intent has no persisted exact context")
     context = Miprov2IntentContext.model_validate(store.get(resolved))
+    candidate_ref = candidate_reference(optim_eval_request.eval_request.candidate)
     if (
-        intent.intent_id,
-        intent.run_id,
-        intent.candidate,
-        intent.target_eval_config,
-        intent.evaluation_binding,
-        intent.expected_reward_policy_hash,
+        optim_eval_request.eval_request.request_id,
+        optim_eval_request.optim_run_id,
+        candidate_ref,
+        optim_eval_request.target_eval_config,
+        optim_eval_request.eval_request.evaluation_binding,
+        optim_eval_request.expected_reward_policy_hash,
     ) != (
         context.intent_id,
         context.run_id,
@@ -330,7 +334,8 @@ def load_miprov2_intent_context(
         "sample": "miprov2_sample",
         "promotion": "miprov2_promotion",
     }[context.effect_kind]
-    if intent.purpose != expected_purpose:
+    purpose = eval_purpose(optim_eval_request.eval_request.metadata)
+    if purpose != expected_purpose:
         raise ValueError("MIPROv2 intent purpose conflicts with context")
     return context
 
@@ -366,7 +371,9 @@ class Miprov2EvidenceResolver:
         self,
         resolution: IntentResolution,
     ) -> _ResolvedEvidence:
-        context = load_miprov2_intent_context(self.store, resolution.intent)
+        context = load_miprov2_intent_context(
+            self.store, resolution.optim_eval_request
+        )
         if resolution.outcome is not IntentOutcome.COMPLETED:
             raise ValueError(
                 "MIPROv2 requires a completed measured resolution"
@@ -381,17 +388,17 @@ class Miprov2EvidenceResolver:
             self.store.get(evidence_ref.reference)
         )
         EvaluationEvidenceRef(record=evidence, record_ref=evidence_ref)
-        expected_binding = resolution.intent.evaluation_binding
+        expected_binding = resolution.optim_eval_request.eval_request.evaluation_binding
         if (
             evidence.candidate,
             evidence.evaluation_binding,
-            evidence.purpose,
+            evidence.metadata,
             evidence.task_hashes,
             evidence.num_samples,
         ) != (
             context.candidate,
             expected_binding,
-            resolution.intent.purpose,
+            resolution.optim_eval_request.eval_request.metadata,
             context.task_batch_hashes,
             1,
         ):
@@ -418,7 +425,7 @@ class Miprov2EvidenceResolver:
             traces.evaluation_binding,
             traces.evaluation_role,
             traces.graph_hash,
-            traces.purpose,
+            traces.metadata,
             traces.split_role,
             traces.task_hashes,
             traces.num_samples,
@@ -427,7 +434,7 @@ class Miprov2EvidenceResolver:
             evidence.evaluation_binding,
             EvaluationRole.INTERNAL,
             evidence.graph_hash,
-            evidence.purpose,
+            evidence.metadata,
             "internal",
             evidence.task_hashes,
             evidence.num_samples,
@@ -481,7 +488,9 @@ class Miprov2EvidenceResolver:
                 "miprov2_sample",
                 "miprov2_promotion",
             ],
-            resolution.intent.purpose,
+            eval_purpose(
+                resolution.optim_eval_request.eval_request.metadata
+            ),
         )
         normalized_score = round(resolved.reward_ref.record.value * 100, 2)
         observation = Miprov2EvaluationObservation(
@@ -493,7 +502,9 @@ class Miprov2EvidenceResolver:
             task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
-            evaluation_binding=resolution.intent.evaluation_binding,
+            evaluation_binding=(
+                resolution.optim_eval_request.eval_request.evaluation_binding
+            ),
             evaluation_result_ref=resolved.evidence_ref,
             expected_reward_policy_hash=context.reward_policy_hash,
             reward_ref=resolved.reward_ref,
@@ -513,7 +524,9 @@ class Miprov2EvidenceResolver:
     ) -> Miprov2ResolvedEvaluation:
         """Map exact terminal failure evidence to a zero observation."""
 
-        context = load_miprov2_intent_context(self.store, resolution.intent)
+        context = load_miprov2_intent_context(
+            self.store, resolution.optim_eval_request
+        )
         if context.effect_kind == "bootstrap":
             raise ValueError("bootstrap failures use the bootstrap mapper")
         if resolution.outcome is not IntentOutcome.FAILED:
@@ -533,11 +546,11 @@ class Miprov2EvidenceResolver:
         if (
             failure.candidate,
             failure.evaluation_binding,
-            failure.purpose,
+            failure.metadata,
         ) != (
             context.candidate,
-            resolution.intent.evaluation_binding,
-            resolution.intent.purpose,
+            resolution.optim_eval_request.eval_request.evaluation_binding,
+            resolution.optim_eval_request.eval_request.metadata,
         ):
             raise ValueError(
                 "evaluation failure conflicts with intent context"
@@ -553,7 +566,9 @@ class Miprov2EvidenceResolver:
                 "miprov2_sample",
                 "miprov2_promotion",
             ],
-            resolution.intent.purpose,
+            eval_purpose(
+                resolution.optim_eval_request.eval_request.metadata
+            ),
         )
         observation = Miprov2EvaluationObservation(
             run_id=context.run_id,
@@ -564,7 +579,9 @@ class Miprov2EvidenceResolver:
             task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
-            evaluation_binding=resolution.intent.evaluation_binding,
+            evaluation_binding=(
+                resolution.optim_eval_request.eval_request.evaluation_binding
+            ),
             evaluation_result_ref=failure_ref,
             expected_reward_policy_hash=context.reward_policy_hash,
             reward_ref=None,
@@ -660,7 +677,9 @@ class Miprov2EvidenceResolver:
     ) -> BootstrapGenerationResult:
         """Preserve exact failure evidence without inventing score or trace."""
 
-        context = load_miprov2_intent_context(self.store, resolution.intent)
+        context = load_miprov2_intent_context(
+            self.store, resolution.optim_eval_request
+        )
         if (
             context.effect_kind != "bootstrap"
             or context.bootstrap_attempt is None
@@ -685,11 +704,11 @@ class Miprov2EvidenceResolver:
         if (
             failure.candidate,
             failure.evaluation_binding,
-            failure.purpose,
+            failure.metadata,
         ) != (
             context.candidate,
             context.evaluation_binding,
-            resolution.intent.purpose,
+            resolution.optim_eval_request.eval_request.metadata,
         ):
             raise ValueError("bootstrap failure conflicts with exact context")
         if (

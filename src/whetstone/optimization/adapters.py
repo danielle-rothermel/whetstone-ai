@@ -17,7 +17,7 @@ from whetstone.core.identity import (
 from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.contracts import (
     BudgetDelta,
-    EvaluationIntent,
+    OptimEvalRequest,
     OptimizationStepRequest,
     StepKind,
     StepMode,
@@ -58,7 +58,7 @@ class AdapterOutput(BaseModel):
 
     proposed_candidates: tuple[Candidate, ...] = ()
     accepted_candidates: tuple[Candidate, ...] = ()
-    evaluation_intents: tuple[EvaluationIntent, ...] = ()
+    optim_eval_requests: tuple[OptimEvalRequest, ...] = ()
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
     proposed_status: StepStatus = StepStatus.CONTINUE
     terminal_failure: TerminalFailure | None = None
@@ -83,7 +83,7 @@ class AdapterOutput(BaseModel):
                 raise ValueError(
                     "a failed Adapter Output claims no accepted candidates"
                 )
-            if self.evaluation_intents:
+            if self.optim_eval_requests:
                 raise ValueError(
                     "a failed Adapter Output requests no Evaluations"
                 )

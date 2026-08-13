@@ -14,10 +14,11 @@ from whetstone.evaluation.analysis.statistics import (
     BootstrapCI,
     bootstrap_paired_delta_ci,
 )
+from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import (
     EngineEvaluation,
+    EvalRequest,
     EvaluationEngine,
-    EvaluationRequest,
 )
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate
@@ -134,15 +135,17 @@ def run_anchor_calibration(
     calibration_task_ids = calibration_task_hashes(engine, task_ids)
     subset_engine = engine.for_task_ids(calibration_task_ids)
     subset_binding = _subset_binding(evaluation_binding, subset_engine)
-    baseline_request = EvaluationRequest(
+    baseline_request = EvalRequest(
+        request_id=f"calibration:{baseline_purpose}",
         candidate=baseline_candidate,
         evaluation_binding=subset_binding,
-        purpose=baseline_purpose,
+        metadata=metadata_with_purpose(baseline_purpose),
     )
-    ceiling_request = EvaluationRequest(
+    ceiling_request = EvalRequest(
+        request_id=f"calibration:{ceiling_purpose}",
         candidate=ceiling_candidate,
         evaluation_binding=subset_binding,
-        purpose=ceiling_purpose,
+        metadata=metadata_with_purpose(ceiling_purpose),
     )
 
     subset_engine.validate_request(baseline_request)

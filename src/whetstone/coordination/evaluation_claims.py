@@ -21,7 +21,7 @@ from whetstone.core.identity import (
 from whetstone.evaluation.protocol import EvaluationEngine
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA,
-    EvaluationIntent,
+    OptimEvalRequest,
     IntentOutcome,
     IntentResolution,
 )
@@ -104,15 +104,15 @@ class EvaluationClaims:
     if TYPE_CHECKING:
 
         @staticmethod
-        def _intent_ref(intent: EvaluationIntent) -> TypedRef: ...
+        def _intent_ref(intent: OptimEvalRequest) -> TypedRef: ...
 
         @classmethod
-        def _key(cls, intent: EvaluationIntent) -> str: ...
+        def _key(cls, intent: OptimEvalRequest) -> str: ...
 
         @classmethod
         def _claim_key(
             cls,
-            intent: EvaluationIntent,
+            intent: OptimEvalRequest,
             event_ordinal: int,
         ) -> str: ...
 
@@ -120,9 +120,11 @@ class EvaluationClaims:
         def _typed_ref(reference: Any) -> TypedRef: ...
 
     def _bind(
-        self, intent: EvaluationIntent, resolution: IntentResolution
+        self, intent: OptimEvalRequest, resolution: IntentResolution
     ) -> IntentResolution:
-        self._validate_result_graph(resolution, expected_intent=intent)
+        self._validate_result_graph(
+            resolution, expected_optim_eval_request=intent
+        )
         content = resolution.model_dump(mode="json")
         reference, _ = self._store.put(INTENT_RESOLUTION_SCHEMA, content)
         try:
@@ -130,7 +132,7 @@ class EvaluationClaims:
         except BindingConflictError:
             winner = self._store.resolve(self._key(intent))
             assert winner is not None
-            loaded = self._load(winner, expected_intent=intent)
+            loaded = self._load(winner, expected_optim_eval_request=intent)
             return loaded
         return resolution
 
@@ -141,16 +143,20 @@ class EvaluationClaims:
         self,
         reference: Any,
         *,
-        expected_intent: EvaluationIntent,
+        expected_optim_eval_request: OptimEvalRequest,
     ) -> EvaluationResultAttestation:
         _attestation_ref, content = self._load_exact(
             reference,
             expected_schema=EVALUATION_RESULT_ATTESTATION_SCHEMA,
         )
         attestation = EvaluationResultAttestation.model_validate(content)
-        if attestation.resolution.intent != expected_intent:
+        if (
+            attestation.resolution.optim_eval_request
+            != expected_optim_eval_request
+        ):
             raise ValueError(
-                "Evaluation Result Attestation belongs to another Intent"
+                "Evaluation Result Attestation belongs to another "
+                "Optim Eval Request"
             )
         if attestation.graph_hash != self._engine.plan_snapshot.graph_hash:
             raise ValueError(
@@ -160,7 +166,7 @@ class EvaluationClaims:
 
     def _latest_claim(
         self,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
     ) -> EvaluationIntentClaim | None:
         latest: EvaluationIntentClaim | None = None
         event_ordinal = 0
@@ -208,7 +214,7 @@ class EvaluationClaims:
     def _append_claim_event(
         self,
         *,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         intent_ref: TypedRef,
         prior: EvaluationIntentClaim | None,
         generation: int,
@@ -279,13 +285,13 @@ class EvaluationClaims:
     def _publish_result_attestation(
         self,
         *,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         resolution: IntentResolution,
         owned: _OwnedClaim,
     ) -> EvaluationResultAttestation:
         self._validate_result_graph(
             resolution,
-            expected_intent=intent,
+            expected_optim_eval_request=intent,
             require_attestation=False,
         )
         attestation = EvaluationResultAttestation(
@@ -310,7 +316,7 @@ class EvaluationClaims:
             if latest.result_attestation_ref is not None:
                 existing = self._load_result_attestation(
                     latest.result_attestation_ref,
-                    expected_intent=intent,
+                    expected_optim_eval_request=intent,
                 )
                 if existing != attestation:
                     raise _LeaseLostError(
@@ -341,19 +347,19 @@ class EvaluationClaims:
 
     def _attested_resolution(
         self,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
     ) -> IntentResolution | None:
         latest = self._latest_claim(intent)
         if latest is None or latest.result_attestation_ref is None:
             return None
         return self._load_result_attestation(
             latest.result_attestation_ref,
-            expected_intent=intent,
+            expected_optim_eval_request=intent,
         ).resolution
 
     def _renew_claim(
         self,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         owned: _OwnedClaim,
     ) -> None:
         latest = self._latest_claim(intent)
@@ -385,7 +391,7 @@ class EvaluationClaims:
 
     def _assert_generation_current(
         self,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         owned: _OwnedClaim,
     ) -> None:
         latest = self._latest_claim(intent)
@@ -398,7 +404,7 @@ class EvaluationClaims:
                 "evaluation lease is not owned by this resolver"
             )
 
-    def _claim(self, intent: EvaluationIntent) -> _OwnedClaim | None:
+    def _claim(self, intent: OptimEvalRequest) -> _OwnedClaim | None:
         intent_ref = self._intent_ref(intent)
         while True:
             if self._store.resolve(self._key(intent)) is not None:
@@ -438,7 +444,7 @@ class EvaluationClaims:
 
     def _evaluate_with_heartbeat(
         self,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         owned: _OwnedClaim,
     ) -> IntentResolution:
         stop = threading.Event()
@@ -474,17 +480,17 @@ class EvaluationClaims:
             )
         return resolution
 
-    def _resolve_claimed(self, intent: EvaluationIntent) -> IntentResolution:
+    def _resolve_claimed(self, intent: OptimEvalRequest) -> IntentResolution:
         existing = self._store.resolve(self._key(intent))
         if existing is not None:
-            return self._load(existing, expected_intent=intent)
+            return self._load(existing, expected_optim_eval_request=intent)
         attested = self._attested_resolution(intent)
         if attested is not None:
             return self._bind(intent, attested)
         owned = self._claim(intent)
         existing = self._store.resolve(self._key(intent))
         if existing is not None:
-            return self._load(existing, expected_intent=intent)
+            return self._load(existing, expected_optim_eval_request=intent)
         attested = self._attested_resolution(intent)
         if attested is not None:
             return self._bind(intent, attested)
@@ -492,15 +498,15 @@ class EvaluationClaims:
             raise RuntimeError("evaluation claim resolved without a result")
         return self._evaluate_with_heartbeat(intent, owned)
 
-    def resolve_evaluation_intent(
-        self, intent: EvaluationIntent
+    def resolve_optim_eval_request(
+        self, optim_eval_request: OptimEvalRequest
     ) -> IntentResolution:
         with self._resolve_lock:
-            return self._resolve_claimed(intent)
+            return self._resolve_claimed(optim_eval_request)
 
     def _bind_if_owned(
         self,
-        intent: EvaluationIntent,
+        intent: OptimEvalRequest,
         resolution: IntentResolution,
         owned: _OwnedClaim,
     ) -> IntentResolution:

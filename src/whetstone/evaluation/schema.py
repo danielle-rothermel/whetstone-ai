@@ -193,7 +193,9 @@ class EvaluationComponentTraces(BaseModel):
     evaluation_binding: EvaluationBinding
     evaluation_role: EvaluationRole
     graph_hash: IdentityHash
-    purpose: StrictStr
+    metadata: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     split_role: StrictStr
     task_hashes: tuple[StrictStr, ...]
     num_samples: StrictInt
@@ -205,8 +207,6 @@ class EvaluationComponentTraces(BaseModel):
             raise ValueError(
                 "evaluation_role must match the exact Evaluation Binding"
             )
-        if not self.purpose.strip():
-            raise ValueError("purpose must be non-empty")
         if not self.split_role.strip():
             raise ValueError("split_role must be non-empty")
         if self.num_samples < 1:
@@ -307,7 +307,9 @@ class EvaluationOutputsRecord(BaseModel):
     evaluation_binding: EvaluationBinding
     evaluation_role: EvaluationRole
     graph_hash: IdentityHash
-    purpose: StrictStr
+    metadata: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     split_role: StrictStr
     task_hashes: tuple[StrictStr, ...]
     num_samples: StrictInt
@@ -327,8 +329,6 @@ class EvaluationOutputsRecord(BaseModel):
             raise ValueError(
                 "evaluation_role must match the exact Evaluation Binding"
             )
-        if not self.purpose.strip():
-            raise ValueError("purpose must be non-empty")
         if not self.split_role.strip():
             raise ValueError("split_role must be non-empty")
         if self.num_samples < 1:
@@ -404,7 +404,9 @@ class EvaluationEvidence(BaseModel):
     evaluation_binding: EvaluationBinding
     graph_hash: StrictStr
     graph_config_ref: StrictStr
-    purpose: StrictStr
+    metadata: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     #: Source dataset revision/manifest identity. The ordered TaskSet identity
     #: is a separate sampling/config identity and must not be substituted here.
     dataset_hash: StrictStr
@@ -469,7 +471,9 @@ class EvaluationFailureEvidence(BaseModel):
 
     candidate: CandidateRef
     evaluation_binding: EvaluationBinding
-    purpose: StrictStr
+    metadata: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
     exception_type: StrictStr
     message: StrictStr
 

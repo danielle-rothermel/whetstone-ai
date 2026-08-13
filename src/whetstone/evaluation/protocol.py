@@ -4,19 +4,24 @@ from dataclasses import dataclass
 from typing import Any, Protocol, Self, runtime_checkable
 
 from dr_store import ObjectStore
+from pydantic import BaseModel, ConfigDict, Field
 
-from whetstone.core.identity import IdentityRef, TypedRef
+from whetstone.core.identity import IdentityRef, ImmutableJsonObject, NonEmptyId, TypedRef
 from whetstone.evaluation.schema import EvaluationEvidence
 from whetstone.experiment.binding import EvalConfigRef, EvaluationBinding
 from whetstone.experiment.candidate import Candidate
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 
-@dataclass(frozen=True, slots=True)
-class EvaluationRequest:
+class EvalRequest(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    request_id: NonEmptyId
     candidate: Candidate
     evaluation_binding: EvaluationBinding
-    purpose: str
+    metadata: ImmutableJsonObject = Field(
+        default_factory=lambda: ImmutableJsonObject({})
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,9 +97,9 @@ class EvaluationEngine(Protocol):
 
     def expected_model_route(self) -> str: ...
 
-    def validate_request(self, request: EvaluationRequest) -> None: ...
+    def validate_request(self, request: EvalRequest) -> None: ...
 
-    def evaluate(self, request: EvaluationRequest) -> EngineEvaluation: ...
+    def evaluate(self, request: EvalRequest) -> EngineEvaluation: ...
 
     def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine: ...
 
@@ -127,9 +132,9 @@ def load_runtime_config(*, class_path: str, raw: bytes) -> EvaluationRuntimeConf
 
 __all__ = [
     "EngineEvaluation",
+    "EvalRequest",
     "EvaluationEngine",
     "EvaluationPlanSnapshot",
-    "EvaluationRequest",
     "EvaluationRuntimeConfig",
     "EvaluationSamplingView",
     "EvaluationTaskView",

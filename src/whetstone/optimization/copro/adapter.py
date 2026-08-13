@@ -24,6 +24,8 @@ from whetstone.core.identity import (
     require_full_hash,
 )
 from whetstone.core.roles import EvaluationRole
+from whetstone.evaluation.metadata import metadata_with_purpose
+from whetstone.evaluation.protocol import EvalRequest
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
 from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import (
@@ -35,7 +37,7 @@ from whetstone.experiment.reward import RewardRef
 from whetstone.optimization.adapters import AdapterOutput
 from whetstone.optimization.contracts import (
     BudgetDelta,
-    EvaluationIntent,
+    OptimEvalRequest,
     IntentOutcome,
     IntentResolution,
     OptimizationStepRequest,
@@ -209,21 +211,25 @@ class CoproAttempt(BaseModel):
             raise ValueError(
                 "COPRO measured resolution requires an Evaluation Result ref"
             )
+        optim_eval_request = resolution.optim_eval_request
         if (
-            resolution.intent.evaluation_binding.role
+            optim_eval_request.eval_request.evaluation_binding.role
             is not EvaluationRole.INTERNAL
         ):
             raise ValueError("COPRO folds only internal evaluation intents")
-        if resolution.intent.run_id != expected_run_id:
+        if optim_eval_request.optim_run_id != expected_run_id:
             raise ValueError("COPRO resolution belongs to another run")
-        if resolution.intent.step_index != round_index:
+        if optim_eval_request.optim_step_index != round_index:
             raise ValueError("COPRO resolution belongs to another round")
-        if resolution.intent.evaluation_binding != expected_evaluation_binding:
+        if (
+            optim_eval_request.eval_request.evaluation_binding
+            != expected_evaluation_binding
+        ):
             raise ValueError(
                 "COPRO resolution uses an unexpected Evaluation Binding"
             )
         if (
-            resolution.intent.expected_reward_policy_hash
+            optim_eval_request.expected_reward_policy_hash
             != expected_reward_policy_hash
         ):
             raise ValueError(
@@ -233,14 +239,17 @@ class CoproAttempt(BaseModel):
         reward = reward_ref.record
         if reward.reward_policy_hash != expected_reward_policy_hash:
             raise ValueError("COPRO Reward uses an unexpected Reward Policy")
+        candidate_ref = candidate_reference(
+            optim_eval_request.eval_request.candidate
+        )
         return cls(
             occurrence_ordinal=occurrence_ordinal,
             round_index=round_index,
             run_id=expected_run_id,
-            step_index=resolution.intent.step_index,
-            intent_id=resolution.intent.intent_id,
-            candidate=resolution.intent.candidate,
-            evaluation_binding=resolution.intent.evaluation_binding,
+            step_index=optim_eval_request.optim_step_index,
+            intent_id=optim_eval_request.eval_request.request_id,
+            candidate=candidate_ref,
+            evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
             reward=reward.value,
             expected_reward_policy_hash=reward.reward_policy_hash,
             evaluation_result_ref=resolution.evaluation_result_ref,
@@ -944,28 +953,30 @@ class CoproAdapter:
                 },
             )
 
-        intents: list[EvaluationIntent] = []
+        optim_eval_requests: list[OptimEvalRequest] = []
         for occurrence_ordinal, candidate in occurrences:
             candidate_ref = candidate_reference(candidate)
-            intents.append(
-                EvaluationIntent(
-                    intent_id=(
-                        f"{request.run_id}:{request.step_index}:"
-                        f"{occurrence_ordinal}:{candidate_ref.identity_hash}"
-                    ),
-                    candidate=candidate_ref,
+            optim_eval_requests.append(
+                OptimEvalRequest(
+                    optim_run_id=request.run_id,
+                    optim_step_index=request.step_index,
                     target_eval_config=evaluation_binding.eval_config,
-                    evaluation_binding=evaluation_binding,
-                    purpose=plan.proposal_mode,
-                    run_id=request.run_id,
-                    step_index=request.step_index,
-                    expected_reward_policy_hash=(expected_reward_policy_hash),
+                    eval_request=EvalRequest(
+                        request_id=(
+                            f"{request.run_id}:{request.step_index}:"
+                            f"{occurrence_ordinal}:{candidate_ref.identity_hash}"
+                        ),
+                        candidate=candidate,
+                        evaluation_binding=evaluation_binding,
+                        metadata=metadata_with_purpose(plan.proposal_mode),
+                    ),
+                    expected_reward_policy_hash=expected_reward_policy_hash,
                 )
             )
         return AdapterOutput(
             proposed_candidates=tuple(proposed),
             accepted_candidates=tuple(proposed),
-            evaluation_intents=tuple(intents),
+            optim_eval_requests=tuple(optim_eval_requests),
             budget_delta=BudgetDelta(
                 consumed={"proposal_calls": plan.proposal_count}
             ),

@@ -12,11 +12,12 @@ from typing import Any
 from whetstone.core.identity import IdentityRef, TypedRef
 from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.drivers.row_jobs import row_job_from_entrypoint
+from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import (
     EngineEvaluation,
+    EvalRequest,
     EvaluationEngine,
     EvaluationPlanSnapshot,
-    EvaluationRequest,
     EvaluationSamplingView,
     EvaluationTaskView,
 )
@@ -71,10 +72,10 @@ class FakeEvaluationEngine:
     def expected_model_route(self) -> str:
         return self.model_route
 
-    def validate_request(self, request: EvaluationRequest) -> None:
+    def validate_request(self, request: EvalRequest) -> None:
         return None
 
-    def evaluate(self, request: EvaluationRequest) -> EngineEvaluation:
+    def evaluate(self, request: EvalRequest) -> EngineEvaluation:
         raise NotImplementedError("smoke test uses validate() only")
 
     def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine:
@@ -149,7 +150,7 @@ def _graph_rollout_driver_smoke() -> None:
     from whetstone.evaluation.drivers.graph_rollout import GraphRolloutEvaluationDriver
     from whetstone.evaluation.preview.binding import preview_evaluation_binding
     from whetstone.evaluation.preview.persisted import load_component_traces
-    from whetstone.evaluation.protocol import EvaluationRequest
+    from whetstone.evaluation.protocol import EvalRequest
     from whetstone.evaluation.runtime_engine import RuntimeEvaluationEngine
     from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
     from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
@@ -183,14 +184,15 @@ def _graph_rollout_driver_smoke() -> None:
             driver=driver,
             concurrency=2,
         )
-        request = EvaluationRequest(
+        request = EvalRequest(
+            request_id="smoke:graph-rollout-driver",
             candidate=experiment.initial_candidate,
             evaluation_binding=preview_evaluation_binding(
                 engine,
                 campaign="smoke",
                 provenance_note="graph-rollout-driver",
             ),
-            purpose="smoke",
+            metadata=metadata_with_purpose("smoke"),
         )
         engine.validate_request(request)
         evaluated = engine.evaluate(request)
@@ -210,7 +212,7 @@ def _reference_runtime_smoke() -> None:
     from whetstone.core.blocking_store import open_blocking_sqlite_store
 
     from whetstone.evaluation.preview.binding import preview_evaluation_binding
-    from whetstone.evaluation.protocol import EvaluationRequest
+    from whetstone.evaluation.protocol import EvalRequest
     from whetstone.evaluation.reference_runtime import (
         ReferenceEvaluationRuntimeConfig,
     )
@@ -233,14 +235,15 @@ def _reference_runtime_smoke() -> None:
     ) as store:
         runtime = ReferenceEvaluationRuntimeConfig.model_validate({})
         engine = runtime.build_engine(store)
-        request = EvaluationRequest(
+        request = EvalRequest(
+            request_id="smoke:reference-runtime",
             candidate=engine.experiment.initial_candidate,
             evaluation_binding=preview_evaluation_binding(
                 engine,
                 campaign="smoke",
                 provenance_note="reference-runtime",
             ),
-            purpose="smoke",
+            metadata=metadata_with_purpose("smoke"),
         )
         engine.validate_request(request)
         evaluated = engine.evaluate(request)

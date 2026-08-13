@@ -24,7 +24,7 @@ from whetstone.evaluation.drivers.row_common import (
     start_phase_deadline,
 )
 from whetstone.evaluation.eval_procedure import EvalProcedureRunner
-from whetstone.evaluation.protocol import EvaluationRequest, EvaluationTaskView
+from whetstone.evaluation.protocol import EvalRequest, EvaluationTaskView
 from whetstone.evaluation.schema import SubmissionResultRecord
 from whetstone.evaluation.traces import ExecutedRowState
 from whetstone.experiment.candidate import Candidate, TemplateRenderContract
@@ -218,7 +218,7 @@ class GraphRolloutEvaluationDriver:
         *,
         experiment: Experiment,
         sampling: SplitSampling,
-        request: EvaluationRequest,
+        request: EvalRequest,
         execution_policy: ProviderExecutionPolicy,
         concurrency: int,
         max_wall_seconds: float | None,
