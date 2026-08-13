@@ -142,6 +142,68 @@ def _p1_preview_smoke() -> None:
     _ = (evaluate_and_resolve, run_anchor_calibration)
 
 
+def _graph_rollout_driver_smoke() -> None:
+    import tempfile
+
+    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from whetstone.evaluation.drivers.graph_rollout import GraphRolloutEvaluationDriver
+    from whetstone.evaluation.preview.binding import preview_evaluation_binding
+    from whetstone.evaluation.preview.persisted import load_component_traces
+    from whetstone.evaluation.protocol import EvaluationRequest
+    from whetstone.evaluation.runtime_engine import RuntimeEvaluationEngine
+    from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
+    from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
+    from whetstone.testing.fakes.transport import FakeLlmTransport
+    from whetstone.testing.toy.experiment import (
+        TOY_MUTATION_FIELD,
+        build_toy_experiment,
+        toy_template_render_contract,
+    )
+
+    experiment = build_toy_experiment()
+    sampling = experiment.eval_configs.internal
+    transport_policy = default_transport_policy(api_key_env="WHETSTONE_TOY_API_KEY")
+    execution_policy = ProviderExecutionPolicy(transport_policy=transport_policy)
+    driver = GraphRolloutEvaluationDriver(
+        eval_runner=FakeEvalProcedureRunner(),
+        mutation_field=TOY_MUTATION_FIELD,
+        render_contract=toy_template_render_contract(),
+        transport_factory=lambda policy: FakeLlmTransport(
+            transport_policy=policy.transport_policy
+        ),
+    )
+    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_blocking_sqlite_store(
+        handle.name
+    ) as store:
+        engine = RuntimeEvaluationEngine(
+            store=store,
+            experiment=experiment,
+            sampling=sampling,
+            execution_policy=execution_policy,
+            driver=driver,
+            concurrency=2,
+        )
+        request = EvaluationRequest(
+            candidate=experiment.initial_candidate,
+            evaluation_binding=preview_evaluation_binding(
+                engine,
+                campaign="smoke",
+                provenance_note="graph-rollout-driver",
+            ),
+            purpose="smoke",
+        )
+        engine.validate_request(request)
+        evaluated = engine.evaluate(request)
+        assert evaluated.evidence.aggregate_value is not None
+        expected_rows = len(sampling.tasks) * sampling.sample_plan.num_samples
+        assert evaluated.evidence.row_accounting.present == expected_rows
+        component_traces = load_component_traces(store, evaluated.evidence)
+        assert any(
+            row.executed_component_trace.executed_component_steps
+            for row in component_traces.rows
+        )
+
+
 def _reference_runtime_smoke() -> None:
     import tempfile
 
@@ -214,6 +276,9 @@ def main() -> None:
 
     _reference_runtime_smoke()
     print("reference runtime smoke ok")
+
+    _graph_rollout_driver_smoke()
+    print("graph rollout driver smoke ok")
 
 
 if __name__ == "__main__":

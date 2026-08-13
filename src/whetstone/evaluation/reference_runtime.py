@@ -1,29 +1,33 @@
 from __future__ import annotations
 
-from typing import Any
-
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr
 
+from whetstone.evaluation.drivers.graph_rollout import GraphRolloutEvaluationDriver
 from whetstone.evaluation.protocol import EvaluationEngine
 from whetstone.evaluation.runtime_engine import RuntimeEvaluationEngine
 from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
-from whetstone.testing.fakes.driver import FakeEvaluationDriver
-from whetstone.testing.toy.experiment import build_toy_experiment
+from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
+from whetstone.testing.fakes.transport import FakeLlmTransport
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    build_toy_experiment,
+    toy_template_render_contract,
+)
 
 REFERENCE_RUNTIME_SCHEMA = "whetstone.reference_evaluation_runtime"
 REFERENCE_RUNTIME_SCHEMA_VERSION = 1
 
 
 class ReferenceEvaluationRuntimeConfig(BaseModel):
-    """In-memory SQLite + toy experiment + FakeEvaluationDriver."""
+    """In-memory SQLite + toy experiment + GraphRolloutEvaluationDriver."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     partial_log_path: StrictStr | None = None
     prompt_cache_path: StrictStr | None = None
     row_job_entrypoint: StrictStr = (
-        "whetstone.testing.fakes.driver:FakeEvaluationDriver"
+        "whetstone.evaluation.drivers.graph_rollout:GraphRolloutEvaluationDriver"
     )
     env_name: StrictStr = "whetstone.toy"
     split_role: StrictStr = "internal_eval"
@@ -45,12 +49,25 @@ class ReferenceEvaluationRuntimeConfig(BaseModel):
             sampling = experiment.eval_configs.official
         else:
             raise ValueError(f"unknown split role {self.split_role!r}")
+        execution_policy = self.execution_policy
+
+        def transport_factory(
+            policy: ProviderExecutionPolicy,
+        ) -> FakeLlmTransport:
+            return FakeLlmTransport(transport_policy=policy.transport_policy)
+
+        driver = GraphRolloutEvaluationDriver(
+            eval_runner=FakeEvalProcedureRunner(),
+            mutation_field=TOY_MUTATION_FIELD,
+            render_contract=toy_template_render_contract(),
+            transport_factory=transport_factory,
+        )
         return RuntimeEvaluationEngine(
             store=store,
             experiment=experiment,
             sampling=sampling,
-            execution_policy=self.execution_policy,
-            driver=FakeEvaluationDriver(),
+            execution_policy=execution_policy,
+            driver=driver,
         )
 
 
