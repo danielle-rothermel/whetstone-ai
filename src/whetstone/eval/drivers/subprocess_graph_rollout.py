@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from whetstone.eval.drivers.graph_row_request import (
     GraphRowRequest,
     decode_graph_row_output,
+    worker_request_identities,
 )
 from whetstone.eval.drivers.graph_rollout import (
     GraphRolloutEvalDriver,
@@ -54,6 +55,8 @@ def _build_graph_row_request(
     mutation_field: str,
     graph_external_input_field: str,
     transport_api_key_env: str,
+    partial_log: PartialLog | None,
+    prompt_cache: PromptResultCache | None,
 ) -> GraphRowRequest:
     rollout_graph = experiment.rollout_graph
     rendered = render_contract.render(
@@ -89,6 +92,12 @@ def _build_graph_row_request(
         },
         gold=gold if isinstance(gold, str) else "",
         transport_api_key_env=transport_api_key_env,
+        partial_log_path=(
+            str(partial_log.path.resolve()) if partial_log is not None else None
+        ),
+        prompt_cache_path=(
+            str(prompt_cache.root.resolve()) if prompt_cache is not None else None
+        ),
     )
 
 
@@ -137,7 +146,7 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         partial_log: PartialLog | None,
         prompt_cache: PromptResultCache | None,
     ) -> InternalEvalResult:
-        _ = (eval_config_hash, partial_log, prompt_cache)
+        _ = eval_config_hash
         self.preflight(request.candidate)
         num_seeds = sampling.seed_plan.num_seeds
         task_hashes = sampling.task_set.task_hashes
@@ -165,9 +174,21 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
                 mutation_field=self._mutation_field,
                 graph_external_input_field=self._graph_external_input_field,
                 transport_api_key_env=self._transport_api_key_env,
+                partial_log=partial_log,
+                prompt_cache=prompt_cache,
             )
             for row in scheduled_rows
         }
+        collected_identities: set[str] = set()
+
+        def _decode_row_output(
+            payload: dict[str, object],
+            *,
+            row_request: GraphRowRequest,
+        ) -> RolloutRowOutput:
+            collected_identities.update(worker_request_identities(payload))
+            return decode_graph_row_output(payload, request=row_request)
+
         specs = [
             CallSpec(
                 key=(row.task_index, row.seed_index),
@@ -179,7 +200,7 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
                 ),
                 decode=lambda payload, req=row_requests[
                     (row.task_index, row.seed_index)
-                ]: decode_graph_row_output(payload, request=req),
+                ]: _decode_row_output(payload, row_request=req),
                 deadline_seconds=self._unit_deadline_seconds,
             )
             for row in scheduled_rows
@@ -210,6 +231,7 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
             graph_hash=experiment.rollout_graph.graph_hash,
             matrix_plan=sampling.evaluation_matrix_plan,
             aggregate_name=self._aggregate_name,
+            request_identities=frozenset(collected_identities),
             concurrency_halved=pool_outcome.concurrency_halved,
             deadline_reached=pool_outcome.deadline_reached,
             guard_timeouts=pool_outcome.guard_timeouts,

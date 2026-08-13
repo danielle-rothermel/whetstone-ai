@@ -15,6 +15,7 @@ __all__ = [
     "GraphRowRequest",
     "decode_graph_row_output",
     "rollout_row_output_from_worker_payload",
+    "worker_request_identities",
 ]
 
 
@@ -41,6 +42,8 @@ class GraphRowRequest(BaseModel):
     prompt_inputs: dict[str, StrictStr] = {}
     gold: StrictStr = ""
     transport_api_key_env: StrictStr = "WHETSTONE_TOY_API_KEY"
+    partial_log_path: StrictStr | None = None
+    prompt_cache_path: StrictStr | None = None
 
     @property
     def parsed_graph_config(self) -> GraphConfig:
@@ -113,6 +116,13 @@ def rollout_row_output_from_worker_payload(
         ),
         submission_result=payload.get("submission_result"),
     )
+
+
+def worker_request_identities(payload: Mapping[str, object]) -> tuple[str, ...]:
+    raw = payload.get("request_identities", ())
+    if not isinstance(raw, list):
+        return ()
+    return tuple(str(item) for item in raw if isinstance(item, str))
 
 
 def decode_graph_row_output(
