@@ -278,13 +278,7 @@ def execute_optim_step_sync(
         output_ref = _persist_work_state(runtime, state)
         return StageCompletion(
             output_reference=output_ref,
-            successors=(
-                StageSuccessor(
-                    stage_key=StageKey(STAGE_RUN_COMPLETION),
-                    stage_index=current_stage_index + 1,
-                    input_reference=output_ref,
-                ),
-            ),
+            successors=(),
         )
     work_input = state.work_input
     launch = _load_launch(runtime, work_input.run_id)
@@ -355,13 +349,7 @@ def execute_optim_step_sync(
     if updated.terminal:
         return StageCompletion(
             output_reference=output_ref,
-            successors=(
-                StageSuccessor(
-                    stage_key=StageKey(STAGE_RUN_COMPLETION),
-                    stage_index=current_stage_index + 1,
-                    input_reference=output_ref,
-                ),
-            ),
+            successors=(),
         )
 
     deferred = runtime.harness.last_deferred_platform_intents

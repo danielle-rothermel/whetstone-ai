@@ -5,11 +5,11 @@ from dr_store.content_addressing import parse_object_reference
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
 from whetstone.platform.contracts import (
     STAGE_OPTIM_STEP,
-    STAGE_RUN_COMPLETION,
     OptimWorkInput,
     persist_work_input,
 )
 from whetstone.platform.step_executor import (
+    OPTIM_WORK_STATE_SCHEMA,
     execute_optim_step_sync,
     execute_run_completion_sync,
 )
@@ -36,22 +36,22 @@ def test_platform_driver_inline_copro_chain(copro_launch) -> None:
         )
         assert completion.output_reference
         if not completion.successors:
-            break
-        successor = completion.successors[0]
-        assert successor.stage_index == stage_index + 1
-        if successor.stage_key.value == STAGE_RUN_COMPLETION:
+            parsed = parse_object_reference(completion.output_reference)
+            assert parsed.schema == OPTIM_WORK_STATE_SCHEMA
             terminal_ref = execute_run_completion_sync(
                 runtime,
-                input_reference=successor.input_reference,
+                input_reference=completion.output_reference,
             )
-            parsed = parse_object_reference(terminal_ref)
-            assert parsed.schema == OPTIM_RESULT_SCHEMA
+            parsed_result = parse_object_reference(terminal_ref)
+            assert parsed_result.schema == OPTIM_RESULT_SCHEMA
             result = OptimResult.model_validate(
-                runtime.store.get(parsed)
+                runtime.store.get(parsed_result)
             )
             assert result.run.record.run_id == run_id
             assert len(result.proposals) == 1
             return
+        successor = completion.successors[0]
+        assert successor.stage_index == stage_index + 1
         assert successor.stage_key.value == STAGE_OPTIM_STEP
         current_ref = successor.input_reference
         stage_index = successor.stage_index
