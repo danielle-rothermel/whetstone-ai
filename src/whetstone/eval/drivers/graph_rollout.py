@@ -7,22 +7,17 @@ from dataclasses import dataclass
 from dr_providers import ProviderCallConfig
 
 from whetstone.core.identity import IdentityRef
-from whetstone.eval.aggregate import TaskRows, unweighted_task_mean
-from whetstone.eval.attribution import attribute_generated_row
-from whetstone.eval.drivers.eval_result import (
-    InternalEvalResult,
-    per_task_count,
-    per_task_score,
-)
 from whetstone.eval.drivers.graph_row import (
     execute_rollout_graph,
     graph_result_to_row_fields,
 )
+from whetstone.eval.drivers.rollout_aggregate import aggregate_rollout_outputs
 from whetstone.eval.drivers.row_common import (
     RolloutRowOutput,
     remaining_phase_wall_seconds,
     start_phase_deadline,
 )
+from whetstone.eval.drivers.eval_result import InternalEvalResult
 from whetstone.eval.eval_procedure import EvalProcedureRunner
 from whetstone.eval.protocol import EvalRequest, EvalTaskView
 from whetstone.eval.schema import SubmissionResultRecord
@@ -36,6 +31,7 @@ from whetstone.experiment.graph.llm_call_run_node import (
 )
 from whetstone.experiment.graph.run_node_registry import build_run_node
 from whetstone.experiment.sampling import EvalSplit
+from whetstone.execution._file_lock import ensure_private_directory
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.provider.driver import TransportCall
@@ -88,7 +84,9 @@ def run_rollout_row(
     mutation_field: str,
     resolve_provider_call_config: ProviderCallConfigResolver,
     graph_external_input_field: str = "prompt",
+    request_identity_sink: list[str] | None = None,
 ) -> RolloutRowOutput:
+    task_id = _task_id(task)
     template = candidate.payload[mutation_field]
     rendered = render_contract.render(template, _task_prompt_inputs(task))
     rollout_graph = experiment.rollout_graph
@@ -99,13 +97,16 @@ def run_rollout_row(
             graph_hash=rollout_graph.graph_hash,
             rng_seed=derive_rng_seed(
                 candidate.candidate_id,
-                _task_id(task),
+                task_id,
                 seed_index,
             ),
+            task_id=task_id,
             seed_index=seed_index,
             drive_ordinal=0,
             phase=split_role,
             unit=candidate.candidate_id,
+            split_role=split_role,
+            request_identity_sink=request_identity_sink,
         ),
         eval_deps=EvalRunNodeDeps(runner=eval_runner, task=task),
     )
@@ -117,7 +118,7 @@ def run_rollout_row(
     return graph_result_to_row_fields(
         result,
         candidate_id=candidate.candidate_id,
-        task_id=_task_id(task),
+        task_id=task_id,
         task_index=task_index,
         seed_index=seed_index,
     )
@@ -226,8 +227,10 @@ class GraphRolloutEvalDriver:
         partial_log: PartialLog | None,
         prompt_cache: PromptResultCache | None,
     ) -> InternalEvalResult:
-        _ = partial_log
+        _ = eval_config_hash
         self.preflight(request.candidate)
+        if partial_log is not None:
+            ensure_private_directory(partial_log.path.parent)
         resolve_provider_call_config = (
             self._resolve_provider_call_config
             or _default_provider_config_resolver(experiment)
@@ -237,6 +240,7 @@ class GraphRolloutEvalDriver:
             transport=self._transport_factory(execution_policy),
             prompt_adapter=self._prompt_adapter,
             prompt_cache=prompt_cache,
+            partial_log=partial_log,
         )
         num_seeds = sampling.seed_plan.num_seeds
         task_hashes = sampling.task_set.task_hashes
@@ -256,10 +260,12 @@ class GraphRolloutEvalDriver:
         deadline = start_phase_deadline(max_wall_seconds)
         outputs_by_key: dict[tuple[int, int], RolloutRowOutput] = {}
         deadline_reached = False
+        request_identities: set[str] = set()
         max_workers = max(1, concurrency)
 
-        def _execute_row(row: _ScheduledRow) -> RolloutRowOutput:
-            return run_rollout_row(
+        def _execute_row(row: _ScheduledRow) -> tuple[RolloutRowOutput, tuple[str, ...]]:
+            row_identities: list[str] = []
+            output = run_rollout_row(
                 experiment=experiment,
                 candidate=request.candidate,
                 task=row.task,
@@ -272,7 +278,9 @@ class GraphRolloutEvalDriver:
                 mutation_field=self._mutation_field,
                 resolve_provider_call_config=resolve_provider_call_config,
                 graph_external_input_field=self._graph_external_input_field,
+                request_identity_sink=row_identities,
             )
+            return output, tuple(row_identities)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             pending: dict[object, _ScheduledRow] = {}
@@ -293,45 +301,49 @@ class GraphRolloutEvalDriver:
 
             for future in as_completed(pending):
                 scheduled = pending[future]
+                remaining = remaining_phase_wall_seconds(deadline)
+                if remaining is not None and remaining <= 0:
+                    deadline_reached = True
+                    if not future.done():
+                        outputs_by_key[
+                            (scheduled.task_index, scheduled.seed_index)
+                        ] = _deadline_missing_row(
+                            candidate_id=request.candidate.candidate_id,
+                            task_id=scheduled.task_id,
+                            task_index=scheduled.task_index,
+                            seed_index=scheduled.seed_index,
+                        )
+                        continue
+                try:
+                    if remaining is not None and remaining > 0:
+                        output, row_identities = future.result(timeout=remaining)
+                    else:
+                        output, row_identities = future.result()
+                except TimeoutError:
+                    deadline_reached = True
+                    output = _deadline_missing_row(
+                        candidate_id=request.candidate.candidate_id,
+                        task_id=scheduled.task_id,
+                        task_index=scheduled.task_index,
+                        seed_index=scheduled.seed_index,
+                    )
+                    row_identities = ()
+                request_identities.update(row_identities)
                 outputs_by_key[(scheduled.task_index, scheduled.seed_index)] = (
-                    future.result()
+                    output
                 )
 
         outputs = tuple(
             outputs_by_key[(row.task_index, row.seed_index)]
             for row in scheduled_rows
         )
-        task_rows: list[TaskRows] = []
-        for task_index, task_hash in enumerate(task_hashes):
-            row_values = tuple(
-                attribute_generated_row(
-                    row_state=output.row_state,
-                    score=output.score,
-                    failure_code=output.failure_code or None,
-                )
-                for output in outputs
-                if output.task_index == task_index
-            )
-            task_rows.append(TaskRows(task_hash=task_hash, rows=row_values))
-
-        matrix_plan = sampling.evaluation_matrix_plan
-        aggregate = unweighted_task_mean(
-            aggregate_name=self._aggregate_name,
-            graph_hash=experiment.rollout_graph.graph_hash,
-            task_rows=tuple(task_rows),
-            plan=matrix_plan,
-        )
-        per_task_scores = tuple(
-            per_task_score(task_row, num_seeds) for task_row in task_rows
-        )
-        per_task_counts = tuple(
-            per_task_count(task_row, num_seeds) for task_row in task_rows
-        )
-        return InternalEvalResult(
-            aggregate=aggregate,
-            reward=None,
-            per_task_scores=per_task_scores,
-            per_task_counts=per_task_counts,
+        return aggregate_rollout_outputs(
             outputs=outputs,
+            task_hashes=task_hashes,
+            num_seeds=num_seeds,
+            graph_hash=experiment.rollout_graph.graph_hash,
+            matrix_plan=sampling.evaluation_matrix_plan,
+            aggregate_name=self._aggregate_name,
+            request_identities=frozenset(request_identities),
             deadline_reached=deadline_reached,
         )

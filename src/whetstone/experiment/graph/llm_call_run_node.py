@@ -52,10 +52,13 @@ class LlmCallRunNodeDeps:
     resolve_provider_call_config: ProviderCallConfigResolver
     graph_hash: str
     rng_seed: int
+    task_id: str
     seed_index: int = 0
     drive_ordinal: int = 0
     phase: str = ""
     unit: str = ""
+    split_role: str | None = None
+    request_identity_sink: list[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,10 +102,13 @@ def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
                 context=deps.context,
                 request=request,
                 logical_call_id=logical_call_id,
+                task_id=deps.task_id,
                 seed_index=deps.seed_index,
                 drive_ordinal=deps.drive_ordinal,
                 phase=deps.phase,
                 unit=deps.unit,
+                split_role=deps.split_role,
+                request_identity_sink=deps.request_identity_sink,
             )
             text = provider_result_text(execution.result)
         except (GenerationNodeError, ValueError) as exc:
