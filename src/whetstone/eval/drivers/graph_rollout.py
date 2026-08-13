@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
 from dr_providers import ProviderCallConfig
@@ -299,12 +299,13 @@ class GraphRolloutEvalDriver:
                     continue
                 pending[executor.submit(_execute_row, row)] = row
 
-            for future in as_completed(pending):
-                scheduled = pending[future]
+            unfinished = set(pending.keys())
+            while unfinished:
                 remaining = remaining_phase_wall_seconds(deadline)
                 if remaining is not None and remaining <= 0:
                     deadline_reached = True
-                    if not future.done():
+                    for future in unfinished:
+                        scheduled = pending[future]
                         outputs_by_key[
                             (scheduled.task_index, scheduled.seed_index)
                         ] = _deadline_missing_row(
@@ -313,25 +314,35 @@ class GraphRolloutEvalDriver:
                             task_index=scheduled.task_index,
                             seed_index=scheduled.seed_index,
                         )
-                        continue
-                try:
-                    if remaining is not None and remaining > 0:
-                        output, row_identities = future.result(timeout=remaining)
-                    else:
-                        output, row_identities = future.result()
-                except TimeoutError:
-                    deadline_reached = True
-                    output = _deadline_missing_row(
-                        candidate_id=request.candidate.candidate_id,
-                        task_id=scheduled.task_id,
-                        task_index=scheduled.task_index,
-                        seed_index=scheduled.seed_index,
-                    )
-                    row_identities = ()
-                request_identities.update(row_identities)
-                outputs_by_key[(scheduled.task_index, scheduled.seed_index)] = (
-                    output
+                        future.cancel()
+                    break
+                wait_timeout = remaining
+                done, not_done = wait(
+                    unfinished,
+                    timeout=wait_timeout,
+                    return_when=FIRST_COMPLETED,
                 )
+                for future in done:
+                    scheduled = pending[future]
+                    try:
+                        output, row_identities = future.result()
+                    except Exception:
+                        raise
+                    request_identities.update(row_identities)
+                    outputs_by_key[
+                        (scheduled.task_index, scheduled.seed_index)
+                    ] = output
+                unfinished = not_done
+
+            for row in scheduled_rows:
+                key = (row.task_index, row.seed_index)
+                if key not in outputs_by_key:
+                    outputs_by_key[key] = _deadline_missing_row(
+                        candidate_id=request.candidate.candidate_id,
+                        task_id=row.task_id,
+                        task_index=row.task_index,
+                        seed_index=row.seed_index,
+                    )
 
         outputs = tuple(
             outputs_by_key[(row.task_index, row.seed_index)]
