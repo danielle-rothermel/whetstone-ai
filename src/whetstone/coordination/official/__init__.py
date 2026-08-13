@@ -5,7 +5,7 @@ from whetstone.coordination.official.aggregation import (
     account_planned_keys,
 )
 from whetstone.coordination.official.authority import (
-    EvaluationAuthority,
+    EvalAuthority,
     RelabelingRefusedError,
     UnauthorizedOfficialWriteError,
 )
@@ -36,7 +36,7 @@ __all__ = [
     "OFFICIAL_PLOT_MANIFEST_SCHEMA",
     "SELECTION_EVIDENCE_SCHEMA",
     "CompletenessDecision",
-    "EvaluationAuthority",
+    "EvalAuthority",
     "MissingPlannedKeysError",
     "OfficialAggregationAccount",
     "OfficialEvaluationRecord",

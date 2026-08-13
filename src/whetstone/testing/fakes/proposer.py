@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from whetstone.core.identity import require_full_hash
-from whetstone.optimization.proposal.proposer import (
+from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
     ProposalDraft,
     ProposalRequest,

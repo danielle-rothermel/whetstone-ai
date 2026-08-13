@@ -29,7 +29,7 @@ def run_gepa_step_preview(
     experiment = build_toy_experiment()
     current = str(experiment.initial_candidate.payload[TOY_MUTATION_FIELD])
     intent = (
-        "Would issue an internal EvaluationIntent for the reflected candidate "
+        "Would issue an internal Optim Eval Request for the reflected candidate "
         "after proposal acceptance."
         if show_intent
         else "Evaluation intent emission is omitted in preview mode."

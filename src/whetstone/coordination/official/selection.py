@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 from whetstone.core.identity import require_full_hash
-from whetstone.evaluation import AggregationStatus
+from whetstone.eval import AggregationStatus
 from whetstone.experiment.objectives import (
     Direction,
     Objective,
@@ -28,7 +28,7 @@ from whetstone.experiment.objectives import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from whetstone.evaluation.aggregate import Aggregate
+    from whetstone.eval.aggregate import Aggregate
 
 __all__ = [
     "IncompleteEvidenceError",

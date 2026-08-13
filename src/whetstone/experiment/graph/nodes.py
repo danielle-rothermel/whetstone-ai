@@ -17,7 +17,7 @@ EVAL_NODE_TYPE = "whetstone.eval/v1"
 
 
 PROVIDER_CALL_CONFIG_VARIABLE = "provider_call_config_ref"
-EVALUATION_PROCEDURE_CONFIG_VARIABLE = "evaluation_procedure_config_ref"
+EVAL_PROCEDURE_CONFIG_VARIABLE = "evaluation_procedure_config_ref"
 
 
 PROVIDER_GENERATION_OUTPUT_FIELD = "provider_generation"
@@ -106,7 +106,7 @@ def eval_node_definition(
             for name, ref in upstream_sources.items()
         },
         output_field=output_field,
-        variable_names=frozenset({EVALUATION_PROCEDURE_CONFIG_VARIABLE}),
+        variable_names=frozenset({EVAL_PROCEDURE_CONFIG_VARIABLE}),
     )
 
 
@@ -116,7 +116,7 @@ def eval_variable_assignment(
     evaluation_procedure_config_hash: str,
 ) -> dict[str, Any]:
     return {
-        EVALUATION_PROCEDURE_CONFIG_VARIABLE: _typed_config_ref(
+        EVAL_PROCEDURE_CONFIG_VARIABLE: _typed_config_ref(
             schema_name=evaluation_procedure_config_schema,
             identity_hash=evaluation_procedure_config_hash,
         ),
@@ -124,7 +124,7 @@ def eval_variable_assignment(
 
 
 def eval_node_procedure_hash(node_variables: Mapping[str, Any]) -> str:
-    ref = node_variables[EVALUATION_PROCEDURE_CONFIG_VARIABLE]
+    ref = node_variables[EVAL_PROCEDURE_CONFIG_VARIABLE]
     if not isinstance(ref, Mapping):
         raise ValueError(
             f"evaluation procedure config reference is malformed: {ref!r}"
@@ -142,7 +142,7 @@ def eval_node_procedure_hash(node_variables: Mapping[str, Any]) -> str:
 
 
 __all__ = [
-    "EVALUATION_PROCEDURE_CONFIG_VARIABLE",
+    "EVAL_PROCEDURE_CONFIG_VARIABLE",
     "EVAL_NODE_TYPE",
     "EVAL_OUTPUT_FIELD",
     "LLM_CALL_NODE_TYPE",

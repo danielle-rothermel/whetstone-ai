@@ -17,8 +17,11 @@ packages or repos), one-off experiment scripts, and product-facing runners.
 
 1. **Evaluation** — batched, efficient sweeps over candidates and tasks;
    configurable splits, graph rollouts, concurrency, and durable evidence.
+   Bundled reference driver: `GraphRolloutEvalDriver`
+   (`eval/drivers/graph_rollout.py`) — parallel in-process graph rollouts
+   with injected `EvalProcedureRunner`.
 2. **Evaluation analysis** — bootstrap confidence intervals, power analysis, and
-   anchor calibration over persisted evaluation evidence (`evaluation/analysis/`).
+   anchor calibration over persisted evaluation evidence (`eval/analysis/`).
 3. **Optimization** — shared harness and adapters that propose candidates and
    drive evaluation intents in a loop.
 4. **Sandbox & interpretation** — dry-run previews and toy-graph helpers to step

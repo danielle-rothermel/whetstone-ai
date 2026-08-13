@@ -18,7 +18,7 @@ class Miprov2PlanPreview(BaseModel):
 
 
 def run_miprov2_plan_preview(*, round_index: int = 0) -> Miprov2PlanPreview:
-    from whetstone.optimization.miprov2.adapter import MIPROV2_PROPOSAL
+    from whetstone.optim.miprov2.adapter import MIPROV2_PROPOSAL
     from whetstone.testing.toy.experiment import (
         DEFAULT_TOY_TEMPLATE,
         TOY_MUTATION_FIELD,

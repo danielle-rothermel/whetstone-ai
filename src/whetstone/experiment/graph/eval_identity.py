@@ -10,7 +10,7 @@ from whetstone.experiment.graph.nodes import (
 )
 
 if TYPE_CHECKING:
-    from whetstone.evaluation import EvalConfig
+    from whetstone.eval import EvalConfig
 
 
 class EvalIdentityMismatchError(ValueError):

@@ -2,19 +2,20 @@ from __future__ import annotations
 
 from typing import Any
 
-from whetstone.evaluation.protocol import (
-    EvaluationEngine,
-    EvaluationPlanSnapshot,
-    EvaluationRequest,
-    EvaluationSamplingView,
+from whetstone.eval.protocol import (
+    EvalRequest,
+    EvalResult,
+    EvalEngine,
+    EvalPlanSnapshot,
+    EvalSplitView,
 )
 from whetstone.experiment.binding import EvalConfigRef
 
-__all__ = ["FakeEvaluationEngine"]
+__all__ = ["FakeEvalEngine"]
 
 
-class FakeEvaluationEngine:
-    """Minimal EvaluationEngine stub; use ReferenceEvaluationRuntimeConfig for real runs."""
+class FakeEvalEngine:
+    """Minimal EvalEngine stub; use ReferenceEvalRuntimeConfig for real runs."""
 
     def __init__(
         self,
@@ -22,8 +23,8 @@ class FakeEvaluationEngine:
         eval_config_ref: EvalConfigRef,
         provider_execution_policy_ref: Any,
         provider_execution_policy_record: dict[str, Any],
-        plan_snapshot: EvaluationPlanSnapshot,
-        sampling: EvaluationSamplingView,
+        plan_snapshot: EvalPlanSnapshot,
+        sampling: EvalSplitView,
         model_route: str = "openai/chat_completions/fake-model",
     ) -> None:
         self._eval_config_ref = eval_config_ref
@@ -46,11 +47,11 @@ class FakeEvaluationEngine:
         return self._provider_execution_policy_record
 
     @property
-    def plan_snapshot(self) -> EvaluationPlanSnapshot:
+    def plan_snapshot(self) -> EvalPlanSnapshot:
         return self._plan_snapshot
 
     @property
-    def sampling(self) -> EvaluationSamplingView:
+    def sampling(self) -> EvalSplitView:
         return self._sampling
 
     def task_model_identity_hash(self) -> str:
@@ -65,16 +66,13 @@ class FakeEvaluationEngine:
     def expected_model_route(self) -> str:
         return self._model_route
 
-    def validate_request(self, request: EvaluationRequest) -> None:
-        _ = request
-
-    def evaluate(self, request: EvaluationRequest) -> Any:
+    def evaluate(self, request: EvalRequest) -> EvalResult:
         raise NotImplementedError(
-            "FakeEvaluationEngine is a protocol stub; use "
-            "ReferenceEvaluationRuntimeConfig.build_engine() for evaluation"
+            "FakeEvalEngine is a protocol stub; use "
+            "ReferenceEvalRuntimeConfig.build_engine() for evaluation"
         )
 
-    def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine:
+    def for_task_ids(self, task_ids: tuple[str, ...]) -> EvalEngine:
         if not task_ids:
             raise ValueError("task_ids must be non-empty")
         return self

@@ -7,7 +7,7 @@ its controller from a registry keyed by the controller's ``runtime_hash``.
 
 The boundary carries references, not records. DBOS checkpoints workflow
 arguments and return values by pickling them, so the parent takes a request
-of plain strings and returns the terminal ``OptimizationResult``'s exact
+of plain strings and returns the terminal ``OptimResult``'s exact
 ``TypedRef``.
 """
 
@@ -29,7 +29,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
-from whetstone.optimization.contracts import OPTIMIZATION_RESULT_SCHEMA
+from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA
 
 RUN_WORKFLOW_SCHEMA = "whetstone.coordination.parent_run"
 RUN_WORKFLOW_SCHEMA_VERSION = 1
@@ -113,7 +113,7 @@ def _registered_controller(request: RunRequest) -> RunController:
 
 def _validated_result_ref(reference: TypedRef) -> TypedRef:
     exact = TypedRef.model_validate(reference.model_dump(mode="json"))
-    if exact.schema_name != OPTIMIZATION_RESULT_SCHEMA:
+    if exact.schema_name != OPTIM_RESULT_SCHEMA:
         raise RunWorkflowError(
             "a run must terminalize into an exact Optimization Result ref"
         )

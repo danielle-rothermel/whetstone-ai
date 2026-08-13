@@ -12,14 +12,14 @@ from whetstone.core.identity import (
     assert_materialized_ref_matches,
     identity_ref_from_config_variable,
 )
-from whetstone.evaluation.drivers.graph_execution import (
+from whetstone.eval.drivers.graph_execution import (
     METADATA_PROMPT_KEY,
     METADATA_SUBMISSION_RESULT_KEY,
     GenerationNodeError,
     single_node_input,
 )
-from whetstone.evaluation.eval_procedure import EvalProcedureRunner
-from whetstone.evaluation.protocol import EvaluationTaskView
+from whetstone.eval.eval_procedure import EvalProcedureRunner
+from whetstone.eval.protocol import EvalTaskView
 from whetstone.experiment.graph.nodes import (
     EVAL_NODE_TYPE,
     EVAL_OUTPUT_FIELD,
@@ -51,16 +51,20 @@ class LlmCallRunNodeDeps:
     context: LlmCallContext
     resolve_provider_call_config: ProviderCallConfigResolver
     graph_hash: str
-    sample_index: int = 0
+    rng_seed: int
+    task_id: str
+    seed_index: int = 0
     drive_ordinal: int = 0
     phase: str = ""
     unit: str = ""
+    split_role: str | None = None
+    request_identity_sink: list[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class EvalRunNodeDeps:
     runner: EvalProcedureRunner
-    task: EvaluationTaskView
+    task: EvalTaskView
 
 
 def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
@@ -85,6 +89,7 @@ def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
         )
         request = build_provider_request(
             provider_config=provider_config,
+            rng_seed=deps.rng_seed,
             prompt=prompt,
             prompt_adapter=deps.context.prompt_adapter,
         )
@@ -97,10 +102,13 @@ def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
                 context=deps.context,
                 request=request,
                 logical_call_id=logical_call_id,
-                sample_index=deps.sample_index,
+                task_id=deps.task_id,
+                seed_index=deps.seed_index,
                 drive_ordinal=deps.drive_ordinal,
                 phase=deps.phase,
                 unit=deps.unit,
+                split_role=deps.split_role,
+                request_identity_sink=deps.request_identity_sink,
             )
             text = provider_result_text(execution.result)
         except (GenerationNodeError, ValueError) as exc:

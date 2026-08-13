@@ -17,14 +17,14 @@ from dr_providers import (
 from pydantic import BaseModel, ConfigDict, StrictStr
 
 from whetstone.core.identity import typed_ref_for_record
-from whetstone.evaluation import (
-    EvaluationProcedureDefinition,
+from whetstone.eval import (
+    EvalProcedureDefinition,
     MetricExtractionDefinition,
     MetricQuestionBinding,
     PreprocessingDefinition,
-    SCHEMA_EVALUATION_PROCEDURE_CONFIG,
+    SCHEMA_EVAL_PROCEDURE_CONFIG,
 )
-from whetstone.evaluation.aggregate import CompletenessPolicy, aggregation_definition
+from whetstone.eval.aggregate import CompletenessPolicy, aggregation_definition
 from whetstone.experiment.candidate import (
     Candidate,
     TemplateRenderContract,
@@ -38,7 +38,7 @@ from whetstone.experiment.sampling import (
     INTERNAL_EVAL,
     OFFICIAL,
     EvalConfigs,
-    derive_split_sampling,
+    derive_eval_split,
 )
 
 TOY_NAMESPACE = "whetstone.toy"
@@ -74,7 +74,7 @@ class ToyPromptFrame(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class _ToyGenerationGraph:
+class _ToyRolloutGraph:
     graph_config: GraphConfig
     provider_call_config: ProviderCallConfig
     procedure_hash: str
@@ -106,7 +106,7 @@ def _reference_procedure() -> tuple[object, str]:
             MetricQuestionBinding(metric="score", on="submission"),
         ),
     ).materialize(resolved_operators=(("score", "1"),))
-    procedure = EvaluationProcedureDefinition(
+    procedure = EvalProcedureDefinition(
         definition_id=f"{TOY_NAMESPACE}.evaluation_procedure",
         version="1",
     ).materialize(
@@ -132,7 +132,7 @@ def _reference_provider_call_config() -> ProviderCallConfig:
     return ProviderCallConfig(definition=definition, controls={}, extensions={})
 
 
-def _reference_generation_graph() -> _ToyGenerationGraph:
+def _reference_rollout_graph() -> _ToyRolloutGraph:
     provider_call_config = _reference_provider_call_config()
     procedure, procedure_hash = _reference_procedure()
     provider_ref_hash = str(
@@ -143,10 +143,10 @@ def _reference_generation_graph() -> _ToyGenerationGraph:
     )
     graph_config = build_single_llm_eval_graph(
         provider_call_config_hash=provider_ref_hash,
-        evaluation_procedure_config_schema=SCHEMA_EVALUATION_PROCEDURE_CONFIG,
+        evaluation_procedure_config_schema=SCHEMA_EVAL_PROCEDURE_CONFIG,
         evaluation_procedure_config_hash=procedure_hash,
     )
-    return _ToyGenerationGraph(
+    return _ToyRolloutGraph(
         graph_config=graph_config,
         provider_call_config=provider_call_config,
         procedure_hash=procedure_hash,
@@ -181,13 +181,13 @@ def build_toy_experiment(
     *,
     internal_tasks: tuple[ToyTask, ...] | None = None,
     official_tasks: tuple[ToyTask, ...] | None = None,
-    num_samples: int = 1,
+    num_seeds: int = 1,
     initial_template: str = DEFAULT_TOY_TEMPLATE,
     ceiling_template: str | None = None,
 ) -> Experiment:
     """Build an in-memory toy Experiment wired to the single-node eval graph."""
-    if num_samples < 1:
-        raise ValueError("num_samples must be at least 1")
+    if num_seeds < 1:
+        raise ValueError("num_seeds must be at least 1")
     resolved_internal = internal_tasks or (
         ToyTask(task_id="task-a", prompt_inputs={"prompt": "hello A"}, gold="A"),
         ToyTask(task_id="task-b", prompt_inputs={"prompt": "hello B"}, gold="B"),
@@ -198,10 +198,10 @@ def build_toy_experiment(
     if not resolved_internal or not resolved_official:
         raise ValueError("toy experiment requires non-empty internal and official tasks")
 
-    generation_graph = _reference_generation_graph()
+    rollout_graph = _reference_rollout_graph()
     procedure, procedure_hash = _reference_procedure()
     aggregation = _reference_aggregation()
-    internal = derive_split_sampling(
+    internal = derive_eval_split(
         namespace=TOY_NAMESPACE,
         dataset_revision=TOY_DATASET_REVISION,
         split_role=INTERNAL_EVAL,
@@ -209,9 +209,9 @@ def build_toy_experiment(
         task_hash_of=_task_hash,
         procedure=procedure,
         aggregation=aggregation,
-        num_samples=num_samples,
+        num_seeds=num_seeds,
     )
-    official = derive_split_sampling(
+    official = derive_eval_split(
         namespace=TOY_NAMESPACE,
         dataset_revision=TOY_DATASET_REVISION,
         split_role=OFFICIAL,
@@ -219,7 +219,7 @@ def build_toy_experiment(
         task_hash_of=_task_hash,
         procedure=procedure,
         aggregation=aggregation,
-        num_samples=num_samples,
+        num_seeds=num_seeds,
     )
     eval_configs = EvalConfigs(
         env_name=TOY_NAMESPACE,
@@ -242,7 +242,7 @@ def build_toy_experiment(
     )
     return Experiment(
         env_name=TOY_NAMESPACE,
-        generation_graph=generation_graph,
+        rollout_graph=rollout_graph,
         initial_candidate=_toy_candidate(
             candidate_id="toy-initial",
             template=initial_template,

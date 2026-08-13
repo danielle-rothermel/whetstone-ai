@@ -62,7 +62,7 @@ _PERSISTED_FIELDS = frozenset(
         "phase",
         "task_id",
         "unit",
-        "sample_index",
+        "seed_index",
         "request_hash",
         "redrive_pending",
         "split_role",
@@ -100,7 +100,7 @@ class PartialCallRecord(BaseModel):
     phase: StrictStr
     task_id: StrictStr
     unit: StrictStr
-    sample_index: StrictInt
+    seed_index: StrictInt
     request_hash: StrictStr
     redrive_pending: StrictBool
     score: float | None = None
@@ -158,8 +158,8 @@ class PartialCallRecord(BaseModel):
         _reject_non_finite(self.provider_error, path="provider_error")
         if not self.phase or not self.task_id or not self.unit:
             raise ValueError("partial identity fields must be non-empty")
-        if self.sample_index < 0:
-            raise ValueError("sample_index must be non-negative")
+        if self.seed_index < 0:
+            raise ValueError("seed_index must be non-negative")
         sources = (
             self.cache_source_phase,
             self.cache_source_unit,
@@ -184,7 +184,7 @@ class PartialCallRecord(BaseModel):
             self.phase,
             self.task_id,
             self.unit,
-            self.sample_index,
+            self.seed_index,
             self.request_hash,
         )
 
@@ -194,7 +194,7 @@ class PartialCallRecord(BaseModel):
             "phase": self.phase,
             "task_id": self.task_id,
             "unit": self.unit,
-            "sample_index": self.sample_index,
+            "seed_index": self.seed_index,
             "request_hash": self.request_hash,
             "redrive_pending": self.redrive_pending,
             "split_role": self.split_role,
@@ -241,10 +241,10 @@ def partial_key(
     phase: str,
     task_id: str,
     unit: str,
-    sample_index: int,
+    seed_index: int,
     request_hash: str,
 ) -> tuple[str, str, str, int, str]:
-    return (phase, task_id, unit, sample_index, request_hash)
+    return (phase, task_id, unit, seed_index, request_hash)
 
 
 def _validate_timestamp(value: str) -> None:
@@ -384,12 +384,12 @@ def _same_file_snapshot(
 
 
 def _entry_name(record: PartialCallRecord) -> str:
-    phase, task_id, unit, sample_index, request_hash = record.key()
+    phase, task_id, unit, seed_index, request_hash = record.key()
     identity = {
         "phase": phase,
         "task_id": task_id,
         "unit": unit,
-        "sample_index": sample_index,
+        "seed_index": seed_index,
         "request_hash": request_hash,
     }
     return (

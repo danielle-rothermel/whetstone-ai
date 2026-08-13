@@ -23,7 +23,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     typed_ref_for_record,
 )
-from whetstone.core.roles import EvaluationRole
+from whetstone.core.roles import EvalRole
 
 __all__ = [
     "REWARD_POLICY_SCHEMA",
@@ -163,7 +163,7 @@ class Reward(BaseModel):
     reward_name: NonEmptyId
     value: FiniteFloat
     reward_policy: RewardPolicy
-    evidence_role: EvaluationRole
+    evidence_role: EvalRole
     input_citations: tuple[RewardInputCitation, ...]
     evidence_refs: tuple[TypedRef, ...]
     provenance_ordinal: NonNegativeInt | None = None
@@ -175,7 +175,7 @@ class Reward(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> Reward:
-        if self.evidence_role is not EvaluationRole.INTERNAL:
+        if self.evidence_role is not EvalRole.INTERNAL:
             raise ValueError(
                 "a Reward may only cite evidence with the internal "
                 "Evaluation Role; official evaluation computes no Reward"
@@ -273,11 +273,11 @@ def apply_reward_policy(
     policy: RewardPolicy,
     *,
     aggregates: Mapping[str, float | None],
-    evidence_role: EvaluationRole,
+    evidence_role: EvalRole,
     evidence_refs: tuple[TypedRef, ...],
     provenance_ordinal: int | None = None,
 ) -> Reward:
-    if evidence_role is not EvaluationRole.INTERNAL:
+    if evidence_role is not EvalRole.INTERNAL:
         raise OfficialRewardError(
             "apply_reward_policy refuses official-role evidence: official "
             "evaluation computes Objective Vectors/Aggregates, never Reward"

@@ -7,15 +7,15 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.experiment.candidate import Candidate, candidate_reference
-from whetstone.optimization.copro.adapter import CoproConfig, CoproDriver
-from whetstone.optimization.copro.prompts import (
+from whetstone.optim.copro.adapter import CoproConfig, CoproDriver
+from whetstone.optim.copro.prompts import (
     COPRO_INSTRUCTION_CONTRACT_KEY,
     COPRO_INSTRUCTION_HISTORY_KEY,
 )
-from whetstone.optimization.copro.proposal_contract import (
+from whetstone.optim.copro.proposal_contract import (
     CoproProposalContractRecord,
 )
-from whetstone.optimization.proposal.proposer import (
+from whetstone.optim.proposal.proposer import (
     ProposerConfig,
     ProposalRequest,
     prompt_adapter_identity_hash,

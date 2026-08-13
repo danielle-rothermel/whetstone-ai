@@ -22,7 +22,7 @@ def index_partial_records(
     unit: str,
 ) -> PartialRecordIndex:
     return {
-        (record.task_id, record.sample_index, record.request_hash): record
+        (record.task_id, record.seed_index, record.request_hash): record
         for record in records
         if record.phase == phase and record.unit == unit
     }
@@ -32,17 +32,17 @@ def resolve_exact_resume(
     records: PartialRecordIndex,
     *,
     task_id: str,
-    sample_index: int,
+    seed_index: int,
     ordinal_0_request_hash: str,
     ordinal_1_request_hash: str,
 ) -> ExactResumeDecision:
-    ordinal_1 = records.get((task_id, sample_index, ordinal_1_request_hash))
+    ordinal_1 = records.get((task_id, seed_index, ordinal_1_request_hash))
     if ordinal_1 is not None:
         if ordinal_1.redrive_pending:
             raise ValueError("an ordinal-1 partial record cannot be pending")
         return ExactResumeDecision(record=ordinal_1, drive_ordinal=None)
 
-    ordinal_0 = records.get((task_id, sample_index, ordinal_0_request_hash))
+    ordinal_0 = records.get((task_id, seed_index, ordinal_0_request_hash))
     if ordinal_0 is None:
         return ExactResumeDecision(record=None, drive_ordinal=0)
     if ordinal_0.redrive_pending:

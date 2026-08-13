@@ -24,8 +24,8 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 
-CANDIDATE_RECORD_SCHEMA = "whetstone.optimization_candidate"
-CANDIDATE_IDENTITY_SCHEMA = "whetstone.optimization_candidate"
+CANDIDATE_RECORD_SCHEMA = "whetstone.optim_candidate"
+CANDIDATE_IDENTITY_SCHEMA = "whetstone.optim_candidate"
 CANDIDATE_IDENTITY_SCHEMA_VERSION = 1
 
 
