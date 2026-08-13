@@ -783,6 +783,17 @@ class OptimHarness(OptimRunStore):
             )
         }
         resolutions: list[IntentResolution] = []
+        from whetstone.coordination.eval_service import (
+            EvalDispatchMode,
+            EvalEngineService,
+            EvalPlatformDeferred,
+        )
+
+        platform_mode = (
+            isinstance(self._evaluation_service, EvalEngineService)
+            and self._evaluation_service.dispatch_mode
+            is EvalDispatchMode.PLATFORM
+        )
         for optim_eval_request in output.optim_eval_requests:
             if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(
@@ -805,12 +816,21 @@ class OptimHarness(OptimRunStore):
                     "candidate"
                 )
             self._persist_intent_records(optim_eval_request)
-            resolutions.append(
-                self._resolve_one_intent(
-                    request=request,
-                    optim_eval_request=optim_eval_request,
+            if platform_mode:
+                assert isinstance(self._evaluation_service, EvalEngineService)
+                self._evaluation_service.persist_platform_intent(
+                    optim_eval_request
                 )
-            )
+                continue
+            try:
+                resolutions.append(
+                    self._resolve_one_intent(
+                        request=request,
+                        optim_eval_request=optim_eval_request,
+                    )
+                )
+            except EvalPlatformDeferred:
+                continue
         return tuple(resolutions)
 
     def _resolve_one_intent(

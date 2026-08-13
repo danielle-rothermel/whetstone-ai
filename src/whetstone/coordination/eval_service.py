@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from enum import StrEnum, verify, UNIQUE
 from typing import Any
 
 from dr_store import ObjectStore
@@ -45,6 +46,17 @@ from whetstone.optim.contracts import (
 )
 
 _EVAL_SERVICE_NAMESPACE = "whetstone.eval_service.v3"
+_PLATFORM_INTENT_NAMESPACE = "whetstone.platform_eval_intent.v1"
+
+
+@verify(UNIQUE)
+class EvalDispatchMode(StrEnum):
+    INLINE = "inline"
+    PLATFORM = "platform"
+
+
+class EvalPlatformDeferred(RuntimeError):
+    """Evaluation intent persisted for platform row fan-out."""
 
 
 class EvalEngineService(EvalClaims, EvalEvidenceValidation):
@@ -53,6 +65,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         *,
         store: ObjectStore,
         engine: EvalEngine,
+        dispatch_mode: EvalDispatchMode = EvalDispatchMode.INLINE,
         claim_lease_seconds: float = 300.0,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
@@ -67,6 +80,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             raise ValueError("claim_lease_seconds must be positive")
         self._store = store
         self._engine = engine
+        self._dispatch_mode = dispatch_mode
         self._claim_lease_seconds = claim_lease_seconds
         self._clock = clock
         self._sleep = sleep
@@ -78,6 +92,49 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     @property
     def replay_policy(self) -> ReplayPolicy:
         return ReplayPolicy.DURABLE_WORKFLOW
+
+    @property
+    def dispatch_mode(self) -> EvalDispatchMode:
+        return self._dispatch_mode
+
+    def set_dispatch_mode(self, mode: EvalDispatchMode) -> EvalDispatchMode:
+        previous = self._dispatch_mode
+        self._dispatch_mode = mode
+        return previous
+
+    @classmethod
+    def _platform_intent_key(cls, optim_eval_request: OptimEvalRequest) -> str:
+        return (
+            f"{_PLATFORM_INTENT_NAMESPACE}.pending:"
+            f"{cls._intent_ref(optim_eval_request).content_hash}"
+        )
+
+    def persist_platform_intent(
+        self,
+        optim_eval_request: OptimEvalRequest,
+    ) -> TypedRef:
+        if self._dispatch_mode is not EvalDispatchMode.PLATFORM:
+            raise ValueError("platform intent persistence requires PLATFORM mode")
+        self._persist_intent_targets(optim_eval_request)
+        reference, _ = self._store.put(
+            "whetstone.optim_eval_request",
+            optim_eval_request.model_dump(mode="json"),
+        )
+        key = self._platform_intent_key(optim_eval_request)
+        self._store.bind(key, reference)
+        return TypedRef(
+            schema_name=reference.schema,
+            content_hash=reference.content_hash,
+        )
+
+    def load_platform_intent(
+        self,
+        optim_eval_request: OptimEvalRequest,
+    ) -> OptimEvalRequest | None:
+        bound = self._store.resolve(self._platform_intent_key(optim_eval_request))
+        if bound is None:
+            return None
+        return OptimEvalRequest.model_validate(self._store.get(bound))
 
     def validate_resolution_graph(self, resolution: IntentResolution) -> None:
         self._validate_result_graph(
@@ -152,6 +209,11 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         owned: _OwnedClaim,
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
+        if self._dispatch_mode is EvalDispatchMode.PLATFORM:
+            self.persist_platform_intent(optim_eval_request)
+            raise EvalPlatformDeferred(
+                "evaluation intent deferred to platform eval stages"
+            )
         resolved_eval_config = self._engine.eval_config_ref
         request = EvalRequest(
             request_id=optim_eval_request.eval_request.request_id,
@@ -236,4 +298,8 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                 raise TypeError(f"unexpected evaluation result: {result!r}")
 
 
-__all__ = ["EvalEngineService"]
+__all__ = [
+    "EvalDispatchMode",
+    "EvalEngineService",
+    "EvalPlatformDeferred",
+]
