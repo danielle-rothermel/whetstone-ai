@@ -24,6 +24,11 @@ except ImportError as exc:
     ) from exc
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
 
+from whetstone.coordination.run_controller_registry import (
+    RunWorkflowError,
+    register_run_controller,
+    registered_controller,
+)
 from whetstone.core.identity import (
     TypedRef,
     compute_identity_hash,
@@ -35,10 +40,6 @@ RUN_WORKFLOW_SCHEMA = "whetstone.coordination.parent_run"
 RUN_WORKFLOW_SCHEMA_VERSION = 1
 
 RUN_WORKFLOW_ID_PREFIX = "whetstone-run-"
-
-
-class RunWorkflowError(RuntimeError):
-    """The configured parent run-workflow boundary is invalid."""
 
 
 @runtime_checkable
@@ -85,32 +86,6 @@ class RunRequest(BaseModel):
         return f"{RUN_WORKFLOW_ID_PREFIX}{self.identity_hash()}"
 
 
-_CONTROLLERS: dict[str, RunController] = {}
-
-
-def register_run_controller(controller: RunController) -> str:
-    """Bind one run controller under its exact runtime identity."""
-    identity_hash = controller.runtime_hash
-    require_full_hash(identity_hash, field="controller_identity_hash")
-    existing = _CONTROLLERS.get(identity_hash)
-    if existing is not None and existing is not controller:
-        raise RunWorkflowError("run controller identity is already bound")
-    _CONTROLLERS[identity_hash] = controller
-    return identity_hash
-
-
-def _registered_controller(request: RunRequest) -> RunController:
-    try:
-        controller = _CONTROLLERS[request.controller_identity_hash]
-    except KeyError:
-        raise RunWorkflowError(
-            "run controller is not registered before DBOS launch"
-        ) from None
-    if controller.runtime_hash != request.controller_identity_hash:
-        raise RunWorkflowError("registered run controller identity drifted")
-    return controller
-
-
 def _validated_result_ref(reference: TypedRef) -> TypedRef:
     exact = TypedRef.model_validate(reference.model_dump(mode="json"))
     if exact.schema_name != OPTIM_RESULT_SCHEMA:
@@ -127,7 +102,7 @@ def _parent_run_workflow(request: RunRequest) -> TypedRef:
         raise RunWorkflowError(
             "the parent run workflow cannot execute inside a DBOS step"
         )
-    controller = _registered_controller(request)
+    controller = registered_controller(request)
     return _validated_result_ref(controller.drive(request))
 
 

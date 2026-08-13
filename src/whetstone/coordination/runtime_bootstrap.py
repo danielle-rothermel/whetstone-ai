@@ -10,7 +10,7 @@ from whetstone.coordination.harness_run_controller import (
     HarnessRunController,
     OptimRunLaunch,
 )
-from whetstone.coordination.run_workflow import register_run_controller
+from whetstone.coordination.run_controller_registry import register_run_controller
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.blocking_store import BlockingObjectStore, open_blocking_sqlite_store
 from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy

@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum, verify, UNIQUE
 from typing import Any
 
@@ -59,6 +60,11 @@ class EvalPlatformDeferred(RuntimeError):
     """Evaluation intent persisted for platform row fan-out."""
 
 
+@dataclass(frozen=True, slots=True)
+class EvalExecutionContext:
+    dispatch_mode: EvalDispatchMode = EvalDispatchMode.INLINE
+
+
 class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     def __init__(
         self,
@@ -88,6 +94,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         self._renewal_published = _renewal_published
         self._owner_id = uuid.uuid4().hex
         self._resolve_lock = threading.Lock()
+        self._active_context: EvalExecutionContext | None = None
 
     @property
     def replay_policy(self) -> ReplayPolicy:
@@ -102,6 +109,14 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         self._dispatch_mode = mode
         return previous
 
+    def _effective_context(
+        self,
+        context: EvalExecutionContext | None,
+    ) -> EvalExecutionContext:
+        if context is not None:
+            return context
+        return EvalExecutionContext(dispatch_mode=self._dispatch_mode)
+
     @classmethod
     def _platform_intent_key(cls, optim_eval_request: OptimEvalRequest) -> str:
         return (
@@ -112,8 +127,11 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     def persist_platform_intent(
         self,
         optim_eval_request: OptimEvalRequest,
+        *,
+        context: EvalExecutionContext | None = None,
     ) -> TypedRef:
-        if self._dispatch_mode is not EvalDispatchMode.PLATFORM:
+        effective = self._effective_context(context)
+        if effective.dispatch_mode is not EvalDispatchMode.PLATFORM:
             raise ValueError("platform intent persistence requires PLATFORM mode")
         self._persist_intent_targets(optim_eval_request)
         reference, _ = self._store.put(
@@ -126,6 +144,20 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             schema_name=reference.schema,
             content_hash=reference.content_hash,
         )
+
+    def resolve_optim_eval_request(
+        self,
+        optim_eval_request: OptimEvalRequest,
+        *,
+        context: EvalExecutionContext | None = None,
+    ) -> IntentResolution:
+        with self._resolve_lock:
+            previous = self._active_context
+            self._active_context = self._effective_context(context)
+            try:
+                return self._resolve_claimed(optim_eval_request)
+            finally:
+                self._active_context = previous
 
     def load_platform_intent(
         self,
@@ -209,8 +241,12 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         owned: _OwnedClaim,
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
-        if self._dispatch_mode is EvalDispatchMode.PLATFORM:
-            self.persist_platform_intent(optim_eval_request)
+        effective = self._effective_context(self._active_context)
+        if effective.dispatch_mode is EvalDispatchMode.PLATFORM:
+            self.persist_platform_intent(
+                optim_eval_request,
+                context=effective,
+            )
             raise EvalPlatformDeferred(
                 "evaluation intent deferred to platform eval stages"
             )
@@ -301,5 +337,6 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
 __all__ = [
     "EvalDispatchMode",
     "EvalEngineService",
+    "EvalExecutionContext",
     "EvalPlatformDeferred",
 ]

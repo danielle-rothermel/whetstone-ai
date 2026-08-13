@@ -2,11 +2,18 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from dr_store.content_addressing import format_object_reference
-
 from whetstone.coordination.eval_service import EvalDispatchMode, EvalEngineService
+from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
 from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OptimEvalRequest
+from whetstone.platform.contracts import (
+    EvalFaninInput,
+    EvalRowInput,
+    OptimWorkInput,
+    persist_eval_fanin_input,
+    persist_eval_row_input,
+)
 from whetstone.platform.eval_fanin import (
     execute_eval_fanin_sync,
     execute_eval_row_sync,
@@ -61,38 +68,69 @@ def test_eval_fanin_resolution_with_mock_row_executor(toy_runtime) -> None:
         expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
     )
     runtime.eval_service.persist_platform_intent(intent)
-    row_payload = {
-        "optim_eval_request": intent.model_dump(mode="json"),
-        "task_id": "task-0",
-        "seed_index": 0,
-    }
-    row_ref, _ = runtime.store.put("whetstone.platform_eval_row_input", row_payload)
-    row_reference = format_object_reference(row_ref)
+    row_reference = persist_eval_row_input(
+        runtime.store,
+        EvalRowInput(
+            batch_id="batch-1",
+            optim_eval_request=intent,
+            task_id="task-0",
+            seed_index=0,
+        ),
+    )
     row_calls: list[str] = []
 
     def row_executor(**kwargs) -> None:
         row_calls.append(kwargs["task_id"])
 
-    execute_eval_row_sync(
+    row_completion = execute_eval_row_sync(
         runtime,
         input_reference=row_reference,
         row_executor=row_executor,
     )
     assert row_calls == ["task-0"]
+    assert row_completion.output_reference
 
-    fanin_payload = {
-        "optim_eval_request": intent.model_dump(mode="json"),
-    }
-    fanin_ref, _ = runtime.store.put(
-        "whetstone.platform_eval_fanin_input",
-        fanin_payload,
+    fanin_reference = persist_eval_fanin_input(
+        runtime.store,
+        EvalFaninInput(
+            batch_id="batch-1",
+            optim_eval_request=intent,
+        ),
     )
-    fanin_reference = format_object_reference(fanin_ref)
+    from whetstone.platform.contracts import EvalBatch, persist_eval_batch
+    from whetstone.platform.step_executor import OptimWorkState, _persist_work_state
+
+    pending_state = OptimWorkState(
+        work_input=OptimWorkInput(
+            run_id="run-platform",
+            controller_identity_hash="a" * 64,
+            control_identity_hash="b" * 64,
+            platform_stage_index=3,
+        ),
+        step_index=1,
+        step_result_refs=(),
+        terminal=False,
+    )
+    work_state_ref = _persist_work_state(runtime, pending_state)
+    persist_eval_batch(
+        runtime.store,
+        EvalBatch(
+            batch_id="batch-1",
+            run_id="run-platform",
+            step_index=0,
+            optim_step_stage_index=0,
+            row_input_refs=(row_reference,),
+            fanin_input_ref=fanin_reference,
+            work_state_ref=work_state_ref,
+        ),
+    )
     row_loader = MagicMock()
-    output = execute_eval_fanin_sync(
+    fanin_completion = execute_eval_fanin_sync(
         runtime,
         input_reference=fanin_reference,
         row_loader=row_loader,
     )
     row_loader.assert_called_once()
-    assert "whetstone.platform_eval_fanin" in output
+    assert fanin_completion.output_reference
+    assert fanin_completion.successors
+    assert fanin_completion.successors[0].stage_key.value == "optim_step"

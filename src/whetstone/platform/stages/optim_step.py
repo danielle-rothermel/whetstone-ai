@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 async def optim_step_workflow(
     runtime: RegisteredRuntime,
     input_reference: str,
-) -> str:
+):
     from whetstone.platform.step_executor import execute_optim_step_sync
 
     return await asyncio.to_thread(

@@ -341,7 +341,7 @@ wheels = [
 [[package]]
 name = "dr-platform"
 version = "0.2.1"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../../repos/dr-platform" }
 dependencies = [
     { name = "alembic" },
     { name = "dbos", extra = ["otel"] },
@@ -351,9 +351,24 @@ dependencies = [
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/03/b042d9cc56beb01776cc5ebe329364d73b2ea5653d63a5157eddad0b2f6b/dr_platform-0.2.1.tar.gz", hash = "sha256:8c931d31add58a24408afeceb3043661996eac13b45ef2660d7780775725cff6", size = 62487, upload-time = "2026-08-12T20:56:00.168Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f6/96/ff80f2c07eeef0552073062d5337d3d422823834b38bf23ad59a0474985a/dr_platform-0.2.1-py3-none-any.whl", hash = "sha256:5b725fef51a79c002f2f4fc5916a62890c5e433d1a68100faadd7e3bb10606d3", size = 91324, upload-time = "2026-08-12T20:55:58.973Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = ">=1.16.2" },
+    { name = "dbos", extras = ["otel"], specifier = "==2.27.0" },
+    { name = "dr-serialize", specifier = "==0.1.2" },
+    { name = "dr-store", specifier = "==0.2.3" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
+    { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pre-commit", specifier = ">=4.6.0" },
+    { name = "pytest", specifier = ">=9.1.1" },
+    { name = "ruff", specifier = ">=0.15.18" },
+    { name = "ty", specifier = ">=0.0.51" },
 ]
 
 [[package]]
@@ -1473,12 +1488,6 @@ dependencies = [
 dbos = [
     { name = "dbos" },
 ]
-dev = [
-    { name = "dbos" },
-    { name = "pytest" },
-    { name = "rich" },
-    { name = "typer" },
-]
 platform = [
     { name = "dbos" },
     { name = "dr-platform" },
@@ -1497,11 +1506,10 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dbos", marker = "extra == 'dbos'", specifier = ">=2.25.0" },
-    { name = "dbos", marker = "extra == 'dev'", specifier = ">=2.25.0" },
     { name = "dbos", marker = "extra == 'platform'", specifier = ">=2.25.0" },
     { name = "dr-exec", specifier = "==0.1.10" },
     { name = "dr-graph", specifier = "==0.1.3" },
-    { name = "dr-platform", marker = "extra == 'platform'", specifier = "==0.2.1" },
+    { name = "dr-platform", marker = "extra == 'platform'", editable = "../../repos/dr-platform" },
     { name = "dr-providers", specifier = "==0.3.1" },
     { name = "dr-serialize", specifier = "==0.1.2" },
     { name = "dr-store", specifier = "==0.2.3" },
@@ -1511,13 +1519,10 @@ requires-dist = [
     { name = "optuna", specifier = "==4.8.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'platform'", specifier = ">=3.3.4" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.3.4" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "rich", specifier = ">=15.0.0" },
-    { name = "rich", marker = "extra == 'dev'", specifier = ">=15.0.0" },
     { name = "typer", specifier = ">=0.26.8" },
-    { name = "typer", marker = "extra == 'dev'", specifier = ">=0.26.8" },
 ]
-provides-extras = ["dbos", "postgres", "platform", "dev"]
+provides-extras = ["dbos", "postgres", "platform"]
 
 [package.metadata.requires-dev]
 dev = [

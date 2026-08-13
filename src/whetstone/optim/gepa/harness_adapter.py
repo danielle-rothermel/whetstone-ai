@@ -4,7 +4,7 @@ from typing import Any
 
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import OptimStepRequest, StepMode, StepStatus
 from whetstone.optim.gepa.adapter import project_gepa_terminal
@@ -117,18 +117,20 @@ class GepaHarnessAdapter:
             component_name = self._control.component_names[0]
             candidate = Candidate(
                 candidate_id=f"{request.run_id}:gepa:best",
-                base_ref=request.candidates[0].base_ref,
+                base_ref=candidate_reference(request.candidates[0]).record_ref,
                 payload={
                     mutation_field: terminal.best_candidate[component_name],
                 },
             )
             return AdapterOutput(
                 accepted_candidates=(candidate,),
+                proposed_candidates=(candidate,),
                 proposed_status=StepStatus.COMPLETE,
                 state_delta=state_delta,
                 history_delta=ImmutableJsonObject(
                     {GEPA_TERMINAL_ARTIFACT_KEY: artifact_ref.model_dump(mode="json")}
                 ),
+                budget_delta=checkpoint.budget_delta,
             )
         return AdapterOutput(
             proposed_status=StepStatus.CONTINUE,

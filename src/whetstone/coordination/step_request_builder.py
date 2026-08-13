@@ -182,6 +182,11 @@ class StepRequestBuilder:
                 else self._store.get(prior.state_ref.reference)
             )
             checkpoint = prior_state.get(GEPA_STATE_KEY, {})
+            if isinstance(checkpoint, dict):
+                consumed = int(checkpoint.get("metric_calls_consumed", 0))
+            else:
+                consumed = 0
+            terminal_next = consumed + 1 >= control.resolved_max_metric_calls
             return OptimStepRequest(
                 run=prior.request.record.run,
                 step_id=f"{prior.run_id}:gepa:{step_index}",
@@ -197,7 +202,11 @@ class StepRequestBuilder:
                     control.step_hyperparameters(iteration=step_index)
                 ),
                 budget=prior.budget,
-                step_output_contract=OutputContract(returned_proposal_count=0),
+                step_output_contract=(
+                    prior.request.record.run.record.terminal_output_contract
+                    if terminal_next
+                    else OutputContract(returned_proposal_count=0)
+                ),
             )
         if adapter_key != COPRO_ADAPTER_KEY:
             raise ValueError(

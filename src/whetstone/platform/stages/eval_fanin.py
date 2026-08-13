@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 async def eval_fanin_workflow(
     runtime: RegisteredRuntime,
     input_reference: str,
-) -> str:
+):
     from whetstone.platform.eval_fanin import execute_eval_fanin_sync
 
     return await asyncio.to_thread(
