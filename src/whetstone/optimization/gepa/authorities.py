@@ -549,9 +549,10 @@ class CanonicalGepaEvaluationAuthority:
         request: GepaEvaluationEffectRequest,
         resolution: Any,
     ) -> GepaEvaluationEffectResult:
-        refs = tuple(resolution.evaluation_evidence_refs)
-        if refs:
-            failure_ref = refs[0]
+        evidence_ref = resolution.evaluation_result_ref
+        refs = () if evidence_ref is None else (evidence_ref,)
+        if evidence_ref is not None:
+            failure_ref = evidence_ref
         else:
             record = {
                 "request_hash": request.identity_hash(),
@@ -586,11 +587,11 @@ class CanonicalGepaEvaluationAuthority:
         candidate: CandidateRef,
         resolution: Any,
     ) -> GepaEvaluationEffectResult:
-        if len(resolution.evaluation_evidence_refs) != 1:
+        evidence_ref = resolution.evaluation_result_ref
+        if evidence_ref is None:
             raise ValueError(
                 "GEPA requires one canonical evaluation evidence record"
             )
-        evidence_ref = resolution.evaluation_evidence_refs[0]
         if evidence_ref.schema_name != EVALUATION_EVIDENCE_SCHEMA:
             raise ValueError("GEPA requires canonical evaluation evidence")
         evidence = EvaluationEvidence.model_validate(

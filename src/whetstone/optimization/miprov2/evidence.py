@@ -28,9 +28,7 @@ from whetstone.evaluation.schema import (
     EvaluationComponentTraces,
     EvaluationComponentTracesRef,
     EvaluationEvidence,
-    EvaluationEvidenceRef,
     EvaluationFailureEvidence,
-    EvaluationFailureEvidenceRef,
 )
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
@@ -381,7 +379,6 @@ class Miprov2EvidenceResolver:
         evidence = EvaluationEvidence.model_validate(
             self.store.get(evidence_ref.reference)
         )
-        EvaluationEvidenceRef(record=evidence, record_ref=evidence_ref)
         if (
             evidence.candidate,
             evidence.eval_config_ref,
@@ -540,7 +537,6 @@ class Miprov2EvidenceResolver:
         failure = EvaluationFailureEvidence.model_validate(
             self.store.get(failure_ref.reference)
         )
-        EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
         if (
             failure.candidate,
             failure.eval_config_ref,
@@ -701,7 +697,6 @@ class Miprov2EvidenceResolver:
         failure = EvaluationFailureEvidence.model_validate(
             self.store.get(failure_ref.reference)
         )
-        EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
         if (
             failure.candidate,
             failure.eval_config_ref,

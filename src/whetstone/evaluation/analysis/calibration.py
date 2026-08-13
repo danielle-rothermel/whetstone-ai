@@ -16,10 +16,14 @@ from whetstone.evaluation.analysis.statistics import (
 )
 from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import (
-    EngineEvaluation,
+    EvalEvidenceWithRef,
     EvalRequest,
+    EvalResult,
     EvaluationEngine,
+    eval_is_rejected,
+    eval_is_success,
 )
+from whetstone.evaluation.schema import EvaluationEvidence, EvaluationFailureEvidence
 from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.sampling import INTERNAL_EVAL, evaluation_role_for_split
@@ -33,21 +37,39 @@ __all__ = [
 @dataclass(frozen=True, slots=True)
 class AnchorCalibrationResult:
     eval_config_ref: EvalConfigRef
-    baseline: EngineEvaluation
-    ceiling: EngineEvaluation
+    baseline: EvalEvidenceWithRef
+    ceiling: EvalEvidenceWithRef
     paired_delta_ci: BootstrapCI
     power: PowerResult
 
 
+def _require_success_eval(
+    result: EvalResult,
+    *,
+    label: str,
+) -> EvalEvidenceWithRef:
+    if eval_is_rejected(result):
+        raise ValueError(f"{label} rejected: {result.detail.message}")
+    if isinstance(result, EvalEvidenceWithRef) and isinstance(
+        result.evidence, EvaluationFailureEvidence
+    ):
+        raise ValueError(f"{label} failed: {result.evidence.message}")
+    if not eval_is_success(result):
+        raise TypeError(f"unexpected evaluation result for {label}: {result!r}")
+    return result
+
+
 def _validate_anchor_evidence(
     *,
-    evaluated: EngineEvaluation,
+    evaluated: EvalEvidenceWithRef,
     expected_eval_config_ref: EvalConfigRef,
     expected_eval_role: EvaluationRole,
     expected_task_ids: tuple[str, ...],
     expected_samples: int,
     expected_reward_policy_hash: str,
 ) -> None:
+    if not isinstance(evaluated.evidence, EvaluationEvidence):
+        raise ValueError("calibration requires successful evaluation evidence")
     evidence = evaluated.evidence
     if evidence.eval_config_ref != expected_eval_config_ref:
         raise ValueError("calibration evidence changed its Eval Config")
@@ -124,15 +146,15 @@ def run_anchor_calibration(
         metadata=metadata_with_purpose(ceiling_purpose),
     )
 
-    subset_engine.validate_request(baseline_request)
-    subset_engine.validate_request(ceiling_request)
-
     planned_rows = (
         len(task_ids) * subset_engine.sampling.num_samples
     )
     if log is not None:
         log(f"Starting {baseline_log_label} evaluation ({planned_rows} rows)")
-    baseline = subset_engine.evaluate(baseline_request)
+    baseline = _require_success_eval(
+        subset_engine.evaluate(baseline_request),
+        label=baseline_log_label,
+    )
     if log is not None:
         accounting = baseline.evidence.row_accounting
         log(
@@ -142,7 +164,10 @@ def run_anchor_calibration(
             f"invalid={accounting.invalid})"
         )
         log(f"Starting {ceiling_log_label} evaluation ({planned_rows} rows)")
-    ceiling = subset_engine.evaluate(ceiling_request)
+    ceiling = _require_success_eval(
+        subset_engine.evaluate(ceiling_request),
+        label=ceiling_log_label,
+    )
     if log is not None:
         accounting = ceiling.evidence.row_accounting
         log(
@@ -163,19 +188,23 @@ def run_anchor_calibration(
             expected_samples=samples,
             expected_reward_policy_hash=reward_policy_hash,
         )
-    if baseline.evidence.graph_hash != ceiling.evidence.graph_hash:
+    baseline_evidence = baseline.evidence
+    ceiling_evidence = ceiling.evidence
+    assert isinstance(baseline_evidence, EvaluationEvidence)
+    assert isinstance(ceiling_evidence, EvaluationEvidence)
+    if baseline_evidence.graph_hash != ceiling_evidence.graph_hash:
         raise ValueError("calibration anchors changed graph identity")
 
     paired_delta_ci = bootstrap_paired_delta_ci(
-        baseline.evidence.per_task_values,
-        ceiling.evidence.per_task_values,
+        baseline_evidence.per_task_values,
+        ceiling_evidence.per_task_values,
         level=bootstrap_level,
         resamples=bootstrap_resamples,
         seed=bootstrap_seed,
     )
     power = analyze_power(
-        naive_per_task=baseline.evidence.per_task_values,
-        ceiling_per_task=ceiling.evidence.per_task_values,
+        naive_per_task=baseline_evidence.per_task_values,
+        ceiling_per_task=ceiling_evidence.per_task_values,
         pool_ceiling=pool_ceiling,
         anchor_samples=samples,
         config=power_config,

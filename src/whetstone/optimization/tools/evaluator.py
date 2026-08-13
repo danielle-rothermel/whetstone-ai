@@ -4,11 +4,17 @@ from collections.abc import Sequence
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
 from whetstone.evaluation.metadata import metadata_with_purpose
-from whetstone.evaluation.protocol import EvaluationEngine, EvalRequest
-from whetstone.experiment.candidate import Candidate
+from whetstone.evaluation.protocol import (
+    EvalEvidenceWithRef,
+    EvalRequest,
+    EvaluationEngine,
+    eval_is_rejected,
+    eval_is_success,
+)
 from whetstone.optimization.tools.contracts import ToolCall, ToolConfig
 from whetstone.optimization.tools.execution import (
     ToolEvaluation,
+    ToolEvaluationError,
     ToolValidationError,
 )
 
@@ -67,16 +73,29 @@ class EngineToolEvaluator:
             base_ref=TypedRef.model_validate(call.args["base_ref"]),
             payload=payload,
         )
-        evaluated = engine.evaluate(
+        result = engine.evaluate(
             EvalRequest(
                 request_id=f"tool:{call.call_id}",
                 candidate=candidate,
                 metadata=metadata_with_purpose(config.tool_name),
             )
         )
-        evidence = evaluated.evidence
+        if eval_is_rejected(result):
+            raise ToolValidationError(result.detail.message)
+        if not isinstance(result, EvalEvidenceWithRef):
+            raise ToolEvaluationError(
+                f"unexpected evaluation result: {result!r}"
+            )
+        if isinstance(result.evidence, EvaluationFailureEvidence):
+            raise ToolEvaluationError(result.evidence.message)
+        if not eval_is_success(result):
+            raise ToolEvaluationError(
+                f"unexpected evaluation result: {result!r}"
+            )
+        evidence = result.evidence
+        assert isinstance(evidence, EvaluationEvidence)
         available_output = {
-            "evaluation_evidence_ref": evaluated.evidence_ref.model_dump(
+            "evaluation_evidence_ref": result.evidence_ref.model_dump(
                 mode="json"
             ),
             "output_artifact_ref": evidence.outputs_ref.model_dump(
@@ -103,7 +122,7 @@ class EngineToolEvaluator:
                     for field in config.definition.record.output_fields
                 }
             ),
-            generation_refs=(evaluated.evidence_ref,),
+            generation_refs=(result.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
             eval_config_hash=evidence.eval_config_ref.config_hash,
         )

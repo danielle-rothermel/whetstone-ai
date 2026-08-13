@@ -11,7 +11,7 @@ from whetstone.evaluation.analysis.statistics import (
     DEFAULT_RESAMPLES,
     BootstrapCI,
 )
-from whetstone.evaluation.protocol import EngineEvaluation, EvaluationEngine
+from whetstone.evaluation.protocol import EvalEvidenceWithRef, EvaluationEngine
 from whetstone.evaluation.preview.persisted import (
     load_component_traces,
     load_evaluation_outputs,
@@ -103,10 +103,13 @@ def _arm(
     *,
     label: str,
     store: ObjectStore,
-    evaluated: EngineEvaluation,
+    evaluated: EvalEvidenceWithRef,
     instruction_field: str,
 ) -> AnchorArmPreview:
-    instruction = evaluated.evidence.candidate.record.payload.get(
+    if not isinstance(evaluated.evidence, EvaluationEvidence):
+        raise ValueError("baseline anchor requires successful evidence")
+    evidence = evaluated.evidence
+    instruction = evidence.candidate.record.payload.get(
         instruction_field
     )
     if not isinstance(instruction, str):
@@ -114,9 +117,9 @@ def _arm(
     return AnchorArmPreview(
         label=label,
         instruction=instruction,
-        evidence=evaluated.evidence,
-        outputs=load_evaluation_outputs(store, evaluated.evidence),
-        component_traces=load_component_traces(store, evaluated.evidence),
+        evidence=evidence,
+        outputs=load_evaluation_outputs(store, evidence),
+        component_traces=load_component_traces(store, evidence),
     )
 
 

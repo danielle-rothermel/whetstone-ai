@@ -21,17 +21,19 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.evaluation.protocol import EvalRequest, EvaluationEngine
+from whetstone.evaluation.protocol import (
+    EvalEvidenceWithRef,
+    EvalRejected,
+    EvalRequest,
+    EvaluationEngine,
+)
 from whetstone.evaluation.evidence_validation import (
     EvaluationEvidenceValidation,
 )
 from whetstone.evaluation.schema import (
+    EvaluationEvidence,
     EvaluationFailureEvidence,
-    EvaluationFailureEvidenceRef,
 )
-from whetstone.evaluation.schema_names import EVALUATION_FAILURE_SCHEMA
-from whetstone.experiment.candidate import candidate_reference
-from whetstone.experiment.sampling import evaluation_role_for_split
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -156,98 +158,82 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
             candidate=optim_eval_request.eval_request.candidate,
             metadata=optim_eval_request.eval_request.metadata,
         )
-        try:
-            self._engine.validate_request(request)
-        except (KeyError, TypeError, ValueError) as exc:
-            return self._bind_if_owned(
-                optim_eval_request,
-                IntentResolution(
-                    schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                    optim_eval_request=optim_eval_request,
-                    outcome=IntentOutcome.REJECTED,
-                    detail=ResolutionDetail(
-                        classification=ResolutionClass.VALIDATION,
-                        message=str(exc) or type(exc).__name__,
+        self._assert_generation_current(optim_eval_request, owned)
+        result = self._engine.evaluate(request)
+        match result:
+            case EvalRejected(detail=detail):
+                return self._bind_if_owned(
+                    optim_eval_request,
+                    IntentResolution(
+                        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+                        optim_eval_request=optim_eval_request,
+                        outcome=IntentOutcome.REJECTED,
+                        detail=detail,
+                        resolved_eval_config=resolved_eval_config,
                     ),
-                    resolved_eval_config=resolved_eval_config,
-                ),
-                owned,
-            )
-        try:
-            self._assert_generation_current(optim_eval_request, owned)
-            evaluated = self._engine.evaluate(request)
-        except Exception as exc:
-            candidate_ref = candidate_reference(
-                optim_eval_request.eval_request.candidate
-            )
-            failure = EvaluationFailureEvidence(
-                candidate=candidate_ref,
-                eval_config_ref=self._engine.eval_config_ref,
-                eval_role=evaluation_role_for_split(
-                    self._engine.sampling.split_role
-                ),
-                provider_execution_policy_ref=(
-                    self._engine.provider_execution_policy_ref
-                ),
-                metadata=optim_eval_request.eval_request.metadata,
-                exception_type=type(exc).__name__,
-                message=str(exc) or type(exc).__name__,
-            )
-            persisted_ref, _ = self._store.put(
-                EVALUATION_FAILURE_SCHEMA, failure.record_content()
-            )
-            failure_ref = EvaluationFailureEvidenceRef(
-                record=failure,
-                record_ref=self._typed_ref(persisted_ref),
-            )
-            terminal_failure = TerminalFailure(
-                code=f"evaluation_{failure.exception_type}",
-                message=failure.message,
-                details={
-                    "evidence_schema": failure_ref.record_ref.schema_name,
-                    "evidence_content_hash": (
-                        failure_ref.record_ref.content_hash
+                    owned,
+                )
+            case EvalEvidenceWithRef(
+                evidence=EvaluationFailureEvidence() as failure,
+                evidence_ref=evidence_ref,
+            ):
+                terminal_failure = TerminalFailure(
+                    code=f"evaluation_{failure.exception_type}",
+                    message=failure.message,
+                    details={
+                        "evidence_schema": evidence_ref.schema_name,
+                        "evidence_content_hash": evidence_ref.content_hash,
+                    },
+                )
+                return self._bind_if_owned(
+                    optim_eval_request,
+                    IntentResolution(
+                        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+                        optim_eval_request=optim_eval_request,
+                        outcome=IntentOutcome.FAILED,
+                        detail=ResolutionDetail(
+                            classification=ResolutionClass.INFRASTRUCTURE,
+                            message=failure.message,
+                        ),
+                        evaluation_result_ref=evidence_ref,
+                        reward_evidence_refs=(),
+                        resolved_eval_config=resolved_eval_config,
+                        terminal_failure=terminal_failure,
                     ),
-                },
-            )
-            return self._bind_if_owned(
-                optim_eval_request,
-                IntentResolution(
-                    schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                    optim_eval_request=optim_eval_request,
-                    outcome=IntentOutcome.FAILED,
-                    detail=ResolutionDetail(
-                        classification=ResolutionClass.INFRASTRUCTURE,
-                        message=failure.message,
+                    owned,
+                )
+            case EvalEvidenceWithRef(
+                evidence=EvaluationEvidence() as evidence,
+                evidence_ref=evidence_ref,
+            ):
+                reward_ref = evidence.reward_ref
+                reward_evidence_refs = (
+                    ()
+                    if reward_ref is None
+                    else reward_ref.record.evidence_refs
+                )
+                return self._bind_if_owned(
+                    optim_eval_request,
+                    IntentResolution(
+                        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+                        optim_eval_request=optim_eval_request,
+                        outcome=IntentOutcome.COMPLETED,
+                        detail=ResolutionDetail(
+                            classification=ResolutionClass.MEASURED,
+                            message=(
+                                "candidate evaluated under exact sampling "
+                                "binding"
+                            ),
+                        ),
+                        evaluation_result_ref=evidence_ref,
+                        reward_evidence_refs=reward_evidence_refs,
+                        resolved_eval_config=resolved_eval_config,
+                        reward_ref=reward_ref,
                     ),
-                    evaluation_result_ref=failure_ref.record_ref,
-                    reward_evidence_refs=(),
-                    resolved_eval_config=resolved_eval_config,
-                    terminal_failure=terminal_failure,
-                ),
-                owned,
-            )
-        reward_ref = evaluated.evidence.reward_ref
-        reward_evidence_refs = (
-            () if reward_ref is None else reward_ref.record.evidence_refs
-        )
-        return self._bind_if_owned(
-            optim_eval_request,
-            IntentResolution(
-                schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                optim_eval_request=optim_eval_request,
-                outcome=IntentOutcome.COMPLETED,
-                detail=ResolutionDetail(
-                    classification=ResolutionClass.MEASURED,
-                    message="candidate evaluated under exact sampling binding",
-                ),
-                evaluation_result_ref=evaluated.evidence_ref,
-                reward_evidence_refs=reward_evidence_refs,
-                resolved_eval_config=resolved_eval_config,
-                reward_ref=reward_ref,
-            ),
-            owned,
-        )
+                    owned,
+                )
+            case _:
+                raise TypeError(f"unexpected evaluation result: {result!r}")
 
 
 __all__ = ["EngineEvaluationService"]

@@ -441,26 +441,6 @@ class EvaluationEvidence(BaseModel):
         return self.model_dump(mode="json")
 
 
-class EvaluationEvidenceRef(BaseModel):
-    """An exact persisted Evaluation Evidence record."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    record: EvaluationEvidence
-    record_ref: TypedRef
-
-    @model_validator(mode="after")
-    def _validate(self) -> EvaluationEvidenceRef:
-        expected = typed_ref_for_record(
-            _EVALUATION_EVIDENCE_SCHEMA, self.record.record_content()
-        )
-        if self.record_ref != expected:
-            raise ValueError(
-                "Evaluation Evidence record_ref must address the exact record"
-            )
-        return self
-
-
 class EvaluationFailureEvidence(BaseModel):
     """Typed terminal evidence when execution started but did not score."""
 
@@ -480,26 +460,6 @@ class EvaluationFailureEvidence(BaseModel):
         return self.model_dump(mode="json")
 
 
-class EvaluationFailureEvidenceRef(BaseModel):
-    """An exact persisted Evaluation Failure record."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    record: EvaluationFailureEvidence
-    record_ref: TypedRef
-
-    @model_validator(mode="after")
-    def _validate(self) -> EvaluationFailureEvidenceRef:
-        expected = typed_ref_for_record(
-            _EVALUATION_FAILURE_SCHEMA, self.record.record_content()
-        )
-        if self.record_ref != expected:
-            raise ValueError(
-                "Evaluation Failure record_ref must address the exact record"
-            )
-        return self
-
-
 __all__ = [
     "EVALUATION_COMPONENT_TRACES_SCHEMA",
     "EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION",
@@ -511,9 +471,7 @@ __all__ = [
     "EvaluationComponentTraces",
     "EvaluationComponentTracesRef",
     "EvaluationEvidence",
-    "EvaluationEvidenceRef",
     "EvaluationFailureEvidence",
-    "EvaluationFailureEvidenceRef",
     "EvaluationOutputRow",
     "EvaluationOutputsRecord",
     "RowAccounting",

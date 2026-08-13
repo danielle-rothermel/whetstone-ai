@@ -14,12 +14,13 @@ from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.drivers.row_jobs import row_job_from_entrypoint
 from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import (
-    EngineEvaluation,
     EvalRequest,
+    EvalResult,
     EvaluationEngine,
     EvaluationPlanSnapshot,
     EvaluationSamplingView,
     EvaluationTaskView,
+    eval_is_success,
 )
 from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
@@ -72,10 +73,7 @@ class FakeEvaluationEngine:
     def expected_model_route(self) -> str:
         return self.model_route
 
-    def validate_request(self, request: EvalRequest) -> None:
-        return None
-
-    def evaluate(self, request: EvalRequest) -> EngineEvaluation:
+    def evaluate(self, request: EvalRequest) -> EvalResult:
         raise NotImplementedError("smoke test uses validate() only")
 
     def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine:
@@ -188,12 +186,13 @@ def _graph_rollout_driver_smoke() -> None:
             candidate=experiment.initial_candidate,
             metadata=metadata_with_purpose("smoke"),
         )
-        engine.validate_request(request)
         evaluated = engine.evaluate(request)
-        assert evaluated.evidence.aggregate_value is not None
+        assert eval_is_success(evaluated)
+        evidence = evaluated.evidence
+        assert evidence.aggregate_value is not None
         expected_rows = len(sampling.tasks) * sampling.sample_plan.num_samples
-        assert evaluated.evidence.row_accounting.present == expected_rows
-        component_traces = load_component_traces(store, evaluated.evidence)
+        assert evidence.row_accounting.present == expected_rows
+        component_traces = load_component_traces(store, evidence)
         assert any(
             row.executed_component_trace.executed_component_steps
             for row in component_traces.rows
@@ -233,8 +232,8 @@ def _reference_runtime_smoke() -> None:
             candidate=engine.experiment.initial_candidate,
             metadata=metadata_with_purpose("smoke"),
         )
-        engine.validate_request(request)
         evaluated = engine.evaluate(request)
+        assert eval_is_success(evaluated)
         assert evaluated.evidence.aggregate_value is not None
 
 

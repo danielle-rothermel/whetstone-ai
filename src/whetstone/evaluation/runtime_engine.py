@@ -11,9 +11,11 @@ from whetstone.evaluation.driver import EvaluationDriver
 from whetstone.evaluation.drivers.eval_result import InternalEvalResult
 from whetstone.evaluation.generation import GenerationIndex
 from whetstone.evaluation.protocol import (
-    EngineEvaluation,
-    EvaluationPlanSnapshot,
+    EvalEvidenceWithRef,
+    EvalRejected,
     EvalRequest,
+    EvalResult,
+    EvaluationPlanSnapshot,
     EvaluationSamplingView,
 )
 from whetstone.evaluation.schema import (
@@ -25,13 +27,17 @@ from whetstone.evaluation.schema import (
     CacheEvidence,
     EvaluationComponentTraceRow,
     EvaluationComponentTraces,
-    EvaluationComponentTracesRef,
     EvaluationEvidence,
+    EvaluationFailureEvidence,
     EvaluationOutputRow,
     EvaluationOutputsRecord,
     RowAccounting,
 )
-from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
+from whetstone.evaluation.schema_names import (
+    EVALUATION_EVIDENCE_SCHEMA,
+    EVALUATION_FAILURE_SCHEMA,
+)
+from whetstone.optimization.contracts import ResolutionClass, ResolutionDetail
 from whetstone.evaluation.traces import ExecutedComponentTracePayload
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
@@ -216,23 +222,54 @@ class RuntimeEvaluationEngine:
     def preflight(self, candidate: Candidate) -> None:
         self._driver.preflight(candidate)
 
-    def validate_request(self, request: EvalRequest) -> None:
-        self.preflight(request.candidate)
+    def _preflight(self, request: EvalRequest) -> EvalRejected | None:
+        try:
+            self.preflight(request.candidate)
+        except (KeyError, TypeError, ValueError) as exc:
+            return EvalRejected(
+                detail=ResolutionDetail(
+                    classification=ResolutionClass.VALIDATION,
+                    message=str(exc) or type(exc).__name__,
+                )
+            )
+        return None
 
-    def evaluate(self, request: EvalRequest) -> EngineEvaluation:
-        self.validate_request(request)
-        result = self._driver.run(
-            experiment=self._experiment,
-            sampling=self._sampling,
-            request=request,
-            eval_config_hash=self.eval_config_ref.config_hash,
-            execution_policy=self._execution_policy,
-            concurrency=self._concurrency,
-            max_wall_seconds=self._max_wall_seconds,
-            partial_log=self._partial_log,
-            prompt_cache=self._prompt_cache,
+    def evaluate(self, request: EvalRequest) -> EvalResult:
+        rejected = self._preflight(request)
+        if rejected is not None:
+            return rejected
+        try:
+            result = self._driver.run(
+                experiment=self._experiment,
+                sampling=self._sampling,
+                request=request,
+                eval_config_hash=self.eval_config_ref.config_hash,
+                execution_policy=self._execution_policy,
+                concurrency=self._concurrency,
+                max_wall_seconds=self._max_wall_seconds,
+                partial_log=self._partial_log,
+                prompt_cache=self._prompt_cache,
+            )
+            return self._persist_success(request, result)
+        except Exception as exc:
+            return self._persist_failure(request, exc)
+
+    def _persist_failure(
+        self, request: EvalRequest, exc: BaseException
+    ) -> EvalEvidenceWithRef:
+        failure = EvaluationFailureEvidence(
+            candidate=candidate_reference(request.candidate),
+            eval_config_ref=self.eval_config_ref,
+            eval_role=self._eval_role(),
+            provider_execution_policy_ref=self.provider_execution_policy_ref,
+            metadata=request.metadata,
+            exception_type=type(exc).__name__,
+            message=str(exc) or type(exc).__name__,
         )
-        return self._persist(request, result)
+        failure_ref = self._put(
+            EVALUATION_FAILURE_SCHEMA, failure.record_content()
+        )
+        return EvalEvidenceWithRef(evidence=failure, evidence_ref=failure_ref)
 
     def _validate_sampling_contract(self) -> None:
         expected = self._experiment.eval_configs.eval_config_for(
@@ -409,9 +446,9 @@ class RuntimeEvaluationEngine:
             tuple(output_rows),
         )
 
-    def _persist(
+    def _persist_success(
         self, request: EvalRequest, result: InternalEvalResult
-    ) -> EngineEvaluation:
+    ) -> EvalEvidenceWithRef:
         candidate_ref = candidate_reference(request.candidate)
         persisted_candidate = self._put(
             CANDIDATE_RECORD_SCHEMA, request.candidate.record_content()
@@ -432,10 +469,6 @@ class RuntimeEvaluationEngine:
         component_traces_ref = self._put(
             EVALUATION_COMPONENT_TRACES_SCHEMA,
             component_traces.record_content(),
-        )
-        EvaluationComponentTracesRef(
-            record=component_traces,
-            record_ref=component_traces_ref,
         )
         output_record = self._evaluation_outputs_record(
             request,
@@ -504,7 +537,7 @@ class RuntimeEvaluationEngine:
         evidence_ref = self._put(
             EVALUATION_EVIDENCE_SCHEMA, evidence.record_content()
         )
-        return EngineEvaluation(evidence=evidence, evidence_ref=evidence_ref)
+        return EvalEvidenceWithRef(evidence=evidence, evidence_ref=evidence_ref)
 
     def _cache_evidence(
         self, candidate_id: str, request_identities: frozenset[str]

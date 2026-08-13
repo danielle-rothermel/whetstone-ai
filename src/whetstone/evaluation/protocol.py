@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypeGuard, runtime_checkable
 
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, Field
 
 from whetstone.core.identity import IdentityRef, ImmutableJsonObject, NonEmptyId, TypedRef
-from whetstone.evaluation.schema import EvaluationEvidence
+from whetstone.evaluation.schema import EvaluationEvidence, EvaluationFailureEvidence
 from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.provider.policy import ProviderExecutionPolicy
+
+if TYPE_CHECKING:
+    from whetstone.optimization.contracts import ResolutionDetail
 
 
 class EvalRequest(BaseModel):
@@ -24,15 +27,27 @@ class EvalRequest(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class EngineEvaluation:
-    evidence: EvaluationEvidence
+class EvalRejected:
+    detail: ResolutionDetail
+
+
+@dataclass(frozen=True, slots=True)
+class EvalEvidenceWithRef:
+    evidence: EvaluationEvidence | EvaluationFailureEvidence
     evidence_ref: TypedRef
 
-    @property
-    def reward_value(self) -> float | None:
-        if self.evidence.reward_ref is None:
-            return None
-        return self.evidence.reward_ref.record.value
+
+EvalResult = EvalRejected | EvalEvidenceWithRef
+
+
+def eval_is_rejected(result: EvalResult) -> TypeGuard[EvalRejected]:
+    return isinstance(result, EvalRejected)
+
+
+def eval_is_success(result: EvalResult) -> TypeGuard[EvalEvidenceWithRef]:
+    return isinstance(result, EvalEvidenceWithRef) and isinstance(
+        result.evidence, EvaluationEvidence
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,9 +111,7 @@ class EvaluationEngine(Protocol):
 
     def expected_model_route(self) -> str: ...
 
-    def validate_request(self, request: EvalRequest) -> None: ...
-
-    def evaluate(self, request: EvalRequest) -> EngineEvaluation: ...
+    def evaluate(self, request: EvalRequest) -> EvalResult: ...
 
     def for_task_ids(self, task_ids: tuple[str, ...]) -> EvaluationEngine: ...
 
@@ -130,12 +143,16 @@ def load_runtime_config(*, class_path: str, raw: bytes) -> EvaluationRuntimeConf
 
 
 __all__ = [
-    "EngineEvaluation",
+    "EvalEvidenceWithRef",
+    "EvalRejected",
     "EvalRequest",
+    "EvalResult",
     "EvaluationEngine",
     "EvaluationPlanSnapshot",
     "EvaluationRuntimeConfig",
     "EvaluationSamplingView",
     "EvaluationTaskView",
+    "eval_is_rejected",
+    "eval_is_success",
     "load_runtime_config",
 ]

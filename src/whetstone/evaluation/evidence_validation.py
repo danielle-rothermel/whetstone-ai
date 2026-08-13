@@ -18,16 +18,13 @@ from whetstone.evaluation.schema import (
     EvaluationComponentTraces,
     EvaluationComponentTracesRef,
     EvaluationEvidence,
-    EvaluationEvidenceRef,
     EvaluationFailureEvidence,
-    EvaluationFailureEvidenceRef,
     EvaluationOutputsRecord,
 )
 from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
 )
-from whetstone.evaluation.protocol import EvalRequest
 from whetstone.experiment.binding import EVAL_CONFIG_RECORD_SCHEMA
 from whetstone.experiment.candidate import CANDIDATE_RECORD_SCHEMA
 from whetstone.experiment.reward import REWARD_SCHEMA, Reward, RewardRef
@@ -158,12 +155,6 @@ class EvaluationEvidenceValidation:
     def _validate_execution_contract(
         self, optim_eval_request: OptimEvalRequest
     ) -> None:
-        request = EvalRequest(
-            request_id=optim_eval_request.eval_request.request_id,
-            candidate=optim_eval_request.eval_request.candidate,
-            metadata=optim_eval_request.eval_request.metadata,
-        )
-        self._engine.validate_request(request)
         policy_ref = self._engine.provider_execution_policy_ref
         _record_ref, content = self._load_exact(
             policy_ref.record_ref,
@@ -430,7 +421,6 @@ class EvaluationEvidenceValidation:
             expected_schema=EVALUATION_EVIDENCE_SCHEMA,
         )
         evidence = EvaluationEvidence.model_validate(content)
-        EvaluationEvidenceRef(record=evidence, record_ref=evidence_ref)
         if evidence.candidate != candidate_ref:
             raise ValueError(
                 "Evaluation Evidence belongs to another candidate"
@@ -501,7 +491,6 @@ class EvaluationEvidenceValidation:
             expected_schema=EVALUATION_FAILURE_SCHEMA,
         )
         failure = EvaluationFailureEvidence.model_validate(content)
-        EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
         if failure.candidate != candidate_ref:
             raise ValueError("Evaluation Failure belongs to another candidate")
         self._validate_engine_eval_context(
