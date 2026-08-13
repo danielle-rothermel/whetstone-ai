@@ -99,6 +99,7 @@ class FakeEvaluationDriver:
         experiment: Experiment,
         sampling: SplitSampling,
         request: EvalRequest,
+        eval_config_hash: str,
         execution_policy: ProviderExecutionPolicy,
         concurrency: int,
         max_wall_seconds: float | None,
@@ -149,7 +150,6 @@ class FakeEvaluationDriver:
         aggregate = unweighted_task_mean(
             aggregate_name=self._aggregate_name,
             graph_hash=experiment.generation_graph.graph_hash,
-            evaluation_binding_hash=request.evaluation_binding.identity_hash(),
             task_rows=tuple(task_rows),
             plan=matrix_plan,
         )

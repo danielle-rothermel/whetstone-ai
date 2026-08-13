@@ -188,7 +188,6 @@ class Aggregate:
     name: str
     graph_hash: str
     eval_config_hash: str
-    evaluation_binding_hash: str
 
     task_count: int
     num_samples: int
@@ -203,9 +202,6 @@ class Aggregate:
     def __post_init__(self) -> None:
         require_full_hash(self.graph_hash, field="graph_hash")
         require_full_hash(self.eval_config_hash, field="eval_config_hash")
-        require_full_hash(
-            self.evaluation_binding_hash, field="evaluation_binding_hash"
-        )
         if self.task_count < 0:
             raise ValueError("task_count cannot be negative")
         if self.num_samples < 1:
@@ -236,7 +232,6 @@ class Aggregate:
             "name": self.name,
             "graph_hash": self.graph_hash,
             "eval_config_hash": self.eval_config_hash,
-            "evaluation_binding_hash": self.evaluation_binding_hash,
             "task_count": self.task_count,
             "num_samples": self.num_samples,
             "aggregation_output": self.aggregation_output.model_dump(
@@ -340,7 +335,6 @@ def unweighted_task_mean(
     *,
     aggregate_name: str,
     graph_hash: str,
-    evaluation_binding_hash: str,
     task_rows: tuple[TaskRows, ...],
     plan: EvaluationMatrixPlan,
 ) -> Aggregate:
@@ -412,7 +406,6 @@ def unweighted_task_mean(
         name=aggregate_name,
         graph_hash=graph_hash,
         eval_config_hash=plan.eval_config.config_hash,
-        evaluation_binding_hash=evaluation_binding_hash,
         task_count=len(planned_task_hashes),
         num_samples=num_samples,
         aggregation_output=output,

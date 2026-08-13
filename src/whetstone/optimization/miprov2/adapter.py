@@ -12,7 +12,7 @@ from whetstone.core.identity import (
 )
 from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import EvalRequest
-from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optimization.adapters import AdapterOutput
 from whetstone.optimization.contracts import (
@@ -356,16 +356,6 @@ class Miprov2Adapter:
                 f"{request.run_id}:miprov2:bootstrap:{attempt.identity_hash()}"
             )
             component = state.control.component_specs[0]
-            evaluation_binding = EvaluationBinding.model_validate(
-                {
-                    **state.control.evaluation_binding.model_dump(mode="json"),
-                    "eval_config": (
-                        plan.state.resolved_eval_binding.eval_config.model_dump(
-                            mode="json"
-                        )
-                    ),
-                }
-            )
             context = Miprov2IntentContext(
                 control_identity_hash=state.control.identity_hash(),
                 run_id=state.run_id,
@@ -376,7 +366,10 @@ class Miprov2Adapter:
                 task_batch_hashes=(attempt.task_hash,),
                 eval_config=plan.state.resolved_eval_binding.eval_config,
                 eval_config_binding=plan.state.resolved_eval_binding,
-                evaluation_binding=evaluation_binding,
+                eval_role=state.control.eval_role,
+                provider_execution_policy_ref=(
+                    state.control.provider_execution_policy_ref
+                ),
                 execution_policy=(
                     plan.state.resolved_eval_binding.request.execution_policy
                 ),
@@ -389,11 +382,9 @@ class Miprov2Adapter:
             optim_eval_request = OptimEvalRequest(
                 optim_run_id=request.run_id,
                 optim_step_index=request.step_index,
-                target_eval_config=context.eval_config,
                 eval_request=EvalRequest(
                     request_id=intent_id,
                     candidate=teacher_candidate.record,
-                    evaluation_binding=evaluation_binding,
                     metadata=metadata_with_purpose("miprov2_bootstrap"),
                 ),
                 expected_reward_policy_hash=(
@@ -432,12 +423,6 @@ class Miprov2Adapter:
             effect_kind = "sample"
         else:
             effect_kind = "promotion"
-        evaluation_binding = EvaluationBinding.model_validate(
-            {
-                **state.control.evaluation_binding.model_dump(mode="json"),
-                "eval_config": effect.eval_config.model_dump(mode="json"),
-            }
-        )
         context = Miprov2IntentContext(
             control_identity_hash=state.control.identity_hash(),
             run_id=state.run_id,
@@ -448,7 +433,10 @@ class Miprov2Adapter:
             task_batch_hashes=effect.task_batch_hashes,
             eval_config=effect.eval_config,
             eval_config_binding=plan.state.resolved_eval_binding,
-            evaluation_binding=evaluation_binding,
+            eval_role=state.control.eval_role,
+            provider_execution_policy_ref=(
+                state.control.provider_execution_policy_ref
+            ),
             execution_policy=effect.execution_policy,
             reward_policy_hash=state.control.reward_policy_hash,
         )
@@ -456,11 +444,9 @@ class Miprov2Adapter:
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.run_id,
             optim_step_index=request.step_index,
-            target_eval_config=effect.eval_config,
             eval_request=EvalRequest(
                 request_id=intent_id,
                 candidate=effect.candidate,
-                evaluation_binding=evaluation_binding,
                 metadata=metadata_with_purpose(effect.purpose),
             ),
             expected_reward_policy_hash=(

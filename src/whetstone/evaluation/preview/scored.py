@@ -16,7 +16,6 @@ from whetstone.evaluation.schema import (
     EvaluationEvidence,
     EvaluationOutputsRecord,
 )
-from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate, CandidateRef
 from whetstone.experiment.reward import RewardRef
 from whetstone.optimization.contracts import IntentResolution
@@ -45,7 +44,6 @@ def build_scored_evaluation(
     *,
     store: ObjectStore,
     engine: EvaluationEngine,
-    binding: EvaluationBinding,
     candidate: Candidate,
     purpose: str,
     run_id: str,
@@ -58,7 +56,6 @@ def build_scored_evaluation(
 ) -> ScoredEvaluation:
     evaluated, resolution = evaluate_and_resolve(
         engine,
-        binding,
         candidate,
         purpose=purpose,
         run_id=run_id,

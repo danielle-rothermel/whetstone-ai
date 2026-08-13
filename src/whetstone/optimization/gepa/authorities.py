@@ -19,7 +19,6 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.evaluation.preview.binding import preview_evaluation_binding
 from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import EvalRequest, EvaluationEngine
 from whetstone.evaluation.schema import (
@@ -28,10 +27,7 @@ from whetstone.evaluation.schema import (
     EvaluationEvidence,
 )
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
-from whetstone.experiment.binding import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    EvaluationBinding,
-)
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import (
     Candidate,
     CandidateRef,
@@ -513,22 +509,15 @@ class CanonicalGepaEvaluationAuthority:
         candidate = self._candidate_assembler.assemble(request.candidate)
         task_ids = tuple(item.data_id for item in request.data)
         subset_engine = self._engine.for_task_ids(task_ids)
-        evaluation_binding = preview_evaluation_binding(
-            subset_engine,
-            campaign=request.slot.context.run_id,
-            provenance_note="gepa_metric",
-        )
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.slot.context.run_id,
             optim_step_index=request.slot.invocation_ordinal,
-            target_eval_config=subset_engine.eval_config_ref,
             eval_request=EvalRequest(
                 request_id=(
                     f"{request.slot.context.run_id}:gepa:"
                     f"{request.identity_hash()}"
                 ),
                 candidate=candidate.record,
-                evaluation_binding=evaluation_binding,
                 metadata=metadata_with_purpose("gepa_metric"),
             ),
             expected_reward_policy_hash=self._control.reward_policy_hash,

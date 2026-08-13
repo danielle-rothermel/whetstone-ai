@@ -21,7 +21,7 @@ from whetstone.evaluation.protocol import (
     EvaluationSamplingView,
     EvaluationTaskView,
 )
-from whetstone.experiment.binding import EvalConfigRef, EvaluationBinding
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.tools.contracts import ToolCall, ToolConfig
 from whetstone.optimization.tools.evaluator import EngineToolEvaluator
@@ -148,7 +148,6 @@ def _graph_rollout_driver_smoke() -> None:
 
     from whetstone.core.blocking_store import open_blocking_sqlite_store
     from whetstone.evaluation.drivers.graph_rollout import GraphRolloutEvaluationDriver
-    from whetstone.evaluation.preview.binding import preview_evaluation_binding
     from whetstone.evaluation.preview.persisted import load_component_traces
     from whetstone.evaluation.protocol import EvalRequest
     from whetstone.evaluation.runtime_engine import RuntimeEvaluationEngine
@@ -187,11 +186,6 @@ def _graph_rollout_driver_smoke() -> None:
         request = EvalRequest(
             request_id="smoke:graph-rollout-driver",
             candidate=experiment.initial_candidate,
-            evaluation_binding=preview_evaluation_binding(
-                engine,
-                campaign="smoke",
-                provenance_note="graph-rollout-driver",
-            ),
             metadata=metadata_with_purpose("smoke"),
         )
         engine.validate_request(request)
@@ -211,7 +205,6 @@ def _reference_runtime_smoke() -> None:
 
     from whetstone.core.blocking_store import open_blocking_sqlite_store
 
-    from whetstone.evaluation.preview.binding import preview_evaluation_binding
     from whetstone.evaluation.protocol import EvalRequest
     from whetstone.evaluation.reference_runtime import (
         ReferenceEvaluationRuntimeConfig,
@@ -238,11 +231,6 @@ def _reference_runtime_smoke() -> None:
         request = EvalRequest(
             request_id="smoke:reference-runtime",
             candidate=engine.experiment.initial_candidate,
-            evaluation_binding=preview_evaluation_binding(
-                engine,
-                campaign="smoke",
-                provenance_note="reference-runtime",
-            ),
             metadata=metadata_with_purpose("smoke"),
         )
         engine.validate_request(request)

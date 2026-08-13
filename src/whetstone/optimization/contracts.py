@@ -229,28 +229,13 @@ class OptimEvalRequest(BaseModel):
 
     optim_run_id: NonEmptyId
     optim_step_index: NonNegativeInt
-    target_eval_config: _binding.EvalConfigRef
     eval_request: EvalRequest
     expected_reward_policy_hash: IdentityHash | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> OptimEvalRequest:
-        binding = self.eval_request.evaluation_binding
-        if self.target_eval_config != binding.eval_config:
-            raise ValueError(
-                "Optim Eval Request target Eval Config must match its exact "
-                "Evaluation Binding"
-            )
-        if binding.role is EvaluationRole.INTERNAL:
-            if self.expected_reward_policy_hash is None:
-                raise ValueError(
-                    "an internal proposal Optim Eval Request requires its "
-                    "expected Reward Policy hash"
-                )
-        elif self.expected_reward_policy_hash is not None:
-            raise ValueError(
-                "an official Optim Eval Request must not expect a Reward Policy"
-            )
+        if self.expected_reward_policy_hash is None:
+            return self
         return self
 
 
@@ -490,10 +475,6 @@ class IntentResolution(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> IntentResolution:
-        if self.resolved_eval_config != self.optim_eval_request.target_eval_config:
-            raise ValueError(
-                "an Intent may resolve only under its exact target Eval Config"
-            )
         if (
             self.outcome is not IntentOutcome.REJECTED
             and self.evaluation_result_ref is None
@@ -551,7 +532,7 @@ class IntentResolution(BaseModel):
                 "only a completed Intent Resolution may carry a Reward"
             )
         if (
-            self.optim_eval_request.eval_request.evaluation_binding.role is EvaluationRole.OFFICIAL
+            self.optim_eval_request.expected_reward_policy_hash is None
             and self.reward_ref is not None
         ):
             raise ValueError(
@@ -559,7 +540,7 @@ class IntentResolution(BaseModel):
             )
         if (
             self.outcome is IntentOutcome.COMPLETED
-            and self.optim_eval_request.eval_request.evaluation_binding.role is EvaluationRole.INTERNAL
+            and self.optim_eval_request.expected_reward_policy_hash is not None
             and self.reward_ref is None
         ):
             raise ValueError(
@@ -825,8 +806,7 @@ class OptimizationStepResult(BaseModel):
                     "Policy"
                 )
             if (
-                optim_request.eval_request.evaluation_binding.role
-                is EvaluationRole.INTERNAL
+                optim_request.expected_reward_policy_hash is not None
                 and optim_request.expected_reward_policy_hash
                 != reward_policy.identity_hash()
             ):

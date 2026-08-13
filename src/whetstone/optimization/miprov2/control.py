@@ -24,10 +24,8 @@ from whetstone.core.identity import (
     require_full_hash,
     typed_ref_for_record,
 )
-from whetstone.experiment.binding import (
-    EvalConfigRef,
-    EvaluationBinding,
-)
+from whetstone.core.roles import EvaluationRole
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import (
     CandidateRef,
     TemplateRenderContract,
@@ -271,7 +269,8 @@ class Miprov2InjectedDefaults(BaseModel):
     bootstrap_eval_source: EvalConfigRef
     validation_eval_source: EvalConfigRef
     reward_policy: RewardPolicy
-    evaluation_binding: EvaluationBinding
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     provider_execution_policy_hash: StrictStr
     task_model_identity_hash: StrictStr
     prompt_adapter: PlainPromptAdapter
@@ -313,7 +312,8 @@ class Miprov2Control(BaseModel):
     bootstrap_eval_source: EvalConfigRef
     validation_eval_source: EvalConfigRef
     reward_policy: RewardPolicy
-    evaluation_binding: EvaluationBinding
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     provider_execution_policy_hash: StrictStr
     task_model_identity_hash: StrictStr
     prompt_adapter_identity_hash: StrictStr
@@ -452,10 +452,8 @@ class Miprov2Control(BaseModel):
                     field="source_valset_task_hashes",
                 )
         _validate_teacher_settings(self.teacher_settings.to_json())
-        if self.evaluation_binding.eval_config != self.validation_eval_source:
-            raise ValueError(
-                "MIPROv2 Evaluation Binding must match validation source"
-            )
+        if self.eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("MIPROv2 requires internal evaluation")
         require_full_hash(
             self.provider_execution_policy_hash,
             field="provider_execution_policy_hash",
@@ -589,8 +587,11 @@ class Miprov2Control(BaseModel):
                 mode="json"
             ),
             "reward_policy": self.reward_policy.model_dump(mode="json"),
-            "evaluation_binding": self.evaluation_binding.model_dump(
-                mode="json"
+            "eval_role": self.eval_role.value,
+            "provider_execution_policy_ref": (
+                None
+                if self.provider_execution_policy_ref is None
+                else self.provider_execution_policy_ref.model_dump(mode="json")
             ),
             "provider_execution_policy_hash": (
                 self.provider_execution_policy_hash
@@ -1292,14 +1293,8 @@ def configure_miprov2(
         bootstrap_eval_source=bootstrap_source_snapshot,
         validation_eval_source=validation_source_snapshot,
         reward_policy=defaults.reward_policy,
-        evaluation_binding=EvaluationBinding.model_validate(
-            {
-                **defaults.evaluation_binding.model_dump(mode="json"),
-                "eval_config": validation_source_snapshot.model_dump(
-                    mode="json"
-                ),
-            }
-        ),
+        eval_role=defaults.eval_role,
+        provider_execution_policy_ref=defaults.provider_execution_policy_ref,
         provider_execution_policy_hash=(
             defaults.provider_execution_policy_hash
         ),

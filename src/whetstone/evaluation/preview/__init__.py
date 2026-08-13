@@ -12,7 +12,6 @@ __all__ = [
     "load_aggregate_value",
     "load_component_traces",
     "load_evaluation_outputs",
-    "preview_evaluation_binding",
     "run_baseline_preview",
     "run_baseline_sweep",
 ]
@@ -33,7 +32,6 @@ _MODULE_EXPORTS = {
     "load_aggregate_value": "whetstone.evaluation.preview.persisted",
     "load_component_traces": "whetstone.evaluation.preview.persisted",
     "load_evaluation_outputs": "whetstone.evaluation.preview.persisted",
-    "preview_evaluation_binding": "whetstone.evaluation.preview.binding",
 }
 
 

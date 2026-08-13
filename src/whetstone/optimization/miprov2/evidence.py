@@ -14,6 +14,7 @@ from pydantic import (
 )
 
 from whetstone.core.identity import (
+    IdentityRef,
     ImmutableJsonObject,
     TypedRef,
     compute_identity_hash,
@@ -35,10 +36,7 @@ from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
 )
-from whetstone.experiment.binding import (
-    EvalConfigRef,
-    EvaluationBinding,
-)
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import CandidateRef, candidate_reference
 from whetstone.experiment.reward import REWARD_SCHEMA, RewardRef
 from whetstone.optimization.contracts import (
@@ -123,7 +121,8 @@ class Miprov2IntentContext(BaseModel):
     task_batch_hashes: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     eval_config_binding: Miprov2EvalConfigBinding
-    evaluation_binding: EvaluationBinding
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     execution_policy: Miprov2EvaluationExecutionPolicy
     reward_policy_hash: StrictStr
     bootstrap_attempt: BootstrapAttemptPlan | None = None
@@ -132,9 +131,6 @@ class Miprov2IntentContext(BaseModel):
 
     @model_validator(mode="after")
     def _validate_context(self) -> Miprov2IntentContext:
-        EvaluationBinding.model_validate(
-            self.evaluation_binding.model_dump(mode="json")
-        )
         for field in (
             "control_identity_hash",
             "effect_identity_hash",
@@ -164,8 +160,7 @@ class Miprov2IntentContext(BaseModel):
             or request.num_samples != 1
             or request.execution_policy != self.execution_policy
             or self.eval_config_binding.eval_config != self.eval_config
-            or self.evaluation_binding.eval_config != self.eval_config
-            or self.evaluation_binding.role is not EvaluationRole.INTERNAL
+            or self.eval_role is not EvaluationRole.INTERNAL
         ):
             raise ValueError(
                 "intent context conflicts with exact Eval Config binding"
@@ -229,8 +224,11 @@ class Miprov2IntentContext(BaseModel):
             "eval_config_binding": self.eval_config_binding.model_dump(
                 mode="json"
             ),
-            "evaluation_binding": self.evaluation_binding.model_dump(
-                mode="json"
+            "eval_role": self.eval_role.value,
+            "provider_execution_policy_ref": (
+                None
+                if self.provider_execution_policy_ref is None
+                else self.provider_execution_policy_ref.model_dump(mode="json")
             ),
             "execution_policy": self.execution_policy.model_dump(mode="json"),
             "reward_policy_hash": self.reward_policy_hash,
@@ -316,15 +314,11 @@ def load_miprov2_intent_context(
         optim_eval_request.eval_request.request_id,
         optim_eval_request.optim_run_id,
         candidate_ref,
-        optim_eval_request.target_eval_config,
-        optim_eval_request.eval_request.evaluation_binding,
         optim_eval_request.expected_reward_policy_hash,
     ) != (
         context.intent_id,
         context.run_id,
         context.candidate,
-        context.eval_config,
-        context.evaluation_binding,
         context.reward_policy_hash,
     ):
         raise ValueError("MIPROv2 intent conflicts with persisted context")
@@ -388,16 +382,19 @@ class Miprov2EvidenceResolver:
             self.store.get(evidence_ref.reference)
         )
         EvaluationEvidenceRef(record=evidence, record_ref=evidence_ref)
-        expected_binding = resolution.optim_eval_request.eval_request.evaluation_binding
         if (
             evidence.candidate,
-            evidence.evaluation_binding,
+            evidence.eval_config_ref,
+            evidence.eval_role,
+            evidence.provider_execution_policy_ref,
             evidence.metadata,
             evidence.task_hashes,
             evidence.num_samples,
         ) != (
             context.candidate,
-            expected_binding,
+            context.eval_config,
+            EvaluationRole.INTERNAL,
+            context.provider_execution_policy_ref,
             resolution.optim_eval_request.eval_request.metadata,
             context.task_batch_hashes,
             1,
@@ -405,8 +402,8 @@ class Miprov2EvidenceResolver:
             raise ValueError(
                 "evaluation evidence conflicts with exact MIPROv2 context"
             )
-        if expected_binding.role is not EvaluationRole.INTERNAL:
-            raise ValueError("MIPROv2 requires an internal Evaluation Binding")
+        if evidence.eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("MIPROv2 requires internal evaluation")
         accounting = _row_accounting(evidence)
         if accounting.planned != len(context.task_batch_hashes):
             raise ValueError("evaluation row plan conflicts with task batch")
@@ -422,8 +419,9 @@ class Miprov2EvidenceResolver:
         EvaluationComponentTracesRef(record=traces, record_ref=traces_ref)
         if (
             traces.candidate,
-            traces.evaluation_binding,
-            traces.evaluation_role,
+            traces.eval_config_ref,
+            traces.eval_role,
+            traces.provider_execution_policy_ref,
             traces.graph_hash,
             traces.metadata,
             traces.split_role,
@@ -431,11 +429,12 @@ class Miprov2EvidenceResolver:
             traces.num_samples,
         ) != (
             evidence.candidate,
-            evidence.evaluation_binding,
-            EvaluationRole.INTERNAL,
+            evidence.eval_config_ref,
+            evidence.eval_role,
+            evidence.provider_execution_policy_ref,
             evidence.graph_hash,
             evidence.metadata,
-            "internal",
+            "internal_eval",
             evidence.task_hashes,
             evidence.num_samples,
         ):
@@ -502,9 +501,8 @@ class Miprov2EvidenceResolver:
             task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
-            evaluation_binding=(
-                resolution.optim_eval_request.eval_request.evaluation_binding
-            ),
+            eval_role=context.eval_role,
+            provider_execution_policy_ref=context.provider_execution_policy_ref,
             evaluation_result_ref=resolved.evidence_ref,
             expected_reward_policy_hash=context.reward_policy_hash,
             reward_ref=resolved.reward_ref,
@@ -545,11 +543,15 @@ class Miprov2EvidenceResolver:
         EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
         if (
             failure.candidate,
-            failure.evaluation_binding,
+            failure.eval_config_ref,
+            failure.eval_role,
+            failure.provider_execution_policy_ref,
             failure.metadata,
         ) != (
             context.candidate,
-            resolution.optim_eval_request.eval_request.evaluation_binding,
+            context.eval_config,
+            context.eval_role,
+            context.provider_execution_policy_ref,
             resolution.optim_eval_request.eval_request.metadata,
         ):
             raise ValueError(
@@ -579,9 +581,8 @@ class Miprov2EvidenceResolver:
             task_batch_hashes=context.task_batch_hashes,
             eval_config=context.eval_config,
             eval_config_binding=context.eval_config_binding,
-            evaluation_binding=(
-                resolution.optim_eval_request.eval_request.evaluation_binding
-            ),
+            eval_role=context.eval_role,
+            provider_execution_policy_ref=context.provider_execution_policy_ref,
             evaluation_result_ref=failure_ref,
             expected_reward_policy_hash=context.reward_policy_hash,
             reward_ref=None,
@@ -703,11 +704,15 @@ class Miprov2EvidenceResolver:
         EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
         if (
             failure.candidate,
-            failure.evaluation_binding,
+            failure.eval_config_ref,
+            failure.eval_role,
+            failure.provider_execution_policy_ref,
             failure.metadata,
         ) != (
             context.candidate,
-            context.evaluation_binding,
+            context.eval_config,
+            context.eval_role,
+            context.provider_execution_policy_ref,
             resolution.optim_eval_request.eval_request.metadata,
         ):
             raise ValueError("bootstrap failure conflicts with exact context")

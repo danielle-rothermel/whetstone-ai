@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from whetstone.core.roles import EvaluationRole
 from whetstone.core.identity import (
     IdentityRef,
     TypedRef,
@@ -28,10 +29,7 @@ from whetstone.evaluation.schema_names import (
 from whetstone.evaluation.schema_names import (
     EVALUATION_FAILURE_SCHEMA as _EVALUATION_FAILURE_SCHEMA,
 )
-from whetstone.experiment.binding import (
-    EvalConfigRef,
-    EvaluationBinding,
-)
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import (
     CandidateRef,
     candidate_reference,
@@ -343,7 +341,8 @@ class Miprov2EvaluationObservation(_IdentityRecord):
     task_batch_hashes: tuple[StrictStr, ...]
     eval_config: EvalConfigRef
     eval_config_binding: Miprov2EvalConfigBinding
-    evaluation_binding: EvaluationBinding
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     evaluation_result_ref: TypedRef
     expected_reward_policy_hash: StrictStr
     reward_ref: RewardRef | None
@@ -361,8 +360,11 @@ class Miprov2EvaluationObservation(_IdentityRecord):
             "eval_config_binding": self.eval_config_binding.model_dump(
                 mode="json"
             ),
-            "evaluation_binding": self.evaluation_binding.model_dump(
-                mode="json"
+            "eval_role": self.eval_role.value,
+            "provider_execution_policy_ref": (
+                None
+                if self.provider_execution_policy_ref is None
+                else self.provider_execution_policy_ref.model_dump(mode="json")
             ),
             "evaluation_result_ref": self.evaluation_result_ref.model_dump(
                 mode="json"
@@ -379,9 +381,6 @@ class Miprov2EvaluationObservation(_IdentityRecord):
     @model_validator(mode="after")
     def _validate_evidence(self) -> Miprov2EvaluationObservation:
         CandidateRef.model_validate(self.candidate.model_dump(mode="json"))
-        EvaluationBinding.model_validate(
-            self.evaluation_binding.model_dump(mode="json")
-        )
         Miprov2EvalConfigBinding.model_validate(
             self.eval_config_binding.model_dump(mode="json")
         )
@@ -410,10 +409,8 @@ class Miprov2EvaluationObservation(_IdentityRecord):
             raise ValueError(
                 "evaluation Eval Config differs from its derivation binding"
             )
-        if self.evaluation_binding.eval_config != self.eval_config:
-            raise ValueError(
-                "canonical Evaluation Binding differs from exact Eval Config"
-            )
+        if self.eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("MIPROv2 requires internal evaluation")
         if (
             self.evaluation_result_ref.schema_name
             == _EVALUATION_EVIDENCE_SCHEMA

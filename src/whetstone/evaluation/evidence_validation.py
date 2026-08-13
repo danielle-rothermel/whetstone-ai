@@ -27,6 +27,7 @@ from whetstone.evaluation.schema_names import (
     EVALUATION_EVIDENCE_SCHEMA,
     EVALUATION_FAILURE_SCHEMA,
 )
+from whetstone.evaluation.protocol import EvalRequest
 from whetstone.experiment.binding import EVAL_CONFIG_RECORD_SCHEMA
 from whetstone.experiment.candidate import CANDIDATE_RECORD_SCHEMA
 from whetstone.experiment.reward import REWARD_SCHEMA, Reward, RewardRef
@@ -37,6 +38,7 @@ from whetstone.optimization.contracts import (
     OptimEvalRequest,
     ResolutionClass,
 )
+from whetstone.experiment.sampling import evaluation_role_for_split
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
@@ -98,12 +100,9 @@ class EvaluationEvidenceValidation:
             raise ValueError("persisted candidate reference diverged")
         eval_config, _ = self._store.put(
             EVAL_CONFIG_RECORD_SCHEMA,
-            optim_eval_request.target_eval_config.record.model_dump(mode="json"),
+            self._engine.eval_config_ref.record.model_dump(mode="json"),
         )
-        if (
-            self._typed_ref(eval_config)
-            != optim_eval_request.target_eval_config.record_ref
-        ):
+        if self._typed_ref(eval_config) != self._engine.eval_config_ref.record_ref:
             raise ValueError("persisted Eval Config reference diverged")
         policy, _ = self._store.put(
             PROVIDER_EXECUTION_POLICY_SCHEMA,
@@ -133,15 +132,27 @@ class EvaluationEvidenceValidation:
                 "candidate"
             )
         _eval_config_ref, eval_config_content = self._load_exact(
-            optim_eval_request.target_eval_config.record_ref,
+            self._engine.eval_config_ref.record_ref,
             expected_schema=EVAL_CONFIG_RECORD_SCHEMA,
         )
         if eval_config_content != (
-            optim_eval_request.target_eval_config.record.model_dump(mode="json")
+            self._engine.eval_config_ref.record.model_dump(mode="json")
         ):
             raise ValueError(
-                "durable Eval Config does not equal the Optim Eval Request "
-                "target"
+                "durable Eval Config does not equal the engine's exact config"
+            )
+
+    def _expected_eval_role(self):
+        return evaluation_role_for_split(self._plan().split_role)
+
+    def _validate_engine_eval_context(self, *, eval_config_ref, eval_role, provider_execution_policy_ref) -> None:
+        if eval_config_ref != self._engine.eval_config_ref:
+            raise ValueError("evidence uses another Eval Config")
+        if eval_role is not self._expected_eval_role():
+            raise ValueError("evidence uses another Evaluation Role")
+        if provider_execution_policy_ref != self._engine.provider_execution_policy_ref:
+            raise ValueError(
+                "evidence uses another Provider Execution Policy"
             )
 
     def _validate_execution_contract(
@@ -150,18 +161,10 @@ class EvaluationEvidenceValidation:
         request = EvalRequest(
             request_id=optim_eval_request.eval_request.request_id,
             candidate=optim_eval_request.eval_request.candidate,
-            evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
             metadata=optim_eval_request.eval_request.metadata,
         )
         self._engine.validate_request(request)
-        policy_ref = (
-            optim_eval_request.eval_request.evaluation_binding
-            .provider_execution_policy_ref
-        )
-        if policy_ref is None:
-            raise ValueError(
-                "Evaluation Binding must name a Provider Execution Policy"
-            )
+        policy_ref = self._engine.provider_execution_policy_ref
         _record_ref, content = self._load_exact(
             policy_ref.record_ref,
             expected_schema=PROVIDER_EXECUTION_POLICY_SCHEMA,
@@ -195,18 +198,11 @@ class EvaluationEvidenceValidation:
             )
         if outputs.candidate != candidate_ref:
             raise ValueError("evaluation outputs belong to another candidate")
-        if (
-            outputs.evaluation_binding
-            != intent.eval_request.evaluation_binding
-        ):
-            raise ValueError(
-                "evaluation outputs use another Evaluation Binding"
-            )
-        if (
-            outputs.evaluation_role
-            is not intent.eval_request.evaluation_binding.role
-        ):
-            raise ValueError("evaluation outputs use another Evaluation Role")
+        self._validate_engine_eval_context(
+            eval_config_ref=outputs.eval_config_ref,
+            eval_role=outputs.eval_role,
+            provider_execution_policy_ref=outputs.provider_execution_policy_ref,
+        )
         if outputs.graph_hash != plan.graph_hash:
             raise ValueError("evaluation outputs use another generation graph")
         if outputs.metadata != intent.eval_request.metadata:
@@ -244,16 +240,11 @@ class EvaluationEvidenceValidation:
         EvaluationComponentTracesRef(record=traces, record_ref=traces_ref)
         if traces.candidate != candidate_ref:
             raise ValueError("component traces belong to another candidate")
-        if (
-            traces.evaluation_binding
-            != intent.eval_request.evaluation_binding
-        ):
-            raise ValueError("component traces use another Evaluation Binding")
-        if (
-            traces.evaluation_role
-            is not intent.eval_request.evaluation_binding.role
-        ):
-            raise ValueError("component traces use another Evaluation Role")
+        self._validate_engine_eval_context(
+            eval_config_ref=traces.eval_config_ref,
+            eval_role=traces.eval_role,
+            provider_execution_policy_ref=traces.provider_execution_policy_ref,
+        )
         if traces.graph_hash != plan.graph_hash:
             raise ValueError("component traces use another generation graph")
         if traces.metadata != intent.eval_request.metadata:
@@ -295,7 +286,6 @@ class EvaluationEvidenceValidation:
             "name",
             "graph_hash",
             "eval_config_hash",
-            "evaluation_binding_hash",
             "task_count",
             "num_samples",
             "aggregation_output",
@@ -310,7 +300,6 @@ class EvaluationEvidenceValidation:
             name=content["name"],
             graph_hash=content["graph_hash"],
             eval_config_hash=content["eval_config_hash"],
-            evaluation_binding_hash=content["evaluation_binding_hash"],
             task_count=content["task_count"],
             num_samples=content["num_samples"],
             aggregation_output=AggregationOutput.model_validate(
@@ -331,13 +320,8 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "Evaluation Evidence graph config is inconsistent"
             )
-        if aggregate.eval_config_hash != intent.target_eval_config.config_hash:
+        if aggregate.eval_config_hash != self._engine.eval_config_ref.config_hash:
             raise ValueError("Aggregate uses another Eval Config")
-        if (
-            aggregate.evaluation_binding_hash
-            != intent.eval_request.evaluation_binding.identity_hash()
-        ):
-            raise ValueError("Aggregate uses another Evaluation Binding")
         if aggregate.task_count != len(evidence.task_hashes):
             raise ValueError("Aggregate task count is inconsistent")
         if aggregate.num_samples != evidence.num_samples:
@@ -451,13 +435,11 @@ class EvaluationEvidenceValidation:
             raise ValueError(
                 "Evaluation Evidence belongs to another candidate"
             )
-        if (
-            evidence.evaluation_binding
-            != intent.eval_request.evaluation_binding
-        ):
-            raise ValueError(
-                "Evaluation Evidence uses another Evaluation Binding"
-            )
+        self._validate_engine_eval_context(
+            eval_config_ref=evidence.eval_config_ref,
+            eval_role=evidence.eval_role,
+            provider_execution_policy_ref=evidence.provider_execution_policy_ref,
+        )
         if evidence.metadata != intent.eval_request.metadata:
             raise ValueError("Evaluation Evidence uses another purpose")
         if evidence.dataset_hash != plan.dataset_hash:
@@ -502,7 +484,7 @@ class EvaluationEvidenceValidation:
                 aggregate_name=evidence.aggregate_name,
                 aggregate_value=evidence.aggregate_value,
             )
-            if reward.evidence_role is not intent.eval_request.evaluation_binding.role:
+            if reward.evidence_role is not self._expected_eval_role():
                 raise ValueError("Reward uses another Evaluation Role")
             expected_reward_evidence = (evidence.aggregate_ref,)
         if resolution.reward_evidence_refs != expected_reward_evidence:
@@ -522,13 +504,11 @@ class EvaluationEvidenceValidation:
         EvaluationFailureEvidenceRef(record=failure, record_ref=failure_ref)
         if failure.candidate != candidate_ref:
             raise ValueError("Evaluation Failure belongs to another candidate")
-        if (
-            failure.evaluation_binding
-            != intent.eval_request.evaluation_binding
-        ):
-            raise ValueError(
-                "Evaluation Failure uses another Evaluation Binding"
-            )
+        self._validate_engine_eval_context(
+            eval_config_ref=failure.eval_config_ref,
+            eval_role=failure.eval_role,
+            provider_execution_policy_ref=failure.provider_execution_policy_ref,
+        )
         if failure.metadata != intent.eval_request.metadata:
             raise ValueError("Evaluation Failure uses another purpose")
         if (

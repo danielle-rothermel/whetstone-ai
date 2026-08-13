@@ -13,10 +13,7 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.experiment.binding import (
-    EVAL_CONFIG_RECORD_SCHEMA,
-    EVALUATION_BINDING_SCHEMA,
-)
+from whetstone.experiment.binding import EVAL_CONFIG_RECORD_SCHEMA
 from whetstone.experiment.candidate import (
     CANDIDATE_RECORD_SCHEMA,
     Candidate,
@@ -273,27 +270,6 @@ class OptimizationRunStore:
         if candidate != expected:
             raise ValueError(
                 "Optim Eval Request candidate ref is not its exact record"
-            )
-        persisted_eval = self._put(
-            EVAL_CONFIG_RECORD_SCHEMA,
-            optim_eval_request.target_eval_config.record.model_dump(mode="json"),
-        )
-        if persisted_eval != optim_eval_request.target_eval_config.record_ref:
-            raise ValueError(
-                "Optim Eval Request Eval Config ref is not its exact record"
-            )
-        binding_content = (
-            optim_eval_request.eval_request.evaluation_binding.record_content()
-        )
-        persisted_binding = self._put(
-            EVALUATION_BINDING_SCHEMA, binding_content
-        )
-        if persisted_binding != typed_ref_for_record(
-            EVALUATION_BINDING_SCHEMA, binding_content
-        ):
-            raise ValueError(
-                "Optim Eval Request Evaluation Binding ref failed content "
-                "validation"
             )
 
     def _persist_snapshot(

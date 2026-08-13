@@ -38,19 +38,23 @@ class SamplingTaskLike(Protocol):
     def task_id(self) -> str: ...
 
 
+def evaluation_role_for_split(split_role: str) -> EvaluationRole:
+    """Return the exact evidence role owned by a sampling split."""
+    if split_role == INTERNAL_EVAL:
+        return EvaluationRole.INTERNAL
+    if split_role == OFFICIAL:
+        return EvaluationRole.OFFICIAL
+    raise ValueError(f"unknown evaluation split role {split_role!r}")
+
+
 def validate_evaluation_role_for_split(
     *, split_role: str, evaluation_role: EvaluationRole
 ) -> None:
     """Require the exact evidence role owned by a sampling split."""
-    if split_role == INTERNAL_EVAL:
-        expected = EvaluationRole.INTERNAL
-    elif split_role == OFFICIAL:
-        expected = EvaluationRole.OFFICIAL
-    else:
-        raise ValueError(f"unknown evaluation split role {split_role!r}")
+    expected = evaluation_role_for_split(split_role)
     if evaluation_role is not expected:
         raise ValueError(
-            f"evaluation binding role {evaluation_role.value!r} does not "
+            f"evaluation role {evaluation_role.value!r} does not "
             f"match split role {split_role!r}"
         )
 

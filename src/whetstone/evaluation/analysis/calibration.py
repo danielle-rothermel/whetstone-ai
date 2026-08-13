@@ -20,9 +20,9 @@ from whetstone.evaluation.protocol import (
     EvalRequest,
     EvaluationEngine,
 )
-from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
-from whetstone.experiment.sampling import INTERNAL_EVAL
+from whetstone.experiment.sampling import INTERNAL_EVAL, evaluation_role_for_split
 
 __all__ = [
     "AnchorCalibrationResult",
@@ -32,36 +32,27 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class AnchorCalibrationResult:
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
     baseline: EngineEvaluation
     ceiling: EngineEvaluation
     paired_delta_ci: BootstrapCI
     power: PowerResult
 
 
-def _subset_binding(
-    binding: EvaluationBinding,
-    engine: EvaluationEngine,
-) -> EvaluationBinding:
-    return EvaluationBinding.model_validate(
-        {
-            **binding.model_dump(mode="json"),
-            "eval_config": engine.eval_config_ref.model_dump(mode="json"),
-        }
-    )
-
-
 def _validate_anchor_evidence(
     *,
     evaluated: EngineEvaluation,
-    expected_binding: EvaluationBinding,
+    expected_eval_config_ref: EvalConfigRef,
+    expected_eval_role: EvaluationRole,
     expected_task_ids: tuple[str, ...],
     expected_samples: int,
     expected_reward_policy_hash: str,
 ) -> None:
     evidence = evaluated.evidence
-    if evidence.evaluation_binding != expected_binding:
-        raise ValueError("calibration evidence changed its Evaluation Binding")
+    if evidence.eval_config_ref != expected_eval_config_ref:
+        raise ValueError("calibration evidence changed its Eval Config")
+    if evidence.eval_role is not expected_eval_role:
+        raise ValueError("calibration evidence changed its Evaluation Role")
     if evidence.task_hashes != expected_task_ids:
         raise ValueError("calibration evidence changed task identity order")
     if evidence.num_samples != expected_samples:
@@ -88,7 +79,6 @@ def _validate_anchor_evidence(
 def run_anchor_calibration(
     *,
     engine: EvaluationEngine,
-    evaluation_binding: EvaluationBinding,
     baseline_candidate: Candidate,
     ceiling_candidate: Candidate,
     baseline_purpose: str,
@@ -103,20 +93,9 @@ def run_anchor_calibration(
     ceiling_log_label: str = "comparison anchor",
     log: Callable[[str], None] | None = None,
 ) -> AnchorCalibrationResult:
-    if evaluation_binding.role is not EvaluationRole.INTERNAL:
-        raise ValueError("anchor calibration requires an internal binding")
-    if evaluation_binding.eval_config != engine.eval_config_ref:
-        raise ValueError(
-            "calibration binding must name the engine's exact Eval Config"
-        )
-    if (
-        evaluation_binding.provider_execution_policy_ref
-        != engine.provider_execution_policy_ref
-    ):
-        raise ValueError(
-            "calibration binding must name the engine's exact Provider "
-            "Execution Policy"
-        )
+    expected_eval_role = evaluation_role_for_split(engine.sampling.split_role)
+    if expected_eval_role is not EvaluationRole.INTERNAL:
+        raise ValueError("anchor calibration requires internal evaluation")
     if engine.sampling.split_role != INTERNAL_EVAL:
         raise ValueError(
             "anchor calibration requires the internal sampling split"
@@ -134,17 +113,14 @@ def run_anchor_calibration(
 
     calibration_task_ids = calibration_task_hashes(engine, task_ids)
     subset_engine = engine.for_task_ids(calibration_task_ids)
-    subset_binding = _subset_binding(evaluation_binding, subset_engine)
     baseline_request = EvalRequest(
         request_id=f"calibration:{baseline_purpose}",
         candidate=baseline_candidate,
-        evaluation_binding=subset_binding,
         metadata=metadata_with_purpose(baseline_purpose),
     )
     ceiling_request = EvalRequest(
         request_id=f"calibration:{ceiling_purpose}",
         candidate=ceiling_candidate,
-        evaluation_binding=subset_binding,
         metadata=metadata_with_purpose(ceiling_purpose),
     )
 
@@ -177,10 +153,12 @@ def run_anchor_calibration(
         )
     samples = subset_engine.sampling.num_samples
     reward_policy_hash = subset_engine.reward_policy_identity_hash()
+    expected_eval_config_ref = subset_engine.eval_config_ref
     for evaluated in (baseline, ceiling):
         _validate_anchor_evidence(
             evaluated=evaluated,
-            expected_binding=subset_binding,
+            expected_eval_config_ref=expected_eval_config_ref,
+            expected_eval_role=expected_eval_role,
             expected_task_ids=calibration_task_ids,
             expected_samples=samples,
             expected_reward_policy_hash=reward_policy_hash,
@@ -203,7 +181,7 @@ def run_anchor_calibration(
         config=power_config,
     )
     return AnchorCalibrationResult(
-        evaluation_binding=subset_binding,
+        eval_config_ref=expected_eval_config_ref,
         baseline=baseline,
         ceiling=ceiling,
         paired_delta_ci=paired_delta_ci,

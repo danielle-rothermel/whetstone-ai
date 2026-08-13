@@ -18,10 +18,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvaluationRole
-from whetstone.experiment.binding import (
-    EvalConfigRef,
-    EvaluationBinding,
-)
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.optimization.codex.proposer import CodexCliProposerConfig
 from whetstone.optimization.copro.proposal_contract import (
     CoproProposalContractRecord,
@@ -50,7 +47,9 @@ class CoproInjectedDefaults(BaseModel):
 
     prompt_model: CoproProposerConfig
     proposal_contract: CoproProposalContractRecord
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     expected_reward_policy_hash: StrictStr
     provider_execution_policy_hash: StrictStr
     prompt_adapter: PlainPromptAdapter
@@ -65,26 +64,21 @@ class CoproInjectedDefaults(BaseModel):
             self.provider_execution_policy_hash,
             field="provider_execution_policy_hash",
         )
-        if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
-            raise ValueError("COPRO requires an internal Evaluation Binding")
+        if self.eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO requires internal evaluation")
         return self
 
 
 class CoproControl(BaseModel):
-    """Fully resolved, identity-bearing COPRO construction.
-
-    This is the persisted optimizer Config behind a COPRO run. It binds the
-    algorithm version, its own prompt schema, provider attempt policy, prompt
-    projection, resolved proposer route, resolved metric, and DSPy-compatible
-    hyperparameters. Generic proposer protocol versions are intentionally not
-    substitutes for the algorithm-specific prompt schema.
-    """
+    """Fully resolved, identity-bearing COPRO construction."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: CoproProposerConfig
     proposal_contract: CoproProposalContractRecord
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     expected_reward_policy_hash: StrictStr
     breadth: StrictInt = 10
     depth: StrictInt = 3
@@ -119,8 +113,8 @@ class CoproControl(BaseModel):
             self.prompt_adapter_identity_hash,
             field="prompt_adapter_identity_hash",
         )
-        if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
-            raise ValueError("COPRO requires an internal Evaluation Binding")
+        if self.eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO requires internal evaluation")
         if self.algorithm_version != COPRO_ALGORITHM_VERSION:
             raise ValueError("COPRO algorithm_version is fixed")
         if self.proposal_prompt_schema_tag != COPRO_PROPOSAL_PROMPT_SCHEMA_TAG:
@@ -146,10 +140,13 @@ class CoproControl(BaseModel):
             "proposal_contract": self.proposal_contract.model_dump(
                 mode="json"
             ),
-            "evaluation_binding": {
-                "identity_hash": self.evaluation_binding.identity_hash(),
-                "record": self.evaluation_binding.model_dump(mode="json"),
-            },
+            "eval_config_ref": self.eval_config_ref.model_dump(mode="json"),
+            "eval_role": self.eval_role.value,
+            "provider_execution_policy_ref": (
+                None
+                if self.provider_execution_policy_ref is None
+                else self.provider_execution_policy_ref.model_dump(mode="json")
+            ),
             "expected_reward_policy_hash": self.expected_reward_policy_hash,
             "breadth": self.breadth,
             "depth": self.depth,
@@ -167,8 +164,6 @@ class CoproControl(BaseModel):
         return self.model_dump(mode="json")
 
     def reference(self) -> IdentityRef:
-        """Return the exact content and identity binding for this control."""
-
         return IdentityRef(
             record_ref=typed_ref_for_record(
                 COPRO_CONTROL_SCHEMA,
@@ -178,8 +173,6 @@ class CoproControl(BaseModel):
         )
 
     def require_identity_hash(self, persisted_hash: str) -> None:
-        """Reject a run/request bound to conflicting persisted controls."""
-
         require_full_hash(persisted_hash, field="optimizer_config_hash")
         if persisted_hash != self.identity_hash():
             raise ValueError(
@@ -187,8 +180,6 @@ class CoproControl(BaseModel):
             )
 
     def step_hyperparameters(self, *, iteration: int) -> dict[str, Any]:
-        """Project resolved controls onto the durable step protocol."""
-
         if iteration < 0 or iteration >= self.depth:
             raise ValueError("COPRO iteration exceeds configured depth")
         return {
@@ -196,8 +187,12 @@ class CoproControl(BaseModel):
             "depth": self.depth,
             "track_stats": self.track_stats,
             "round_index": iteration,
-            "evaluation_binding": self.evaluation_binding.model_dump(
-                mode="json"
+            "eval_config_ref": self.eval_config_ref.model_dump(mode="json"),
+            "eval_role": self.eval_role.value,
+            "provider_execution_policy_ref": (
+                None
+                if self.provider_execution_policy_ref is None
+                else self.provider_execution_policy_ref.model_dump(mode="json")
             ),
             "expected_reward_policy_hash": self.expected_reward_policy_hash,
             "algorithm_version": self.algorithm_version,
@@ -223,30 +218,18 @@ def configure_copro(
     *,
     defaults: CoproInjectedDefaults,
 ) -> CoproControl:
-    """Resolve DSPy's public COPRO arguments through explicit defaults.
-
-    ``None`` means the corresponding binding from ``defaults``. There is no
-    ambient model, metric, provider policy, prompt adapter, or COPRO-owned
-    sampling temperature.
-    """
-
     resolved_prompt_model = (
         defaults.prompt_model if prompt_model is None else prompt_model
     )
-    resolved_binding = (
-        defaults.evaluation_binding
-        if metric is None
-        else EvaluationBinding.model_validate(
-            {
-                **defaults.evaluation_binding.model_dump(mode="json"),
-                "eval_config": metric.model_dump(mode="json"),
-            }
-        )
+    resolved_eval_config = (
+        defaults.eval_config_ref if metric is None else metric
     )
     return CoproControl(
         prompt_model=resolved_prompt_model,
         proposal_contract=defaults.proposal_contract,
-        evaluation_binding=resolved_binding,
+        eval_config_ref=resolved_eval_config,
+        eval_role=defaults.eval_role,
+        provider_execution_policy_ref=defaults.provider_execution_policy_ref,
         expected_reward_policy_hash=defaults.expected_reward_policy_hash,
         breadth=breadth,
         depth=depth,

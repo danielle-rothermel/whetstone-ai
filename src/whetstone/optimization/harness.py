@@ -748,18 +748,7 @@ class OptimizationHarness(OptimizationRunStore):
                     "Optim Eval Request candidate is not an exact Step output "
                     "candidate"
                 )
-            if (
-                optim_eval_request.target_eval_config
-                != optim_eval_request.eval_request.evaluation_binding.eval_config
-            ):
-                raise ValueError(
-                    "Optim Eval Request target Eval Config must match its exact "
-                    "Evaluation Binding"
-                )
-            if (
-                optim_eval_request.eval_request.evaluation_binding.role
-                is EvaluationRole.INTERNAL
-            ):
+            if optim_eval_request.expected_reward_policy_hash is not None:
                 if (
                     reward_policy is None
                     or optim_eval_request.expected_reward_policy_hash
@@ -769,10 +758,6 @@ class OptimizationHarness(OptimizationRunStore):
                         "Optim Eval Request must expect the exact run Reward "
                         "Policy"
                     )
-            elif optim_eval_request.expected_reward_policy_hash is not None:
-                raise ValueError(
-                    "official Optim Eval Request must not expect a Reward Policy"
-                )
 
     def _resolve_intents(
         self,
@@ -969,13 +954,6 @@ class OptimizationHarness(OptimizationRunStore):
         if resolution.optim_eval_request != optim_eval_request:
             raise ValueError(
                 "EvaluationService resolved another exact Optim Eval Request"
-            )
-        if (
-            resolution.resolved_eval_config
-            != optim_eval_request.target_eval_config
-        ):
-            raise ValueError(
-                "Intent Resolution used another exact Eval Config"
             )
         if resolution.evaluation_result_ref is not None:
             self._validate_stored_ref(

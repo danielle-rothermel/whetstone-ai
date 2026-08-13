@@ -39,7 +39,6 @@ from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.binding import (
     EVAL_CONFIG_RECORD_SCHEMA,
     EvalConfigRef,
-    EvaluationBinding,
     eval_config_reference,
 )
 from whetstone.experiment.candidate import (
@@ -49,7 +48,8 @@ from whetstone.experiment.candidate import (
 )
 from whetstone.experiment.env import Experiment
 from whetstone.experiment.reward import REWARD_SCHEMA, reward_reference
-from whetstone.experiment.sampling import SplitSampling, derive_split_sampling
+from whetstone.experiment.sampling import SplitSampling, derive_split_sampling, evaluation_role_for_split
+from whetstone.core.roles import EvaluationRole
 from whetstone.provider.policy import (
     PROVIDER_EXECUTION_POLICY_SCHEMA,
     ProviderExecutionPolicy,
@@ -217,7 +217,6 @@ class RuntimeEvaluationEngine:
         self._driver.preflight(candidate)
 
     def validate_request(self, request: EvalRequest) -> None:
-        self._validate_binding(request.evaluation_binding)
         self.preflight(request.candidate)
 
     def evaluate(self, request: EvalRequest) -> EngineEvaluation:
@@ -226,6 +225,7 @@ class RuntimeEvaluationEngine:
             experiment=self._experiment,
             sampling=self._sampling,
             request=request,
+            eval_config_hash=self.eval_config_ref.config_hash,
             execution_policy=self._execution_policy,
             concurrency=self._concurrency,
             max_wall_seconds=self._max_wall_seconds,
@@ -251,19 +251,8 @@ class RuntimeEvaluationEngine:
                     "binding or exact derived subset"
                 )
 
-    def _validate_binding(self, binding: EvaluationBinding) -> None:
-        if binding.eval_config != self.eval_config_ref:
-            raise ValueError(
-                "evaluation binding must name the engine's exact Eval Config"
-            )
-        if (
-            binding.provider_execution_policy_ref
-            != self.provider_execution_policy_ref
-        ):
-            raise ValueError(
-                "evaluation binding must name the engine's exact Provider "
-                "Execution Policy"
-            )
+    def _eval_role(self) -> EvaluationRole:
+        return evaluation_role_for_split(self._sampling.split_role)
 
     def _sampling_view(self) -> _EngineSamplingView:
         task_hashes = self._sampling.task_set.task_hashes
@@ -301,8 +290,9 @@ class RuntimeEvaluationEngine:
         return EvaluationOutputsRecord(
             schema_version=EVALUATION_OUTPUTS_SCHEMA_VERSION,
             candidate=candidate_reference(request.candidate),
-            evaluation_binding=request.evaluation_binding,
-            evaluation_role=request.evaluation_binding.role,
+            eval_config_ref=self.eval_config_ref,
+            eval_role=self._eval_role(),
+            provider_execution_policy_ref=self.provider_execution_policy_ref,
             graph_hash=self._experiment.generation_graph.graph_hash,
             metadata=request.metadata,
             split_role=self._sampling.split_role,
@@ -406,8 +396,9 @@ class RuntimeEvaluationEngine:
             EvaluationComponentTraces(
                 schema_version=EVALUATION_COMPONENT_TRACES_SCHEMA_VERSION,
                 candidate=candidate_reference(request.candidate),
-                evaluation_binding=request.evaluation_binding,
-                evaluation_role=request.evaluation_binding.role,
+                eval_config_ref=self.eval_config_ref,
+                eval_role=self._eval_role(),
+                provider_execution_policy_ref=self.provider_execution_policy_ref,
                 graph_hash=self._experiment.generation_graph.graph_hash,
                 metadata=request.metadata,
                 split_role=self._sampling.split_role,
@@ -480,7 +471,9 @@ class RuntimeEvaluationEngine:
         evidence = EvaluationEvidence(
             schema_version=EVALUATION_EVIDENCE_SCHEMA_VERSION,
             candidate=candidate_ref,
-            evaluation_binding=request.evaluation_binding,
+            eval_config_ref=self.eval_config_ref,
+            eval_role=self._eval_role(),
+            provider_execution_policy_ref=self.provider_execution_policy_ref,
             graph_hash=aggregate.graph_hash,
             graph_config_ref=aggregate.graph_hash,
             metadata=request.metadata,

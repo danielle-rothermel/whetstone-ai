@@ -15,6 +15,7 @@ from pydantic import (
 
 from whetstone.core.identity import (
     IdentityHash,
+    IdentityRef,
     ImmutableJsonObject,
     TypedRef,
     typed_ref_for_record,
@@ -32,7 +33,7 @@ from whetstone.evaluation.schema_names import (
     EVALUATION_FAILURE_SCHEMA as _EVALUATION_FAILURE_SCHEMA,
 )
 from whetstone.evaluation.traces import ExecutedComponentTracePayload
-from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import CandidateRef
 from whetstone.experiment.reward import RewardRef
 
@@ -190,8 +191,9 @@ class EvaluationComponentTraces(BaseModel):
 
     schema_version: Literal[2]
     candidate: CandidateRef
-    evaluation_binding: EvaluationBinding
-    evaluation_role: EvaluationRole
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     graph_hash: IdentityHash
     metadata: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
@@ -203,10 +205,6 @@ class EvaluationComponentTraces(BaseModel):
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvaluationComponentTraces:
-        if self.evaluation_role is not self.evaluation_binding.role:
-            raise ValueError(
-                "evaluation_role must match the exact Evaluation Binding"
-            )
         if not self.split_role.strip():
             raise ValueError("split_role must be non-empty")
         if self.num_samples < 1:
@@ -304,8 +302,9 @@ class EvaluationOutputsRecord(BaseModel):
 
     schema_version: Literal[4]
     candidate: CandidateRef
-    evaluation_binding: EvaluationBinding
-    evaluation_role: EvaluationRole
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     graph_hash: IdentityHash
     metadata: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
@@ -324,10 +323,6 @@ class EvaluationOutputsRecord(BaseModel):
         ):
             raise ValueError(
                 "component_traces_ref must use the exact trace schema"
-            )
-        if self.evaluation_role is not self.evaluation_binding.role:
-            raise ValueError(
-                "evaluation_role must match the exact Evaluation Binding"
             )
         if not self.split_role.strip():
             raise ValueError("split_role must be non-empty")
@@ -401,7 +396,9 @@ class EvaluationEvidence(BaseModel):
 
     schema_version: Literal[3]
     candidate: CandidateRef
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     graph_hash: StrictStr
     graph_config_ref: StrictStr
     metadata: ImmutableJsonObject = Field(
@@ -470,7 +467,9 @@ class EvaluationFailureEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate: CandidateRef
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     metadata: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )

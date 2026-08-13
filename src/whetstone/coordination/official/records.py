@@ -98,7 +98,7 @@ class OfficialEvaluationRecord(BaseModel):
 
     authority: StrictStr
 
-    evaluation_binding_id: StrictStr
+    eval_config_hash: StrictStr
     eval_config: EvalConfigRef
 
     planned_results: tuple[PlannedKeyResult, ...]
@@ -124,9 +124,11 @@ class OfficialEvaluationRecord(BaseModel):
         if not self.authority:
             raise ValueError("an official record names its authority")
 
-        require_full_hash(
-            self.evaluation_binding_id, field="evaluation_binding_id"
-        )
+        require_full_hash(self.eval_config_hash, field="eval_config_hash")
+        if self.eval_config.config_hash != self.eval_config_hash:
+            raise ValueError(
+                "eval_config_hash must match the exact Eval Config record"
+            )
         if not self.planned_results:
             raise ValueError("an official record has >=1 planned key")
 

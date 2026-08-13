@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from whetstone.core.identity import IdentityRef, ImmutableJsonObject, NonEmptyId, TypedRef
 from whetstone.evaluation.schema import EvaluationEvidence
-from whetstone.experiment.binding import EvalConfigRef, EvaluationBinding
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.provider.policy import ProviderExecutionPolicy
 
@@ -18,7 +18,6 @@ class EvalRequest(BaseModel):
 
     request_id: NonEmptyId
     candidate: Candidate
-    evaluation_binding: EvaluationBinding
     metadata: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )

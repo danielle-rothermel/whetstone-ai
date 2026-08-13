@@ -27,7 +27,8 @@ from whetstone.core.roles import EvaluationRole
 from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import EvalRequest
 from whetstone.evaluation.schema_names import EVALUATION_EVIDENCE_SCHEMA
-from whetstone.experiment.binding import EvaluationBinding
+from whetstone.core.identity import IdentityRef
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import (
     Candidate,
     CandidateRef,
@@ -108,7 +109,9 @@ class CoproAttempt(BaseModel):
     step_index: StrictInt
     intent_id: StrictStr
     candidate: CandidateRef
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
+    eval_role: EvaluationRole
+    provider_execution_policy_ref: IdentityRef | None = None
     reward: float
     expected_reward_policy_hash: StrictStr
     evaluation_result_ref: TypedRef
@@ -171,8 +174,8 @@ class CoproAttempt(BaseModel):
             raise ValueError(
                 "COPRO attempt Reward citations must match its exact Reward"
             )
-        if self.evaluation_binding.role is not EvaluationRole.INTERNAL:
-            raise ValueError("COPRO attempt requires an internal binding")
+        if self.eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO attempt requires internal evaluation")
         return self
 
     @property
@@ -193,7 +196,9 @@ class CoproAttempt(BaseModel):
         round_index: int,
         resolution: IntentResolution,
         expected_run_id: str,
-        expected_evaluation_binding: EvaluationBinding,
+        expected_eval_config_ref: EvalConfigRef,
+        expected_eval_role: EvaluationRole,
+        expected_provider_execution_policy_ref: IdentityRef | None,
         expected_reward_policy_hash: str,
         mutation_field: str,
     ) -> CoproAttempt:
@@ -212,22 +217,18 @@ class CoproAttempt(BaseModel):
                 "COPRO measured resolution requires an Evaluation Result ref"
             )
         optim_eval_request = resolution.optim_eval_request
-        if (
-            optim_eval_request.eval_request.evaluation_binding.role
-            is not EvaluationRole.INTERNAL
-        ):
+        if optim_eval_request.expected_reward_policy_hash is None:
             raise ValueError("COPRO folds only internal evaluation intents")
         if optim_eval_request.optim_run_id != expected_run_id:
             raise ValueError("COPRO resolution belongs to another run")
         if optim_eval_request.optim_step_index != round_index:
             raise ValueError("COPRO resolution belongs to another round")
-        if (
-            optim_eval_request.eval_request.evaluation_binding
-            != expected_evaluation_binding
-        ):
+        if resolution.resolved_eval_config != expected_eval_config_ref:
             raise ValueError(
-                "COPRO resolution uses an unexpected Evaluation Binding"
+                "COPRO resolution uses an unexpected Eval Config"
             )
+        if expected_eval_role is not EvaluationRole.INTERNAL:
+            raise ValueError("COPRO folds only internal evaluation intents")
         if (
             optim_eval_request.expected_reward_policy_hash
             != expected_reward_policy_hash
@@ -249,7 +250,11 @@ class CoproAttempt(BaseModel):
             step_index=optim_eval_request.optim_step_index,
             intent_id=optim_eval_request.eval_request.request_id,
             candidate=candidate_ref,
-            evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
+            eval_config_ref=resolution.resolved_eval_config,
+            eval_role=expected_eval_role,
+            provider_execution_policy_ref=(
+                expected_provider_execution_policy_ref
+            ),
             reward=reward.value,
             expected_reward_policy_hash=reward.reward_policy_hash,
             evaluation_result_ref=resolution.evaluation_result_ref,
@@ -445,10 +450,20 @@ class CoproDriver:
         expected_run_id = (
             state.attempts[0].run_id if state.attempts else attempts[0].run_id
         )
-        expected_evaluation_binding = (
-            state.attempts[0].evaluation_binding
+        expected_eval_config_ref = (
+            state.attempts[0].eval_config_ref
             if state.attempts
-            else attempts[0].evaluation_binding
+            else attempts[0].eval_config_ref
+        )
+        expected_eval_role = (
+            state.attempts[0].eval_role
+            if state.attempts
+            else attempts[0].eval_role
+        )
+        expected_provider_execution_policy_ref = (
+            state.attempts[0].provider_execution_policy_ref
+            if state.attempts
+            else attempts[0].provider_execution_policy_ref
         )
         expected_reward_policy_hash = (
             state.attempts[0].expected_reward_policy_hash
@@ -468,9 +483,20 @@ class CoproDriver:
                 )
             if attempt.run_id != expected_run_id:
                 raise ValueError("COPRO attempts span multiple runs")
-            if attempt.evaluation_binding != expected_evaluation_binding:
+            if attempt.eval_config_ref != expected_eval_config_ref:
                 raise ValueError(
-                    "COPRO attempts span multiple Evaluation Bindings"
+                    "COPRO attempts span multiple Eval Configs"
+                )
+            if attempt.eval_role != expected_eval_role:
+                raise ValueError(
+                    "COPRO attempts span multiple Evaluation Roles"
+                )
+            if (
+                attempt.provider_execution_policy_ref
+                != expected_provider_execution_policy_ref
+            ):
+                raise ValueError(
+                    "COPRO attempts span multiple Provider Execution Policies"
                 )
             if (
                 attempt.expected_reward_policy_hash
@@ -747,7 +773,9 @@ class CoproAdapter:
             raise ValueError(
                 "COPRO expected Reward Policy conflicts with the exact run"
             )
-        evaluation_binding = self._control.evaluation_binding
+        eval_config_ref = self._control.eval_config_ref
+        eval_role = self._control.eval_role
+        provider_execution_policy_ref = self._control.provider_execution_policy_ref
         if len(request.candidates) != 1:
             raise ValueError(
                 "single-prompt COPRO requires exactly one initial candidate"
@@ -761,9 +789,20 @@ class CoproAdapter:
         for attempt in history:
             if attempt.run_id != request.run_id:
                 raise ValueError("COPRO history belongs to another run")
-            if attempt.evaluation_binding != evaluation_binding:
+            if attempt.eval_config_ref != eval_config_ref:
                 raise ValueError(
-                    "COPRO history uses an unexpected Evaluation Binding"
+                    "COPRO history uses an unexpected Eval Config"
+                )
+            if attempt.eval_role != eval_role:
+                raise ValueError(
+                    "COPRO history uses an unexpected Evaluation Role"
+                )
+            if (
+                attempt.provider_execution_policy_ref
+                != provider_execution_policy_ref
+            ):
+                raise ValueError(
+                    "COPRO history uses an unexpected Provider Execution Policy"
                 )
             if (
                 attempt.expected_reward_policy_hash
@@ -960,14 +999,12 @@ class CoproAdapter:
                 OptimEvalRequest(
                     optim_run_id=request.run_id,
                     optim_step_index=request.step_index,
-                    target_eval_config=evaluation_binding.eval_config,
                     eval_request=EvalRequest(
                         request_id=(
                             f"{request.run_id}:{request.step_index}:"
                             f"{occurrence_ordinal}:{candidate_ref.identity_hash}"
                         ),
                         candidate=candidate,
-                        evaluation_binding=evaluation_binding,
                         metadata=metadata_with_purpose(plan.proposal_mode),
                     ),
                     expected_reward_policy_hash=expected_reward_policy_hash,

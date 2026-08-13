@@ -28,6 +28,7 @@ class EvaluationDriver(Protocol):
         experiment: Experiment,
         sampling: SplitSampling,
         request: EvalRequest,
+        eval_config_hash: str,
         execution_policy: ProviderExecutionPolicy,
         concurrency: int,
         max_wall_seconds: float | None,

@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
-from whetstone.evaluation.preview.binding import preview_evaluation_binding
 from whetstone.evaluation.metadata import metadata_with_purpose
 from whetstone.evaluation.protocol import EvaluationEngine, EvalRequest
 from whetstone.experiment.candidate import Candidate
@@ -72,11 +71,6 @@ class EngineToolEvaluator:
             EvalRequest(
                 request_id=f"tool:{call.call_id}",
                 candidate=candidate,
-                evaluation_binding=preview_evaluation_binding(
-                    engine,
-                    campaign=config.store_namespace_key,
-                    provenance_note=config.tool_name,
-                ),
                 metadata=metadata_with_purpose(config.tool_name),
             )
         )
@@ -111,9 +105,7 @@ class EngineToolEvaluator:
             ),
             generation_refs=(evaluated.evidence_ref,),
             aggregates={evidence.aggregate_name: evidence.aggregate_value},
-            eval_config_hash=(
-                evidence.evaluation_binding.eval_config.config_hash
-            ),
+            eval_config_hash=evidence.eval_config_ref.config_hash,
         )
 
 

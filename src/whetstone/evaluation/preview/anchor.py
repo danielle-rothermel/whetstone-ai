@@ -25,7 +25,7 @@ from whetstone.evaluation.schema import (
     EvaluationEvidence,
     EvaluationOutputsRecord,
 )
-from whetstone.experiment.binding import EvaluationBinding
+from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.task_selection import TaskRoleSelection
 
@@ -83,7 +83,7 @@ class BaselinePreviewTranscript(BaseModel):
     concurrency: int
     preflight: ScoringPreflight
     metadata: PreviewMetadata
-    evaluation_binding: EvaluationBinding
+    eval_config_ref: EvalConfigRef
     baseline: AnchorArmPreview
     ceiling: AnchorArmPreview
     paired_delta_ci: BootstrapCI
@@ -124,7 +124,6 @@ def run_baseline_preview(
     *,
     store: ObjectStore,
     engine: EvaluationEngine,
-    evaluation_binding: EvaluationBinding,
     baseline_candidate: Candidate,
     ceiling_candidate: Candidate,
     task_ids: tuple[str, ...],
@@ -163,7 +162,6 @@ def run_baseline_preview(
     calibration_task_ids = calibration_task_hashes(engine, task_ids)
     calibration = run_anchor_calibration(
         engine=engine,
-        evaluation_binding=evaluation_binding,
         baseline_candidate=baseline_candidate,
         ceiling_candidate=ceiling_candidate,
         baseline_purpose=baseline_purpose,
@@ -190,7 +188,7 @@ def run_baseline_preview(
         concurrency=concurrency,
         preflight=preflight,
         metadata=metadata,
-        evaluation_binding=calibration.evaluation_binding,
+        eval_config_ref=calibration.eval_config_ref,
         baseline=_arm(
             label=baseline_log_label,
             store=store,

@@ -12,12 +12,7 @@ from whetstone.coordination.official.records import (
 )
 from whetstone.core.identity import IdentityRef, TypedRef
 from whetstone.core.roles import EvaluationRole
-from whetstone.experiment.binding import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    EvalConfigRef,
-    EvaluationBinding,
-    ExecutionEnvironmentFingerprint,
-)
+from whetstone.experiment.binding import EvalConfigRef
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -47,53 +42,32 @@ class EvaluationAuthority:
         if not self.name:
             raise ValueError("an Evaluation Authority must be named")
 
-    def issue_official_binding(
+    def _require_official_context(
         self,
         *,
-        eval_config: EvalConfigRef,
-        campaign: str,
-        provider_execution_policy_ref: IdentityRef | None = None,
-        retry_policy_ref: TypedRef | None = None,
-        operational_policy_refs: Sequence[TypedRef] = (),
-        environment_fingerprint: ExecutionEnvironmentFingerprint | None = None,
-        provenance_note: str | None = None,
-        provenance_ordinal: int | None = None,
-    ) -> EvaluationBinding:
-        return EvaluationBinding(
-            schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
-            eval_config=eval_config,
-            role=EvaluationRole.OFFICIAL,
-            authority_principal=self.name,
-            campaign=campaign,
-            provider_execution_policy_ref=provider_execution_policy_ref,
-            retry_policy_ref=retry_policy_ref,
-            operational_policy_refs=tuple(operational_policy_refs),
-            environment_fingerprint=(
-                environment_fingerprint or ExecutionEnvironmentFingerprint()
-            ),
-            provenance_note=provenance_note,
-            provenance_ordinal=provenance_ordinal,
-        )
-
-    def _require_official_binding(self, binding: EvaluationBinding) -> None:
-        if binding.role is not EvaluationRole.OFFICIAL:
+        eval_role: EvaluationRole,
+        authority_principal: str | None,
+    ) -> None:
+        if eval_role is not EvaluationRole.OFFICIAL:
             raise RelabelingRefusedError(
                 "internal evaluation evidence can never be certified or "
                 "relabeled as official; matching config Identity Hashes "
-                "permit comparison, never relabeling. Present an official "
-                "Evaluation Binding issued by the authority."
+                "permit comparison, never relabeling. Present official "
+                "evaluation evidence."
             )
-        if binding.authority_principal != self.name:
+        if authority_principal != self.name:
             raise UnauthorizedOfficialWriteError(
-                "official Binding names authority "
-                f"{binding.authority_principal!r}, not {self.name!r}; only "
+                "official evidence names authority "
+                f"{authority_principal!r}, not {self.name!r}; only "
                 "the named authority may write it"
             )
 
     def certify(
         self,
         *,
-        evaluation_binding: EvaluationBinding,
+        eval_config: EvalConfigRef,
+        eval_role: EvaluationRole,
+        authority_principal: str | None = None,
         planned_results: Sequence[PlannedKeyResult],
         aggregate_refs: Sequence[TypedRef],
         selected_record_mapping: SelectedRecordMapping,
@@ -107,7 +81,10 @@ class EvaluationAuthority:
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
     ) -> OfficialEvaluationRecord:
-        self._require_official_binding(evaluation_binding)
+        self._require_official_context(
+            eval_role=eval_role,
+            authority_principal=authority_principal or self.name,
+        )
 
         planned = tuple(planned_results)
         present = sum(1 for p in planned if p.is_present)
@@ -124,8 +101,8 @@ class EvaluationAuthority:
         )
         return OfficialEvaluationRecord(
             authority=self.name,
-            evaluation_binding_id=evaluation_binding.identity_hash(),
-            eval_config=evaluation_binding.eval_config,
+            eval_config_hash=eval_config.config_hash,
+            eval_config=eval_config,
             planned_results=planned,
             aggregate_refs=tuple(aggregate_refs),
             completeness=completeness,

@@ -31,6 +31,7 @@ from whetstone.evaluation.schema import (
 )
 from whetstone.evaluation.schema_names import EVALUATION_FAILURE_SCHEMA
 from whetstone.experiment.candidate import candidate_reference
+from whetstone.experiment.sampling import evaluation_role_for_split
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -149,28 +150,10 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
         owned: _OwnedClaim,
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
-        if optim_eval_request.target_eval_config != self._engine.eval_config_ref:
-            return self._bind_if_owned(
-                optim_eval_request,
-                IntentResolution(
-                    schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
-                    optim_eval_request=optim_eval_request,
-                    outcome=IntentOutcome.REJECTED,
-                    detail=ResolutionDetail(
-                        classification=ResolutionClass.VALIDATION,
-                        message=(
-                            "Optim Eval Request target Eval Config is not the "
-                            "engine's exact sampling binding"
-                        ),
-                    ),
-                    resolved_eval_config=optim_eval_request.target_eval_config,
-                ),
-                owned,
-            )
+        resolved_eval_config = self._engine.eval_config_ref
         request = EvalRequest(
             request_id=optim_eval_request.eval_request.request_id,
             candidate=optim_eval_request.eval_request.candidate,
-            evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
             metadata=optim_eval_request.eval_request.metadata,
         )
         try:
@@ -186,7 +169,7 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
                         classification=ResolutionClass.VALIDATION,
                         message=str(exc) or type(exc).__name__,
                     ),
-                    resolved_eval_config=optim_eval_request.target_eval_config,
+                    resolved_eval_config=resolved_eval_config,
                 ),
                 owned,
             )
@@ -199,7 +182,13 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
             )
             failure = EvaluationFailureEvidence(
                 candidate=candidate_ref,
-                evaluation_binding=optim_eval_request.eval_request.evaluation_binding,
+                eval_config_ref=self._engine.eval_config_ref,
+                eval_role=evaluation_role_for_split(
+                    self._engine.sampling.split_role
+                ),
+                provider_execution_policy_ref=(
+                    self._engine.provider_execution_policy_ref
+                ),
                 metadata=optim_eval_request.eval_request.metadata,
                 exception_type=type(exc).__name__,
                 message=str(exc) or type(exc).__name__,
@@ -233,7 +222,7 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
                     ),
                     evaluation_result_ref=failure_ref.record_ref,
                     reward_evidence_refs=(),
-                    resolved_eval_config=optim_eval_request.target_eval_config,
+                    resolved_eval_config=resolved_eval_config,
                     terminal_failure=terminal_failure,
                 ),
                 owned,
@@ -254,7 +243,7 @@ class EngineEvaluationService(EvaluationClaims, EvaluationEvidenceValidation):
                 ),
                 evaluation_result_ref=evaluated.evidence_ref,
                 reward_evidence_refs=reward_evidence_refs,
-                resolved_eval_config=optim_eval_request.target_eval_config,
+                resolved_eval_config=resolved_eval_config,
                 reward_ref=reward_ref,
             ),
             owned,

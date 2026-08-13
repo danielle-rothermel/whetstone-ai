@@ -6,7 +6,6 @@ from whetstone.evaluation.protocol import (
     EvalRequest,
     EvaluationEngine,
 )
-from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.contracts import (
     INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -20,13 +19,15 @@ from whetstone.optimization.contracts import (
 __all__ = [
     "build_measured_resolution",
     "build_optim_eval_request",
+    "build_rejected_resolution",
+    "build_scored_resolution",
     "evaluate_and_resolve",
 ]
 
 
 def build_optim_eval_request(
     evaluated: EngineEvaluation,
-    binding: EvaluationBinding,
+    engine: EvaluationEngine,
     *,
     purpose: str,
     run_id: str,
@@ -39,14 +40,12 @@ def build_optim_eval_request(
     return OptimEvalRequest(
         optim_run_id=run_id,
         optim_step_index=step_index,
-        target_eval_config=binding.eval_config,
         eval_request=EvalRequest(
             request_id=(
                 f"{run_id}:{step_index}:{occurrence_ordinal}:"
                 f"{evaluated.evidence.candidate.identity_hash}"
             ),
             candidate=evaluated.evidence.candidate.record,
-            evaluation_binding=binding,
             metadata=metadata_with_purpose(purpose),
         ),
         expected_reward_policy_hash=reward_ref.record.reward_policy_hash,
@@ -56,6 +55,7 @@ def build_optim_eval_request(
 def build_measured_resolution(
     evaluated: EngineEvaluation,
     optim_eval_request: OptimEvalRequest,
+    engine: EvaluationEngine,
     *,
     message: str,
 ) -> IntentResolution:
@@ -72,14 +72,46 @@ def build_measured_resolution(
         ),
         evaluation_result_ref=evaluated.evidence_ref,
         reward_evidence_refs=reward_ref.record.evidence_refs,
-        resolved_eval_config=optim_eval_request.target_eval_config,
+        resolved_eval_config=engine.eval_config_ref,
         reward_ref=reward_ref,
+    )
+
+
+def build_rejected_resolution(
+    optim_eval_request: OptimEvalRequest,
+    engine: EvaluationEngine,
+    *,
+    message: str,
+) -> IntentResolution:
+    return IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+        optim_eval_request=optim_eval_request,
+        outcome=IntentOutcome.REJECTED,
+        detail=ResolutionDetail(
+            classification=ResolutionClass.VALIDATION,
+            message=message,
+        ),
+        resolved_eval_config=engine.eval_config_ref,
+    )
+
+
+def build_scored_resolution(
+    evaluated: EngineEvaluation,
+    optim_eval_request: OptimEvalRequest,
+    engine: EvaluationEngine,
+    *,
+    message: str,
+) -> IntentResolution:
+    return build_measured_resolution(
+        evaluated,
+        optim_eval_request,
+        engine,
+        message=message,
     )
 
 
 def evaluate_and_resolve(
     engine: EvaluationEngine,
-    binding: EvaluationBinding,
     candidate: Candidate,
     *,
     purpose: str,
@@ -94,19 +126,18 @@ def evaluate_and_resolve(
                 f"{run_id}:{step_index}:{occurrence_ordinal}:{purpose}"
             ),
             candidate=candidate,
-            evaluation_binding=binding,
             metadata=metadata_with_purpose(purpose),
         )
     )
     optim_eval_request = build_optim_eval_request(
         evaluated,
-        binding,
+        engine,
         purpose=purpose,
         run_id=run_id,
         step_index=step_index,
         occurrence_ordinal=occurrence_ordinal,
     )
     resolution = build_measured_resolution(
-        evaluated, optim_eval_request, message=message
+        evaluated, optim_eval_request, engine, message=message
     )
     return evaluated, resolution
