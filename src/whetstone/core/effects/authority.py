@@ -100,14 +100,6 @@ def _acquire_terminal(
 
 
 class LeaseMaintenance:
-    """Keep a lease live while ordinary long-running work proceeds.
-
-    The helper cannot cancel arbitrary external work. A clean context exit
-    proves that renewal did not observe lease loss. Long-running callers must
-    publish through ``succeed`` or ``fail`` inside the context so renewal is
-    stopped before the exact latest lease is terminalized.
-    """
-
     def __init__(
         self,
         authority: EffectAuthority,
@@ -137,13 +129,11 @@ class LeaseMaintenance:
 
     @property
     def lease(self) -> EffectLease:
-        """Return the latest exact lease token, raising observed loss."""
         self.check()
         with self._lock:
             return self._lease
 
     def check(self) -> None:
-        """Raise when the renewer has observed lease loss or failure."""
         with self._lock:
             loss = self._loss
         if loss is None:
@@ -176,15 +166,12 @@ class LeaseMaintenance:
             self.check()
             raise AssertionError("lease loss check returned unexpectedly")
 
-        # A renewal may already be inside authority I/O. Join without holding
-        # the state lock so it can publish its renewed lease or recorded loss.
         self._thread.join()
         self.check()
         with self._lock:
             return self._lease
 
     def succeed(self, *, result_ref: TypedRef) -> EffectTerminal:
-        """Stop renewal and publish the exact successful terminal."""
         lease = self._lease_for_terminalization()
         terminal = self._authority.succeed(lease, result_ref=result_ref)
         with self._lock:
@@ -197,7 +184,6 @@ class LeaseMaintenance:
         result_ref: TypedRef,
         failure: TerminalFailure,
     ) -> EffectTerminal:
-        """Stop renewal and publish the exact failed terminal."""
         lease = self._lease_for_terminalization()
         terminal = self._authority.fail(
             lease,
@@ -252,8 +238,6 @@ class LeaseMaintenance:
 
 
 class EffectAuthority:
-    """One authority contract backed by memory, SQLite, or PostgreSQL."""
-
     def __init__(
         self,
         store: _Store,
@@ -275,10 +259,6 @@ class EffectAuthority:
         clock: Callable[[], datetime] | None = None,
         _renewal_wait_strategy: _RenewalWaitStrategy | None = None,
     ) -> EffectAuthority:
-        """Open a process-local authority owning one injectable UTC clock.
-
-        ``_renewal_wait_strategy`` scripts renewal scheduling in tests.
-        """
         authority_clock = (
             (lambda: datetime.now(UTC)) if clock is None else clock
         )
@@ -308,11 +288,6 @@ class EffectAuthority:
         *,
         _connect: _Connect | None = None,
     ) -> EffectAuthority:
-        """Open a PostgreSQL authority.
-
-        ``_connect`` exists for transaction-adapter tests. Production callers
-        use the psycopg-backed default.
-        """
         return cls(_PostgreSQLStore(dsn, connect=_connect))
 
     def acquire(
@@ -323,7 +298,6 @@ class EffectAuthority:
         attempt_id: str,
         lease_duration: timedelta,
     ) -> AcquireResult:
-        """Acquire, take over, or replay an exact semantic effect."""
         _require_text(owner_id, field="owner_id", maximum=255)
         _require_text(attempt_id, field="attempt_id", maximum=255)
         validated_owner_id = NonEmptyId(owner_id)
@@ -425,7 +399,6 @@ class EffectAuthority:
         *,
         lease_duration: timedelta,
     ) -> EffectLease:
-        """Extend one still-live exact owner/fence lease."""
         validated_duration = self._validate_lease_duration(lease_duration)
 
         def transition(
@@ -463,7 +436,6 @@ class EffectAuthority:
         *,
         result_ref: TypedRef,
     ) -> EffectTerminal:
-        """Persist or replay the exact successful terminal outcome."""
         terminal = EffectTerminal(
             request=lease.request,
             outcome=TerminalOutcome.SUCCEEDED,
@@ -481,7 +453,6 @@ class EffectAuthority:
         result_ref: TypedRef,
         failure: TerminalFailure,
     ) -> EffectTerminal:
-        """Persist or replay the exact failed terminal outcome."""
         terminal = EffectTerminal(
             request=lease.request,
             outcome=TerminalOutcome.FAILED,
@@ -494,7 +465,6 @@ class EffectAuthority:
         return self._terminalize(lease, terminal=terminal)
 
     def verify_terminal(self, terminal: EffectTerminal) -> EffectTerminal:
-        """Return an exact terminal only when this authority owns it."""
         validated = EffectTerminal.model_validate_json(
             terminal.model_dump_json()
         )
@@ -550,7 +520,6 @@ class EffectAuthority:
         *,
         lease_duration: timedelta,
     ) -> LeaseMaintenance:
-        """Maintain a lease whose terminal is published inside the context."""
         return LeaseMaintenance(
             self,
             lease,

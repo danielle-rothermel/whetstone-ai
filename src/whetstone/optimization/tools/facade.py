@@ -51,8 +51,6 @@ from whetstone.optimization.tools.contracts import (
 
 
 class ToolAdmissionAuthority:
-    """Atomic call-decision and scoped-capacity authority."""
-
     def __init__(self, backend: _AdmissionBackend) -> None:
         self._backend = backend
         self._backend.initialize()
@@ -142,8 +140,6 @@ class ToolAdmissionAuthority:
 
 
 class ToolCallStore:
-    """Persist exact Tool records and delegate mutable decisions atomically."""
-
     def __init__(
         self,
         store: ObjectStore,
@@ -460,7 +456,6 @@ class ToolCallStore:
     def load_result(
         self, result_ref: TypedRef, *, expected_call: ToolCall
     ) -> ToolResult:
-        """Load one exact Tool Result and validate its complete call chain."""
         if result_ref.schema_name != TOOL_RESULT_SCHEMA:
             raise ValueError("effect terminal references a non-Tool Result")
         content = self._store.get(result_ref.reference)
@@ -496,7 +491,6 @@ class ToolCallStore:
 
     @property
     def effect_authority(self) -> EffectAuthority:
-        """The sole effect authority allowed to terminalize this store."""
         return self._effect_authority
 
     def close(self) -> None:

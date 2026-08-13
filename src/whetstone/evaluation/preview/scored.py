@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict
 
-from whetstone.evaluation.engine import EvaluationEngine
+from whetstone.evaluation.protocol import EvaluationEngine
 from whetstone.evaluation.preview.persisted import (
     load_component_traces,
     load_evaluation_outputs,
@@ -20,16 +20,15 @@ from whetstone.experiment.binding import EvaluationBinding
 from whetstone.experiment.candidate import Candidate, CandidateRef
 from whetstone.experiment.reward import RewardRef
 from whetstone.optimization.contracts import IntentResolution
-from whetstone.optimization.copro.adapter import CoproAttempt
 
 __all__ = [
-    "ScoredCandidate",
-    "build_scored_candidate",
+    "ScoredEvaluation",
+    "build_scored_evaluation",
 ]
 
 
-class ScoredCandidate(BaseModel):
-    """One exact candidate evaluation and its optimizer projection."""
+class ScoredEvaluation(BaseModel):
+    """One exact candidate evaluation and its optimizer-facing projection."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -40,10 +39,9 @@ class ScoredCandidate(BaseModel):
     component_traces: EvaluationComponentTraces
     aggregate_values: tuple[float | None, ...]
     resolution: IntentResolution
-    attempt: CoproAttempt
 
 
-def build_scored_candidate(
+def build_scored_evaluation(
     *,
     store: ObjectStore,
     engine: EvaluationEngine,
@@ -57,7 +55,7 @@ def build_scored_candidate(
     aggregate_values_fn: Callable[
         [ObjectStore, RewardRef], tuple[float | None, ...]
     ],
-) -> ScoredCandidate:
+) -> ScoredEvaluation:
     evaluated, resolution = evaluate_and_resolve(
         engine,
         binding,
@@ -71,15 +69,7 @@ def build_scored_candidate(
     reward_ref = evaluated.evidence.reward_ref
     if reward_ref is None:
         raise RuntimeError("internal evaluation returned no Reward")
-    attempt = CoproAttempt.from_resolution(
-        occurrence_ordinal=occurrence_ordinal,
-        round_index=round_index,
-        resolution=resolution,
-        expected_run_id=run_id,
-        expected_evaluation_binding=binding,
-        expected_reward_policy_hash=reward_ref.record.reward_policy_hash,
-    )
-    return ScoredCandidate(
+    return ScoredEvaluation(
         occurrence_ordinal=occurrence_ordinal,
         candidate=evaluated.evidence.candidate,
         evidence=evaluated.evidence,
@@ -87,5 +77,4 @@ def build_scored_candidate(
         component_traces=load_component_traces(store, evaluated.evidence),
         aggregate_values=aggregate_values_fn(store, reward_ref),
         resolution=resolution,
-        attempt=attempt,
     )

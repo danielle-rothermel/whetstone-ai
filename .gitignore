@@ -1,13 +1,10 @@
 __pycache__/
-.pytest_cache/
-.ruff_cache/
 .venv/
 .worktrees/
 logs/
 artifacts/
 analysis/samples/**/*.json
 .env
-.coverage
 *.sqlite3
 .DS_STORE
 .claude/ralph-loop.local.md

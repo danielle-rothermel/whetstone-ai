@@ -11,8 +11,6 @@ from whetstone.experiment.task_selection.roles import (
 
 @dataclass(frozen=True, slots=True)
 class ResolvedSplit[T]:
-    """A manifest-resolved internal and official task partition."""
-
     internal: tuple[T, ...]
     official: tuple[T, ...]
     manifest_tag: str
@@ -26,7 +24,6 @@ def resolve_manifest_split[T](
     id_of: Callable[[T], str],
     official_n: int | None = None,
 ) -> ResolvedSplit[T]:
-    """Resolve manifest membership in manifest order, refusing unknown ids."""
     by_id = {str(id_of(item)): item for item in items}
     missing = sorted(roles.all_role_ids() - frozenset(by_id))
     if missing:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from dr_serialize import decode_strict_json_bytes
-from dr_store import ObjectStore, SqliteBackend
+from whetstone.core.blocking_store import persistent_blocking_sqlite_store
 
 from whetstone.core.effects.authority import (
     EffectAuthority,
@@ -14,7 +14,7 @@ from whetstone.optimization.codex.mcp_bridge import (
     EvaluateCandidateServer,
 )
 from whetstone.optimization.codex.mcp_environment import McpEnvironmentKey
-from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
+from whetstone.optimization.codex.config import load_runtime_config
 from whetstone.optimization.tools.contracts import (
     ToolCapacityBinding,
     ToolConfig,
@@ -32,13 +32,14 @@ def build_server_from_env(
 ) -> EvaluateCandidateServer:
     env = environ if environ is not None else dict(os.environ)
     sqlite_path = env[McpEnvironmentKey.SQLITE_PATH]
-    store = ObjectStore(SqliteBackend(sqlite_path))
+    store = persistent_blocking_sqlite_store(sqlite_path)
     tool_config_raw = _strict_env_json(env[McpEnvironmentKey.TOOL_CONFIG])
     tool_config = ToolConfig.model_validate_json(tool_config_raw)
     binding_raw = _strict_env_json(env[McpEnvironmentKey.CAPACITY_BINDING])
     binding = ToolCapacityBinding.model_validate_json(binding_raw)
     runtime_raw = _strict_env_json(env[McpEnvironmentKey.RUNTIME_CONFIG])
-    runtime = EvaluationRuntimeConfig.model_validate_json(runtime_raw)
+    runtime_class = env[McpEnvironmentKey.RUNTIME_CONFIG_CLASS]
+    runtime = load_runtime_config(class_path=runtime_class, raw=runtime_raw)
     reward_policy_raw = _strict_env_json(env[McpEnvironmentKey.REWARD_POLICY])
     reward_policy = RewardPolicy.model_validate_json(reward_policy_raw)
     engine = runtime.build_engine(store)

@@ -12,8 +12,6 @@ class TaskSplitManifestError(ValueError):
 
 @verify(UNIQUE)
 class TaskSplitRole(StrEnum):
-    """One explicit role from a persisted task-selection manifest."""
-
     TRAIN = "train"
     VALIDATION = "validation"
     TEST = "test"
@@ -21,15 +19,11 @@ class TaskSplitRole(StrEnum):
 
 @verify(UNIQUE)
 class TaskRoleSelectionMethod(StrEnum):
-    """How an ordered selection was derived from its manifest role."""
-
     FULL_ROLE = "full_role"
     LOWEST_HISTORICAL_PASS_RATE = "lowest_historical_pass_rate"
 
 
 class TaskRoleSelection(BaseModel):
-    """The exact persisted manifest-derived selection for one evaluation."""
-
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     manifest_content_hash: str
@@ -70,8 +64,6 @@ class TaskRoleSelection(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class TaskSplitRoles:
-    """One pool's ordered train, validation, and test role sets."""
-
     pool_key: str
     train_ids: tuple[str, ...]
     val_ids: tuple[str, ...]
@@ -90,7 +82,6 @@ class TaskSplitRoles:
         return frozenset(self.train_ids + self.val_ids + self.test_ids)
 
     def ids_for(self, role: TaskSplitRole) -> tuple[str, ...]:
-        """Return one role exactly as ordered in the manifest."""
         if role is TaskSplitRole.TRAIN:
             return self.train_ids
         if role is TaskSplitRole.VALIDATION:

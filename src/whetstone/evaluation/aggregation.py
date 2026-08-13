@@ -1,5 +1,3 @@
-"""Pure aggregation over explicit evaluation inputs."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

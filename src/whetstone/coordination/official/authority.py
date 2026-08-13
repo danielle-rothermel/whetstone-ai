@@ -32,41 +32,20 @@ __all__ = [
 
 
 class RelabelingRefusedError(ValueError):
-    """Internal evidence was offered for official certification/relabeling.
-
-    Raised whenever an internal-role Evaluation Binding (or evidence bearing
-    one) is presented on the official write path. Byte-identical config
-    Identity Hashes between an internal and an official run do not make the
-    internal evidence official: the refusal is by role, not by identity.
-    """
+    pass
 
 
 class UnauthorizedOfficialWriteError(ValueError):
-    """An official artifact was requested with the wrong/absent authority.
-
-    The official write path checks that the requesting authority principal
-    matches the authority named on the official Evaluation Binding.
-    """
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class EvaluationAuthority:
-    """A named trusted principal and the official write path.
-
-    Instances are the only issuer of official Evaluation Bindings, Official
-    Evaluation Records, and Official Plot Manifests. The ``name`` is the
-    principal recorded on every artifact this authority issues.
-    """
-
     name: str
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("an Evaluation Authority must be named")
-
-    # ------------------------------------------------------------------
-    # Official Evaluation Binding issuance
-    # ------------------------------------------------------------------
 
     def issue_official_binding(
         self,
@@ -80,14 +59,6 @@ class EvaluationAuthority:
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
     ) -> EvaluationBinding:
-        """Issue an official Evaluation Binding bound to this authority.
-
-        The returned Binding has role ``official`` and ``authority_principal``
-        set to
-        this principal's name. Only an authority instance can mint an official
-        Binding this way; the ordinary Eval Config it binds is unchanged (the
-        role qualifies its use, it is not a new Config type or identity).
-        """
         return EvaluationBinding(
             schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
             eval_config=eval_config,
@@ -104,20 +75,7 @@ class EvaluationAuthority:
             provenance_ordinal=provenance_ordinal,
         )
 
-    # ------------------------------------------------------------------
-    # Relabeling refusal
-    # ------------------------------------------------------------------
-
     def _require_official_binding(self, binding: EvaluationBinding) -> None:
-        """Refuse any internal-role binding on the official write path.
-
-        This is the seam that makes "internal can never be relabeled to
-        official" true *on the authority write path*: an internal-role Binding
-        is rejected here regardless of whether its Eval Config identity matches
-        an official run byte for byte. This is an enforced funnel, not a
-        cryptographic boundary — see the module docstring: direct model
-        construction of an official-role Binding is not blocked here.
-        """
         if binding.role is not EvaluationRole.OFFICIAL:
             raise RelabelingRefusedError(
                 "internal evaluation evidence can never be certified or "
@@ -131,10 +89,6 @@ class EvaluationAuthority:
                 f"{binding.authority_principal!r}, not {self.name!r}; only "
                 "the named authority may write it"
             )
-
-    # ------------------------------------------------------------------
-    # Official Evaluation Record certification
-    # ------------------------------------------------------------------
 
     def certify(
         self,
@@ -153,14 +107,6 @@ class EvaluationAuthority:
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
     ) -> OfficialEvaluationRecord:
-        """Create an immutable Official Evaluation Record over results.
-
-        Refuses internal-role evidence (relabeling refusal). Computes the
-        completeness decision from the planned/present accounting so no planned
-        key is silently dropped, and certifies only when the evaluation is
-        complete. The referenced ordinary Generation Results become official by
-        this certification; they are not copied or relabeled.
-        """
         self._require_official_binding(evaluation_binding)
 
         planned = tuple(planned_results)
@@ -193,10 +139,6 @@ class EvaluationAuthority:
             provenance_ordinal=provenance_ordinal,
         )
 
-    # ------------------------------------------------------------------
-    # Official Plot Manifest publication
-    # ------------------------------------------------------------------
-
     def publish_plot(
         self,
         *,
@@ -211,12 +153,6 @@ class EvaluationAuthority:
         provenance_note: str | None = None,
         provenance_ordinal: int | None = None,
     ) -> OfficialPlotManifest:
-        """Publish an immutable Official Plot Manifest naming Official records.
-
-        The manifest preserves the same ordered mapping the certified records
-        carry, so a published plot stays attributable to its selected records
-        and curve slots even across graph convergence.
-        """
         return OfficialPlotManifest(
             authority=self.name,
             record_refs=tuple(record_refs),

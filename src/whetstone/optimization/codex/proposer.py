@@ -44,8 +44,6 @@ CODEX_CLI_PROPOSER_DURABILITY_SCHEMA_VERSION = 1
 
 
 class CodexCliProposerConfig(BaseModel):
-    """Exact Codex CLI route for proposal-only COPRO calls."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     codex_binary: StrictStr = "codex"
@@ -82,8 +80,6 @@ class CodexCliProposerConfig(BaseModel):
 
 
 class CodexCliProposalArtifact(BaseModel):
-    """The only semantic output accepted from a proposal-only Codex call."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bodies: tuple[StrictStr, ...]
@@ -118,7 +114,6 @@ def _artifact_schema(*, count: int) -> dict[str, Any]:
 
 
 def _bytes_evidence(value: bytes) -> tuple[str, str]:
-    """Return readable text plus exact base64 bytes for process evidence."""
 
     return (
         value.decode("utf-8", errors="replace"),
@@ -133,7 +128,6 @@ def _failed_drafts(
     request_evidence: dict[str, Any],
     response_evidence: dict[str, Any],
 ) -> tuple[ProposalDraft, ...]:
-    """Represent one unusable Codex call in every requested proposal slot."""
 
     return tuple(
         ProposalDraft.failure(
@@ -152,8 +146,6 @@ def _failed_drafts(
 
 @dataclass(frozen=True, slots=True)
 class CodexCliProposerTransport:
-    """Proposal-only Codex CLI transport with no MCP evaluation server."""
-
     _executor: Executor
     _environment: Mapping[str, str] | None
     _prompt_adapter: PlainPromptAdapter

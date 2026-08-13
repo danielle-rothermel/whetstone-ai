@@ -1,5 +1,3 @@
-"""Whetstone-owned metric facts, lineage, and derived scores."""
-
 from __future__ import annotations
 
 from enum import StrEnum

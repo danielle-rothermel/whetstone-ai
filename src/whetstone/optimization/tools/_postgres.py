@@ -214,7 +214,7 @@ CREATE TABLE IF NOT EXISTS {_CAPACITY_TABLE} (
 )
 """
 _POSTGRES_INIT_LOCK = "SELECT pg_advisory_xact_lock(1465141076, 2)"
-# This stable two-key namespace serializes schema verification and migration.
+
 _POSTGRES_ENTRY_LOCK_SQL = "SELECT pg_advisory_xact_lock(%s)"
 _POSTGRES_TABLES_SQL = """
 SELECT table_name
@@ -520,7 +520,13 @@ class _PostgreSQLAdmissionBackend:
             raise ValueError("PostgreSQL DSN must be non-empty")
         self._dsn = dsn
         if connect is None:
-            from psycopg import connect as psycopg_connect
+            try:
+                from psycopg import connect as psycopg_connect
+            except ImportError as exc:
+                raise ImportError(
+                    "PostgreSQL tools require the optional postgres extra: "
+                    "pip install 'whetstone-ai[postgres]'"
+                ) from exc
 
             self._connect = cast(_Connect, psycopg_connect)
         else:

@@ -94,8 +94,6 @@ Miprov2ProposalEffect = Literal[
 
 
 class Miprov2PromptField(BaseModel):
-    """One ordered semantic field in a proposal-model request."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: StrictStr
@@ -109,8 +107,6 @@ class Miprov2PromptField(BaseModel):
 
 
 class Miprov2PromptComponent(BaseModel):
-    """A native Whetstone prompt component exposed to the grounded proposer."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
@@ -128,8 +124,6 @@ class Miprov2PromptComponent(BaseModel):
 
 
 class Miprov2DatasetExample(BaseModel):
-    """One ordered task record rendered by Whetstone's prompt adapter."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     task_hash: StrictStr
@@ -145,8 +139,6 @@ class Miprov2DatasetExample(BaseModel):
 
 
 class Miprov2DemoField(BaseModel):
-    """One native component field, in renderer-defined reference order."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: StrictStr
@@ -154,8 +146,6 @@ class Miprov2DemoField(BaseModel):
 
 
 class Miprov2ProposalDemo(BaseModel):
-    """One structured demo with explicit augmented-key presence semantics."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     fields: tuple[Miprov2DemoField, ...]
@@ -177,16 +167,12 @@ class Miprov2ProposalDemo(BaseModel):
 
 
 class Miprov2DemoSet(BaseModel):
-    """An ordered demo set for one component."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     examples: tuple[Miprov2ProposalDemo, ...] = ()
 
 
 class Miprov2ComponentDemoCandidates(BaseModel):
-    """All candidate demo sets for one component."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
@@ -202,12 +188,6 @@ def proposal_candidates_from_demo_sets(
     components: tuple[Miprov2PromptComponent, ...],
     component_field_order: dict[str, tuple[str, ...]],
 ) -> tuple[Miprov2ComponentDemoCandidates, ...]:
-    """Bridge candidate-major bootstrap artifacts into proposer-major demos.
-
-    ``component_field_order`` is supplied by the bound native prompt renderer;
-    it replaces DSPy's ``Signature.fields`` order. Labeled/raw examples omit
-    the ``augmented`` key exactly as DSPy's original training examples do.
-    """
 
     component_ids = tuple(component.component_id for component in components)
     if set(component_field_order) != set(component_ids):
@@ -287,8 +267,6 @@ def _render_demo_value(value: Any) -> str:
 
 
 class Miprov2ProposalRequest(BaseModel):
-    """One and only one durable proposer-model effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bindings: Miprov2DurableBindings
@@ -381,7 +359,7 @@ class Miprov2ProposalRequest(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract.
+
         return {
             "bindings": self.bindings.model_dump(mode="json"),
             "optimization_run_identity_hash": (
@@ -411,8 +389,6 @@ class Miprov2ProposalRequest(BaseModel):
 
 
 class Miprov2ProposalResponse(BaseModel):
-    """The result of one proposer-model effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_hash: StrictStr
@@ -457,8 +433,6 @@ class Miprov2ProposalResponse(BaseModel):
 
 
 class Miprov2ProposalEvidence(BaseModel):
-    """Append-only accounting for a completed proposer-model effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request: Miprov2ProposalRequest
@@ -498,8 +472,6 @@ def _validate_proposal_evidence(item: Miprov2ProposalEvidence) -> None:
 
 
 class Miprov2InstructionSlot(BaseModel):
-    """One paid generation slot, including rejected or displaced results."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_id: StrictStr
@@ -511,8 +483,6 @@ class Miprov2InstructionSlot(BaseModel):
 
 
 class Miprov2InstructionGenerationFailed(RuntimeError):
-    """A final instruction effect exhausted its durable retry policy."""
-
     def __init__(
         self,
         detail: str,
@@ -524,8 +494,6 @@ class Miprov2InstructionGenerationFailed(RuntimeError):
 
 
 class Miprov2ProposalState(BaseModel):
-    """Serializable state for the complete grounded-proposal phase."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     components: tuple[Miprov2PromptComponent, ...]
@@ -668,8 +636,6 @@ class Miprov2ProposalState(BaseModel):
                 "proposal evidence run identity does not match state"
             )
         for item in self.evidence:
-            # Re-run the evidence-level identity and decision invariants after
-            # loading a checkpoint, including one built through model_copy.
             _validate_proposal_evidence(item)
         if self.pending_request is not None:
             _require_exact_pending_request(self)
@@ -726,8 +692,6 @@ class Miprov2ProposalState(BaseModel):
 
 
 class Miprov2ProposalPlan(BaseModel):
-    """Pure planning result: persist ``state`` before executing ``request``."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     state: Miprov2ProposalState
@@ -750,7 +714,6 @@ def start_miprov2_proposal(
     fewshot_aware: bool = True,
     rng_checkpoint: Miprov2RngCheckpoint,
 ) -> Miprov2ProposalState:
-    """Create initial effect-free state from an already-shared RNG state."""
 
     return Miprov2ProposalState(
         bindings=bindings,
@@ -775,7 +738,6 @@ def start_miprov2_proposal(
 def plan_next_proposal_request(
     state: Miprov2ProposalState,
 ) -> Miprov2ProposalPlan:
-    """Advance pure control until one external request or completion."""
 
     _require_canonical_proposal_state(state)
     planned, request = _plan_next_proposal_request_unchecked(state)
@@ -785,7 +747,6 @@ def plan_next_proposal_request(
 def _plan_next_proposal_request_unchecked(
     state: Miprov2ProposalState,
 ) -> tuple[Miprov2ProposalState, Miprov2ProposalRequest | None]:
-    """Internal planner used by canonical transcript replay."""
 
     if state.pending_request is not None:
         _require_exact_pending_request(state)
@@ -849,7 +810,6 @@ def fold_proposal_response(
     state: Miprov2ProposalState,
     response: Miprov2ProposalResponse,
 ) -> Miprov2ProposalState:
-    """Fold exactly one pending external result into immutable state."""
 
     _require_canonical_proposal_state(state)
     response = Miprov2ProposalResponse.model_validate(
@@ -890,7 +850,6 @@ def render_miprov2_prompt(
     effect: Miprov2ProposalEffect,
     fields: tuple[Miprov2PromptField, ...],
 ) -> str:
-    """Render stable Whetstone-native sections, without DSPy fields."""
 
     roles = {
         "dataset_initial": (
@@ -935,7 +894,6 @@ def render_miprov2_prompt(
 
 
 def strip_dspy_prefix(text: str) -> str:
-    """Frozen DSPy ``strip_prefix`` behavior."""
 
     pattern = r"^[\*\s]*(([\w\'\-]+\s+){0,4}[\w\'\-]+):\s*"
     return re.sub(pattern, "", text).strip('"')
@@ -985,7 +943,6 @@ def _request(
 
 
 def _require_exact_pending_request(state: Miprov2ProposalState) -> None:
-    """Fail closed unless a checkpoint carries the request implied by state."""
 
     pending = state.pending_request
     if pending is None:
@@ -1011,7 +968,6 @@ def _require_exact_pending_request(state: Miprov2ProposalState) -> None:
 
 
 def _require_canonical_proposal_state(state: Miprov2ProposalState) -> None:
-    """Replay evidence from immutable inputs and reject derived-state drift."""
 
     replay = Miprov2ProposalState.model_construct(
         components=state.components,
@@ -1367,7 +1323,6 @@ def _task_demos(state: Miprov2ProposalState) -> str:
     rendered: list[str] = []
     for demo_set in rotated:
         for example in demo_set.examples:
-            # Frozen DSPy tests key presence, not the value of ``augmented``.
             if not example.augmented_key_present:
                 continue
             rendered.append(example.render())
@@ -1468,7 +1423,7 @@ def _fold_dataset_followup(
         accepted = True
         rejection = None
         parsed = response.text
-        # Frozen DSPy inserts no separator between observations.
+
         updates["dataset_observations"] = (
             state.dataset_observations + response.text
         )
@@ -1665,8 +1620,7 @@ def _fold_instruction(
                 "instruction_slots": (*state.instruction_slots, slot),
             }
         )
-    # GenerateModuleInstruction strips once and GroundedProposer strips the
-    # returned value a second time.
+
     parsed = strip_dspy_prefix(strip_dspy_prefix(response.text))
     rejection = _validate_instruction(component, parsed)
     displaced = state.proposal_index == 0

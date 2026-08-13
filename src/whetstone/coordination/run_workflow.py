@@ -1,49 +1,27 @@
 """Stable parent DBOS workflow boundary for one optimization run.
 
-The runner owns the DBOS workflow context, and this module is where it is
-entered. One optimization run executes inside exactly one parent workflow whose
-ID derives from the run request's ``identity_hash()``, so a recovered process
-resumes the same run rather than starting a second one. Everything the parent
-body needs is bound by identity before ``DBOS.launch``: the body resolves its
-controller from a registry keyed by the controller's ``runtime_hash``,
-so a registered identity can never detach from the capability a recovered
-workflow invokes.
+One optimization run executes inside exactly one parent workflow whose ID
+derives from the run request's ``identity_hash()``, so a recovered process
+resumes the same run rather than starting a second one. The parent resolves
+its controller from a registry keyed by the controller's ``runtime_hash``.
 
-**One parent per run.** The runner adds exactly this one workflow per run and
-never wraps individual optimizer steps in additional child workflows. The
-proposal executor spawns its own child workflow per logical proposal call,
-which is that layer's contract and not something this boundary multiplies.
-
-**Why the boundary lives here.** The proposal executor refuses to run outside a
-workflow body and refuses to start a child workflow from inside a step. Driving
-the optimizer from this parent body satisfies both conditions by construction,
-which lets the shared optimization root and harness stay DBOS-unaware.
-Algorithm-specific GEPA owns its own DBOS effect runtime and parent workflow
-under ``whetstone.optimization.gepa``.
-
-Guarantee, stated honestly. The parent gives replay from run start: a recovered
-parent re-enters the body and re-drives the controller, which resolves already
-durable step results from the harness rather than re-executing them. Recovery
-is not free of every re-execution -- the proposal executor's own accepted
-at-least-once window still applies to a call whose provider had already served
-it when the process died -- and this boundary does not close that window.
-
-**The boundary carries references, not records.** DBOS checkpoints workflow
-arguments and return values by pickling them, and the optimization schema types
-are built on ``ImmutableJsonObject``, which wraps a ``mappingproxy`` and is not
-picklable. So the parent takes a request of plain strings and returns the
-terminal ``OptimizationResult``'s exact ``TypedRef``. That is not merely a
-workaround: the result is already durable and content-addressed in the
-ObjectStore before the workflow returns, so the reference is the authoritative
-handle and shipping a second copy through the checkpoint would duplicate it.
-Callers resolve the record through the harness.
+The boundary carries references, not records. DBOS checkpoints workflow
+arguments and return values by pickling them, so the parent takes a request
+of plain strings and returns the terminal ``OptimizationResult``'s exact
+``TypedRef``.
 """
 
 from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from dbos import DBOS, SetWorkflowID
+try:
+    from dbos import DBOS, SetWorkflowID
+except ImportError as exc:
+    raise ImportError(
+        "DBOS coordination requires the optional dbos extra: "
+        "pip install 'whetstone-ai[dbos]'"
+    ) from exc
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
 
 from whetstone.core.identity import (
@@ -53,12 +31,9 @@ from whetstone.core.identity import (
 )
 from whetstone.optimization.contracts import OPTIMIZATION_RESULT_SCHEMA
 
-RUN_WORKFLOW_SCHEMA = "whetstone.runner.parent_run"
+RUN_WORKFLOW_SCHEMA = "whetstone.coordination.parent_run"
 RUN_WORKFLOW_SCHEMA_VERSION = 1
 
-#: Persisted identity contract: the parent workflow ID prefix. A recovered
-#: process addresses a run by this exact string plus the request identity, so
-#: renaming it orphans every in-flight run.
 RUN_WORKFLOW_ID_PREFIX = "whetstone-run-"
 
 
@@ -68,14 +43,7 @@ class RunWorkflowError(RuntimeError):
 
 @runtime_checkable
 class RunController(Protocol):
-    """The optimizer-agnostic capability the parent workflow drives.
-
-    One controller owns one optimizer's harness, adapters, and durable control
-    record. ``drive`` is the whole run: bind the run, drive steps until a
-    non-continuing status, and terminalize, returning the exact reference of
-    the terminal result it bound. It must be replay-safe, because a recovered
-    parent calls it again from the top.
-    """
+    """The optimizer-agnostic capability the parent workflow drives."""
 
     @property
     def runtime_hash(self) -> str: ...
@@ -84,23 +52,7 @@ class RunController(Protocol):
 
 
 class RunRequest(BaseModel):
-    """Complete serializable input identifying one optimization run.
-
-    ``controller_identity_hash`` binds the exact registered controller;
-    ``run_id`` is the run the harness binds; ``control_identity_hash`` is the
-    content hash of the controller's durable control record, which covers the
-    candidates, budget, algorithm parameters, eval configs, tools, and proposer
-    config.
-
-    The request is the whole workflow identity: a changed control under the
-    same ``run_id`` hashes to a different workflow, so it can never silently
-    resume a run that was configured differently.
-
-    Every field is a plain string. DBOS pickles workflow arguments, so the
-    request deliberately carries hashes rather than the rich control objects
-    they identify: the controller resolves the full control from its own
-    durable record, and the boundary stays trivially serializable.
-    """
+    """Complete serializable input identifying one optimization run."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -137,13 +89,7 @@ _CONTROLLERS: dict[str, RunController] = {}
 
 
 def register_run_controller(controller: RunController) -> str:
-    """Bind one run controller under its exact runtime identity.
-
-    Registration happens at runner startup, before ``DBOS.launch``, so a
-    recovered parent workflow always finds the controller it was built with.
-    Re-registering the identical object is a no-op; binding a different object
-    to an already-bound identity is refused.
-    """
+    """Bind one run controller under its exact runtime identity."""
     identity_hash = controller.runtime_hash
     require_full_hash(identity_hash, field="controller_identity_hash")
     existing = _CONTROLLERS.get(identity_hash)

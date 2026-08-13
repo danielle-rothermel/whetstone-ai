@@ -47,10 +47,6 @@ class PowerConfig:
 
 @dataclass(frozen=True, slots=True)
 class VarianceDecomposition:
-    """Empirical variance terms; paired comparisons cancel the between-task
-    main effect.
-    """
-
     base_rate: float
     within_sample_var: float
     interaction_var: float
@@ -95,7 +91,6 @@ def _decompose_variance(
     *,
     anchor_samples: int,
 ) -> VarianceDecomposition:
-    """Estimate the paired comparison's empirical variance terms."""
     both = np.concatenate([naive_per_task, ceiling_per_task])
     r = max(1, anchor_samples)
     base_rate = float(np.clip(naive_per_task.mean(), 0.0, 1.0))
@@ -124,14 +119,6 @@ def _decompose_variance(
 def _paired_diff_se(
     decomp: VarianceDecomposition, *, n_tasks: int, num_samples: int
 ) -> float:
-    """SE of the mean paired A-vs-B difference at ``(n_tasks, num_samples)``.
-
-    Paired residual per-task-difference variance = the task-x-candidate
-    INTERACTION variance (invariant in ``num_samples``) + the within-task
-    sample noise OF THE DIFFERENCE (``2 * within / num_samples``, shrinks
-    with more samples). The mean over ``n_tasks`` shared tasks divides by
-    ``n_tasks``.
-    """
     per_task_diff_var = (
         decomp.interaction_var
         + 2.0 * decomp.within_sample_var / max(1, num_samples)
@@ -146,23 +133,12 @@ def _mdd_at_target(
     num_samples: int,
     target_prob: float,
 ) -> float:
-    """The minimum detectable difference (MDD) at the target ranking prob.
-
-    Under the paired normal approximation, ``P(observed winner = true winner)``
-    for a true gap ``delta`` is ``Phi(delta / SE)``. Inverting for the target
-    probability: ``MDD = z_target * SE`` where ``z_target = Phi^-1(target)``.
-    """
     se = _paired_diff_se(decomp, n_tasks=n_tasks, num_samples=num_samples)
     z = _normal_ppf(target_prob)
     return z * se
 
 
 def _normal_ppf(p: float) -> float:
-    """Inverse standard-normal CDF (stdlib ``NormalDist``).
-
-    Turns the target ranking probability into the z-multiplier for the MDD
-    (``MDD = z * SE``). Pure stdlib -- no scipy.
-    """
     if not math.isfinite(p) or not 0.5 < p < 1.0:
         raise ValueError("target_prob must be in (0.5, 1)")
     from statistics import NormalDist
@@ -178,18 +154,6 @@ def analyze_power(
     anchor_samples: int,
     config: PowerConfig | None = None,
 ) -> PowerResult:
-    """Run the closed-form paired 2-D (n x s) power analysis over the anchors.
-
-    ``naive_per_task`` / ``ceiling_per_task`` are the anchor configs'
-    per-task
-    mean 0/1 vectors (aligned by task, measured at ``anchor_samples`` samples
-    per task). ``pool_ceiling`` is the available task-pool size (the hard
-    ``n`` ceiling). Returns a :class:`PowerResult` with the variance
-    decomposition, the target gap (``alpha`` x certified headroom), and the
-    full closed-form MDD surface over the ``(n_tasks, num_samples)`` grid.
-    Reading the surface against the target gap is the caller's decision;
-    there is no automated recommendation.
-    """
     cfg = config or PowerConfig()
     if pool_ceiling < 1:
         raise ValueError("pool_ceiling must be at least 1")

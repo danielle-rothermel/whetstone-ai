@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from dbos import DBOS, SetWorkflowID
+try:
+    from dbos import DBOS, SetWorkflowID
+except ImportError as exc:
+    raise ImportError(
+        "DBOS coordination requires the optional dbos extra: "
+        "pip install 'whetstone-ai[dbos]'"
+    ) from exc
 from dr_store import ObjectStore
 
 from whetstone.core.identity import require_full_hash
@@ -20,7 +26,7 @@ from whetstone.optimization.gepa.contracts import (
 
 
 class GepaEffectDurabilityError(RuntimeError):
-    """A GEPA runtime authority cannot satisfy its bound effect contract."""
+    pass
 
 
 _EVALUATION_AUTHORITIES: dict[str, GepaEvaluationEffectAuthority] = {}
@@ -31,7 +37,6 @@ def register_gepa_evaluation_authority(
     identity_hash: str,
     authority: GepaEvaluationEffectAuthority,
 ) -> None:
-    """Register the exact evaluator before DBOS may recover child workflows."""
 
     require_full_hash(
         identity_hash,
@@ -54,7 +59,6 @@ def register_gepa_proposal_authority(
     identity_hash: str,
     authority: GepaProposalEffectAuthority,
 ) -> None:
-    """Register the exact proposer before DBOS may recover child workflows."""
 
     require_full_hash(identity_hash, field="GEPA proposal authority identity")
     if authority.runtime_hash != identity_hash:
@@ -118,10 +122,7 @@ def _gepa_evaluation_effect_implementation(
 def _gepa_evaluation_effect_workflow(
     request: GepaEvaluationEffectRequest,
 ) -> GepaEvaluationEffectResult:
-    # The authority owns row-level/physical durability.  Keeping this as
-    # ordinary workflow code allows its own DBOS steps and stable child
-    # workflows; a whole-call step would introduce a duplicate-effect crash
-    # window around those inner boundaries.
+
     return _gepa_evaluation_effect_implementation(request)
 
 
@@ -144,8 +145,6 @@ def _gepa_proposal_effect_workflow(
 
 
 class DbosGepaEffectBroker:
-    """Stable child workflow per semantic effect, with ObjectStore evidence."""
-
     def __init__(self, store: ObjectStore) -> None:
         self._recorder = GepaEffectRecorder(store)
 

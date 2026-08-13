@@ -46,7 +46,6 @@ REWARD_POLICY_SCHEMA_VERSION = 1
 
 
 def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
-    """Accept only the deliberate Python representations of a JSON array."""
     if type(value) not in (list, tuple):
         raise ValueError(
             f"{info.field_name} must be an ordered tuple or JSON array"
@@ -62,8 +61,6 @@ class MissingDataPolicy(StrEnum):
 
 
 class RewardTerm(BaseModel):
-    """One weighted direction-bearing term."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: NonEmptyId
@@ -72,7 +69,7 @@ class RewardTerm(BaseModel):
     worst_value: FiniteFloat = FiniteFloat(0.0)
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are a pinned wire contract.
+
         return {
             "name": self.name,
             "weight": self.weight,
@@ -82,8 +79,6 @@ class RewardTerm(BaseModel):
 
 
 class RewardPolicy(BaseModel):
-    """Reusable finite scalarization rule addressed by Identity Hash."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     policy_name: NonEmptyId
@@ -106,7 +101,7 @@ class RewardPolicy(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are a pinned wire contract.
+
         return {
             "policy_name": self.policy_name,
             "reward_name": self.reward_name,
@@ -123,8 +118,6 @@ class RewardPolicy(BaseModel):
 
 
 class RewardInputCitation(BaseModel):
-    """The exact finite or missing input used for one policy term."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: NonEmptyId
@@ -165,8 +158,6 @@ def _scalarize_term(
 
 
 class Reward(BaseModel):
-    """Named finite Reward with exact policy identity and evidence."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     reward_name: NonEmptyId
@@ -241,8 +232,6 @@ class Reward(BaseModel):
 
 
 class RewardRef(BaseModel):
-    """An exact persisted Reward record."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: Reward
@@ -270,7 +259,7 @@ def reward_reference(reward: Reward) -> RewardRef:
 
 
 class OfficialRewardError(ValueError):
-    """A Reward Policy was applied to official-role evidence."""
+    pass
 
 
 def _finite_or_missing(value: object) -> float | None:
@@ -288,7 +277,6 @@ def apply_reward_policy(
     evidence_refs: tuple[TypedRef, ...],
     provenance_ordinal: int | None = None,
 ) -> Reward:
-    """Apply missing-data policy to absent, invalid, and non-finite inputs."""
     if evidence_role is not EvaluationRole.INTERNAL:
         raise OfficialRewardError(
             "apply_reward_policy refuses official-role evidence: official "

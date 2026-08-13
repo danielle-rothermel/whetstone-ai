@@ -21,8 +21,6 @@ GUARD_MARGIN_SECONDS = 15.0
 
 @dataclass(frozen=True, slots=True)
 class CallTelemetry:
-    """Usage, latency, and provider provenance for one call."""
-
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
@@ -33,7 +31,6 @@ class CallTelemetry:
 
 
 def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
-    """Extract coverage-honest telemetry from a provider-call result."""
     if result is None:
         return CallTelemetry()
     if not result.succeeded or result.provider_generation is None:
@@ -42,7 +39,7 @@ def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
             provider_error=_provider_error_of(result),
         )
     usage = result.provider_generation.response.usage
-    finish_reason = result.provider_generation.response.finish_reason
+    finish_reason = result.provider_generation.response.stop_reason
     if usage is None:
         return CallTelemetry(
             latency_s=_accepted_latency(result),
@@ -103,7 +100,6 @@ _TRANSIENT_CLASSES = frozenset(
 
 
 def is_transient_transport_failure(result: ProviderCallResult) -> bool:
-    """Whether one additional bounded observation drive is eligible."""
     return (
         not result.succeeded
         and result.semantic_failure is not None
@@ -112,7 +108,6 @@ def is_transient_transport_failure(result: ProviderCallResult) -> bool:
 
 
 def failure_code_of(result: ProviderCallResult) -> str:
-    """Return the most specific stable code for a failed call."""
     if result.succeeded or result.semantic_failure is None:
         return ""
     failure = result.semantic_failure
@@ -123,7 +118,6 @@ def failure_code_of(result: ProviderCallResult) -> str:
 
 
 def is_rate_limit_failure(result: ProviderCallResult) -> bool:
-    """Whether any attempt observed a rate-limit failure."""
     return any(
         attempt.failure_class is SemanticFailureClass.RATE_LIMIT
         for attempt in result.attempts
@@ -135,7 +129,6 @@ def guard_deadline_seconds(
     *,
     wire_calls_per_unit: int = 1,
 ) -> float:
-    """Return the full legal retry/backoff bound for one fanout unit."""
     if wire_calls_per_unit < 1:
         raise ValueError("wire_calls_per_unit must be a positive integer")
     attempt_timeouts = (

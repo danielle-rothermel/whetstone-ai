@@ -3,7 +3,13 @@ from __future__ import annotations
 from threading import Lock
 from typing import NamedTuple
 
-from dbos import DBOS, SetWorkflowID
+try:
+    from dbos import DBOS, SetWorkflowID
+except ImportError as exc:
+    raise ImportError(
+        "DBOS coordination requires the optional dbos extra: "
+        "pip install 'whetstone-ai[dbos]'"
+    ) from exc
 
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import (
@@ -31,7 +37,7 @@ PROPOSAL_DBOS_POLICY_VERSION = 2
 PROPOSAL_DBOS_WORKFLOW_SCHEMA = "whetstone.proposal_dbos_workflow"
 PROPOSAL_DBOS_WORKFLOW_VERSION = 1
 
-#: Persisted contract literal for the one supported durability mode.
+
 PROPOSAL_DURABILITY_MODE = "at_least_once"
 
 type DurableProposerConfig = ProposerConfig | CodexCliProposerConfig
@@ -41,12 +47,10 @@ type DurableProposerTransport = (
 
 
 class ProposalProviderError(RuntimeError):
-    """The configured physical proposal-provider boundary is invalid."""
+    pass
 
 
 class _ProposalTransportRegistry:
-    """Own atomic identity binding and resolution for proposal transports."""
-
     __slots__ = ("_lock", "_transports")
 
     def __init__(self) -> None:
@@ -104,7 +108,6 @@ _TRANSPORT_REGISTRY = _ProposalTransportRegistry()
 def register_proposal_transport(
     transport: DurableProposerTransport,
 ) -> str:
-    """Bind one proposer transport under its exact durability identity."""
 
     return _TRANSPORT_REGISTRY.bind(transport)
 
@@ -116,9 +119,7 @@ def _registered_transport(registry_key: str) -> DurableProposerTransport:
 def _proposal_policy_identity_payload(
     registry_key: str,
 ) -> dict[str, bool | str]:
-    """Build the explicitly pinned persisted durability-policy payload."""
 
-    # Persisted identity contract: keep these exact literals pinned.
     return {
         "automatic_dbos_retries": False,
         "durability_mode": PROPOSAL_DURABILITY_MODE,
@@ -144,9 +145,7 @@ def _proposal_workflow_identity_payload(
     request: ProposalRequest,
     count: int,
 ) -> dict[str, int | str]:
-    """Build the explicitly pinned persisted workflow-identity payload."""
 
-    # Persisted identity contract: keep these exact literals pinned.
     return {
         "count": count,
         "policy_identity_hash": policy_identity_hash,
@@ -184,7 +183,6 @@ def _logical_proposal_step(
     request: ProposalRequest,
     count: int,
 ) -> tuple[ProposalDraft, ...]:
-    """Run one whole logical proposal call, provider retries included."""
 
     transport = _registered_transport(registry_key)
     return transport.draft(config, request, count)
@@ -198,7 +196,6 @@ def _proposal_provider_workflow(
     request: ProposalRequest,
     count: int,
 ) -> tuple[ProposalDraft, ...]:
-    """Execute one exact proposal effect in its own checkpoint namespace."""
 
     if DBOS.step_id is not None:
         raise ProposalProviderError(
@@ -224,8 +221,6 @@ def _proposal_provider_workflow(
 
 
 class _DbosProposalExecution(NamedTuple):
-    """Canonical behavior wrapped by the exact durable capability value."""
-
     transport_registry_key: str
 
     def validate(self) -> None:
@@ -286,7 +281,6 @@ def DbosProposalExecutor(
     *,
     transport_registry_key: str,
 ) -> DurableProposalExecutor:
-    """Create the one canonical durable proposal-execution capability."""
 
     execution = _DbosProposalExecution(transport_registry_key)
     execution.validate()

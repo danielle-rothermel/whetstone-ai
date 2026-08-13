@@ -101,15 +101,11 @@ class GepaEngineAdapter(Protocol):
 
 
 class _QuietLogger:
-    """Suppress operational stdout without participating in decisions."""
-
     def log(self, message: str) -> None:
         del message
 
 
 class GepaDetailedResult(BaseModel):
-    """Lossless JSON-facing projection of frozen ``GEPAResult`` schema v2."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidates: tuple[dict[StrictStr, StrictStr], ...]
@@ -332,7 +328,6 @@ def run_gepa_engine[DataInst](
     adapter: GepaEngineAdapter,
     logger: _Logger | None = None,
 ) -> GepaDetailedResult:
-    """Run the upstream engine without replacing any algorithmic decision."""
 
     verify_installed_gepa_source()
     from gepa import optimize

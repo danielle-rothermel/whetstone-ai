@@ -74,7 +74,6 @@ def _rejection_detail(
     intent_id: str,
     resolution: IntentResolution,
 ) -> str:
-    """Name the rejected Intent and the exact reason it was refused."""
 
     return (
         f"MIPROv2 Evaluation Intent {intent_id!r} was rejected before "
@@ -84,13 +83,6 @@ def _rejection_detail(
 
 
 def _terminalized(state: Miprov2State, *, failure: str) -> Miprov2State:
-    """Bind one terminal cause to durable state so no later plan is owed.
-
-    Every pending effect is dropped with the cause: a terminal MIPROv2 state
-    owes no further effect, and the pending one can never be measured.  The
-    completed-effect ledger is untouched, so already-spent effects stay
-    accounted for.
-    """
 
     if not failure:
         raise ValueError("a terminal MIPROv2 state requires its exact cause")
@@ -113,23 +105,6 @@ def _terminalized(state: Miprov2State, *, failure: str) -> Miprov2State:
 
 
 class Miprov2Adapter:
-    """Execute at most one external effect selected by :class:`Miprov2Driver`.
-
-    Proposal calls are the adapter's only direct side effect.  Bootstrap and
-    task evaluation remain Evaluation Intents owned by the harness.  Their
-    normalized typed results are folded with ``Miprov2Driver.fold_bootstrap``
-    and ``Miprov2Driver.fold_evaluation`` before the next adapter request.
-
-    The paid proposal call runs through one injected
-    :class:`DurableProposalExecutor`, so an interrupted Step recovers by
-    replaying the executor's completed checkpoint instead of failing the run.
-    The executor's own durability contract states the guarantee it delivers.
-
-    :class:`OptimizationHarness` terminalization requires a derived accepted
-    candidate; an unchanged base-candidate winner is not a supported terminal
-    output.
-    """
-
     def __init__(
         self,
         *,
@@ -204,7 +179,6 @@ class Miprov2Adapter:
         prior_result: OptimizationStepResult | None = None,
         prior_result_ref: TypedRef | None = None,
     ) -> OptimizationStepRequest:
-        """Build the exact next harness request from durable prior state."""
 
         if step_index == 0:
             if (
@@ -270,8 +244,6 @@ class Miprov2Adapter:
             raise ValueError("run Reward Policy differs from MIPROv2 control")
         self._require_budget_agreement(budget, state)
         if state.phase == MIPROV2_FAILED:
-            # The prior Step's resolutions terminalized the run.  This Step
-            # exists only to persist the terminal failed Step Result.
             kind_label = MIPROV2_FAILED
             returned_count = 0
         else:
@@ -333,9 +305,6 @@ class Miprov2Adapter:
             state = self._fold_prior_resolutions(state, prior)
         self._require_budget_agreement(request.budget, state)
         if state.phase == MIPROV2_FAILED:
-            # Folding the prior Step's resolutions terminalized the run: a
-            # rejected Evaluation Intent is refused before execution, so the
-            # effect MIPROv2 planned can never be measured.
             assert state.failure is not None
             return self._terminal_failure_output(
                 state,
@@ -513,7 +482,6 @@ class Miprov2Adapter:
 
     @staticmethod
     def _preflight_task_rows(budget: BudgetState, row_count: int) -> None:
-        """Reject an underfunded intent before resolving or persisting it."""
 
         budget.debit(BudgetDelta(consumed={"task_rows": row_count}))
 
@@ -522,7 +490,6 @@ class Miprov2Adapter:
         request_budget: BudgetState,
         state: Miprov2State,
     ) -> None:
-        """Require the harness budget to project the durable effect journal."""
 
         for label in (
             "bootstrap_generations",
@@ -617,13 +584,6 @@ class Miprov2Adapter:
         failure: TerminalFailure,
         budget_delta: BudgetDelta | None = None,
     ) -> AdapterOutput:
-        """Persist one terminal failed Step instead of wedging the run.
-
-        A MIPROv2 run that cannot advance stops as a failed Step Result
-        carrying its exact cause.  Without this the durable state keeps a
-        pending phase that every later plan refuses, and the run can never
-        reach a terminal Optimization Result.
-        """
 
         if state.phase != MIPROV2_FAILED:
             raise ValueError("a terminal failure requires a failed state")
@@ -639,16 +599,11 @@ class Miprov2Adapter:
         state: Miprov2State,
         resolution: IntentResolution,
     ) -> Miprov2State:
-        """Production bridge from exact harness evidence to pure state."""
 
         context = load_miprov2_intent_context(self._store, resolution.intent)
         if context.control_identity_hash != state.control.identity_hash():
             raise ValueError("Intent Resolution belongs to another control")
         if resolution.outcome is IntentOutcome.REJECTED:
-            # A rejection is refused before execution, so it produces no
-            # Evaluation Result at all.  It is not an executed failure and
-            # must never be folded as a zero observation; the intent MIPROv2
-            # planned cannot be measured, so the run is over.
             return _terminalized(
                 state, failure=_rejection_detail(context.intent_id, resolution)
             )
@@ -806,6 +761,7 @@ class Miprov2Adapter:
             proposal_authority_identity_hash=(
                 native.optimization_run_identity_hash
             ),
+            mutation_field=state.control.mutation_field,
             base_candidate=state.control.base_candidate,
             context={
                 "native_miprov2_request": native.model_dump(mode="json"),

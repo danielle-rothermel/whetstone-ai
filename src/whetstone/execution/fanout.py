@@ -58,7 +58,6 @@ def _wait_for_operation_deadline(
     stop: threading.Event,
     trigger: Callable[[], None],
 ) -> None:
-    """Wait for a real deadline and publish it before returning."""
     while True:
         delay = deadline - time.monotonic()
         if delay <= 0:
@@ -81,7 +80,6 @@ def _after_fork_in_parent() -> None:
 
 
 def _after_fork_in_child() -> None:
-    """Drop scheduler authority without acquiring an inherited lock."""
     global _fork_child_control_fds, _parent_control_fds, _parent_control_lock
     for descriptor in _fork_child_control_fds:
         try:
@@ -181,8 +179,6 @@ def _require_finite_json(value: object, *, path: str) -> object:
 
 
 class ProcessJob(BaseModel):
-    """Validated subprocess input naming one importable top-level callable."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_name: StrictStr = _PROCESS_JOB_SCHEMA
@@ -221,8 +217,6 @@ class ProcessJob(BaseModel):
 
 
 class _ProcessDispatchMarker(BaseModel):
-    """Validated worker dispatch evidence crossing the subprocess boundary."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_name: StrictStr = _PROCESS_DISPATCH_SCHEMA
@@ -292,8 +286,6 @@ class _ProcessWorkerResult(BaseModel):
 
 @verify(UNIQUE)
 class FanoutStatus(StrEnum):
-    """Terminal state of one fanout unit."""
-
     COMPLETED = "completed"
     UNIT_TIMEOUT = "unit-timeout"
     OPERATION_DEADLINE = "operation-deadline"
@@ -301,17 +293,15 @@ class FanoutStatus(StrEnum):
 
 
 class ProcessWorkerError(RuntimeError):
-    """A child failed outside the fanout unit's expected result contract."""
+    pass
 
 
 class ProcessCancellationError(RuntimeError):
-    """A cancellation barrier could not confirm terminal external work."""
+    pass
 
 
 @dataclass(frozen=True, slots=True)
 class CallSpec[K: Hashable, R]:
-    """One process job and its parent-side acceptance callbacks."""
-
     key: K
     job: ProcessJob
     decode: Callable[[JsonValue], R]
@@ -322,8 +312,6 @@ class CallSpec[K: Hashable, R]:
 
 @dataclass(frozen=True, slots=True)
 class FanoutResult[K: Hashable, R]:
-    """The accepted value or terminal non-completion state for one unit."""
-
     key: K
     status: FanoutStatus
     value: R | None = None
@@ -335,8 +323,6 @@ class FanoutResult[K: Hashable, R]:
 
 @dataclass(frozen=True, slots=True)
 class PoolOutcome[K: Hashable, R]:
-    """Terminal pool report, preserving caller input order."""
-
     results: tuple[FanoutResult[K, R], ...]
     effective_concurrency: int
     concurrency_halved: bool
@@ -611,8 +597,6 @@ def _signal_process_group[K: Hashable, R](
     except ProcessLookupError:
         pass
     except PermissionError:
-        # macOS reports EPERM for a group whose only member is a terminal,
-        # not-yet-reaped leader. A live leader remains an error.
         if process.process.poll() is None:
             raise
 
@@ -664,8 +648,6 @@ def _terminate_processes[K: Hashable, R](
     ):
         time.sleep(_POLL_INTERVAL_SECONDS)
 
-    # The leader may honor TERM while a descendant does not. Signal the group
-    # independently of the leader's return code.
     for process in processes:
         try:
             _signal_process_group(process, signal.SIGKILL)
@@ -859,15 +841,6 @@ def run_call_pool[K: Hashable, R](
     is_rate_limited: Callable[[R], bool],
     max_wall_seconds: float | None = None,
 ) -> PoolOutcome[K, R]:
-    """Run JSON jobs lazily in fresh process groups.
-
-    The absolute wall gates every child dispatch. A deadline watcher cancels
-    active siblings even while trusted parent-side decode, predicate, commit,
-    or cancellation callbacks run. Python cannot preempt those callbacks: one
-    begun before the wall may delay return. A decode or predicate that crosses
-    the wall prevents later acceptance steps; a commit that crosses it remains
-    completed because its side effect has already occurred.
-    """
     _validate_bounds(
         specs,
         concurrency=concurrency,
@@ -1119,9 +1092,7 @@ def run_call_pool[K: Hashable, R](
         dispatch_available()
         while True:
             collect_wall_cancellations()
-            # Guardian liveness is meaningful only while the scheduler still
-            # owns the active entry. The wall watcher removes an entry before
-            # killing its group, so keep that ownership check atomic.
+
             with active_lock:
                 for process in active.values():
                     process.require_guardian_alive()

@@ -48,11 +48,11 @@ from whetstone.optimization.copro.control import (
     CoproProposerConfig,
 )
 from whetstone.optimization.proposal.mutation import (
-    MUTATION_FIELD,
     DiffCheckError,
     candidate_from_draft,
+    resolve_mutation_field,
 )
-from whetstone.optimization.proposal.prompts import (
+from whetstone.optimization.copro.prompts import (
     COPRO_INSTRUCTION_CONTRACT_KEY,
     COPRO_INSTRUCTION_HISTORY_KEY,
     copro_proposal_prompt,
@@ -69,12 +69,6 @@ HISTORY_PROPOSAL = "history_proposal"
 
 
 class CoproConfig(BaseModel):
-    """COPRO search-shape hyperparameters.
-
-    Proposal sampling controls belong to the configured proposer route, not
-    to COPRO. Breadth and depth remain the algorithm-owned sweep axes.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     breadth: StrictInt = 10
@@ -91,23 +85,19 @@ class CoproConfig(BaseModel):
 
 
 class CoproRoundPlan(BaseModel):
-    """A pure, serializable description of one COPRO evaluation round."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     iteration: StrictInt
     proposal_mode: str
     proposal_count: StrictInt
     include_initial_candidate: StrictBool
-    # DSPy presents the selected best attempts from low score to high score.
+
     instruction_history: tuple[ImmutableJsonObject, ...] = Field(
         default_factory=tuple
     )
 
 
 class CoproAttempt(BaseModel):
-    """One measured candidate occurrence in the append-only COPRO history."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     occurrence_ordinal: StrictInt
@@ -122,6 +112,7 @@ class CoproAttempt(BaseModel):
     evaluation_result_ref: TypedRef
     reward_evidence_refs: tuple[TypedRef, ...]
     reward_ref: RewardRef
+    mutation_field: StrictStr = "user_prompt_template"
 
     @field_validator("reward_evidence_refs", mode="before")
     @classmethod
@@ -152,7 +143,7 @@ class CoproAttempt(BaseModel):
             self.expected_reward_policy_hash,
             field="expected_reward_policy_hash",
         )
-        template = self.candidate.record.payload.get(MUTATION_FIELD)
+        template = self.candidate.record.payload.get(self.mutation_field)
         if not isinstance(template, str) or not template:
             raise ValueError(
                 "COPRO attempt candidate requires a non-empty instruction"
@@ -188,7 +179,7 @@ class CoproAttempt(BaseModel):
 
     @property
     def instruction(self) -> str:
-        value = self.candidate.record.payload[MUTATION_FIELD]
+        value = self.candidate.record.payload[self.mutation_field]
         assert isinstance(value, str)
         return value
 
@@ -202,8 +193,8 @@ class CoproAttempt(BaseModel):
         expected_run_id: str,
         expected_evaluation_binding: EvaluationBinding,
         expected_reward_policy_hash: str,
+        mutation_field: str,
     ) -> CoproAttempt:
-        """Bind an externally loaded Reward to one measured resolution."""
 
         resolution = IntentResolution.model_validate(
             resolution.model_dump(mode="json")
@@ -255,6 +246,7 @@ class CoproAttempt(BaseModel):
             evaluation_result_ref=resolution.evaluation_result_ref,
             reward_evidence_refs=resolution.reward_evidence_refs,
             reward_ref=reward_ref,
+            mutation_field=mutation_field,
         )
 
     def prompt_entry(self) -> ImmutableJsonObject:
@@ -269,11 +261,10 @@ class CoproAttempt(BaseModel):
 
 
 class CoproState(BaseModel):
-    """Durable algorithm state reconstructed from measured occurrences."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     initial_candidate: Candidate
+    mutation_field: StrictStr = "user_prompt_template"
     completed_rounds: StrictInt = 0
     attempts: tuple[CoproAttempt, ...] = ()
     total_calls: StrictInt = 0
@@ -288,8 +279,6 @@ class CoproState(BaseModel):
 
 
 class CoproStatisticsSeries(BaseModel):
-    """DSPy's statistics keys for one single-prompt predictor."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     depth: tuple[int, ...]
@@ -300,8 +289,6 @@ class CoproStatisticsSeries(BaseModel):
 
 
 class CoproStatistics(BaseModel):
-    """DSPy-equivalent statistics projected from durable round observations."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     total_calls: StrictInt
@@ -310,8 +297,6 @@ class CoproStatistics(BaseModel):
 
 
 class CoproFinalization(BaseModel):
-    """Terminal COPRO ranking with unconditional call accounting."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     ranked_attempts: tuple[CoproAttempt, ...]
@@ -322,7 +307,6 @@ class CoproFinalization(BaseModel):
 def attempt_history_entries(
     request: OptimizationStepRequest,
 ) -> tuple[CoproAttempt, ...]:
-    """Read the append-only measured-attempt stream from a step request."""
 
     raw = request.pools.get("attempt_history", ())
     if type(raw) is not tuple:
@@ -340,14 +324,6 @@ def attempt_history_entries(
 def _unique_measured_attempts(
     entries: tuple[CoproAttempt, ...],
 ) -> tuple[CoproAttempt, ...]:
-    """Keep the best observation per template in first-seen template order.
-
-    DSPy keys its evaluated-candidate mapping by the complete mutable prompt
-    assignment. ED1 COPRO's mutation surface contains only the encoder
-    instruction, so instruction text is the corresponding key. Replacing a
-    duplicate with a better observation does not move the key, preserving
-    DSPy's stable first-seen ordering for score ties.
-    """
 
     unique: dict[str, CoproAttempt] = {}
     for entry in entries:
@@ -360,7 +336,6 @@ def _unique_measured_attempts(
 def rank_attempt_history(
     entries: tuple[CoproAttempt, ...],
 ) -> tuple[CoproAttempt, ...]:
-    """Return unique measured attempts best-first with stable score ties."""
 
     unique = _unique_measured_attempts(entries)
 
@@ -379,8 +354,6 @@ def _score_summary(scores: list[float]) -> tuple[float, float, float, float]:
 
 
 class CoproDriver:
-    """Pure owner of COPRO round planning, history selection, and ranking."""
-
     def __init__(self, config: CoproConfig) -> None:
         self.config = config
 
@@ -428,19 +401,25 @@ class CoproDriver:
     def terminal_ranking(
         attempt_history: tuple[CoproAttempt, ...],
     ) -> tuple[CoproAttempt, ...]:
-        """Return DSPy's unique, descending-score terminal candidate order."""
 
         return rank_attempt_history(attempt_history)
 
-    def initial_state(self, initial_candidate: Candidate) -> CoproState:
-        return CoproState(initial_candidate=initial_candidate)
+    def initial_state(
+        self,
+        initial_candidate: Candidate,
+        *,
+        mutation_field: str,
+    ) -> CoproState:
+        return CoproState(
+            initial_candidate=initial_candidate,
+            mutation_field=mutation_field,
+        )
 
     def fold_round(
         self,
         state: CoproState,
         attempts: tuple[CoproAttempt, ...],
     ) -> CoproState:
-        """Advance state by one breadth-sized measured occurrence batch."""
 
         if len(state.attempts) != state.completed_rounds * self.config.breadth:
             raise ValueError(
@@ -494,15 +473,16 @@ class CoproDriver:
             if attempt.intent_id in prior_intent_ids:
                 raise ValueError("COPRO attempt intent IDs must be unique")
             prior_intent_ids.add(attempt.intent_id)
+            field = state.mutation_field
             initial_fixed = {
                 key: value
                 for key, value in state.initial_candidate.payload.items()
-                if key != MUTATION_FIELD
+                if key != field
             }
             attempt_fixed = {
                 key: value
                 for key, value in attempt.candidate.record.payload.items()
-                if key != MUTATION_FIELD
+                if key != field
             }
             if attempt_fixed != initial_fixed:
                 raise ValueError(
@@ -510,6 +490,7 @@ class CoproDriver:
                 )
         return CoproState(
             initial_candidate=state.initial_candidate,
+            mutation_field=state.mutation_field,
             completed_rounds=state.completed_rounds + 1,
             attempts=state.attempts + attempts,
             total_calls=state.total_calls + len(attempts),
@@ -520,27 +501,17 @@ class CoproDriver:
         *,
         initial_candidate: Candidate,
         attempts: tuple[CoproAttempt, ...],
+        mutation_field: str,
     ) -> CoproState:
-        """Rebuild state by folding whole rounds of measured occurrences.
-
-        Folding validates that the history is one exact run's contiguous
-        occurrence sequence: whole breadth-sized rounds, contiguous occurrence
-        ordinals in evaluation order, unique intent IDs, and one shared run,
-        Evaluation Binding, and Reward Policy. Each occurrence must also leave
-        every payload field outside the instruction mutation equal to the
-        supplied initial candidate.
-
-        The initial candidate itself is the controller's input, not an anchored
-        fact: this layer never checks it against the seed round's template or
-        base reference. A controller that owns restarts is responsible for
-        supplying the same initial candidate the run began with.
-        """
 
         if len(attempts) % self.config.breadth:
             raise ValueError(
                 "COPRO history ends with a partial evaluation round"
             )
-        state = self.initial_state(initial_candidate)
+        state = self.initial_state(
+            initial_candidate,
+            mutation_field=mutation_field,
+        )
         for start in range(0, len(attempts), self.config.breadth):
             state = self.fold_round(
                 state,
@@ -549,12 +520,12 @@ class CoproDriver:
         return state
 
     def advance(self, state: CoproState) -> CoproRoundPlan:
-        """Plan the one next round from exact durable state."""
 
         if (
             self.restore_state(
                 initial_candidate=state.initial_candidate,
                 attempts=state.attempts,
+                mutation_field=state.mutation_field,
             )
             != state
         ):
@@ -570,12 +541,12 @@ class CoproDriver:
         )
 
     def finalize(self, state: CoproState) -> CoproFinalization:
-        """Finish only a complete run; call accounting is always returned."""
 
         if (
             self.restore_state(
                 initial_candidate=state.initial_candidate,
                 attempts=state.attempts,
+                mutation_field=state.mutation_field,
             )
             != state
         ):
@@ -600,13 +571,6 @@ class CoproDriver:
         self,
         rounds: tuple[tuple[CoproAttempt, ...], ...],
     ) -> CoproStatistics:
-        """Project DSPy's optional statistics from occurrence-level rounds.
-
-        ``rounds`` must retain every evaluated occurrence, including
-        duplicates. ``results_latest`` therefore summarizes the complete
-        breadth-sized round, while ``results_best`` summarizes the top ten
-        unique retained observations after that round.
-        """
 
         if len(rounds) != self.config.depth:
             raise ValueError(
@@ -654,7 +618,8 @@ def _normalize_initial_candidate(
     candidate: Candidate,
     request: OptimizationStepRequest,
 ) -> Candidate:
-    raw = candidate.payload.get(MUTATION_FIELD)
+    field = resolve_mutation_field(run=request.run)
+    raw = candidate.payload.get(field)
     if not isinstance(raw, str):
         raise ValueError("COPRO initial candidate requires an instruction")
     request.run.record.template_render_contract.validate_template(raw)
@@ -678,14 +643,6 @@ def _validate_attempt_placeholders(
 
 
 class CoproAdapter:
-    """Plan one COPRO round and emit an exact intent for each candidate.
-
-    COPRO's paid proposal call is executed through one injected
-    :class:`DurableProposalExecutor`, so an interrupted Step recovers by
-    replaying the executor's completed checkpoint instead of failing the run.
-    The executor's own durability contract states the guarantee it delivers.
-    """
-
     def __init__(
         self,
         *,
@@ -787,8 +744,9 @@ class CoproAdapter:
                 "single-prompt COPRO requires exactly one initial candidate"
             )
         initial = _normalize_initial_candidate(request.candidates[0], request)
+        mutation_field = resolve_mutation_field(run=request.run)
         self._control.proposal_contract.validate_instruction(
-            str(initial.payload[MUTATION_FIELD])
+            str(initial.payload[mutation_field])
         )
         history = attempt_history_entries(request)
         for attempt in history:
@@ -810,6 +768,7 @@ class CoproAdapter:
         state = driver.restore_state(
             initial_candidate=initial,
             attempts=history,
+            mutation_field=mutation_field,
         )
         if iteration != request.step_index:
             raise ValueError(
@@ -857,6 +816,7 @@ class CoproAdapter:
             proposal_mode=plan.proposal_mode,
             request_ordinal=iteration,
             proposal_authority_identity_hash=request.run.config_hash,
+            mutation_field=mutation_field,
             base_candidate=candidate_reference(base),
             context=context,
         )
@@ -867,6 +827,7 @@ class CoproAdapter:
             proposal_authority_identity_hash=(
                 proposal_request.proposal_authority_identity_hash
             ),
+            mutation_field=proposal_request.mutation_field,
             base_candidate=proposal_request.base_candidate,
             context={**context, "proposal_prompt": prompt},
         )
@@ -888,8 +849,7 @@ class CoproAdapter:
             while candidate_id in reserved_candidate_ids:
                 candidate_id += ":generated"
             reserved_candidate_ids.add(candidate_id)
-            # Match DSPy's candidate normalization. Validation remains a
-            # Whetstone post-generation concern, not proposer-prompt content.
+
             template = draft.template.strip('"').strip()
             disposition = "accepted"
             reason: str | None = None
@@ -1009,8 +969,6 @@ class CoproAdapter:
             budget_delta=BudgetDelta(
                 consumed={"proposal_calls": plan.proposal_count}
             ),
-            # COPRO selection/finalization is always controller-owned after
-            # the final round's external resolutions have been folded.
             proposed_status=StepStatus.CONTINUE,
             state_delta={
                 "copro_config": config.model_dump(mode="json"),

@@ -68,7 +68,6 @@ def gepa_auto_budget(
     minibatch_size: int = 35,
     full_eval_steps: int = 5,
 ) -> int:
-    """Copy DSPy's frozen GEPA ``auto_budget`` arithmetic exactly."""
 
     num_trials = int(
         max(
@@ -95,13 +94,6 @@ def gepa_auto_budget(
 
 
 class GepaControl(BaseModel):
-    """Fully resolved identity document for one canonical GEPA run.
-
-    No Python callback, sampler, policy, selector, logger, or filesystem
-    checkpoint object is accepted here. All upstream behavior is selected by
-    frozen, serializable controls and runs through public ``gepa.optimize``.
-    """
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     reflection_model: ProposerConfig
@@ -114,6 +106,7 @@ class GepaControl(BaseModel):
     task_model_identity_hash: StrictStr
     prompt_format_identity_hash: StrictStr
     prompt_binding_identity_hash: StrictStr
+    mutation_field: StrictStr = "user_prompt_template"
     source_trainset_task_hashes: tuple[StrictStr, ...]
     source_valset_task_hashes: tuple[StrictStr, ...] | None
     trainset_task_hashes: tuple[StrictStr, ...]
@@ -129,6 +122,12 @@ class GepaControl(BaseModel):
     candidate_selection_strategy: GepaCandidateSelection = "pareto"
     skip_perfect_score: StrictBool = True
     add_format_failure_as_feedback: StrictBool = False
+    submission_result_field: StrictStr = "submission_result"
+    format_failure_codes: tuple[StrictStr, ...] = (
+        "format_failure",
+        "output_parse_failure",
+        "render_key_error",
+    )
     component_selector: GepaComponentSelector = "round_robin"
     use_merge: StrictBool = True
     max_merge_invocations: StrictInt = 5
@@ -264,6 +263,14 @@ class GepaControl(BaseModel):
             )
         if self.reflection_minibatch_size < 1:
             raise ValueError("reflection_minibatch_size must be positive")
+        if not self.submission_result_field.strip():
+            raise ValueError("submission_result_field must be non-empty")
+        if not self.format_failure_codes:
+            raise ValueError("format_failure_codes must be non-empty")
+        if len(set(self.format_failure_codes)) != len(
+            self.format_failure_codes
+        ):
+            raise ValueError("format_failure_codes must be unique")
         if self.max_merge_invocations < 0:
             raise ValueError("max_merge_invocations must be non-negative")
         if self.merge_val_overlap_floor < 1:
@@ -315,7 +322,6 @@ class GepaControl(BaseModel):
                 valset_size=len(self.valset_task_hashes),
             )
         if self.max_full_evals is not None:
-            # This intentionally copies DSPy's asymmetric valset=None branch.
             denominator = len(self.trainset_task_hashes)
             if self.source_valset_task_hashes is not None:
                 denominator += len(self.valset_task_hashes)
@@ -347,7 +353,6 @@ class GepaControl(BaseModel):
             )
 
     def upstream_kwargs(self) -> dict[str, Any]:
-        """Project only frozen public options into ``gepa.optimize``."""
 
         return {
             "candidate_selection_strategy": (
@@ -412,7 +417,6 @@ def configure_gepa(
     seed: int = 0,
     teacher: object | None = None,
 ) -> GepaControl:
-    """Resolve DSPy-compatible arguments before any observable effect."""
 
     if teacher is not None:
         raise ValueError("Teacher is not supported in GEPA.")

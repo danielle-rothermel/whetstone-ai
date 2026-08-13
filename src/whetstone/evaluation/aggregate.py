@@ -23,45 +23,16 @@ from whetstone.evaluation import (
 )
 from whetstone.evaluation.attribution import require_exclusive_row_state
 
-# Persisted-format contract for Aggregate. Exact wire fields are pinned
-# by a golden test; never derive them from dataclass fields.
 AGGREGATE_SCHEMA = "whetstone.aggregate"
 
 
 class RowPolicy(StrEnum):
-    """Explicit policy for failed / missing / invalid rows.
-
-    ``PROPAGATE`` (default): any such row makes the aggregate ``MISSING_DATA``
-    — the aggregate is not reported over an incomplete matrix. ``SKIP``:
-    exclude such rows from the reduction, recording the exclusion counts; an
-    empty reduction is an explicit non-OK status, never a fabricated value.
-    """
-
     PROPAGATE = "propagate"
     SKIP = "skip"
 
 
 @dataclass(frozen=True, slots=True)
 class CompletenessPolicy:
-    """A declared missing-data policy with an optional bounded skip tolerance.
-
-    ``row_policy`` is the aggregation ``missing_data`` rule.
-    ``max_skip_fraction``
-    is the DECLARED completeness tolerance: under ``SKIP`` the aggregate is
-    only certified when the fraction of skipped (missing + failed + invalid)
-    rows over the complete planned matrix is at or below this bound; beyond it
-    the aggregate is forced ``MISSING_DATA`` (an incomplete evaluation),
-    never a value
-    reduced over an out-of-tolerance matrix. Under ``PROPAGATE`` the bound is
-    inert (any skipped row already makes the aggregate missing).
-
-    The tolerance is identity-bearing: it is folded into the Aggregation Config
-    identity (a distinct ``max_skip_fraction`` yields a distinct
-    ``eval_config_hash``). ``0.0`` is exact completeness — SKIP with a ``0.0``
-    bound certifies only a fully complete matrix, matching PROPAGATE's numeric
-    result while remaining a declared, distinct config identity.
-    """
-
     row_policy: RowPolicy = RowPolicy.PROPAGATE
     max_skip_fraction: float = 0.0
 
@@ -81,22 +52,10 @@ class CompletenessPolicy:
         )
 
     def skip_fraction_token(self) -> str:
-        """The canonical, identity-bearing string form of the tolerance.
-
-        Python's shortest round-trippable representation makes this injective
-        over accepted binary floats. Signed zero is normalized because it has
-        the same threshold behavior as positive zero.
-        """
         value = float(self.max_skip_fraction)
         return "0.0" if value == 0.0 else repr(value)
 
     def within_tolerance(self, *, skipped: int, planned: int) -> bool:
-        """Whether ``skipped`` of ``planned`` rows is within the bound.
-
-        Only meaningful under ``SKIP``; under ``PROPAGATE`` any skip is
-        already fatal to the scalar via the reduction, so this is not
-        consulted.
-        """
         if planned <= 0:
             return True
         return (skipped / planned) <= self.max_skip_fraction
@@ -104,8 +63,6 @@ class CompletenessPolicy:
 
 @dataclass(frozen=True, slots=True)
 class EvaluationMatrixPlan:
-    """Validated composite authority for one complete evaluation matrix."""
-
     eval_config: EvalConfig
     sampling_config: SamplingConfig
     task_set: TaskSet
@@ -172,30 +129,18 @@ class EvaluationMatrixPlan:
 
     @property
     def policy(self) -> CompletenessPolicy:
-        """Completeness behavior from the validated Aggregation Config."""
 
         return _policy_from_aggregation_config(self.aggregation_config)
 
 
 @dataclass(frozen=True, slots=True)
 class RowValue:
-    """One planned cell's contribution to an aggregate.
-
-    Exactly one of ``value`` is present, or the row is explicitly not present
-    (``missing``) / failed (``failed``) / invalid (``invalid``). None of these
-    are inferred from a bare ``None``: each is a declared state so no row is
-    silently dropped.
-    """
-
-    #: The measured numeric value, when the row produced one.
     value: float | None = None
-    #: The row's generation failed (for example, an exhausted provider or
-    #: execution-infrastructure failure).
+
     failed: bool = False
-    #: The planned row is absent from the observed matrix.
+
     missing: bool = False
-    #: The row produced an invalid value (e.g. zero-denominator Compression
-    #: Ratio) — measured-but-not-a-number.
+
     invalid: bool = False
 
     def __post_init__(self) -> None:
@@ -211,36 +156,21 @@ class RowValue:
         return self.value is not None
 
     def to_aggregation_input(self) -> AggregationInput:
-        """Project onto an ``AggregationInput``.
-
-        A present row contributes its value (applicable, present). A missing
-        or failed row is applicable-but-absent (``value=None``), so a
-        ``propagate`` reduction sees the incompleteness. An invalid row is
-        marked not-applicable (it was measured but is not a usable number).
-        """
 
         if self.is_present:
             return AggregationInput(value=self.value, applicable=True)
         if self.invalid:
             return AggregationInput(value=None, applicable=False)
-        # missing or failed: applicable slot with no present value.
+
         return AggregationInput(value=None, applicable=True)
 
 
 @dataclass(frozen=True, slots=True)
 class TaskRows:
-    """All planned Sample-ID rows for one Task.
-
-    The :class:`EvaluationMatrixPlan` owns the repeat count. A row list shorter
-    than that count declares the shortfall as ``missing`` rows so the per-task
-    mean sees the full planned denominator.
-    """
-
     task_hash: str
     rows: tuple[RowValue, ...]
 
     def completed_rows(self, num_samples: int) -> tuple[RowValue, ...]:
-        """Rows padded to the plan repeat count with explicit missing rows."""
 
         if len(self.rows) > num_samples:
             raise ValueError(
@@ -255,25 +185,16 @@ class TaskRows:
 
 @dataclass(frozen=True, slots=True)
 class Aggregate:
-    """A provenance-bearing Aggregate.
-
-    Binds a pure :class:`AggregationOutput` to the aggregate identity
-    ``(graph_hash, eval_config_hash)``, the complete planned matrix
-    (``task_count`` by ``num_samples``), and the stated Evaluation Binding
-    hash. The numeric reduction stays in the pure ``aggregation_output``;
-    provenance is Whetstone's.
-    """
-
     name: str
     graph_hash: str
     eval_config_hash: str
     evaluation_binding_hash: str
-    #: Complete planned matrix shape.
+
     task_count: int
     num_samples: int
-    #: The pure aggregation output (provenance-free).
+
     aggregation_output: AggregationOutput
-    #: Explicit accounting so no row is silently dropped.
+
     rows_present: int
     rows_missing: int
     rows_failed: int
@@ -339,17 +260,10 @@ def _row_counts(rows: tuple[RowValue, ...]) -> tuple[int, int, int, int]:
     return present, missing, failed, invalid
 
 
-#: The extra declared Variable that folds the bounded skip tolerance into the
-#: Aggregation Config identity.
 SKIP_TOLERANCE_VARIABLE = "max_skip_fraction"
 
 
 def tolerance_variable_spec() -> VariableSpec:
-    """The ``max_skip_fraction`` :class:`VariableSpec` (declared, defaulted).
-
-    Returned as a builder so callers materialize an Aggregation Config whose
-    identity folds in the tolerance.
-    """
     return VariableSpec(
         name=SKIP_TOLERANCE_VARIABLE,
         default="0.0",
@@ -358,12 +272,6 @@ def tolerance_variable_spec() -> VariableSpec:
 
 
 def aggregation_definition(definition_id: str) -> AggregationDefinition:
-    """An Aggregation Definition that additionally declares the skip tolerance.
-
-    The base definition declares reduction / missing_data /
-    zero_denominator; this appends the identity-bearing ``max_skip_fraction``
-    Variable so a declared completeness tolerance changes the config identity.
-    """
     base = AggregationDefinition(definition_id=definition_id, version="1")
     return base.model_copy(
         update={"variables": (*base.variables, tolerance_variable_spec())}
@@ -419,17 +327,6 @@ def enforce_skip_tolerance(
     skipped: int,
     planned: int,
 ) -> AggregationOutput:
-    """Force ``MISSING_DATA`` when SKIP exceeds the declared skip tolerance.
-
-    Under ``SKIP`` the reduction happily certifies a value over the
-    surviving rows no matter how many were skipped; the DECLARED completeness
-    tolerance bounds that. When the skipped fraction exceeds
-    ``max_skip_fraction`` the evaluation is out of tolerance and its scalar
-    is set to ``None`` (``MISSING_DATA``) so the incomplete-evaluation guard
-    fires — the skipped
-    rows are still recorded as explicit counts on the aggregate. Within the
-    bound the reduced value stands unchanged.
-    """
     if policy.row_policy is not RowPolicy.SKIP:
         return output
     if policy.within_tolerance(skipped=skipped, planned=planned):
@@ -447,24 +344,6 @@ def unweighted_task_mean(
     task_rows: tuple[TaskRows, ...],
     plan: EvaluationMatrixPlan,
 ) -> Aggregate:
-    """Unweighted mean of caller-derived scalars over the complete Task Set.
-
-    Two staged reductions:
-
-    1. **Per Task**: the mean scalar across the task's Sample IDs. Each task's
-       planned rows are padded to ``num_samples`` with explicit missing rows,
-       so the per-task denominator is the full plan.
-    2. **Across the complete Task Set**: the configured unweighted mean of the
-       per-task means.
-
-    ``aggregate_name`` is the caller-owned durable name bound to the result.
-    The plan's Aggregation Config governs failed / missing rows. Under
-    ``PROPAGATE`` any such row makes a task's mean (and hence the aggregate)
-    ``MISSING_DATA``. Under ``SKIP`` those rows are excluded from the per-task
-    denominator, and a task with no usable rows contributes a not-applicable
-    slot to the cross-task mean. No row is silently dropped: all are counted
-    in the aggregate's provenance.
-    """
 
     if not isinstance(aggregate_name, str):
         raise TypeError("aggregate_name must be a string")
@@ -506,10 +385,7 @@ def unweighted_task_mean(
             plan.aggregation_config,
             tuple(row.to_aggregation_input() for row in completed),
         )
-        # The per-task mean feeds the cross-task reduction. A non-OK per-task
-        # status is carried explicitly: propagate -> the missing per-task value
-        # flows as an applicable-but-absent slot; not-applicable (no usable
-        # rows under skip) -> a not-applicable slot.
+
         if task_output.status is AggregationStatus.OK:
             per_task_inputs.append(
                 AggregationInput(value=task_output.value, applicable=True)
@@ -519,8 +395,6 @@ def unweighted_task_mean(
                 AggregationInput(value=None, applicable=False)
             )
         else:
-            # MISSING_DATA or ZERO_DENOMINATOR: an applicable slot with no
-            # present value, so a propagate cross-task reduction sees it.
             per_task_inputs.append(
                 AggregationInput(value=None, applicable=True)
             )

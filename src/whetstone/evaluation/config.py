@@ -1,5 +1,3 @@
-"""Whetstone-owned evaluation definition and configuration contracts."""
-
 from __future__ import annotations
 
 import json
@@ -35,10 +33,6 @@ SCHEMA_EVAL_CONFIG = "whetstone.eval.config"
 SCHEMA_TASK_SET = "whetstone.task_set"
 SCHEMA_SAMPLE_PLAN = "whetstone.sample_plan"
 SCHEMA_SAMPLE_ID = "whetstone.sample_id"
-SCHEMA_COMPRESSION_REFERENCE_KEY = "whetstone.compression_reference.key"
-SCHEMA_COMPRESSION_REFERENCE_ARTIFACT = (
-    "whetstone.compression_reference.artifact"
-)
 
 
 class _FrozenModel(BaseModel):
@@ -51,7 +45,6 @@ def identity_hash_for(
     payload: object,
     schema_version: int = SCHEMA_VERSION,
 ) -> str:
-    """Hash one complete finite identity-bearing payload."""
 
     return compute_identity_hash(
         schema=schema,
@@ -61,12 +54,10 @@ def identity_hash_for(
 
 
 class VariableError(ValueError):
-    """A config assignment does not satisfy its definition."""
+    pass
 
 
 class VariableSpec(_FrozenModel):
-    """One serialized variable declaration."""
-
     name: str
     allowed: tuple[JsonValue, ...] | None = None
     default: JsonValue | None = None
@@ -89,7 +80,6 @@ def resolve_assignment(
     specs: tuple[VariableSpec, ...],
     assignment: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
-    """Validate and complete an assignment in declaration order."""
 
     spec_by_name = {spec.name: spec for spec in specs}
     if len(spec_by_name) != len(specs):

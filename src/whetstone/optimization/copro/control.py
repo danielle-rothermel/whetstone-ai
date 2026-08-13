@@ -23,10 +23,10 @@ from whetstone.experiment.binding import (
     EvaluationBinding,
 )
 from whetstone.optimization.codex.proposer import CodexCliProposerConfig
-from whetstone.optimization.copro.code_comp.contract import (
-    EncDecCoproProposalContract,
+from whetstone.optimization.copro.proposal_contract import (
+    CoproProposalContractRecord,
 )
-from whetstone.optimization.proposal.prompts import (
+from whetstone.optimization.copro.prompts import (
     COPRO_PROPOSAL_PROMPT_SCHEMA_TAG,
 )
 from whetstone.optimization.proposal.proposer import (
@@ -49,7 +49,7 @@ class CoproInjectedDefaults(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: CoproProposerConfig
-    proposal_contract: EncDecCoproProposalContract
+    proposal_contract: CoproProposalContractRecord
     evaluation_binding: EvaluationBinding
     expected_reward_policy_hash: StrictStr
     provider_execution_policy_hash: StrictStr
@@ -83,7 +83,7 @@ class CoproControl(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prompt_model: CoproProposerConfig
-    proposal_contract: EncDecCoproProposalContract
+    proposal_contract: CoproProposalContractRecord
     evaluation_binding: EvaluationBinding
     expected_reward_policy_hash: StrictStr
     breadth: StrictInt = 10

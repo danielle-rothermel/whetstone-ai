@@ -28,9 +28,8 @@ __all__: list[str] = []
 
 _START_TOKEN = b"\x01"
 _GUARDIAN_READY_TOKEN = b"\x01"
-# High-concurrency launches can leave a newly spawned guardian runnable but
-# unscheduled for more than one second. Readiness still requires its token;
-# this bound is only the local-startup watchdog.
+
+
 _GUARDIAN_READY_TIMEOUT_SECONDS = 10.0
 _PRE_GATE_READY_TOKEN = b"\x01"
 
@@ -200,7 +199,6 @@ def _publish_pre_gate_ready(writer: int | None) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Execute one gated job and publish one typed result envelope."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) not in {7, 8}:
         sys.stderr.write(

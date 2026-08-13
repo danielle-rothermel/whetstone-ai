@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from whetstone.core.roles import EvaluationRole
-from whetstone.evaluation.engine import EvaluationEngine
+from whetstone.evaluation.protocol import EvaluationEngine
 from whetstone.experiment.binding import (
     EVALUATION_BINDING_SCHEMA_VERSION,
     EvaluationBinding,
@@ -16,7 +16,7 @@ def preview_evaluation_binding(
     *,
     campaign: str,
     provenance_note: str,
-    environment_fingerprint: ExecutionEnvironmentFingerprint,
+    environment_fingerprint: ExecutionEnvironmentFingerprint | None = None,
     role: EvaluationRole = EvaluationRole.INTERNAL,
 ) -> EvaluationBinding:
     return EvaluationBinding(
@@ -25,6 +25,8 @@ def preview_evaluation_binding(
         role=role,
         campaign=campaign,
         provider_execution_policy_ref=engine.provider_execution_policy_ref,
-        environment_fingerprint=environment_fingerprint,
+        environment_fingerprint=(
+            environment_fingerprint or ExecutionEnvironmentFingerprint()
+        ),
         provenance_note=provenance_note,
     )

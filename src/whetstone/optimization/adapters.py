@@ -30,15 +30,12 @@ __all__ = [
     "AdapterOutput",
     "AdapterRegistry",
     "AdapterReplayPolicyMismatchError",
-    "IdentityOptimizerAdapter",
     "MappingAdapterRegistry",
     "OptimizerAdapter",
 ]
 
 
 class AdapterReplayPolicyMismatchError(ValueError):
-    """The host cannot safely run an adapter under its configured policy."""
-
     def __init__(
         self,
         *,
@@ -57,8 +54,6 @@ class AdapterReplayPolicyMismatchError(ValueError):
 
 
 class AdapterOutput(BaseModel):
-    """Serializable output checkpointed before downstream effects."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     proposed_candidates: tuple[Candidate, ...] = ()
@@ -99,8 +94,6 @@ class AdapterOutput(BaseModel):
 
 
 class AdapterCheckpoint(BaseModel):
-    """Bound checkpoint proving which request and adapter produced output."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_ref: TypedRef
@@ -130,15 +123,11 @@ class OptimizerAdapter(Protocol):
 
 
 class AdapterRegistry(Protocol):
-    """Injected lookup seam used by the core harness."""
-
     def resolve(self, adapter_key: str) -> OptimizerAdapter: ...
 
 
 @dataclass(frozen=True, slots=True)
 class MappingAdapterRegistry:
-    """Small immutable registry useful to applications and tests."""
-
     adapters: Mapping[str, OptimizerAdapter]
 
     def __post_init__(self) -> None:
@@ -161,34 +150,3 @@ class MappingAdapterRegistry:
                 f"no optimizer adapter registered for {adapter_key!r}"
             ) from exc
 
-
-class IdentityOptimizerAdapter:
-    """One pure step, unchanged candidates, and no measurement."""
-
-    @property
-    def key(self) -> str:
-        return "identity"
-
-    @property
-    def mode(self) -> StepMode:
-        return StepMode.PURE
-
-    @property
-    def required_replay_policy(self) -> ReplayPolicy:
-        return ReplayPolicy.IDEMPOTENT
-
-    def invoke(
-        self,
-        request: OptimizationStepRequest,
-        handles: tuple[RuntimeToolHandle, ...],
-    ) -> AdapterOutput:
-        if request.kind is not StepKind.IDENTITY:
-            raise ValueError("identity runs only the identity step kind")
-        if handles:
-            raise ValueError("identity receives no Runtime Tool Handles")
-        return AdapterOutput(
-            proposed_candidates=request.candidates,
-            accepted_candidates=request.candidates,
-            budget_delta=BudgetDelta(),
-            proposed_status=StepStatus.COMPLETE,
-        )

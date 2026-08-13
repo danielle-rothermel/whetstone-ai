@@ -3,16 +3,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
-from whetstone.core.roles import EvaluationRole
-from whetstone.envs.code_comp.constants import (
-    CODE_COMP_ENV_NAME,
-    MUTATION_FIELD,
-)
-from whetstone.evaluation.engine import EvaluationEngine, EvaluationRequest
-from whetstone.experiment.binding import (
-    EVALUATION_BINDING_SCHEMA_VERSION,
-    EvaluationBinding,
-)
+from whetstone.evaluation.preview.binding import preview_evaluation_binding
+from whetstone.evaluation.protocol import EvaluationEngine, EvaluationRequest
 from whetstone.experiment.candidate import Candidate
 from whetstone.optimization.tools.contracts import ToolCall, ToolConfig
 from whetstone.optimization.tools.execution import (
@@ -26,7 +18,6 @@ class EngineToolEvaluator:
         self._engine = engine
 
     def validate(self, call: ToolCall, config: ToolConfig) -> None:
-        """Refuse an unevaluatable Call without consuming Tool Capacity."""
         self._resolve_engine(call, config)
 
     def _resolve_engine(
@@ -39,10 +30,7 @@ class EngineToolEvaluator:
                 "tool config is not bound to the engine's exact Eval Config"
             )
         model_route = call.args.get("model_route")
-        provider_config = (
-            self._engine.experiment.generation_graph.provider_call_config
-        )
-        expected_model_route = provider_config.definition.route.model
+        expected_model_route = self._engine.expected_model_route()
         if model_route != expected_model_route:
             raise ToolValidationError(
                 "tool call model_route must match the engine's exact "
@@ -51,8 +39,6 @@ class EngineToolEvaluator:
         engine = self._engine
         task_ids = call.args.get("task_ids")
         if task_ids is not None:
-            # Frozen JSON args render arrays as tuples, so accept any
-            # non-string ordered sequence of strings.
             if isinstance(task_ids, (str, bytes)) or not isinstance(
                 task_ids, Sequence
             ):
@@ -75,10 +61,7 @@ class EngineToolEvaluator:
     def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
         engine = self._resolve_engine(call, config)
         template = call.args.get("template")
-        if engine.experiment.env_name == CODE_COMP_ENV_NAME:
-            payload = {MUTATION_FIELD: template}
-        else:
-            payload = {"user_prompt_template": template}
+        payload = {config.candidate_template_field: template}
         candidate = Candidate(
             candidate_id=call.call_id,
             base_ref=TypedRef.model_validate(call.args["base_ref"]),
@@ -87,14 +70,10 @@ class EngineToolEvaluator:
         evaluated = engine.evaluate(
             EvaluationRequest(
                 candidate=candidate,
-                evaluation_binding=EvaluationBinding(
-                    schema_version=EVALUATION_BINDING_SCHEMA_VERSION,
-                    eval_config=self._engine.eval_config_ref,
-                    role=EvaluationRole.INTERNAL,
+                evaluation_binding=preview_evaluation_binding(
+                    engine,
                     campaign=config.store_namespace_key,
-                    provider_execution_policy_ref=(
-                        self._engine.provider_execution_policy_ref
-                    ),
+                    provenance_note=config.tool_name,
                 ),
                 purpose=config.tool_name,
             )

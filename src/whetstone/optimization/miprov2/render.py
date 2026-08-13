@@ -28,7 +28,6 @@ def _format_literal_text(
     template_render_contract: TemplateRenderContract,
     context: str,
 ) -> str:
-    """Protect non-instruction text under the exact renderer semantics."""
 
     if template_render_contract.kind is TemplateRenderKind.PYTHON_FORMAT_V1:
         return value.replace("{", "{{").replace("}", "}}")
@@ -49,7 +48,6 @@ def _format_literal_json(
     template_render_contract: TemplateRenderContract,
     context: str,
 ) -> str:
-    """Encode JSON as protected literal text under the exact renderer."""
 
     return _format_literal_text(
         json.dumps(value, sort_keys=True, separators=(",", ":")),
@@ -63,7 +61,6 @@ def compose_user_prompt_template(
     *,
     template_render_contract: TemplateRenderContract,
 ) -> str:
-    """Compose ordered instructions, metadata, and demonstrations exactly."""
 
     if len(components) != 1:
         raise ValueError(
@@ -126,7 +123,6 @@ def candidate_from_components(
     components: Sequence[Mapping[str, Any]],
     run: OptimizationRun | OptimizationRunRef,
 ) -> Candidate:
-    """Create one exact candidate through the canonical mutation boundary."""
 
     template_render_contract = _validated_optimization_run(
         run
@@ -144,7 +140,7 @@ def candidate_from_components(
     )
     if candidate.base_ref != base.record_ref:
         raise AssertionError("canonical candidate did not bind the exact base")
-    diff_check(base=base.record, proposed=candidate)
+    diff_check(base=base.record, proposed=candidate, run=run)
     return candidate
 
 

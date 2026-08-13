@@ -67,8 +67,6 @@ def tool_result_to_mcp_result(
 
 
 class EvaluateCandidateServer(MCPServer[None]):
-    """Expose one configured evaluation tool through the official MCP SDK."""
-
     def __init__(self, *, handle: RuntimeToolHandle) -> None:
         definition = handle.config.definition.record
         input_fields = frozenset(definition.input_fields)

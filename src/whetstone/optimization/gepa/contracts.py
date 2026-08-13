@@ -44,12 +44,10 @@ GEPA_EFFECT_TRANSCRIPT_SCHEMA_VERSION = 1
 
 
 class GepaEffectConflictError(RuntimeError):
-    """A replay ordinal was already bound to another semantic effect."""
+    pass
 
 
 class GepaEffectContext(BaseModel):
-    """Immutable run and source identities shared by every GEPA effect."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
@@ -78,8 +76,6 @@ class GepaEffectContext(BaseModel):
 
 
 class GepaEffectSlot(BaseModel):
-    """One replay position in an upstream run restarted from ordinal zero."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     context: GepaEffectContext
@@ -102,8 +98,6 @@ class GepaEffectSlot(BaseModel):
 
 
 class GepaCandidateComponent(BaseModel):
-    """One ordered component in the authoritative upstream candidate map."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: StrictStr
@@ -117,8 +111,6 @@ class GepaCandidateComponent(BaseModel):
 
 
 class GepaDataInstance(BaseModel):
-    """Integer upstream position bound to canonical Whetstone task evidence."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     upstream_position: StrictInt
@@ -140,8 +132,6 @@ class GepaDataInstance(BaseModel):
 
 
 class GepaEvaluationAuthorityBinding(BaseModel):
-    """Exact evaluation route and runtime authority for one run."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -178,8 +168,6 @@ class GepaEvaluationAuthorityBinding(BaseModel):
 
 
 class GepaProposalAuthorityBinding(BaseModel):
-    """Exact reflection route, prompt binding, and durable authority."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     authority_identity_hash: StrictStr
@@ -205,8 +193,6 @@ class GepaProposalAuthorityBinding(BaseModel):
 
 
 class GepaEvaluationEffectRequest(BaseModel):
-    """One ordered upstream adapter ``evaluate`` invocation."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     slot: GepaEffectSlot
@@ -252,8 +238,6 @@ class GepaEvaluationEffectRequest(BaseModel):
 
 
 class GepaTrajectoryProjection(BaseModel):
-    """Canonical reflective evidence retained for one evaluated row."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     data_id: StrictStr
@@ -298,8 +282,6 @@ class GepaTrajectoryProjection(BaseModel):
 
 
 class GepaComponentTraceProjection(BaseModel):
-    """Component-specific trace choice matching DSPy's reflection seam."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -331,8 +313,6 @@ class GepaComponentTraceProjection(BaseModel):
 
 
 class GepaScoreMismatchEvidence(BaseModel):
-    """The first score/feedback mismatch warned about in one adapter run."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -350,8 +330,6 @@ GepaTrajectoryProjection.model_rebuild()
 
 
 class GepaEvaluationRow(BaseModel):
-    """One ordered output/score/trajectory with canonical evidence."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -390,8 +368,6 @@ class GepaEvaluationRow(BaseModel):
 
 
 class GepaEvaluationEffectResult(BaseModel):
-    """Complete ordered evidence returned to one upstream metric call."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_hash: StrictStr
@@ -414,8 +390,6 @@ class GepaEvaluationEffectResult(BaseModel):
 
 
 class GepaProposalEffectRequest(BaseModel):
-    """One rendered, component-specific upstream reflection invocation."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     slot: GepaEffectSlot
@@ -464,8 +438,6 @@ class GepaProposalEffectRequest(BaseModel):
 
 
 class GepaProposalEffectResult(BaseModel):
-    """Raw and parsed proposal evidence for one selected component."""
-
     model_config = ConfigDict(
         frozen=True,
         extra="forbid",
@@ -530,8 +502,6 @@ class GepaProposalEffectResult(BaseModel):
 
 
 class GepaEffectBroker(Protocol):
-    """The only task/reflection side-effect path exposed to upstream GEPA."""
-
     def evaluate(
         self,
         request: GepaEvaluationEffectRequest,
@@ -544,8 +514,6 @@ class GepaEffectBroker(Protocol):
 
 
 class GepaEvaluationEffectAuthority(Protocol):
-    """Identity-bearing runtime evaluator registered before DBOS launch."""
-
     @property
     def runtime_hash(self) -> str: ...
 
@@ -556,8 +524,6 @@ class GepaEvaluationEffectAuthority(Protocol):
 
 
 class GepaProposalEffectAuthority(Protocol):
-    """Identity-bearing, physically durable reflection authority."""
-
     @property
     def runtime_hash(self) -> str: ...
 
@@ -572,8 +538,6 @@ GepaEffectResult = GepaEvaluationEffectResult | GepaProposalEffectResult
 
 
 class GepaEffectTranscriptEntry(BaseModel):
-    """One complete ordinal-to-semantic-effect evidence index entry."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     invocation_ordinal: StrictInt
@@ -600,8 +564,6 @@ class GepaEffectTranscriptEntry(BaseModel):
 
 
 class GepaEffectTranscript(BaseModel):
-    """Ordered effect evidence paired with, but separate from, GEPAResult."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     context: GepaEffectContext
@@ -626,8 +588,6 @@ class GepaEffectTranscript(BaseModel):
 
 
 class GepaEffectRecorder:
-    """Bind semantic requests to ordinals and retain completed results."""
-
     def __init__(self, store: ObjectStore) -> None:
         self._store = store
 

@@ -1,10 +1,10 @@
 from whetstone.optimization.validation.matrix import (
-    MATRIX_SCHEMA_VERSION,
     BehaviorMatrixHooks,
+    MatrixTreatmentBase,
     MatrixTreatmentState,
     MatrixTreatmentStatus,
-    append_status,
     atomic_write_model,
+    append_status,
     map_openai_credential,
     prepare_manifest,
     raise_open_file_limit,
@@ -13,8 +13,8 @@ from whetstone.optimization.validation.matrix import (
 )
 
 __all__ = [
-    "MATRIX_SCHEMA_VERSION",
     "BehaviorMatrixHooks",
+    "MatrixTreatmentBase",
     "MatrixTreatmentState",
     "MatrixTreatmentStatus",
     "append_status",

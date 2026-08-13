@@ -62,8 +62,6 @@ class TeacherSource(StrEnum):
 
 
 class LabeledSelectionPlan(BaseModel):
-    """DSPy ``LabeledFewShot`` selections, in predictor iteration order."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     component_ids: tuple[StrictStr, ...]
@@ -96,7 +94,6 @@ def plan_labeled_selection(
     k: int,
     sample: bool,
 ) -> LabeledSelectionPlan:
-    """Reproduce ``LabeledFewShot.compile``'s local ``Random(0)`` stream."""
 
     if trainset_size < 0:
         raise ValueError("trainset_size cannot be negative")
@@ -117,8 +114,6 @@ def plan_labeled_selection(
 
 
 class TeacherPreparationPlan(BaseModel):
-    """Pure representation of DSPy's teacher copy/reset behavior."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     source: TeacherSource
@@ -140,8 +135,6 @@ class TeacherPreparationPlan(BaseModel):
 
 
 class FewshotCandidatePlan(BaseModel):
-    """One candidate from the exact ``range(-3, N - 3)`` sequence."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     candidate_ordinal: StrictInt
@@ -209,8 +202,7 @@ class FewshotCandidatePlan(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract. Nested
-        # records use their canonical JSON projection.
+
         return {
             "candidate_ordinal": self.candidate_ordinal,
             "candidate_seed": self.candidate_seed,
@@ -247,8 +239,6 @@ class FewshotCandidatePlan(BaseModel):
 
 
 class FewshotCandidatePlanningInputs(BaseModel):
-    """All authorities needed to replay the special-seed plan sequence."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bindings: Miprov2DurableBindings
@@ -269,8 +259,6 @@ class FewshotCandidatePlanningInputs(BaseModel):
 
 
 class FewshotCandidatePlanningResult(BaseModel):
-    """Candidate plans plus the post-bootstrap shared-RNG checkpoint."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     inputs: FewshotCandidatePlanningInputs
@@ -344,11 +332,6 @@ def create_fewshot_candidate_plans(
     rng_checkpoint: Miprov2RngCheckpoint,
     zeroshot_opt: bool = False,
 ) -> FewshotCandidatePlanningResult:
-    """Plan DSPy's complete special-seed sequence and shared RNG draws.
-
-    ``metric_threshold`` does not influence RNG draws, but is folded into each
-    candidate plan so replay cannot silently change the acceptance rule.
-    """
 
     inputs = FewshotCandidatePlanningInputs(
         bindings=bindings,
@@ -580,8 +563,6 @@ def _build_fewshot_candidate_plans(
 
 
 class BootstrapCompilerState(BaseModel):
-    """Folded state for exactly one ``BootstrapFewShot`` compiler."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     plan_identity_hash: StrictStr
@@ -678,8 +659,6 @@ def initial_compiler_state(
 
 
 class BootstrapAttemptPlan(BaseModel):
-    """One task-model effect request selected by the pure state machine."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     bindings: Miprov2DurableBindings
@@ -723,8 +702,7 @@ class BootstrapAttemptPlan(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # Persisted identity keys are an explicit wire contract. The durable
-        # bindings use their canonical JSON projection.
+
         return {
             "bindings": self.bindings.model_dump(mode="json"),
             "plan_identity_hash": self.plan_identity_hash,
@@ -754,7 +732,6 @@ def next_bootstrap_attempt(
     plan: FewshotCandidatePlan,
     state: BootstrapCompilerState,
 ) -> BootstrapAttemptPlan | None:
-    """Return the next effect, or ``None`` once DSPy's loops would stop."""
 
     _validate_state_for_plan(plan, state)
     if state.terminal_failure is not None:
@@ -792,8 +769,6 @@ def _next_bootstrap_attempt_unchecked(
 
 
 class BootstrapGenerationResult(BaseModel):
-    """Normalized evidence returned by one canonical bootstrap evaluation."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempt_identity_hash: StrictStr
@@ -831,8 +806,6 @@ class BootstrapGenerationResult(BaseModel):
 
 
 class BootstrapTerminalFailure(BaseModel):
-    """Durable terminal error reached after charging the final attempt."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempt_identity_hash: StrictStr
@@ -854,8 +827,6 @@ class BootstrapTerminalFailure(BaseModel):
 
 
 class BootstrapFoldEvidence(BaseModel):
-    """One append-only attempted generation and its derived acceptance."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     attempt: BootstrapAttemptPlan
@@ -894,8 +865,6 @@ BootstrapCompilerState.model_rebuild()
 
 
 class BootstrapErrorLimitReached(RuntimeError):
-    """DSPy's per-compiler error limit was reached."""
-
     def __init__(
         self,
         *,
@@ -923,7 +892,6 @@ def fold_bootstrap_result(
     metric_threshold: float | None,
     component_ids: tuple[str, ...],
 ) -> BootstrapCompilerState:
-    """Fold one effect using DSPy's success, trace, and cursor rules."""
 
     _validate_state_for_plan(plan, state)
     if component_ids != plan.component_ids:
@@ -1086,11 +1054,7 @@ def _choose_trace_step(
 ) -> ObservedTraceStep:
     if len(steps) == 1:
         return steps[0]
-    # Frozen DSPy constructs ``Example(augmented=True, **inputs, **outputs)``
-    # for every repeated trace, then seeds ``Random`` with
-    # ``Hasher.hash(tuple(demos))``. ``Hasher.hash`` is SHA-256 over the
-    # standard-library pickle. Keep the exact hash algorithm and demo field
-    # order while projecting away Whetstone-only trace/component metadata.
+
     group_hash = hashlib.sha256(
         _frozen_dspy_demo_tuple_pickle(steps)
     ).hexdigest()
@@ -1099,12 +1063,6 @@ def _choose_trace_step(
 
 
 class _FrozenDspyExample:
-    """Pickle-compatible projection of DSPy's frozen ``Example`` class.
-
-    Only the object state and global class reference participate in hashing.
-    This proxy is never unpickled and intentionally carries no DSPy behavior.
-    """
-
     def __init__(self, **kwargs: Any) -> None:
         self._store: dict[str, Any] = {}
         self._demos: list[Any] = []
@@ -1116,12 +1074,6 @@ _PICKLE_SAVE_TYPE = pickle._Pickler.dispatch[type]
 
 
 class _FrozenDspyExamplePickler(pickle._Pickler):
-    """Emit DSPy's class global while preserving stock protocol-4 semantics."""
-
-    dispatch: Any = (  # ty: ignore[invalid-attribute-override]
-        pickle._Pickler.dispatch.copy()
-    )
-
     def save_type(self: Any, obj: type[Any]) -> None:
         if obj is not _FrozenDspyExample:
             _PICKLE_SAVE_TYPE(self, obj)
@@ -1131,18 +1083,14 @@ class _FrozenDspyExamplePickler(pickle._Pickler):
         self.write(pickle.STACK_GLOBAL)
         self.memoize(obj)
 
-    dispatch[type] = save_type
+
+_FrozenDspyExamplePickler.dispatch = pickle._Pickler.dispatch.copy()
+_FrozenDspyExamplePickler.dispatch[type] = _FrozenDspyExamplePickler.save_type
 
 
 def _frozen_dspy_demo_tuple_pickle(
     steps: list[ObservedTraceStep],
 ) -> bytes:
-    """Serialize repeated traces exactly as frozen DSPy ``Hasher.hash``.
-
-    Protocol 4 is pinned because DSPy's ambient ``pickle.dumps`` default at
-    the reference commit was protocol 4. Field mapping order and shared
-    reference topology are preserved exactly.
-    """
 
     demos: list[_FrozenDspyExample] = []
     for step in steps:
@@ -1288,7 +1236,6 @@ def materialize_bootstrap_demo_set(
     labeled_trainset: tuple[LabeledTaskDemo, ...],
     component_ids: tuple[str, ...],
 ) -> ComponentDemoSet:
-    """Match ``BootstrapFewShot._train``, including raw-demo narrowing."""
 
     _validate_state_for_plan(plan, state)
     if component_ids != plan.component_ids:

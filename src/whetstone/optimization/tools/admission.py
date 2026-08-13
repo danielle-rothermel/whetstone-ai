@@ -49,8 +49,6 @@ _TOOL_EFFECT_KEY_PREFIX = "whetstone.tool_execution:"
 
 
 class ToolAdmissionSchemaMismatchError(RuntimeError):
-    """The durable Tool admission schema is not the exact owned contract."""
-
     def __init__(
         self,
         *,
@@ -73,27 +71,19 @@ class ToolAdmissionSchemaMismatchError(RuntimeError):
 
 @verify(UNIQUE)
 class ToolCallState(StrEnum):
-    """Persisted Tool Call lifecycle state.
-
-    These values are persisted contract literals. Never iterate over this
-    enum to construct a persisted payload.
-    """
-
     ACCEPTED = "accepted"
     REFUSED = "refused"
     COMPLETED = "completed"
 
 
 def tool_effect_request(call: ToolCall) -> EffectRequest:
-    """Return the one effect request authorized by an exact Tool Call."""
     exact = ToolCall.model_validate(call.model_dump(mode="json"))
     replay_policy = (
         ReplayPolicy.IDEMPOTENT
         if exact.tool_config.record.idempotent_replay
         else ReplayPolicy.NO_REDRIVE
     )
-    # Persisted-format contract: schema, version, prefix, and payload keys are
-    # pinned by golden tests. Field names must never be derived from models.
+
     semantic_key = compute_prefixed_identity_key(
         schema=_TOOL_EFFECT_KEY_SCHEMA,
         schema_version=_TOOL_EFFECT_KEY_SCHEMA_VERSION,
@@ -124,8 +114,6 @@ def tool_effect_request(call: ToolCall) -> EffectRequest:
 
 
 class ToolCallStoreEntry(BaseModel):
-    """One exact admission decision and its optional terminal result."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     tool_call: ToolCallRef
@@ -241,7 +229,6 @@ class ToolCallStoreEntry(BaseModel):
 
     @property
     def tool_call_ref(self) -> TypedRef:
-        """The exact call reference consumed by Tool Evidence."""
         return self.tool_call.record_ref
 
     @property
@@ -254,8 +241,6 @@ class ToolCallStoreEntry(BaseModel):
 
 
 class ToolCallStoreConflictError(RuntimeError):
-    """A divergent request or transition lost to an immutable decision."""
-
     def __init__(
         self,
         *,

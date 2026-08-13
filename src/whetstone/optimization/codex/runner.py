@@ -32,7 +32,6 @@ from dr_exec import (
     SpawnAbsentOutcome,
     SpawnFailedOutcome,
     UnbudgetedLimit,
-    UnbudgetedOutput,
     UntrustedCommandTarget,
 )
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
@@ -49,12 +48,11 @@ from whetstone.optimization.contracts import OptimizationStepRequest
 from whetstone.optimization.tools.contracts import RuntimeToolHandle
 
 if TYPE_CHECKING:
-    from whetstone.optimization.codex.runtime import EvaluationRuntimeConfig
+    from whetstone.optimization.codex.config import EvaluationRuntimeConfig
 
 _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
-# Codex 0.146 parses mcp_servers.<name>.default_tools_approval_mode as one of
-# "auto", "prompt", "writes", "approve"; "auto" runs the server's tools
-# without an interactive approval turn.
+
+
 _MCP_TOOLS_APPROVAL_MODE = "auto"
 _DIRECT_EXEC_SOURCE: Final = (
     "import os,sys;os.chdir(sys.argv[1]);os.execv(sys.argv[2],sys.argv[2:])"
@@ -95,8 +93,6 @@ class _CodexDeniedFeature(StrEnum):
     WORKSPACE_DEPENDENCIES = "workspace_dependencies"
 
 
-# Do not build this payload by iterating over the enum; deny-list changes must
-# remain visible in review.
 _CODEX_DENIED_FEATURES = (
     _CodexDeniedFeature.APPS,
     _CodexDeniedFeature.BROWSER_USE,
@@ -133,15 +129,6 @@ _CODEX_DENIED_FEATURES = (
 
 @dataclass(frozen=True, slots=True)
 class _MacOsProcessIsolation:
-    """Fail-closed outer filesystem boundary for Codex and descendants.
-
-    The boundary is filesystem-only. The network and credential surface is
-    explicitly unclaimed: the profile allows all network operations, and the
-    child environment deliberately carries the provider API key, because
-    passing it in argv would expose it to any process listing on the host. A
-    compromised child can therefore reach the network and spend that key.
-    """
-
     def wrap(
         self,
         command: list[str],
@@ -208,8 +195,7 @@ class _MacOsProcessIsolation:
             rule("file-read* file-test-existence", path)
             for path in (*platform_reads, *readable_paths, *writable_paths)
         ]
-        # Descriptor-relative storage walks each ancestor as a distinct open;
-        # literal grants permit traversal without exposing sibling file data.
+
         traversal_paths = {
             parent
             for path in (*readable_paths, *writable_paths)
@@ -256,6 +242,7 @@ def build_codex_command(
     codex_binary: str,
     model: str,
     mcp_env: dict[str, str] | None,
+    mcp_server_module: str = "whetstone.optimization.codex.mcp_server",
     output_schema_path: str,
     output_artifact_path: str,
     working_directory: str,
@@ -294,11 +281,8 @@ def build_codex_command(
                 "-c",
                 "mcp_servers.whetstone.args="
                 + json.dumps(
-                    ["-m", "whetstone.optimization.codex.mcp_server"]
+                    ["-m", mcp_server_module]
                 ),
-                # stdin is closed, so an approval prompt for the one
-                # evaluation tool would stall instead of asking. The tool is
-                # already bounded by its Tool Config capacity.
                 "-c",
                 "mcp_servers.whetstone.default_tools_approval_mode="
                 + json.dumps(_MCP_TOOLS_APPROVAL_MODE),
@@ -316,13 +300,6 @@ def build_codex_command(
 
 
 def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
-    """Reject relative runtime paths that mean different files per process.
-
-    Sandbox write rules resolve against the host working directory while the
-    Codex child resolves the same string against its own temporary working
-    directory, so a relative path silently sends durable state to a directory
-    deleted on exit.
-    """
     if not raw:
         if optional:
             return
@@ -341,7 +318,7 @@ def _codex_budgets(timeout_seconds: float) -> Budgets:
             max_ns=max(1, math.ceil(timeout_seconds * 1_000_000_000))
         ),
         input_bytes=unbudgeted,
-        payload_output=UnbudgetedOutput(),
+        payload_output=unbudgeted,
         memory_bytes=unbudgeted,
         cpu_time=unbudgeted,
         process_count=unbudgeted,
@@ -365,8 +342,6 @@ def _retained_bytes(
 
 @dataclass(frozen=True, slots=True)
 class CodexStructuredExecution:
-    """One schema-constrained Codex CLI result plus process evidence."""
-
     artifact_bytes: bytes
     stdout: bytes
     stderr: str
@@ -374,8 +349,6 @@ class CodexStructuredExecution:
 
 
 class CodexStructuredExecutionFailure(OpaqueStepError):
-    """Failed execution with every process byte available to the caller."""
-
     def __init__(
         self,
         message: str,
@@ -393,22 +366,17 @@ class CodexStructuredExecutionFailure(OpaqueStepError):
 
 
 class SubprocessCodexRunner:
-    """Adapt Codex to Whetstone through one injected typed executor.
-
-    A production caller must supply a ``ProcessExecutor`` backed by an
-    ``IsolatedHostPythonRuntime`` and a caller-owned durable
-    ``DirectoryRunStore``. The store is executor state, not child authority.
-    """
-
     def __init__(
         self,
         *,
         executor: Executor,
         sqlite_path: str | None = None,
         runtime_config: EvaluationRuntimeConfig | None = None,
+        runtime_config_class: str | None = None,
         reward_policy: RewardPolicy | None = None,
         codex_binary: str = "codex",
         model: str = "",
+        mcp_server_module: str = "whetstone.optimization.codex.mcp_server",
         timeout_seconds: float = 600.0,
         environment: Mapping[str, str] | None = None,
         prompt_builder: (
@@ -436,10 +404,24 @@ class SubprocessCodexRunner:
                 runtime_config.prompt_cache_path,
                 optional=True,
             )
+        if runtime_config is not None and runtime_config_class is None:
+            raise ValueError(
+                "runtime_config_class is required when runtime_config is set"
+            )
+        if runtime_config_class is not None:
+            module_name, separator, class_name = runtime_config_class.partition(
+                ":"
+            )
+            if not separator or not module_name or not class_name:
+                raise ValueError(
+                    "runtime_config_class must be module:Class"
+                )
         self._sqlite_path = sqlite_path
         self._executor = executor
         self._runtime = runtime_config
+        self._runtime_config_class = runtime_config_class
         self._reward_policy = reward_policy
+        self._mcp_server_module = mcp_server_module
         self._binary = codex_binary
         self._model = model
         self._timeout = timeout_seconds
@@ -486,6 +468,7 @@ class SubprocessCodexRunner:
         if (
             self._sqlite_path is None
             or self._runtime is None
+            or self._runtime_config_class is None
             or self._reward_policy is None
         ):
             raise OpaqueStepError(
@@ -512,6 +495,9 @@ class SubprocessCodexRunner:
                 McpEnvironmentKey.RUNTIME_CONFIG: (
                     self._runtime.model_dump_json()
                 ),
+                McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+                    self._runtime_config_class
+                ),
                 McpEnvironmentKey.REWARD_POLICY: (
                     self._reward_policy.model_dump_json()
                 ),
@@ -533,7 +519,6 @@ class SubprocessCodexRunner:
         prompt: str,
         output_schema: dict[str, Any],
     ) -> CodexStructuredExecution:
-        """Run schema-constrained Codex without registering an MCP server."""
 
         return self._execute_structured(
             prompt=prompt,
@@ -591,6 +576,7 @@ class SubprocessCodexRunner:
                 codex_binary=resolved_binary,
                 model=self._model,
                 mcp_env=exact_mcp_env,
+                mcp_server_module=self._mcp_server_module,
                 output_schema_path=str(schema_path),
                 output_artifact_path=str(artifact_path),
                 working_directory=working_directory,
@@ -759,8 +745,7 @@ class SubprocessCodexRunner:
             )
         if spec.submodule_search_locations:
             target = destination / top_level
-            # copytree overwrites existing files, so reverse order preserves
-            # Python's first-location import precedence in the merged package.
+
             for location in reversed(spec.submodule_search_locations):
                 source = Path(location)
                 if source.resolve() != package_root.resolve():
@@ -812,9 +797,7 @@ class SubprocessCodexRunner:
                     "Codex partial-log parent directory does not exist"
                 )
             state_paths.add(partial_path)
-            # PartialLog opens its record path and sibling lock through the
-            # parent descriptor, so callers must keep unrelated state
-            # elsewhere.
+
             state_paths.add(
                 partial_path.with_name(f".{partial_path.name}.lock")
             )

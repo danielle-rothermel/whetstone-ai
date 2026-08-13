@@ -53,20 +53,16 @@ __all__ = [
 
 
 class ToolValidationError(ValueError):
-    """Pure pre-admission validation refused one Tool Call."""
+    pass
 
 
 class ToolEvaluationError(RuntimeError):
-    """An expected evaluator exhaustion with shared terminal evidence."""
-
     def __init__(self, failure: TerminalFailure) -> None:
         self.failure = failure
         super().__init__(failure.message)
 
 
 class ToolExecutionBusyError(RuntimeError):
-    """Another owner holds the unexpired exact execution lease."""
-
     def __init__(self, *, busy_expires_at: datetime) -> None:
         self.busy_expires_at = busy_expires_at
         super().__init__(
@@ -76,12 +72,10 @@ class ToolExecutionBusyError(RuntimeError):
 
 
 class ToolExecutionConflictError(RuntimeError):
-    """The semantic execution key is bound to another exact request."""
+    pass
 
 
 class ToolExecutionRecoveryRequiredError(RuntimeError):
-    """A non-redrivable expired Tool execution needs operator recovery."""
-
     def __init__(self, failure: TerminalFailure) -> None:
         self.failure = failure
         super().__init__(failure.message)
@@ -89,8 +83,6 @@ class ToolExecutionRecoveryRequiredError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ToolEvaluation:
-    """Evaluator output before Reward scalarization and ToolResult creation."""
-
     output: ImmutableJsonObject
     generation_refs: tuple[TypedRef, ...]
     aggregates: Mapping[str, float | None]
@@ -103,25 +95,14 @@ class ToolEvaluation:
 
 
 class ToolEvaluator(Protocol):
-    """Pure validation followed by internal-role effectful evaluation."""
-
     def validate(self, call: ToolCall, config: ToolConfig) -> None:
-        """Validate without performing evaluation or consuming capacity."""
+        pass
 
     def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
-        """Perform one accepted internal evaluation.
-
-        Expected exhaustion raises :class:`ToolEvaluationError`. Unexpected
-        exceptions represent process/worker failure and intentionally leave
-        the acquired lease unterminated. Lease loss fences authoritative
-        completion, but cannot guarantee cancellation of arbitrary external
-        work already dispatched by an evaluator.
-        """
+        pass
 
 
 class EvaluatingToolExecutor:
-    """One paved path from pure validation to fenced terminal persistence."""
-
     def __init__(
         self,
         evaluator: ToolEvaluator,

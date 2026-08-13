@@ -101,8 +101,6 @@ def _open_private_regular_at(
 
 @dataclass(slots=True)
 class PrivateDirectory:
-    """An owned private directory retained as a descriptor capability."""
-
     path: Path
     fd: int
     _closed: bool = False
@@ -232,7 +230,6 @@ def open_private_directory(
     *,
     create: bool = True,
 ) -> PrivateDirectory:
-    """Open an owned private directory without releasing its verified FD."""
     absolute = Path(os.path.abspath(path))
     if len(absolute.parts) == 1:
         raise ValueError(
@@ -299,7 +296,6 @@ def open_private_directory(
 
 
 def ensure_private_directory(path: Path) -> None:
-    """Durably create and tighten an owned, non-symlink directory path."""
     with open_private_directory(path):
         pass
 
@@ -309,9 +305,7 @@ def open_private_regular_file(
     flags: int,
     mode: int = 0o600,
 ) -> int:
-    """Open one owned regular file without following its final component."""
-    # O_NONBLOCK prevents an unexpected FIFO from blocking before fstat can
-    # reject it. It has no effect on regular-file I/O.
+
     fd = os.open(
         path,
         _descriptor_flags(flags | os.O_NONBLOCK),
@@ -332,8 +326,6 @@ def open_private_regular_file(
 
 
 class FileLock:
-    """An advisory sidecar lock shared by threads and peer processes."""
-
     def __init__(self, path: Path, *, shared: bool = False) -> None:
         self.path = path
         self.shared = shared
@@ -388,12 +380,10 @@ class FileLock:
 
 
 def fsync_file(fd: int) -> None:
-    """Persist file contents and metadata acknowledged through ``fd``."""
     os.fsync(fd)
 
 
 def fsync_parent_directory(path: Path) -> None:
-    """Persist a path's directory entry after creation, replace, or delete."""
     fd = os.open(path.parent, _directory_flags())
     try:
         _validate_owned_descriptor(

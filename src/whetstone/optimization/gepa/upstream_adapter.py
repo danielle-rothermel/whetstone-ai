@@ -52,13 +52,6 @@ def _candidate_components(
 
 
 class WhetstoneGepaAdapter:
-    """Present GEPA's public adapter protocol over a durable effect broker.
-
-    A fresh adapter starts its invocation ordinal at zero.  Replaying
-    ``gepa.optimize`` therefore revisits the same slots in the same order; the
-    broker rejects a semantic mismatch instead of reusing another effect.
-    """
-
     def __init__(
         self,
         *,
@@ -120,7 +113,6 @@ class WhetstoneGepaAdapter:
 
     @property
     def effect_context(self) -> GepaEffectContext:
-        """Exact run/control/source context validated by the engine host."""
 
         return self._context
 
@@ -166,12 +158,10 @@ class WhetstoneGepaAdapter:
 
     @property
     def effect_count(self) -> int:
-        """Number of upstream external-effect calls seen in this replay."""
 
         return self._next_invocation_ordinal
 
     def reset_effect_ordinal(self) -> None:
-        """Reset only when beginning an unmodified replay from run start."""
 
         self._next_invocation_ordinal = 0
         self._rng = random.Random(self._evaluation_authority.selection_seed)
@@ -362,7 +352,6 @@ class WhetstoneGepaAdapter:
         ],
         components_to_update: list[str],
     ) -> dict[str, str]:
-        """Route reflection in component order; merge never calls it."""
 
         self._validate_candidate(candidate)
         concrete_dataset = {
@@ -372,9 +361,6 @@ class WhetstoneGepaAdapter:
         selected = tuple(components_to_update)
         replacements: dict[str, str] = {}
         for component_name in selected:
-            # Upstream gepa's proposer skips components with no reflective
-            # examples rather than failing the whole proposal round, so a
-            # traceless component must not sink its traced siblings.
             if not concrete_dataset.get(component_name):
                 continue
             reflection_request = GepaReflectionRequest(

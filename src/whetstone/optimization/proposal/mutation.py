@@ -16,26 +16,17 @@ if TYPE_CHECKING:
     from whetstone.optimization.proposal.proposer import ProposalDraft
 
 __all__ = [
-    "MUTATION_FIELD",
     "DiffCheckError",
     "ProposalValidationError",
     "candidate_from_draft",
     "diff_check",
+    "resolve_mutation_field",
     "template_placeholder_fields",
     "validate_candidate_template",
 ]
 
-# The single allowed mutation field across every optimizing run here.
-MUTATION_FIELD = "user_prompt_template"
-
 
 def template_placeholder_fields(template: str) -> tuple[str, ...]:
-    """Return every placeholder occurrence in one template, in order.
-
-    Parses the pinned brace syntax without importing the candidate runtime, so
-    callers validating a bare replacement template need no render contract.
-    Raises :class:`ValueError` when the braces are malformed.
-    """
 
     fields: list[str] = []
     for _literal, field_name, _spec, _conversion in string.Formatter().parse(
@@ -52,17 +43,16 @@ def template_placeholder_fields(template: str) -> tuple[str, ...]:
 
 
 class DiffCheckError(ValueError):
-    """A proposed candidate failed the Mutation-Surface diff check."""
+    pass
 
 
 class ProposalValidationError(DiffCheckError):
-    """A typed proposer draft cannot become a valid candidate."""
+    pass
 
 
 def _validated_optimization_run(
     run: OptimizationRun | OptimizationRunRef,
 ) -> OptimizationRun:
-    """Revalidate an exact run authority at its mutation boundary."""
 
     from whetstone.optimization.contracts import (
         OptimizationRun,
@@ -78,6 +68,20 @@ def _validated_optimization_run(
     raise TypeError("run must be an exact OptimizationRun or RunRef")
 
 
+def resolve_mutation_field(
+    *,
+    run: OptimizationRun | OptimizationRunRef | None = None,
+    mutation_field: str | None = None,
+) -> str:
+    if mutation_field is not None:
+        if type(mutation_field) is not str or not mutation_field.strip():
+            raise ValueError("mutation_field must be a non-empty string")
+        return mutation_field
+    if run is None:
+        raise TypeError("resolve_mutation_field requires run or mutation_field")
+    return _validated_optimization_run(run).mutation_field
+
+
 def candidate_from_draft(
     *,
     base: Candidate,
@@ -85,13 +89,8 @@ def candidate_from_draft(
     draft: ProposalDraft,
     run: OptimizationRun | OptimizationRunRef,
 ) -> Candidate:
-    """The sole draft-to-candidate validation path.
-
-    Failed drafts remain failures. Successful drafts must use only renderable
-    placeholders and then pass the same mutation-surface diff check as every
-    other proposal. There is no base-template fallback.
-    """
     exact_run = _validated_optimization_run(run)
+    field = exact_run.mutation_field
     if draft.failed:
         failure = draft.terminal_failure
         if failure is None:
@@ -111,13 +110,13 @@ def candidate_from_draft(
             f"proposal template violates its render contract: {error}"
         ) from error
     payload = base.payload.to_json()
-    payload[MUTATION_FIELD] = draft.template
+    payload[field] = draft.template
     proposed = Candidate(
         candidate_id=candidate_id,
         base_ref=candidate_reference(base).record_ref,
         payload=payload,
     )
-    diff_check(base=base, proposed=proposed)
+    diff_check(base=base, proposed=proposed, run=exact_run)
     return proposed
 
 
@@ -126,10 +125,10 @@ def validate_candidate_template(
     candidate: Candidate,
     run: OptimizationRun | OptimizationRunRef,
 ) -> None:
-    """Validate one candidate template under an exact run's authority."""
     exact_run = _validated_optimization_run(run)
+    field = exact_run.mutation_field
     exact_run.template_render_contract.validate_template(
-        candidate.payload.get(MUTATION_FIELD)
+        candidate.payload.get(field)
     )
 
 
@@ -137,54 +136,41 @@ def diff_check(
     *,
     base: Candidate,
     proposed: Candidate,
+    run: OptimizationRun | OptimizationRunRef,
 ) -> None:
-    """Validate a proposal against its base under the Mutation Surface.
-
-    Raises :class:`DiffCheckError` unless the proposal:
-
-    * binds the exact same base (``base_ref`` byte-matches),
-    * supplies a non-empty ``MUTATION_FIELD`` value, and
-    * canonical-JSON-matches the base on **every** other payload key (no
-      added, dropped, or altered non-surface field).
-    """
     from whetstone.experiment.candidate import candidate_reference
 
+    field = resolve_mutation_field(run=run)
     expected_base_ref = candidate_reference(base).record_ref
     if proposed.base_ref != expected_base_ref:
         raise DiffCheckError(
             f"proposal binds base {proposed.base_ref!r}, not the exact "
             f"request candidate {expected_base_ref!r}"
         )
-    value = proposed.payload.get(MUTATION_FIELD)
+    value = proposed.payload.get(field)
     if type(value) is not str or value == "":
         raise DiffCheckError(
-            f"proposal must supply a non-empty {MUTATION_FIELD!r} template"
+            f"proposal must supply a non-empty {field!r} template"
         )
     base_payload = base.model_dump(mode="json")["payload"]
     proposed_payload = proposed.model_dump(mode="json")["payload"]
-    if MUTATION_FIELD not in base_payload:
+    if field not in base_payload:
         raise DiffCheckError(
-            f"base candidate must supply the {MUTATION_FIELD!r} mutation field"
+            f"base candidate must supply the {field!r} mutation field"
         )
-    base_value = base_payload[MUTATION_FIELD]
+    base_value = base_payload[field]
     if type(base_value) is not str:
         raise DiffCheckError(
-            f"base candidate {MUTATION_FIELD!r} mutation field must be "
-            "a string"
+            f"base candidate {field!r} mutation field must be a string"
         )
     if value == base_value:
         raise DiffCheckError(
-            f"proposal {MUTATION_FIELD!r} mutation must differ from its base"
+            f"proposal {field!r} mutation must differ from its base"
         )
-    base_others = {
-        k: v for k, v in base_payload.items() if k != MUTATION_FIELD
-    }
-    prop_others = {
-        k: v for k, v in proposed_payload.items() if k != MUTATION_FIELD
-    }
+    base_others = {k: v for k, v in base_payload.items() if k != field}
+    prop_others = {k: v for k, v in proposed_payload.items() if k != field}
     if canonical_json(prop_others) != canonical_json(base_others):
         raise DiffCheckError(
             "proposal changes a field outside the Mutation Surface "
-            f"({MUTATION_FIELD!r} only): non-surface payload diverged "
-            "from base"
+            f"({field!r} only): non-surface payload diverged from base"
         )

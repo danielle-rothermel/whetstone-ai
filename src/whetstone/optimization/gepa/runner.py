@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from dbos import DBOS, SetWorkflowID
+try:
+    from dbos import DBOS, SetWorkflowID
+except ImportError as exc:
+    raise ImportError(
+        "DBOS coordination requires the optional dbos extra: "
+        "pip install 'whetstone-ai[dbos]'"
+    ) from exc
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -25,8 +31,6 @@ _GEPA_FACTORIES: dict[str, CanonicalGepaAdapterFactory] = {}
 
 
 class GepaParentRunRequest(BaseModel):
-    """Complete serializable input needed to replay upstream from ordinal 0."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     factory_identity_hash: StrictStr
@@ -49,8 +53,7 @@ class GepaParentRunRequest(BaseModel):
             self.control.trainset_task_hashes
         ):
             raise ValueError("GEPA parent workflow trainset identity drift")
-        # Mirror the engine's valset binding check so an unrunnable request
-        # cannot validate and hash into a persistable workflow ID.
+
         if self.valset is None:
             if self.control.source_valset_task_hashes is not None:
                 raise ValueError(
@@ -75,7 +78,6 @@ class GepaParentRunRequest(BaseModel):
 def register_gepa_adapter_factory(
     factory: CanonicalGepaAdapterFactory,
 ) -> None:
-    """Register exact runtime authorities before parent recovery may start."""
 
     identity_hash = factory.runtime_hash
     require_full_hash(identity_hash, field="GEPA factory identity")
@@ -115,8 +117,6 @@ def _gepa_parent_workflow(
 
 
 class DbosGepaRunner:
-    """Launch one stable parent whose recovery replays frozen GEPA exactly."""
-
     def run(self, request: GepaParentRunRequest) -> GepaPersistedRun:
         workflow_id = f"whetstone-gepa-run-{request.identity_hash()}"
         with SetWorkflowID(workflow_id):

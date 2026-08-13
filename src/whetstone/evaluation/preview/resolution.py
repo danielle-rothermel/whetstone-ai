@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from whetstone.evaluation.engine import (
+from whetstone.evaluation.protocol import (
     EngineEvaluation,
     EvaluationEngine,
     EvaluationRequest,
@@ -101,8 +101,6 @@ def evaluate_and_resolve(
         occurrence_ordinal=occurrence_ordinal,
     )
     resolution = build_measured_resolution(
-        evaluated,
-        intent,
-        message=message,
+        evaluated, intent, message=message
     )
     return evaluated, resolution

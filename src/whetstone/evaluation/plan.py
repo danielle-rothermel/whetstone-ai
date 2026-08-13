@@ -1,5 +1,3 @@
-"""Whetstone-owned task selection and sample-plan contracts."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass

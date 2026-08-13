@@ -49,8 +49,6 @@ __all__ = [
 
 
 class EvalConfigRef(BaseModel):
-    """Exact typed Eval Config record and both addressing dimensions."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     record: EvalConfig
@@ -84,8 +82,6 @@ def eval_config_reference(eval_config: EvalConfig) -> EvalConfigRef:
 
 
 class ExecutionEnvironmentFingerprint(BaseModel):
-    """Exact realized dependency, code, and runtime environment."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     dependency_versions: tuple[tuple[NonEmptyId, NonEmptyId], ...] = ()
@@ -115,14 +111,11 @@ class ExecutionEnvironmentFingerprint(BaseModel):
         package_names = [package for package, _ in value]
         if len(set(package_names)) != len(package_names):
             raise ValueError("dependency package names must be unique")
-        # Dependency order has no semantic meaning. Canonicalize it so the
-        # same realized environment has one stable identity.
+
         return tuple(sorted(value, key=lambda dependency: dependency[0]))
 
 
 class EvaluationBinding(BaseModel):
-    """Immutable policy and environment binding for one evaluation."""
-
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[3]
@@ -181,8 +174,7 @@ class EvaluationBinding(BaseModel):
         return self
 
     def identity_payload(self) -> dict[str, Any]:
-        # These persisted identity keys are an explicit wire contract. Never
-        # derive them by iterating over model fields.
+
         return {
             "schema_version": self.schema_version,
             "eval_config": self.eval_config.model_dump(mode="json"),

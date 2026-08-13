@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from dr_providers import (
-    RECOVERABLE_FAILURE_CLASSES,
-    RETRYABLE_FAILURE_CLASSES,
-    FailureClass,
-    ProviderFailureError,
-)
+from dr_providers import ProviderFailureError, RecoverabilityClass
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from whetstone.provider.failures.exceptions import EvalFailureError
+from whetstone.provider.failures.exceptions import (
+    RECOVERABLE_FAILURE_CLASSES,
+    RETRYABLE_FAILURE_CLASSES,
+    EvalFailureError,
+)
+
+FailureClass = RecoverabilityClass
 
 __all__ = [
     "RECOVERABLE_FAILURE_CLASSES",
@@ -31,7 +32,7 @@ __all__ = [
 class FailureSummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    failure_class: FailureClass
+    failure_class: RecoverabilityClass
     failure_exception_type: StrictStr
     underlying_exception_type: StrictStr
     message: StrictStr
@@ -94,13 +95,13 @@ def find_classified_exception(
 
 def _failure_class(
     error: EvalFailureError | ProviderFailureError,
-) -> FailureClass:
+) -> RecoverabilityClass:
     if isinstance(error, EvalFailureError):
         return error.failure_class
-    return error.failure.failure_class
+    return error.failure.recoverability
 
 
-def classify_exception(error: BaseException) -> FailureClass | None:
+def classify_exception(error: BaseException) -> RecoverabilityClass | None:
     classified = find_classified_exception(error)
     return None if classified is None else _failure_class(classified)
 

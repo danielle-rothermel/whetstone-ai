@@ -13,19 +13,12 @@ __all__ = [
     "resample_indices",
 ]
 
-#: The plan-mandated resample count (percentile bootstrap, 10k, 95%).
+
 DEFAULT_RESAMPLES = 10_000
 
 
 @dataclass(frozen=True, slots=True)
 class BootstrapCI:
-    """A percentile-bootstrap confidence interval for a scalar statistic.
-
-    ``point`` is the observed statistic (a mean, or a paired mean-delta);
-    ``low``/``high`` are the empirical ``level`` percentile bounds over the
-    resampled statistic.
-    """
-
     point: float
     low: float
     high: float
@@ -34,11 +27,9 @@ class BootstrapCI:
 
     @property
     def delta(self) -> float:
-        """Alias for ``point`` (paired-delta call sites read ``delta``)."""
         return self.point
 
     def excludes_zero(self) -> bool:
-        """True when the whole interval lies strictly on one side of 0."""
         return self.low > 0.0 or self.high < 0.0
 
     def as_tuple(self) -> tuple[float, float]:
@@ -54,13 +45,6 @@ def mean(values: tuple[float, ...]) -> float:
 def resample_indices(
     n: int, *, resamples: int, seed: int
 ) -> list[tuple[int, ...]]:
-    """The ``resamples`` task-index draws (with replacement) for ``n`` tasks.
-
-    Deterministic given ``seed``. Paired intervals reuse ONE such index set
-    across both anchor configs so the same tasks are resampled together;
-    that is what
-    makes a paired CI a paired CI (shared per-task variance cancels).
-    """
     if n <= 0:
         raise ValueError("bootstrap requires at least one task")
     if resamples < 1:
@@ -95,7 +79,6 @@ def bootstrap_mean_ci(
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = 0,
 ) -> BootstrapCI:
-    """Marginal percentile-bootstrap CI for ``mean(per_task)`` over tasks."""
     _validate_interval(level=level, resamples=resamples)
     if not per_task:
         raise ValueError("bootstrap requires at least one task")
@@ -117,15 +100,6 @@ def bootstrap_paired_delta_ci(
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = 0,
 ) -> BootstrapCI:
-    """Paired percentile-bootstrap CI for ``mean(b) - mean(a)`` over tasks.
-
-    ``a_per_task`` and ``b_per_task`` are aligned per-task means (task ``i`` in
-    both anchor configs). Each resample draws ONE task-index set (via
-    :func:`resample_indices`) and applies it to BOTH anchor configs, so the
-    shared
-    per-task variance cancels -- a genuine paired bootstrap. Deterministic
-    given ``seed``.
-    """
     _validate_interval(level=level, resamples=resamples)
     if len(a_per_task) != len(b_per_task):
         raise ValueError(
@@ -155,11 +129,6 @@ def bootstrap_delta_ci(
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = 0,
 ) -> BootstrapCI:
-    """Paired CI for ``mean(best) - mean(naive)``.
-
-    A thin alias of :func:`bootstrap_paired_delta_ci` in ``(naive, best)``
-    order, kept as the delta call site's name.
-    """
     return bootstrap_paired_delta_ci(
         naive_per_task,
         best_per_task,
