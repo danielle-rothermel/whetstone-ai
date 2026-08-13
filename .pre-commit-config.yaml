@@ -1,0 +1,5 @@
+# Pre-commit is intentionally disabled (no hook repos). CI was removed with the
+# test suite. Local hooks may still be installed from an earlier setup; remove
+# them with: pre-commit uninstall -t pre-commit -t pre-push
+minimum_pre_commit_version: "3.0.0"
+repos: []
