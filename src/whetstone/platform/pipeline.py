@@ -40,6 +40,8 @@ OPTIM_PIPELINE_IDENTITY = PipelineIdentity(
     version=OPTIM_PIPELINE_VERSION,
 )
 
+EVAL_ROW_QUEUE_CONCURRENCY = 4
+
 
 def build_optim_pipeline(
     runtime: RegisteredRuntime,
@@ -92,6 +94,7 @@ def register_optim_pipeline(
 
 
 __all__ = [
+    "EVAL_ROW_QUEUE_CONCURRENCY",
     "OPTIM_PIPELINE_IDENTITY",
     "build_optim_pipeline",
     "register_optim_pipeline",

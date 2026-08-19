@@ -22,13 +22,11 @@ dependencies = [
 dbos = ["dbos>=2.25.0"]
 postgres = ["psycopg[binary]>=3.3.4"]
 platform = [
-  "dr-platform",
-  "dbos>=2.25.0",
+  "dr-platform==0.2.2",
+  "dbos[otel]==2.27.0",
   "psycopg[binary]>=3.3.4",
 ]
 
-[tool.uv.sources]
-dr-platform = { path = "../../repos/dr-platform", editable = true }
 [dependency-groups]
 dev = [
     "rich>=15.0.0",

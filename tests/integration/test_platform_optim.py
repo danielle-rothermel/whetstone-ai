@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -22,11 +23,14 @@ from dr_platform.admission.runner import run_admission_pass
 from dr_platform.completion.execution import inspect_run_completion
 from dr_platform.pipeline.registry import PipelineRegistry
 from dr_platform.recovery.live_identity import LiveDbosIdentity
-from dr_platform.runtime.dbos import PlatformDbosConfig, initialize_dbos_runtime
-from dr_platform.runtime.dispatcher import register_scheduled_dispatcher
-from datetime import UTC, datetime
-
 from dr_platform.runtime.database.migrate import upgrade_platform_schema
+from dr_platform.runtime.dbos import (
+    DEFAULT_POOL_SIZE,
+    PlatformDbosConfig,
+    initialize_dbos_runtime,
+)
+from dr_platform.runtime.dispatcher import register_scheduled_dispatcher
+from dr_store.content_addressing import parse_object_reference
 
 from whetstone.core.blocking_store import open_blocking_sqlite_store
 from whetstone.coordination.runtime_bootstrap import (
@@ -36,10 +40,9 @@ from whetstone.coordination.runtime_bootstrap import (
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
-from whetstone.platform.pipeline import register_optim_pipeline
+from whetstone.platform.contracts import STAGE_EVAL_ROW
+from whetstone.platform.pipeline import EVAL_ROW_QUEUE_CONCURRENCY, register_optim_pipeline
 from whetstone.platform.submit import submit_optim_run
-
-from dr_store.content_addressing import parse_object_reference
 
 pytestmark = pytest.mark.integration
 
@@ -72,6 +75,12 @@ def _stage_workflow_ids(engine: Engine) -> tuple[str, ...]:
         )
 
 
+def _queue_concurrency(stage_key: str) -> int:
+    if stage_key == STAGE_EVAL_ROW:
+        return EVAL_ROW_QUEUE_CONCURRENCY
+    return 1
+
+
 @pytest.mark.skipif(
     os.environ.get("WHETSTONE_PLATFORM_INTEGRATION") != "1",
     reason="set WHETSTONE_PLATFORM_INTEGRATION=1 with Postgres+DBOS configured",
@@ -89,7 +98,7 @@ def test_inline_platform_copro_submit_to_result(
     run_key = f"run-{suffix}"
 
     with open_blocking_sqlite_store(str(store_path)) as store:
-        runtime = register_runtime(store=store)
+        runtime = register_runtime(store=store, ledger_engine=pg_engine)
         registry = PipelineRegistry()
         pipeline = register_optim_pipeline(
             registry,
@@ -97,11 +106,14 @@ def test_inline_platform_copro_submit_to_result(
             max_recovery_attempts=1,
         )
         for stage in pipeline.stages:
-            Queue(stage.queue_name, concurrency=1)
+            Queue(
+                stage.queue_name,
+                concurrency=_queue_concurrency(stage.key.value),
+            )
             set_stage_capacity(
                 pipeline=pipeline.identity,
                 stage_key=stage.key,
-                capacity=1,
+                capacity=_queue_concurrency(stage.key.value),
                 engine=pg_engine,
                 clock=lambda: NOW,
             )
@@ -132,12 +144,13 @@ def test_inline_platform_copro_submit_to_result(
             database_url=clean_pg,
             system_database_url=clean_pg,
             max_recovery_attempts=1,
+            pool_size=DEFAULT_POOL_SIZE,
         )
         initialize_dbos_runtime(config, app_name=f"whetstone-platform-{suffix}")
         registration = register_scheduled_dispatcher(
             live_dbos_identity=LiveDbosIdentity(
                 app_version=f"whetstone-{suffix}",
-                executor_ids=frozenset({"local"}),
+                resolve_executor_ids=lambda: frozenset({DBOS.application_version}),
             ),
             config=config,
             engine=pg_engine,

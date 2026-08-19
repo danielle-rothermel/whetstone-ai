@@ -68,6 +68,7 @@ def submit_optim_run(
     controller_identity_hash: str,
     execution_config_reference: str,
     dispatch_mode: EvalDispatchMode | None = None,
+    priority: int = 0,
 ) -> SubmissionReceipt:
     runtime.controller.bind_launch(launch)
     work_input = build_work_input(
@@ -84,6 +85,7 @@ def submit_optim_run(
             work_key=WorkKey(work_key),
             input_reference=input_reference,
             labels={"run_id": launch.run.run_id},
+            priority=priority,
         ),
     )
     members = (member,)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from dr_store.content_addressing import format_object_reference, parse_object_reference
 
@@ -115,6 +115,57 @@ def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
     assert fanin_completion.output_reference
     assert fanin_completion.successors
     assert fanin_completion.successors[0].stage_key.value == "optim_step"
+
+
+def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
+    runtime, launch = copro_launch
+    runtime, _control = _platform_runtime((runtime, launch.control))
+    control = launch.control
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+    step_completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+    row_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    fanin_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    ]
+    for row_successor in row_successors:
+        execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+        )
+    object.__setattr__(runtime, "ledger_engine", MagicMock())
+    with patch(
+        "dr_platform.inspection.work_items.list_predecessor_stage_outputs",
+        return_value=(),
+    ):
+        try:
+            execute_eval_fanin_sync(
+                runtime,
+                input_reference=fanin_successors[0].input_reference,
+                stage_index=fanin_successors[0].stage_index,
+                work_item_id=1,
+            )
+        except ValueError as error:
+            assert "ledger predecessors do not match batch row count" in str(error)
+        else:
+            raise AssertionError("expected ledger predecessor mismatch")
 
 
 def test_platform_stage_index_mismatch_raises(copro_launch) -> None:

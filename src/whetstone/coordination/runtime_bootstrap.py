@@ -37,6 +37,8 @@ from whetstone.testing.toy.experiment import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
+
     from whetstone.optim.copro.control import CoproControl
 
 RUNTIME_BOOTSTRAP_SCHEMA = "whetstone.runtime_bootstrap"
@@ -50,6 +52,7 @@ class RegisteredRuntime:
     controller: HarnessRunController
     eval_service: EvalEngineService
     adapter_registry: MappingAdapterRegistry
+    ledger_engine: Engine | None = None
 
 
 def _inline_proposal_executor(*, policy_identity_hash: str):
@@ -117,6 +120,7 @@ def register_runtime(
     store: BlockingObjectStore | None = None,
     sqlite_path: str | None = None,
     copro_control: CoproControl | None = None,
+    ledger_engine: Engine | None = None,
 ) -> RegisteredRuntime:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
     from whetstone.optim.tools.facade import ToolAdmissionAuthority, ToolCallStore
@@ -196,6 +200,7 @@ def register_runtime(
         controller=controller,
         eval_service=eval_service,
         adapter_registry=adapter_registry,
+        ledger_engine=ledger_engine,
     )
 
 

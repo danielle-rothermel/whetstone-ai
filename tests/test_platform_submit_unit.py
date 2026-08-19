@@ -118,7 +118,7 @@ def test_stage_args_for_with_admission_payload(toy_runtime) -> None:
     payload = payload.model_copy(
         update={"stage_key": StageKey(STAGE_EVAL_FANIN), "stage_index": 2}
     )
-    assert eval_fanin_args_for(runtime, payload) == (runtime, "input-ref", 2)
+    assert eval_fanin_args_for(runtime, payload) == (runtime, "input-ref", 2, 1)
 
 
 def test_build_work_input_uses_launch_control(copro_launch) -> None:
