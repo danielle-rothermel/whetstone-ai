@@ -17,6 +17,7 @@ from whetstone.platform.contracts import (
     persist_work_input,
 )
 from whetstone.platform.eval_fanin import (
+    build_platform_row_executor,
     execute_eval_fanin_sync,
     execute_eval_row_sync,
     serialize_platform_eval_intent,
@@ -77,9 +78,11 @@ def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
     assert fanin_successors[0].barrier is True
 
     row_calls: list[str] = []
+    platform_executor = build_platform_row_executor(runtime)
 
-    def row_executor(**kwargs) -> None:
+    def row_executor(**kwargs):
         row_calls.append(kwargs["task_id"])
+        return platform_executor(**kwargs)
 
     for row_successor in row_successors:
         execute_eval_row_sync(
@@ -136,11 +139,13 @@ def test_eval_fanin_ignores_other_batch_predecessors(copro_launch) -> None:
         if successor.stage_key.value == STAGE_EVAL_FANIN
     ]
     row_outputs: list[str] = []
+    platform_executor = build_platform_row_executor(runtime)
     for row_successor in row_successors:
         row_completion = execute_eval_row_sync(
             runtime,
             input_reference=row_successor.input_reference,
             stage_index=row_successor.stage_index,
+            row_executor=platform_executor,
         )
         row_outputs.append(row_completion.output_reference)
     stale_output_ref, _ = runtime.store.put(

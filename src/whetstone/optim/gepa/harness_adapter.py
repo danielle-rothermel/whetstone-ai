@@ -4,11 +4,15 @@ from typing import Any
 
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.experiment.candidate import Candidate, candidate_reference
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import OptimStepRequest, StepMode, StepStatus
 from whetstone.optim.gepa.adapter import project_gepa_terminal
-from whetstone.optim.gepa.contracts import GepaDataInstance
+from whetstone.optim.gepa.authorities import (
+    CanonicalGepaCandidateAssembler,
+    GepaCandidateFieldBinding,
+)
+from whetstone.optim.gepa.contracts import GepaCandidateComponent, GepaDataInstance
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaEngineAdapter
 from whetstone.optim.gepa.step_engine import (
@@ -114,13 +118,32 @@ class GepaHarnessAdapter:
                 artifact_ref=artifact_ref,
             )
             mutation_field = request.run.record.mutation_field
-            component_name = self._control.component_names[0]
-            candidate = Candidate(
-                candidate_id=f"{request.run_id}:gepa:best",
-                base_ref=candidate_reference(request.candidates[0]).record_ref,
-                payload={
-                    mutation_field: terminal.best_candidate[component_name],
-                },
+            base_ref = candidate_reference(request.candidates[0])
+            field_bindings = tuple(
+                GepaCandidateFieldBinding(
+                    component_name=name,
+                    candidate_field=(
+                        mutation_field
+                        if len(self._control.component_names) == 1
+                        else name
+                    ),
+                )
+                for name in self._control.component_names
+            )
+            assembler = CanonicalGepaCandidateAssembler(
+                base_candidate=base_ref,
+                fields=field_bindings,
+            )
+            components = tuple(
+                GepaCandidateComponent(name=name, text=terminal.best_candidate[name])
+                for name in self._control.component_names
+            )
+            assembled = assembler.assemble(components).record
+            candidate = assembled.model_copy(
+                update={
+                    "candidate_id": f"{request.run_id}:gepa:best",
+                    "base_ref": base_ref.record_ref,
+                }
             )
             return AdapterOutput(
                 accepted_candidates=(candidate,),

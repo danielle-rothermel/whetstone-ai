@@ -188,9 +188,15 @@ class StepRequestBuilder:
             checkpoint = prior_state.get(GEPA_STATE_KEY, {})
             if isinstance(checkpoint, dict):
                 consumed = int(checkpoint.get("metric_calls_consumed", 0))
+                checkpoint_terminal = bool(checkpoint.get("terminal", False))
             else:
                 consumed = 0
-            terminal_next = consumed + 1 >= control.resolved_max_metric_calls
+                checkpoint_terminal = False
+            terminal_next = (
+                control.resolved_max_metric_calls == 0
+                or checkpoint_terminal
+                or consumed + 1 >= control.resolved_max_metric_calls
+            )
             return OptimStepRequest(
                 run=prior.request.record.run,
                 step_id=f"{prior.run_id}:gepa:{step_index}",

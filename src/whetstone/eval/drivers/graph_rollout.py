@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
+from typing import Any
 
 from dr_providers import ProviderCallConfig
 
@@ -39,7 +40,7 @@ from whetstone.provider.language_model import (
     PlainPromptAdapter,
     StructuredPromptAdapter,
 )
-from whetstone.provider.llm_call import LlmCallContext, derive_rng_seed
+from whetstone.provider.llm_call import LlmCallContext, resolve_eval_rng_seed
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = ["GraphRolloutEvalDriver", "run_rollout_row"]
@@ -76,7 +77,9 @@ def run_rollout_row(
     candidate: Candidate,
     task: EvalTaskView,
     task_index: int,
+    task_hash: str,
     seed_index: int,
+    seed_plan: Any,
     split_role: str,
     llm_context: LlmCallContext,
     eval_runner: EvalProcedureRunner,
@@ -95,10 +98,12 @@ def run_rollout_row(
             context=llm_context,
             resolve_provider_call_config=resolve_provider_call_config,
             graph_hash=rollout_graph.graph_hash,
-            rng_seed=derive_rng_seed(
-                candidate.candidate_id,
-                task_id,
-                seed_index,
+            rng_seed=resolve_eval_rng_seed(
+                candidate_id=candidate.candidate_id,
+                task_id=task_id,
+                task_hash=task_hash,
+                seed_index=seed_index,
+                seed_plan=seed_plan,
             ),
             task_id=task_id,
             seed_index=seed_index,
@@ -270,7 +275,9 @@ class GraphRolloutEvalDriver:
                 candidate=request.candidate,
                 task=row.task,
                 task_index=row.task_index,
+                task_hash=row.task_hash,
                 seed_index=row.seed_index,
+                seed_plan=sampling.seed_plan,
                 split_role=sampling.split_role,
                 llm_context=llm_context,
                 eval_runner=self._eval_runner,

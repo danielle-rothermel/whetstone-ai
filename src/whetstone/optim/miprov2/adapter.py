@@ -248,10 +248,16 @@ class Miprov2Adapter:
         if state.phase == MIPROV2_FAILED:
             kind_label = MIPROV2_FAILED
             returned_count = 0
+            terminal_contract = OutputContract(returned_proposal_count=0)
         else:
             preview = self._driver.plan(state)
             kind_label = preview.kind
             returned_count = 1 if preview.kind == MIPROV2_COMPLETE else 0
+            terminal_contract = (
+                exact_run.record.terminal_output_contract
+                if preview.kind == MIPROV2_COMPLETE
+                else OutputContract(returned_proposal_count=returned_count)
+            )
         return OptimStepRequest(
             run=exact_run,
             step_id=f"{state.run_id}:miprov2:{step_index}",
@@ -271,9 +277,7 @@ class Miprov2Adapter:
                 )
             ),
             budget=budget,
-            step_output_contract=OutputContract(
-                returned_proposal_count=returned_count
-            ),
+            step_output_contract=terminal_contract,
         )
 
     def invoke(

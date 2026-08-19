@@ -147,3 +147,47 @@ def test_platform_deferral_fanout_fanin_through_admission(
             )
         finally:
             shutdown_platform_runtime(context)
+
+
+@pytest.mark.integration
+def test_platform_deferral_survives_fanin_retry(
+    pg_engine: Engine,
+    clean_pg: str,
+    tmp_path,
+) -> None:
+    """PLATFORM deferral completes after fan-in replay (preemptible idempotency contract)."""
+    store_path = tmp_path / "integration-preemptible-retry.sqlite"
+    with open_blocking_sqlite_store(str(store_path)) as store:
+        context = bootstrap_platform_runtime(
+            store=store,
+            pg_engine=pg_engine,
+            clean_pg=clean_pg,
+            now=NOW,
+            dispatch_mode=EvalDispatchMode.PLATFORM,
+            breadth=2,
+            depth=1,
+        )
+        try:
+            work_item_id = lookup_work_item_id(
+                pg_engine,
+                campaign_key=context.campaign_key,
+                work_key=context.work_key,
+            )
+            run_until_quiescent(
+                pg_engine=pg_engine,
+                registry=context.registry,
+                registration=context.registration,
+                now=NOW,
+                deadline_seconds=180,
+                work_item_id=work_item_id,
+            )
+            terminal_result_ref = await_run_completion(
+                run_key=context.run_key,
+                pg_engine=pg_engine,
+                registration=context.registration,
+                registry=context.registry,
+                now=NOW,
+            )
+            load_terminal_optim_result(context, terminal_result_ref)
+        finally:
+            shutdown_platform_runtime(context)

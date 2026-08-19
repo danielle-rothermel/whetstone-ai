@@ -197,24 +197,46 @@ class RuntimeEvalEngine:
                 f"derived sampling contains unknown task IDs: {unknown!r}"
             )
         selected = tuple(source_by_id[task_id] for task_id in task_ids)
-        task_hash_by_task = {
-            id(task): task_id for task_id, task in zip(task_ids, selected, strict=True)
-        }
+        task_hash_by_id = dict(
+            zip(
+                (_task_id(task) for task in source.tasks),
+                source.task_set.task_hashes,
+                strict=True,
+            )
+        )
         namespace, separator, role = source.task_set.manifest_id.rpartition(".")
         if not separator or role != source.split_role:
             raise ValueError(
                 "source sampling manifest does not match its split role"
             )
-        return derive_eval_split(
+        source_rng = dict(source.seed_plan.rng_seeds)
+        provenance_rows = tuple(
+            TaskTrialProvenanceRow(
+                task_hash=task_hash_by_id[task_id],
+                seed_index=seed_index,
+                rng_seed=source_rng.get(f"{task_hash_by_id[task_id]}#{seed_index}"),
+            )
+            for task_id in task_ids
+            for seed_index in range(source.seed_plan.num_seeds)
+        )
+        seed_plan = seed_plan_from_provenance(
+            provenance_rows,
+            plan_id=f"{namespace}.{role}",
+            version=source.seed_plan.version,
+        )
+        derived = derive_eval_split(
             namespace=namespace,
             dataset_revision=source.task_set.dataset_revision,
             split_role=source.split_role,
             tasks=selected,
-            task_hash_of=lambda task: task_hash_by_task[id(task)],
+            task_hash_of=lambda task: task_hash_by_id[_task_id(task)],
             procedure=source.procedure_config,
             aggregation=source.aggregation_config,
             num_seeds=source.seed_plan.num_seeds,
         )
+        from dataclasses import replace
+
+        return replace(derived, seed_plan=seed_plan)
 
     def for_task_ids(
         self, task_ids: tuple[str, ...]
@@ -401,7 +423,7 @@ class RuntimeEvalEngine:
         rows_by_task_hash: dict[str, dict[int, RowValue]] = {}
         output_rows: list[EvalOutputRow] = []
         trace_rows: list[EvalTraceRow] = []
-        supplemental_by_name: dict[str, Aggregate] = {}
+        supplemental_rows_by_name: dict[str, dict[str, dict[int, RowValue]]] = {}
         supplemental_refs: list[TypedRef] = []
         cache = CacheEvidence()
         concurrency_halved = False
@@ -458,10 +480,16 @@ class RuntimeEvalEngine:
                 raise ValueError("row aggregate reference diverged")
             for supplemental_ref in row_slice.supplemental_aggregate_refs:
                 supplemental_record = self._load_aggregate_record(supplemental_ref)
-                supplemental_by_name.setdefault(
-                    supplemental_record.name,
-                    supplemental_record,
+                supplemental_name = supplemental_record.name
+                row_value = RowValue(
+                    value=supplemental_record.aggregation_output.value,
+                    failed=supplemental_record.rows_failed > 0,
+                    missing=supplemental_record.rows_missing > 0,
+                    invalid=supplemental_record.rows_invalid > 0,
                 )
+                supplemental_rows_by_name.setdefault(supplemental_name, {}).setdefault(
+                    task_hash, {}
+                )[row_slice.seed_index] = row_value
             cache = CacheEvidence(
                 partial_row_count=cache.partial_row_count
                 + row_slice.evidence.cache.partial_row_count,
@@ -496,8 +524,27 @@ class RuntimeEvalEngine:
             plan=matrix_plan,
         )
         supplemental_aggregates = tuple(
-            supplemental_by_name[name]
-            for name in sorted(supplemental_by_name)
+            unweighted_task_mean(
+                aggregate_name=name,
+                graph_hash=template.graph_hash,
+                task_rows=tuple(
+                    TaskRows(
+                        task_hash=task_hash,
+                        rows=tuple(
+                            supplemental_rows_by_name[name]
+                            .get(task_hash, {})
+                            .get(
+                                seed_index,
+                                RowValue(missing=True),
+                            )
+                            for seed_index in range(num_seeds)
+                        ),
+                    )
+                    for task_hash in self._sampling.task_set.task_hashes
+                ),
+                plan=matrix_plan,
+            )
+            for name in sorted(supplemental_rows_by_name)
             if name != aggregate_name
         )
         internal_result = InternalEvalResult(

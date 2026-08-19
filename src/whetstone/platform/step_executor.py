@@ -325,6 +325,32 @@ def _platform_deferred_successors(
     return tuple(successors), work_state_ref
 
 
+def _platform_deferred_resume_from_batch(
+    *,
+    batch: EvalBatch,
+) -> tuple[tuple[StageSuccessor, ...], str]:
+    successors: list[StageSuccessor] = []
+    next_index = batch.optim_step_stage_index + 1
+    for row_ref in batch.row_input_refs:
+        successors.append(
+            StageSuccessor(
+                stage_key=StageKey(STAGE_EVAL_ROW),
+                stage_index=next_index,
+                input_reference=row_ref,
+            )
+        )
+        next_index += 1
+    successors.append(
+        StageSuccessor(
+            stage_key=StageKey(STAGE_EVAL_FANIN),
+            stage_index=next_index,
+            input_reference=batch.fanin_input_ref,
+            barrier=True,
+        )
+    )
+    return tuple(successors), batch.work_state_ref
+
+
 def _unique_deferred_intents_from_batch(
     runtime: RegisteredRuntime,
     batch: EvalBatch,
@@ -381,6 +407,19 @@ def execute_optim_step_sync(
             successors=(),
         )
     work_input = state.work_input
+    if (
+        work_input.dispatch_mode is EvalDispatchMode.PLATFORM
+        and state.pending_eval_batch_ref is not None
+    ):
+        batch = load_eval_batch_by_id(runtime.store, state.pending_eval_batch_ref)
+        if batch.step_index == state.step_index:
+            successors, output_ref = _platform_deferred_resume_from_batch(
+                batch=batch,
+            )
+            return StageCompletion(
+                output_reference=output_ref,
+                successors=successors,
+            )
     launch = _load_launch(runtime, work_input.run_id)
     if launch.control is not None:
         if launch.control.identity_hash() != work_input.control_identity_hash:
@@ -460,17 +499,17 @@ def execute_optim_step_sync(
                 content_hash=result_ref.content_hash,
             )
         )
-        _evict_step_result_binding(
-            runtime,
-            run_id=work_input.run_id,
-            step_index=state.step_index,
-        )
         successors, output_ref = _platform_deferred_successors(
             runtime,
             state=state,
             deferred_intents=deferred,
             current_stage_index=current_stage_index,
             pending_step_result_ref=pending_step_result_ref,
+        )
+        _evict_step_result_binding(
+            runtime,
+            run_id=work_input.run_id,
+            step_index=state.step_index,
         )
         return StageCompletion(
             output_reference=output_ref,
