@@ -29,7 +29,7 @@ from whetstone.provider.language_model import (
     PlainPromptAdapter,
     StructuredPromptAdapter,
 )
-from whetstone.provider.llm_call import derive_rng_seed
+from whetstone.provider.llm_call import resolve_eval_rng_seed
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = ["SubprocessGraphRolloutEvalDriver"]
@@ -76,10 +76,12 @@ def _build_graph_row_request(
         provider_call_config=rollout_graph.provider_call_config.model_dump(
             mode="json"
         ),
-        rng_seed=derive_rng_seed(
-            request.candidate.candidate_id,
-            row.task_id,
-            row.seed_index,
+        rng_seed=resolve_eval_rng_seed(
+            candidate_id=request.candidate.candidate_id,
+            task_id=row.task_id,
+            task_hash=row.task_hash,
+            seed_index=row.seed_index,
+            seed_plan=sampling.seed_plan,
         ),
         mutation_field=mutation_field,
         graph_external_input_field=graph_external_input_field,

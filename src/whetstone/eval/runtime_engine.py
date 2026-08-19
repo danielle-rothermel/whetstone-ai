@@ -6,9 +6,23 @@ from typing import Any, Protocol, runtime_checkable
 from dr_store import ObjectStore
 
 from whetstone.core.identity import IdentityRef, TypedRef, typed_ref_for_record
-from whetstone.eval.aggregate import AGGREGATE_SCHEMA
+from whetstone.eval import AggregationOutput
+from whetstone.eval.aggregate import (
+    AGGREGATE_SCHEMA,
+    Aggregate,
+    RowValue,
+    TaskRows,
+    unweighted_task_mean,
+)
 from whetstone.eval.driver import EvalDriver
-from whetstone.eval.drivers.eval_result import InternalEvalResult
+from whetstone.eval.drivers.eval_result import (
+    InternalEvalResult,
+    per_task_count,
+    per_task_score,
+)
+from whetstone.eval.row_slice import RowEvalCompletion, RowEvalSlice
+from whetstone.eval.plan import TaskTrialProvenanceRow, seed_plan_from_provenance
+from whetstone.provider.llm_call import derive_rng_seed
 from whetstone.eval.task_trial import TaskTrialKey
 from whetstone.eval.protocol import (
     EvalEvidenceWithRef,
@@ -38,7 +52,7 @@ from whetstone.eval.schema_names import (
     EVAL_FAILURE_SCHEMA,
 )
 from whetstone.optim.contracts import ResolutionClass, ResolutionDetail
-from whetstone.eval.traces import ExecutedComponentTracePayload
+from whetstone.eval.traces import ExecutedComponentStep, ExecutedComponentTracePayload, ExecutedRowState
 from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
@@ -53,7 +67,7 @@ from whetstone.experiment.candidate import (
     candidate_reference,
 )
 from whetstone.experiment.env import Experiment
-from whetstone.experiment.reward import REWARD_SCHEMA, reward_reference
+from whetstone.experiment.reward import REWARD_SCHEMA, apply_reward_policy, reward_reference
 from whetstone.experiment.sampling import EvalSplit, derive_eval_split, evaluation_role_for_split
 from whetstone.core.roles import EvalRole
 from whetstone.provider.policy import (
@@ -184,24 +198,53 @@ class RuntimeEvalEngine:
                 f"derived sampling contains unknown task IDs: {unknown!r}"
             )
         selected = tuple(source_by_id[task_id] for task_id in task_ids)
-        task_hash_by_task = {
-            id(task): task_id for task_id, task in zip(task_ids, selected, strict=True)
-        }
+        task_hash_by_id = dict(
+            zip(
+                (_task_id(task) for task in source.tasks),
+                source.task_set.task_hashes,
+                strict=True,
+            )
+        )
         namespace, separator, role = source.task_set.manifest_id.rpartition(".")
         if not separator or role != source.split_role:
             raise ValueError(
                 "source sampling manifest does not match its split role"
             )
-        return derive_eval_split(
+        source_rng = dict(source.seed_plan.rng_seeds)
+        provenance_rows_list: list[TaskTrialProvenanceRow] = []
+        for task_id in task_ids:
+            task_hash = task_hash_by_id[task_id]
+            for seed_index in range(source.seed_plan.num_seeds):
+                key = f"{task_hash}#{seed_index}"
+                rng_seed = source_rng.get(key)
+                if rng_seed is None:
+                    rng_seed = derive_rng_seed(task_hash, seed_index)
+                provenance_rows_list.append(
+                    TaskTrialProvenanceRow(
+                        task_hash=task_hash,
+                        seed_index=seed_index,
+                        rng_seed=rng_seed,
+                    )
+                )
+        provenance_rows = tuple(provenance_rows_list)
+        seed_plan = seed_plan_from_provenance(
+            provenance_rows,
+            plan_id=f"{namespace}.{role}",
+            version=source.seed_plan.version,
+        )
+        derived = derive_eval_split(
             namespace=namespace,
             dataset_revision=source.task_set.dataset_revision,
             split_role=source.split_role,
             tasks=selected,
-            task_hash_of=lambda task: task_hash_by_task[id(task)],
+            task_hash_of=lambda task: task_hash_by_id[_task_id(task)],
             procedure=source.procedure_config,
             aggregation=source.aggregation_config,
             num_seeds=source.seed_plan.num_seeds,
         )
+        from dataclasses import replace
+
+        return replace(derived, seed_plan=seed_plan)
 
     def for_task_ids(
         self, task_ids: tuple[str, ...]
@@ -218,6 +261,435 @@ class RuntimeEvalEngine:
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
         )
+
+    def for_task_seed(self, task_id: str, seed_index: int) -> RuntimeEvalEngine:
+        if seed_index < 0:
+            raise ValueError("seed_index must be non-negative")
+        num_seeds = self._sampling.seed_plan.num_seeds
+        if seed_index >= num_seeds:
+            raise ValueError(
+                f"seed_index {seed_index} is outside plan num_seeds {num_seeds}"
+            )
+        derived = self._derive_task_seed_sampling(
+            self._sampling,
+            task_id,
+            seed_index,
+        )
+        return RuntimeEvalEngine(
+            store=self._store,
+            experiment=self._experiment,
+            sampling=derived,
+            execution_policy=self._execution_policy,
+            driver=self._driver,
+            concurrency=self._concurrency,
+            max_wall_seconds=self._max_wall_seconds,
+            partial_log=self._partial_log,
+            prompt_cache=self._prompt_cache,
+        )
+
+    @staticmethod
+    def _derive_task_seed_sampling(
+        source: EvalSplit,
+        task_id: str,
+        seed_index: int,
+    ) -> EvalSplit:
+        from whetstone.eval import EvalDefinition, SamplingDefinition, TaskSet
+
+        source_by_id = {_task_id(task): task for task in source.tasks}
+        if task_id not in source_by_id:
+            raise ValueError(f"derived sampling contains unknown task ID: {task_id!r}")
+        selected = (source_by_id[task_id],)
+        task_hash_by_id = dict(
+            zip(
+                (_task_id(task) for task in source.tasks),
+                source.task_set.task_hashes,
+                strict=True,
+            )
+        )
+        task_hash = task_hash_by_id[task_id]
+        namespace, separator, role = source.task_set.manifest_id.rpartition(".")
+        if not separator or role != source.split_role:
+            raise ValueError(
+                "source sampling manifest does not match its split role"
+            )
+        rng_seeds = dict(source.seed_plan.rng_seeds)
+        rng_seed = rng_seeds.get(f"{task_hash}#{seed_index}")
+        if rng_seed is None:
+            rng_seed = derive_rng_seed(task_hash, seed_index)
+        seed_plan = seed_plan_from_provenance(
+            (
+                TaskTrialProvenanceRow(
+                    task_hash=task_hash,
+                    seed_index=0,
+                    rng_seed=rng_seed,
+                ),
+            ),
+            plan_id=f"{namespace}.{role}",
+            version=source.seed_plan.version,
+        )
+        task_set = TaskSet(
+            manifest_id=f"{namespace}.{role}",
+            version=source.task_set.version,
+            dataset_revision=source.task_set.dataset_revision,
+            task_hashes=(task_hash,),
+        )
+        sampling = SamplingDefinition(
+            definition_id=f"{namespace}.{role}.sampling",
+            version=source.sampling_config.definition_ref.version,
+        ).materialize(
+            {
+                "task_set_hash": task_set.identity_hash(),
+                "seed_plan_hash": seed_plan.identity_hash(),
+            }
+        )
+        eval_config = EvalDefinition(
+            definition_id=f"{namespace}.eval",
+            version=source.eval_config.definition_ref.version,
+        ).materialize(
+            sampling=sampling,
+            evaluation_procedure=source.procedure_config,
+            aggregation=source.aggregation_config,
+        )
+        return EvalSplit(
+            split_role=source.split_role,
+            tasks=selected,
+            task_set=task_set,
+            seed_plan=seed_plan,
+            sampling_config=sampling,
+            procedure_config=source.procedure_config,
+            aggregation_config=source.aggregation_config,
+            eval_config=eval_config,
+        )
+
+    def evaluate_row(self, request: EvalRequest) -> RowEvalCompletion:
+        rejected = self._preflight(request)
+        if rejected is not None:
+            return RowEvalCompletion(rejected_detail=rejected.detail)
+        try:
+            result = self._driver.run(
+                experiment=self._experiment,
+                sampling=self._sampling,
+                request=request,
+                eval_config_hash=self.eval_config_ref.config_hash,
+                execution_policy=self._execution_policy,
+                concurrency=self._concurrency,
+                max_wall_seconds=self._max_wall_seconds,
+                partial_log=self._partial_log,
+                prompt_cache=self._prompt_cache,
+            )
+            evidence_with_ref, supplemental_refs = self._persist_success(
+                request,
+                result,
+            )
+            return RowEvalCompletion(
+                evidence_ref=evidence_with_ref.evidence_ref,
+                supplemental_aggregate_refs=supplemental_refs,
+            )
+        except Exception as exc:
+            failure = self._persist_failure(request, exc)
+            return RowEvalCompletion(evidence_ref=failure.evidence_ref)
+
+    def assemble_from_row_slices(
+        self,
+        request: EvalRequest,
+        *,
+        row_slices: tuple[RowEvalSlice, ...],
+    ) -> EvalResult:
+        rejected = self._preflight(request)
+        if rejected is not None:
+            return rejected
+        if not row_slices:
+            raise ValueError("row assembly requires at least one slice")
+        return self._persist_assembled_success(request, row_slices)
+
+    def _persist_assembled_success(
+        self,
+        request: EvalRequest,
+        row_slices: tuple[RowEvalSlice, ...],
+    ) -> EvalEvidenceWithRef:
+        template = row_slices[0].evidence
+        for row_slice in row_slices[1:]:
+            evidence = row_slice.evidence
+            if evidence.candidate != template.candidate:
+                raise ValueError("row evidence candidates must match")
+            if evidence.graph_hash != template.graph_hash:
+                raise ValueError("row evidence graph hashes must match")
+            if evidence.metadata != template.metadata:
+                raise ValueError("row evidence metadata must match")
+            if evidence.eval_role != template.eval_role:
+                raise ValueError("row evidence eval roles must match")
+            if evidence.aggregate_name != template.aggregate_name:
+                raise ValueError("row evidence aggregate names must match")
+
+        task_hash_by_id = {
+            _task_id(task): task_hash
+            for task, task_hash in zip(
+                self._sampling.tasks,
+                self._sampling.task_set.task_hashes,
+                strict=True,
+            )
+        }
+        num_seeds = self._sampling.seed_plan.num_seeds
+        rows_by_task_hash: dict[str, dict[int, RowValue]] = {}
+        output_rows: list[EvalOutputRow] = []
+        trace_rows: list[EvalTraceRow] = []
+        supplemental_rows_by_name: dict[str, dict[str, dict[int, RowValue]]] = {}
+        supplemental_refs: list[TypedRef] = []
+        cache = CacheEvidence()
+        concurrency_halved = False
+        deadline_reached = False
+        guard_timeouts = 0
+        for row_slice in row_slices:
+            task_hash = task_hash_by_id.get(row_slice.task_id)
+            if task_hash is None:
+                raise ValueError(
+                    f"row slice task_id is outside sampling plan: {row_slice.task_id!r}"
+                )
+            outputs_record = EvalOutputsRecord.model_validate(
+                self._store.get(row_slice.evidence.outputs_ref.reference)
+            )
+            output_row = self._load_output_row(row_slice.evidence.outputs_ref)
+            trace_row = self._load_trace_row(row_slice.evidence.traces_ref)
+            if len(outputs_record.outputs) != 1:
+                raise ValueError(
+                    "platform row evidence must contain exactly one output row"
+                )
+            _ = outputs_record
+            remapped_output = output_row.model_copy(
+                update={
+                    "task_index": self._sampling.task_set.task_hashes.index(task_hash),
+                    "task_hash": task_hash,
+                    "seed_index": row_slice.seed_index,
+                }
+            )
+            remapped_trace = trace_row.model_copy(
+                update={
+                    "task_index": remapped_output.task_index,
+                    "task_hash": task_hash,
+                    "seed_index": row_slice.seed_index,
+                }
+            )
+            output_rows.append(remapped_output)
+            trace_rows.append(remapped_trace)
+            rows_by_task_hash.setdefault(task_hash, {})[row_slice.seed_index] = RowValue(
+                value=output_row.score,
+                failed=output_row.failed,
+                missing=output_row.missing,
+                invalid=output_row.invalid,
+            )
+            aggregate_record = self._load_aggregate_record(
+                row_slice.evidence.aggregate_ref
+            )
+            if aggregate_record.name != template.aggregate_name:
+                raise ValueError("row aggregate name must match template")
+            partial_aggregate_ref = self._put(
+                AGGREGATE_SCHEMA,
+                aggregate_record.record_content(),
+            )
+            if partial_aggregate_ref != row_slice.evidence.aggregate_ref:
+                raise ValueError("row aggregate reference diverged")
+            for supplemental_ref in row_slice.supplemental_aggregate_refs:
+                supplemental_record = self._load_aggregate_record(supplemental_ref)
+                supplemental_name = supplemental_record.name
+                row_value = RowValue(
+                    value=supplemental_record.aggregation_output.value,
+                    failed=supplemental_record.rows_failed > 0,
+                    missing=supplemental_record.rows_missing > 0,
+                    invalid=supplemental_record.rows_invalid > 0,
+                )
+                supplemental_rows_by_name.setdefault(supplemental_name, {}).setdefault(
+                    task_hash, {}
+                )[row_slice.seed_index] = row_value
+            cache = CacheEvidence(
+                partial_row_count=cache.partial_row_count
+                + row_slice.evidence.cache.partial_row_count,
+                cache_hit_count=cache.cache_hit_count
+                + row_slice.evidence.cache.cache_hit_count,
+                source_call_ids=cache.source_call_ids
+                + row_slice.evidence.cache.source_call_ids,
+            )
+            concurrency_halved = concurrency_halved or row_slice.evidence.concurrency_halved
+            deadline_reached = deadline_reached or row_slice.evidence.deadline_reached
+            guard_timeouts += row_slice.evidence.guard_timeouts
+
+        task_rows = tuple(
+            TaskRows(
+                task_hash=task_hash,
+                rows=tuple(
+                    rows_by_task_hash.get(task_hash, {}).get(
+                        seed_index,
+                        RowValue(missing=True),
+                    )
+                    for seed_index in range(num_seeds)
+                ),
+            )
+            for task_hash in self._sampling.task_set.task_hashes
+        )
+        matrix_plan = self._sampling.evaluation_matrix_plan
+        aggregate_name = template.aggregate_name
+        aggregate = unweighted_task_mean(
+            aggregate_name=aggregate_name,
+            graph_hash=template.graph_hash,
+            task_rows=task_rows,
+            plan=matrix_plan,
+        )
+        supplemental_aggregates = tuple(
+            unweighted_task_mean(
+                aggregate_name=name,
+                graph_hash=template.graph_hash,
+                task_rows=tuple(
+                    TaskRows(
+                        task_hash=task_hash,
+                        rows=tuple(
+                            supplemental_rows_by_name[name]
+                            .get(task_hash, {})
+                            .get(
+                                seed_index,
+                                RowValue(missing=True),
+                            )
+                            for seed_index in range(num_seeds)
+                        ),
+                    )
+                    for task_hash in self._sampling.task_set.task_hashes
+                ),
+                plan=matrix_plan,
+            )
+            for name in sorted(supplemental_rows_by_name)
+            if name != aggregate_name
+        )
+        internal_result = InternalEvalResult(
+            aggregate=aggregate,
+            reward=None,
+            per_task_scores=tuple(
+                per_task_score(task_row, num_seeds) for task_row in task_rows
+            ),
+            per_task_counts=tuple(
+                per_task_count(task_row, num_seeds) for task_row in task_rows
+            ),
+            outputs=(),
+            supplemental_aggregates=supplemental_aggregates,
+            concurrency_halved=concurrency_halved,
+            deadline_reached=deadline_reached,
+            guard_timeouts=guard_timeouts,
+        )
+        ordered_outputs = sorted(
+            output_rows,
+            key=lambda row: (row.task_index, row.seed_index),
+        )
+        ordered_traces = sorted(
+            trace_rows,
+            key=lambda row: (row.task_index, row.seed_index),
+        )
+        traces = EvalTraces(
+            schema_version=EVAL_TRACES_SCHEMA_VERSION,
+            candidate=template.candidate,
+            eval_config_ref=self.eval_config_ref,
+            eval_role=template.eval_role,
+            provider_execution_policy_ref=template.provider_execution_policy_ref,
+            graph_hash=template.graph_hash,
+            metadata=template.metadata,
+            split_role=self._sampling.split_role,
+            task_hashes=self._sampling.task_set.task_hashes,
+            num_seeds=num_seeds,
+            rows=tuple(ordered_traces),
+        )
+        traces_ref = self._put(EVAL_TRACES_SCHEMA, traces.record_content())
+        output_record = EvalOutputsRecord(
+            schema_version=EVAL_OUTPUTS_SCHEMA_VERSION,
+            candidate=template.candidate,
+            eval_config_ref=self.eval_config_ref,
+            eval_role=template.eval_role,
+            provider_execution_policy_ref=template.provider_execution_policy_ref,
+            graph_hash=template.graph_hash,
+            metadata=template.metadata,
+            split_role=self._sampling.split_role,
+            task_hashes=self._sampling.task_set.task_hashes,
+            num_seeds=num_seeds,
+            traces_ref=traces_ref,
+            outputs=tuple(ordered_outputs),
+        )
+        outputs_ref = self._put(
+            EVAL_OUTPUTS_SCHEMA,
+            output_record.record_content(),
+        )
+        aggregate_ref = self._put(AGGREGATE_SCHEMA, aggregate.record_content())
+        if aggregate_ref != aggregate.record_ref():
+            raise ValueError("persisted aggregate reference diverged")
+        for supplemental in supplemental_aggregates:
+            supplemental_ref = self._put(
+                AGGREGATE_SCHEMA,
+                supplemental.record_content(),
+            )
+            if supplemental_ref != supplemental.record_ref():
+                raise ValueError(
+                    "persisted supplemental aggregate reference diverged"
+                )
+            supplemental_refs.append(supplemental_ref)
+        reward = None
+        if self._eval_role() is EvalRole.INTERNAL:
+            aggregates = {
+                aggregate.name: aggregate.aggregation_output.value,
+            }
+            aggregates.update(
+                {
+                    supplemental.name: supplemental.aggregation_output.value
+                    for supplemental in supplemental_aggregates
+                }
+            )
+            reward = apply_reward_policy(
+                self._experiment.reward_policy,
+                aggregates=aggregates,
+                evidence_role=EvalRole.INTERNAL,
+                evidence_refs=(aggregate_ref, *supplemental_refs),
+            )
+        reward_ref = None
+        if reward is not None:
+            reward_ref = reward_reference(reward)
+            persisted_reward = self._put(
+                REWARD_SCHEMA,
+                reward.record_content(),
+            )
+            if persisted_reward != reward_ref.record_ref:
+                raise ValueError("persisted Reward reference diverged")
+        evidence = EvalEvidence(
+            schema_version=EVAL_EVIDENCE_SCHEMA_VERSION,
+            candidate=template.candidate,
+            eval_config_ref=self.eval_config_ref,
+            eval_role=template.eval_role,
+            provider_execution_policy_ref=template.provider_execution_policy_ref,
+            graph_hash=aggregate.graph_hash,
+            graph_config_ref=aggregate.graph_hash,
+            metadata=template.metadata,
+            dataset_hash=self._sampling.task_set.dataset_revision,
+            task_hashes=self._sampling.task_set.task_hashes,
+            num_seeds=num_seeds,
+            per_task_values=internal_result.per_task_scores,
+            per_task_counts=internal_result.per_task_counts,
+            row_accounting=RowAccounting(
+                planned=aggregate.task_count * aggregate.num_seeds,
+                present=aggregate.rows_present,
+                missing=aggregate.rows_missing,
+                failed=aggregate.rows_failed,
+                invalid=aggregate.rows_invalid,
+            ),
+            traces_ref=traces_ref,
+            outputs_ref=outputs_ref,
+            aggregate_ref=aggregate_ref,
+            aggregate_name=aggregate.name,
+            aggregate_value=aggregate.aggregation_output.value,
+            aggregate_status=aggregate.aggregation_output.status.value,
+            reward_ref=reward_ref,
+            cache=cache,
+            concurrency_halved=concurrency_halved,
+            deadline_reached=deadline_reached,
+            guard_timeouts=guard_timeouts,
+        )
+        evidence_ref = self._put(
+            EVAL_EVIDENCE_SCHEMA,
+            evidence.record_content(),
+        )
+        _ = internal_result
+        return EvalEvidenceWithRef(evidence=evidence, evidence_ref=evidence_ref)
 
     def preflight(self, candidate: Candidate) -> None:
         self._driver.preflight(candidate)
@@ -250,7 +722,8 @@ class RuntimeEvalEngine:
                 partial_log=self._partial_log,
                 prompt_cache=self._prompt_cache,
             )
-            return self._persist_success(request, result)
+            evidence_with_ref, _ = self._persist_success(request, result)
+            return evidence_with_ref
         except Exception as exc:
             return self._persist_failure(request, exc)
 
@@ -275,18 +748,36 @@ class RuntimeEvalEngine:
         expected = self._experiment.eval_configs.eval_config_for(
             self._sampling.split_role
         )
-        if expected != self._sampling.eval_config:
-            canonical = self._experiment.eval_configs.internal
-            if self._sampling.split_role != canonical.split_role:
-                canonical = self._experiment.eval_configs.official
-            expected_subset = self._derive_sampling(
-                canonical, self._sampling.task_set.task_hashes
-            )
-            if expected_subset != self._sampling:
-                raise ValueError(
-                    "engine sampling must be an exact experiment split "
-                    "binding or exact derived subset"
-                )
+        if expected == self._sampling.eval_config:
+            return
+        canonical = self._experiment.eval_configs.internal
+        if self._sampling.split_role != canonical.split_role:
+            canonical = self._experiment.eval_configs.official
+        if (
+            len(self._sampling.tasks) == 1
+            and self._sampling.seed_plan.num_seeds == 1
+        ):
+            task_id = _task_id(self._sampling.tasks[0])
+            for seed_index in range(canonical.seed_plan.num_seeds):
+                if (
+                    self._derive_task_seed_sampling(
+                        canonical,
+                        task_id,
+                        seed_index,
+                    )
+                    == self._sampling
+                ):
+                    return
+        expected_subset = self._derive_sampling(
+            canonical,
+            tuple(_task_id(task) for task in self._sampling.tasks),
+        )
+        if expected_subset == self._sampling:
+            return
+        raise ValueError(
+            "engine sampling must be an exact experiment split "
+            "binding or exact derived subset"
+        )
 
     def _eval_role(self) -> EvalRole:
         return evaluation_role_for_split(self._sampling.split_role)
@@ -316,6 +807,72 @@ class RuntimeEvalEngine:
             schema_name=reference.schema,
             content_hash=reference.content_hash,
         )
+
+    def _load_aggregate_record(self, reference: TypedRef) -> Aggregate:
+        content = self._store.get(reference.reference)
+        if not isinstance(content, dict):
+            raise ValueError("aggregate record is not an object")
+        return Aggregate(
+            name=content["name"],
+            graph_hash=content["graph_hash"],
+            eval_config_hash=content["eval_config_hash"],
+            task_count=content["task_count"],
+            num_seeds=content["num_seeds"],
+            aggregation_output=AggregationOutput.model_validate(
+                content["aggregation_output"]
+            ),
+            rows_present=content["rows_present"],
+            rows_missing=content["rows_missing"],
+            rows_failed=content["rows_failed"],
+            rows_invalid=content["rows_invalid"],
+        )
+
+    def _load_trace_row(self, reference: TypedRef) -> EvalTraceRow:
+        raw = self._store.get(reference.reference)
+        if not isinstance(raw, dict):
+            raise ValueError("trace record is not an object")
+        rows = raw.get("rows")
+        if not isinstance(rows, list) or len(rows) != 1:
+            raise ValueError("platform row trace record must contain one row")
+        row = rows[0]
+        if not isinstance(row, dict):
+            raise ValueError("trace row is not an object")
+        trace = row.get("trace")
+        if not isinstance(trace, dict):
+            raise ValueError("trace payload is not an object")
+        trace_steps = trace.get("trace_steps", ())
+        normalized_steps: list[dict[str, object]] = []
+        for step in trace_steps:
+            if not isinstance(step, dict):
+                raise ValueError("trace step is not an object")
+            normalized = dict(step)
+            for field_name in ("input_field_names", "output_field_names"):
+                values = normalized.get(field_name)
+                if isinstance(values, list):
+                    normalized[field_name] = tuple(values)
+            normalized_steps.append(normalized)
+        return EvalTraceRow(
+            task_id=row["task_id"],
+            task_hash=row["task_hash"],
+            task_index=row["task_index"],
+            seed_index=row["seed_index"],
+            trace=ExecutedComponentTracePayload(
+                row_state=ExecutedRowState(trace["row_state"]),
+                trace_steps=tuple(
+                    ExecutedComponentStep.model_validate(step)
+                    for step in normalized_steps
+                ),
+            ),
+        )
+
+    def _load_output_row(self, reference: TypedRef) -> EvalOutputRow:
+        raw = self._store.get(reference.reference)
+        if not isinstance(raw, dict):
+            raise ValueError("outputs record is not an object")
+        outputs = raw.get("outputs")
+        if not isinstance(outputs, list) or len(outputs) != 1:
+            raise ValueError("platform row outputs record must contain one row")
+        return EvalOutputRow.model_validate(outputs[0])
 
     def _evaluation_outputs_record(
         self,
@@ -448,7 +1005,7 @@ class RuntimeEvalEngine:
 
     def _persist_success(
         self, request: EvalRequest, result: InternalEvalResult
-    ) -> EvalEvidenceWithRef:
+    ) -> tuple[EvalEvidenceWithRef, tuple[TypedRef, ...]]:
         candidate_ref = candidate_reference(request.candidate)
         persisted_candidate = self._put(
             CANDIDATE_RECORD_SCHEMA, request.candidate.record_content()
@@ -482,6 +1039,7 @@ class RuntimeEvalEngine:
         aggregate_ref = self._put(AGGREGATE_SCHEMA, aggregate_record)
         if aggregate_ref != aggregate.record_ref():
             raise ValueError("persisted aggregate reference diverged")
+        supplemental_refs: list[TypedRef] = []
         for supplemental in result.supplemental_aggregates:
             supplemental_ref = self._put(
                 AGGREGATE_SCHEMA, supplemental.record_content()
@@ -490,11 +1048,29 @@ class RuntimeEvalEngine:
                 raise ValueError(
                     "persisted supplemental aggregate reference diverged"
                 )
+            supplemental_refs.append(supplemental_ref)
+        reward = result.reward
+        if reward is None and self._eval_role() is EvalRole.INTERNAL:
+            aggregates = {
+                aggregate.name: aggregate.aggregation_output.value,
+            }
+            aggregates.update(
+                {
+                    supplemental.name: supplemental.aggregation_output.value
+                    for supplemental in result.supplemental_aggregates
+                }
+            )
+            reward = apply_reward_policy(
+                self._experiment.reward_policy,
+                aggregates=aggregates,
+                evidence_role=EvalRole.INTERNAL,
+                evidence_refs=(aggregate_ref, *supplemental_refs),
+            )
         reward_ref = None
-        if result.reward is not None:
-            reward_ref = reward_reference(result.reward)
+        if reward is not None:
+            reward_ref = reward_reference(reward)
             persisted_reward = self._put(
-                REWARD_SCHEMA, result.reward.record_content()
+                REWARD_SCHEMA, reward.record_content()
             )
             if persisted_reward != reward_ref.record_ref:
                 raise ValueError("persisted Reward reference diverged")
@@ -537,7 +1113,10 @@ class RuntimeEvalEngine:
         evidence_ref = self._put(
             EVAL_EVIDENCE_SCHEMA, evidence.record_content()
         )
-        return EvalEvidenceWithRef(evidence=evidence, evidence_ref=evidence_ref)
+        return (
+            EvalEvidenceWithRef(evidence=evidence, evidence_ref=evidence_ref),
+            tuple(supplemental_refs),
+        )
 
     def _cache_evidence(
         self, candidate_id: str, request_identities: frozenset[str]

@@ -99,7 +99,12 @@ class CanonicalGepaAdapterFactory:
             },
         )
 
-    def create(self, *, control: GepaControl) -> WhetstoneGepaAdapter:
+    def create(
+        self,
+        *,
+        control: GepaControl,
+        effect_broker: str = "dbos",
+    ) -> WhetstoneGepaAdapter:
         from whetstone.optim.gepa.effect_runtime import (
             DbosGepaEffectBroker,
             register_gepa_evaluation_authority,
@@ -115,6 +120,21 @@ class CanonicalGepaAdapterFactory:
             self._proposal_authority.runtime_hash,
             self._proposal_authority,
         )
+        if effect_broker == "harness":
+            from whetstone.optim.gepa.harness_broker import HarnessGepaEffectBroker
+
+            broker = HarnessGepaEffectBroker(
+                self._store,
+                evaluation_authority=self._evaluation_authority,
+                proposal_authority=self._proposal_authority,
+            )
+        elif effect_broker == "dbos":
+            broker = DbosGepaEffectBroker(self._store)
+        else:
+            raise ValueError(
+                f"unsupported GEPA effect broker {effect_broker!r}; "
+                "expected 'dbos' or 'harness'"
+            )
         return WhetstoneGepaAdapter(
             context=GepaEffectContext(
                 run_id=self._run_id,
@@ -124,7 +144,7 @@ class CanonicalGepaAdapterFactory:
                 ),
                 adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,
             ),
-            broker=DbosGepaEffectBroker(self._store),
+            broker=broker,
             evaluation_authority=self._evaluation_authority.binding,
             proposal_authority=self._proposal_authority.binding,
             prompt_services=self._prompt_services,

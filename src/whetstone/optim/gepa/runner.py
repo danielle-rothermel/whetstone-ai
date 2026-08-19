@@ -118,6 +118,14 @@ def _gepa_parent_workflow(
 
 class DbosGepaRunner:
     def run(self, request: GepaParentRunRequest) -> GepaPersistedRun:
+        import warnings
+
+        warnings.warn(
+            "DbosGepaRunner is deprecated; use HarnessRunController or "
+            "whetstone.platform.submit.submit_optim_run instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         workflow_id = f"whetstone-gepa-run-{request.identity_hash()}"
         with SetWorkflowID(workflow_id):
             result = _gepa_parent_workflow(request)

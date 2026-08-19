@@ -58,4 +58,19 @@ uv run whetstone-sandbox copro --task-prompt "Say hello"
 uv run whetstone-sandbox graph --run
 ```
 
-Requires Python 3.13+. Optional extras: `dbos`, `postgres`.
+Requires Python 3.13+. Optional extras: `dbos`, `postgres`, `platform`.
+
+## Platform integration tests
+
+Tier 2 tests exercise the dr-platform harness against Postgres + DBOS:
+
+```bash
+uv sync --extra platform
+createdb whetstone_platform_test   # once, if needed
+uv run pytest -m integration tests/integration/
+```
+
+Set `WHETSTONE_TEST_DATABASE_URL` when not using the default
+`postgresql+psycopg:///whetstone_platform_test`. Locally, tests skip when
+Postgres is unavailable; in CI they fail hard. Default `uv run pytest` excludes
+integration tests via the pytest marker.

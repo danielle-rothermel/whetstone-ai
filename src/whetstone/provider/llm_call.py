@@ -39,6 +39,7 @@ __all__ = [
     "build_provider_request",
     "call_execution_metadata",
     "derive_rng_seed",
+    "resolve_eval_rng_seed",
     "execute_llm_call",
     "provider_result_text",
 ]
@@ -57,6 +58,22 @@ def derive_rng_seed(*parts: str | int) -> int:
     digest = hashlib.sha256(encoded).digest()
     # OpenAI-style provider seeds are ints; stay within signed 31-bit range.
     return int.from_bytes(digest[:8], "big") % (2**31)
+
+
+def resolve_eval_rng_seed(
+    *,
+    candidate_id: str,
+    task_id: str,
+    task_hash: str,
+    seed_index: int,
+    seed_plan: Any,
+) -> int:
+    """Prefer explicit plan provenance; fall back to deterministic derivation."""
+    keyed = f"{task_hash}#{seed_index}"
+    rng_map = dict(getattr(seed_plan, "rng_seeds", ()))
+    if keyed in rng_map:
+        return int(rng_map[keyed])
+    return derive_rng_seed(candidate_id, task_id, seed_index)
 
 
 def _validate_eval_rng_seed(rng_seed: int) -> None:

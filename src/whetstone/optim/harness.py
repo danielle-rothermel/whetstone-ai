@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from dr_store import BindingConflictError, BindStatus, ObjectStore
 
+from whetstone.coordination.eval_service import EvalExecutionContext
 from whetstone.core.effects.authority import (
     AcquireOutcome,
     AcquireResult,
@@ -197,15 +198,25 @@ class OptimHarness(OptimRunStore):
             )
         if evaluation_service is not None:
             self._evaluation_replay_policy = evaluation_service.replay_policy
+        self._last_deferred_platform_intents: tuple[OptimEvalRequest, ...] = ()
+
+    @property
+    def last_deferred_platform_intents(self) -> tuple[OptimEvalRequest, ...]:
+        return self._last_deferred_platform_intents
 
     def run_step(
-        self, request: OptimStepRequest
+        self,
+        request: OptimStepRequest,
+        *,
+        eval_context: EvalExecutionContext | None = None,
     ) -> tuple[OptimStepResult, TypedRef]:
         validated_request = OptimStepRequest.model_validate(
             request.model_dump(mode="json")
         )
         self._validate_bound_run(validated_request)
         request = validated_request
+        self._last_deferred_platform_intents = ()
+        effective_eval_context = eval_context or EvalExecutionContext()
         for candidate in request.candidates:
             validate_candidate_template(candidate=candidate, run=request.run)
         exact_request = step_request_reference(request)
@@ -299,7 +310,11 @@ class OptimHarness(OptimRunStore):
 
         if request.mode is StepMode.PROPOSAL_ONLY:
             resolutions = self._resolve_intents(
-                request, output, proposed_refs, accepted_refs
+                request,
+                output,
+                proposed_refs,
+                accepted_refs,
+                eval_context=effective_eval_context,
             )
         else:
             resolutions = ()
@@ -765,6 +780,8 @@ class OptimHarness(OptimRunStore):
         output: AdapterOutput,
         proposed: tuple[CandidateRef, ...],
         accepted: tuple[CandidateRef, ...],
+        *,
+        eval_context: EvalExecutionContext,
     ) -> tuple[IntentResolution, ...]:
         if not output.optim_eval_requests:
             return ()
@@ -783,6 +800,17 @@ class OptimHarness(OptimRunStore):
             )
         }
         resolutions: list[IntentResolution] = []
+        from whetstone.coordination.eval_service import (
+            EvalDispatchMode,
+            EvalEngineService,
+            EvalPlatformDeferred,
+        )
+
+        platform_mode = (
+            isinstance(self._evaluation_service, EvalEngineService)
+            and eval_context.dispatch_mode is EvalDispatchMode.PLATFORM
+        )
+        deferred: list[OptimEvalRequest] = []
         for optim_eval_request in output.optim_eval_requests:
             if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(
@@ -805,11 +833,33 @@ class OptimHarness(OptimRunStore):
                     "candidate"
                 )
             self._persist_intent_records(optim_eval_request)
-            resolutions.append(
-                self._resolve_one_intent(
-                    request=request,
-                    optim_eval_request=optim_eval_request,
+            if platform_mode:
+                assert isinstance(self._evaluation_service, EvalEngineService)
+                self._evaluation_service.persist_platform_intent(
+                    optim_eval_request,
+                    context=eval_context,
                 )
+                deferred.append(optim_eval_request)
+                continue
+            try:
+                resolutions.append(
+                    self._resolve_one_intent(
+                        request=request,
+                        optim_eval_request=optim_eval_request,
+                        eval_context=eval_context,
+                    )
+                )
+            except EvalPlatformDeferred:
+                continue
+        if deferred:
+            self._last_deferred_platform_intents = tuple(deferred)
+            from whetstone.platform.deferred_intents import persist_deferred_intents
+
+            persist_deferred_intents(
+                self._store,
+                run_id=request.run_id,
+                step_index=request.step_index,
+                intents=tuple(deferred),
             )
         return tuple(resolutions)
 
@@ -818,6 +868,7 @@ class OptimHarness(OptimRunStore):
         *,
         request: OptimStepRequest,
         optim_eval_request: OptimEvalRequest,
+        eval_context: EvalExecutionContext,
     ) -> IntentResolution:
         if (
             self._evaluation_service is None
@@ -869,7 +920,8 @@ class OptimHarness(OptimRunStore):
             lease, lease_duration=self._lease_duration
         ) as maintenance:
             raw = self._evaluation_service.resolve_optim_eval_request(
-                optim_eval_request
+                optim_eval_request,
+                context=eval_context,
             )
             resolution = IntentResolution.model_validate(
                 raw.model_dump(mode="json")

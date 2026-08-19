@@ -40,6 +40,15 @@ def copro_proposal_prompt(request: ProposalRequest) -> str:
         contract["output_rule"],
     ]
 
+    if request.proposal_mode == "seed_proposal":
+        return "\n".join(
+            [
+                *contract_lines,
+                "",
+                "Propose diverse instruction variants for the task.",
+            ]
+        )
+
     if request.proposal_mode != "history_proposal":
         raise ValueError(
             f"unsupported COPRO proposal mode {request.proposal_mode!r}"

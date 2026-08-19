@@ -740,16 +740,6 @@ class CoproAdapter:
             raise ValueError(
                 "COPRO run optimizer_config does not bind the exact control"
             )
-        iteration = request.hyperparameters.get("round_index")
-        if type(iteration) is not int:
-            raise ValueError("COPRO round_index must be an integer")
-        expected_hyperparameters = ImmutableJsonObject(
-            self._control.step_hyperparameters(iteration=iteration)
-        )
-        if request.hyperparameters != expected_hyperparameters:
-            raise ValueError(
-                "COPRO step hyperparameters do not match the exact control"
-            )
         config = CoproConfig(
             breadth=self._control.breadth,
             depth=self._control.depth,
@@ -818,6 +808,51 @@ class CoproAdapter:
             attempts=history,
             mutation_field=mutation_field,
         )
+        if state.completed_rounds >= config.depth:
+            finalization = driver.finalize(state)
+            contract = request.run.record.terminal_output_contract
+            ranked = finalization.ranked_attempts
+            if not ranked:
+                return AdapterOutput(
+                    proposed_status=StepStatus.FAILED,
+                    terminal_failure=TerminalFailure(
+                        code="copro_no_measured_history",
+                        message="COPRO cannot finalize without measured history",
+                    ),
+                )
+            if len(ranked) < contract.returned_proposal_count:
+                return AdapterOutput(
+                    proposed_status=StepStatus.FAILED,
+                    terminal_failure=TerminalFailure(
+                        code="copro_insufficient_ranked_candidates",
+                        message=(
+                            "COPRO finalization produced "
+                            f"{len(ranked)} ranked candidates but terminal "
+                            f"contract requires {contract.returned_proposal_count}"
+                        ),
+                    ),
+                )
+            selected = ranked[: contract.returned_proposal_count]
+            accepted = tuple(entry.candidate.record for entry in selected)
+            return AdapterOutput(
+                proposed_candidates=accepted,
+                accepted_candidates=accepted,
+                proposed_status=StepStatus.COMPLETE,
+                budget_delta=BudgetDelta(),
+                state_delta={
+                    "copro_finalization": finalization.model_dump(mode="json"),
+                },
+            )
+        iteration = request.hyperparameters.get("round_index")
+        if type(iteration) is not int:
+            raise ValueError("COPRO round_index must be an integer")
+        expected_hyperparameters = ImmutableJsonObject(
+            self._control.step_hyperparameters(iteration=iteration)
+        )
+        if request.hyperparameters != expected_hyperparameters:
+            raise ValueError(
+                "COPRO step hyperparameters do not match the exact control"
+            )
         if iteration != request.step_index:
             raise ValueError(
                 "COPRO round_index must match the durable step index"
@@ -852,13 +887,9 @@ class CoproAdapter:
 
         ranked = driver.terminal_ranking(history)
         base = initial
-        context: dict[str, Any] = {
-            COPRO_INSTRUCTION_CONTRACT_KEY: (
-                self._control.proposal_contract.model_dump(mode="json")
-            ),
-            COPRO_INSTRUCTION_HISTORY_KEY: [
-                item.to_json() for item in plan.instruction_history
-            ],
+        contract_payload = {
+            **self._control.proposal_contract.model_dump(mode="json"),
+            "budget_mode": plan.proposal_mode,
         }
         proposal_request = ProposalRequest(
             proposal_mode=plan.proposal_mode,
@@ -866,9 +897,17 @@ class CoproAdapter:
             proposal_authority_identity_hash=request.run.config_hash,
             mutation_field=mutation_field,
             base_candidate=candidate_reference(base),
-            context=context,
+            context=ImmutableJsonObject(
+                {
+                    COPRO_INSTRUCTION_CONTRACT_KEY: contract_payload,
+                    COPRO_INSTRUCTION_HISTORY_KEY: [
+                        item.to_json() for item in plan.instruction_history
+                    ],
+                }
+            ),
         )
         prompt = copro_proposal_prompt(proposal_request)
+        base_context = proposal_request.context.to_json()
         proposal_request = ProposalRequest(
             proposal_mode=proposal_request.proposal_mode,
             request_ordinal=proposal_request.request_ordinal,
@@ -877,7 +916,9 @@ class CoproAdapter:
             ),
             mutation_field=proposal_request.mutation_field,
             base_candidate=proposal_request.base_candidate,
-            context={**context, "proposal_prompt": prompt},
+            context=ImmutableJsonObject(
+                {**base_context, "proposal_prompt": prompt}
+            ),
         )
         drafts = self._proposal_executor.execute(
             config=self.proposer_config,

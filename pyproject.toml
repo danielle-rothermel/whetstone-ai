@@ -6,7 +6,7 @@ authors = [
 ]
 requires-python = ">=3.13, <3.15"
 dependencies = [
-    "dr-exec==0.1.10",
+    "dr-exec==0.1.11",
     "dr-graph==0.1.3",
     "dr-providers==0.3.1",
     "dr-serialize==0.1.2",
@@ -21,14 +21,28 @@ dependencies = [
 [project.optional-dependencies]
 dbos = ["dbos>=2.25.0"]
 postgres = ["psycopg[binary]>=3.3.4"]
-dev = ["rich>=15.0.0", "typer>=0.26.8"]
+platform = [
+  "dr-platform==0.2.2",
+  "dbos[otel]==2.27.0",
+  "psycopg[binary]>=3.3.4",
+]
+
 [dependency-groups]
 dev = [
     "rich>=15.0.0",
+    "pytest>=8.0",
 ]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires postgres + dbos + dr-platform",
+    "slow: long-running",
+]
+addopts = "-m 'not integration and not slow'"
 [project.scripts]
 whetstone-mcp-eval = "whetstone.optim.codex.mcp_server:main"
 whetstone-sandbox = "whetstone.sandbox.cli:main"
+whetstone-optim = "whetstone.platform.cli:main"
 
 [build-system]
 requires = ["hatchling"]

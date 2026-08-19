@@ -13,8 +13,10 @@ from pydantic import (
 )
 
 from whetstone.core.identity import (
+    IdentityRef,
     compute_identity_hash,
     require_full_hash,
+    typed_ref_for_record,
 )
 from whetstone.experiment.binding import EvalConfigRef
 from whetstone.optim.gepa.prompts import (
@@ -344,6 +346,32 @@ class GepaControl(BaseModel):
             schema_version=GEPA_CONTROL_SCHEMA_VERSION,
             payload=self.identity_payload(),
         )
+
+    def record_content(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+    def reference(self) -> IdentityRef:
+        return IdentityRef(
+            record_ref=typed_ref_for_record(
+                GEPA_CONTROL_SCHEMA,
+                self.record_content(),
+            ),
+            record_hash=self.identity_hash(),
+        )
+
+    def step_hyperparameters(self, *, iteration: int) -> dict[str, Any]:
+        if iteration < 0:
+            raise ValueError("GEPA iteration cannot be negative")
+        return {
+            "round_index": iteration,
+            "max_metric_calls": self.resolved_max_metric_calls,
+            "reflection_minibatch_size": self.reflection_minibatch_size,
+            "candidate_selection_strategy": self.candidate_selection_strategy,
+            "component_selector": self.component_selector,
+            "seed": self.seed,
+            "metric_identity_hash": self.metric.config_hash,
+            "reward_policy_hash": self.reward_policy_hash,
+        }
 
     def require_identity_hash(self, persisted_hash: str) -> None:
         require_full_hash(persisted_hash, field="optimizer_config_hash")
