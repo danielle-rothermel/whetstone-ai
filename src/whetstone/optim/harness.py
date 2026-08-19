@@ -853,6 +853,14 @@ class OptimHarness(OptimRunStore):
                 continue
         if deferred:
             self._last_deferred_platform_intents = tuple(deferred)
+            from whetstone.platform.deferred_intents import persist_deferred_intents
+
+            persist_deferred_intents(
+                self._store,
+                run_id=request.run_id,
+                step_index=request.step_index,
+                intents=tuple(deferred),
+            )
         return tuple(resolutions)
 
     def _resolve_one_intent(

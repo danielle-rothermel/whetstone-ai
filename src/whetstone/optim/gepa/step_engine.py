@@ -53,6 +53,24 @@ def run_one_gepa_iteration[DataInst](
     checkpoint: GepaStepCheckpoint | None,
 ) -> tuple[GepaDetailedResult, GepaStepCheckpoint]:
     current = checkpoint or GepaStepCheckpoint()
+    if control.resolved_max_metric_calls == 0:
+        if current.terminal:
+            raise ValueError("GEPA step budget is already exhausted")
+        ordered_seed = dict(seed_candidate)
+        detailed = GepaDetailedResult(
+            candidates=(ordered_seed,),
+            parents=((None,),),
+            val_aggregate_scores=(0.0,),
+            val_subscores=({},),
+            per_val_instance_best_candidates={},
+            discovery_eval_counts=(0,),
+            seed=control.seed,
+            best_idx=0,
+            control_identity_hash=control.identity_hash(),
+            total_metric_calls=0,
+        )
+        return detailed, GepaStepCheckpoint(metric_calls_consumed=0, terminal=True)
+
     next_budget = min(
         control.resolved_max_metric_calls,
         current.metric_calls_consumed + 1,

@@ -253,27 +253,44 @@ def test_platform_stage_index_mismatch_raises(copro_launch) -> None:
         raise AssertionError("expected stage_index mismatch")
 
 
-def test_platform_row_executor_scopes_evaluation_to_task(copro_launch, monkeypatch) -> None:
+def test_platform_row_executor_scopes_evaluation_to_task_seed(
+    copro_launch, monkeypatch
+) -> None:
     from unittest.mock import MagicMock
 
     from whetstone.platform.eval_fanin import build_platform_row_executor
 
+    from whetstone.core.identity import TypedRef
+    from whetstone.eval.protocol import EvalEvidenceWithRef
+
     runtime, launch = copro_launch
     runtime.controller.bind_launch(launch)
     scoped_engine = MagicMock()
-    scoped_engine.evaluate.return_value = MagicMock()
-    original_for_task_ids = runtime.eval_service._engine.for_task_ids  # noqa: SLF001
+    scoped_engine.evaluate.return_value = EvalEvidenceWithRef(
+        evidence=MagicMock(),
+        evidence_ref=TypedRef(
+            schema_name="whetstone.eval_evidence",
+            content_hash="a" * 64,
+        ),
+    )
+    original_for_task_seed = runtime.eval_service._engine.for_task_seed  # noqa: SLF001
+    captured: list[tuple[str, int]] = []
+
+    def for_task_seed(task_id, seed_index):
+        captured.append((task_id, seed_index))
+        return scoped_engine
+
     monkeypatch.setattr(
         runtime.eval_service._engine,
-        "for_task_ids",
-        lambda task_ids: scoped_engine,
+        "for_task_seed",
+        for_task_seed,
     )
     executor = build_platform_row_executor(runtime)
     from whetstone.testing.toy.experiment import build_toy_experiment
     from whetstone.optim.contracts import OptimEvalRequest
     from whetstone.eval.protocol import EvalRequest
 
-    experiment = build_toy_experiment(num_seeds=1)
+    experiment = build_toy_experiment(num_seeds=2)
     intent = OptimEvalRequest(
         optim_run_id=launch.run.run_id,
         optim_step_index=0,
@@ -283,9 +300,10 @@ def test_platform_row_executor_scopes_evaluation_to_task(copro_launch, monkeypat
         ),
         expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
     )
-    executor(intent=intent, task_id="task-a", seed_index=0)
+    executor(intent=intent, task_id="task-a", seed_index=1)
+    assert captured == [("task-a", 1)]
     scoped_engine.evaluate.assert_called_once()
-    _ = original_for_task_ids
+    _ = original_for_task_seed
 
 
 def test_run_manifest_roundtrip(sqlite_store) -> None:

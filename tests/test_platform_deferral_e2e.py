@@ -81,3 +81,47 @@ def test_platform_deferral_fanout_fanin_resume(copro_launch) -> None:
         input_reference=resumed.output_reference,
     )
     assert parse_object_reference(terminal_ref)
+
+
+def test_platform_deferral_assembles_row_evidence(copro_launch) -> None:
+    runtime, launch = copro_launch
+    from whetstone.platform.eval_fanin import build_platform_row_executor
+
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+    completion = execute_optim_step_sync(
+        runtime,
+        input_reference=current_ref,
+        stage_index=0,
+    )
+    row_successors = [
+        successor
+        for successor in completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    fanin_successors = [
+        successor
+        for successor in completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    ]
+    row_executor = build_platform_row_executor(runtime)
+    for row_successor in row_successors:
+        execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+            row_executor=row_executor,
+        )
+    execute_eval_fanin_sync(
+        runtime,
+        input_reference=fanin_successors[0].input_reference,
+        stage_index=fanin_successors[0].stage_index,
+    )
