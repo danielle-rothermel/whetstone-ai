@@ -7,7 +7,7 @@ from dr_platform.completion.execution import RunCompletionPayload
 from dr_platform.execution.stage_completion import StageCompletion, StageSuccessor
 from dr_store.content_addressing import ObjectReference, format_object_reference, parse_object_reference
 
-from whetstone.coordination.eval_service import EvalDispatchMode, EvalExecutionContext
+from whetstone.coordination.eval_service import EvalDispatchMode, EvalEngineService, EvalExecutionContext
 from whetstone.coordination.harness_run_controller import (
     RUN_LAUNCH_BINDING_PREFIX,
     OptimRunLaunch,
@@ -15,7 +15,9 @@ from whetstone.coordination.harness_run_controller import (
 from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef
+from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.runtime_engine import _task_id
+from whetstone.experiment.candidate import Candidate
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OptimEvalRequest,
@@ -32,6 +34,8 @@ from whetstone.platform.contracts import (
     EvalFaninInput,
     EvalRowInput,
     OPTIM_WORK_INPUT_SCHEMA,
+    load_eval_batch_by_id,
+    load_eval_row_input,
     load_run_manifest,
     load_work_input,
     new_batch_id,
@@ -43,6 +47,7 @@ from whetstone.platform.contracts import (
 OPTIM_WORK_STATE_SCHEMA = "whetstone.optim_work_state"
 OPTIM_WORK_STATE_SCHEMA_VERSION = 1
 RUN_MEMBER_TERMINAL_BINDING_PREFIX = "whetstone.run_member_terminal:"
+PLATFORM_DEFERRED_INTENTS_PREFIX = "whetstone.platform_deferred_intents:"
 
 
 class OptimWorkState:
@@ -319,6 +324,113 @@ def _platform_deferred_successors(
     return tuple(successors), work_state_ref
 
 
+def _deferred_intents_binding_key(run_id: str, step_index: int) -> str:
+    return f"{PLATFORM_DEFERRED_INTENTS_PREFIX}{run_id}:{step_index}"
+
+
+def _persist_deferred_intents(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    step_index: int,
+    intents: tuple[OptimEvalRequest, ...],
+) -> None:
+    payload = [intent.model_dump(mode="json") for intent in intents]
+    reference, _ = runtime.store.put(
+        "whetstone.platform_deferred_intents",
+        {"intents": payload},
+    )
+    runtime.store.bind(
+        _deferred_intents_binding_key(run_id, step_index),
+        reference,
+    )
+
+
+def _load_persisted_deferred_intents(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    step_index: int,
+) -> tuple[OptimEvalRequest, ...]:
+    binding = runtime.store.resolve(
+        _deferred_intents_binding_key(run_id, step_index)
+    )
+    if binding is None:
+        return ()
+    record = runtime.store.get(binding)
+    if not isinstance(record, dict):
+        return ()
+    return tuple(
+        OptimEvalRequest.model_validate(item)
+        for item in record.get("intents", ())
+    )
+
+
+def _unique_deferred_intents_from_batch(
+    runtime: RegisteredRuntime,
+    batch: EvalBatch,
+) -> tuple[OptimEvalRequest, ...]:
+    seen: set[str] = set()
+    intents: list[OptimEvalRequest] = []
+    for row_ref in batch.row_input_refs:
+        row = load_eval_row_input(runtime.store, row_ref)
+        key = EvalEngineService._intent_ref(row.optim_eval_request).content_hash
+        if key in seen:
+            continue
+        seen.add(key)
+        intents.append(row.optim_eval_request)
+    return tuple(intents)
+
+
+def _recover_deferred_platform_intents(
+    runtime: RegisteredRuntime,
+    *,
+    state: OptimWorkState,
+    result: OptimStepResult,
+) -> tuple[OptimEvalRequest, ...]:
+    if state.pending_eval_batch_ref is not None:
+        batch = load_eval_batch_by_id(runtime.store, state.pending_eval_batch_ref)
+        return _unique_deferred_intents_from_batch(runtime, batch)
+
+    persisted = _load_persisted_deferred_intents(
+        runtime,
+        run_id=state.work_input.run_id,
+        step_index=state.step_index,
+    )
+    if persisted:
+        return persisted
+
+    service = runtime.eval_service
+    if not isinstance(service, EvalEngineService):
+        return ()
+
+    request = result.request.record
+    reward_policy = request.run.record.reward_policy
+    if reward_policy is None:
+        return ()
+    expected_hash = reward_policy.identity_hash()
+    recovered: list[OptimEvalRequest] = []
+    for occurrence_ordinal, candidate_ref in enumerate(result.accepted_candidates):
+        candidate = Candidate.model_validate(
+            runtime.store.get(candidate_ref.record_ref.reference)
+        )
+        optim_eval_request = OptimEvalRequest(
+            optim_run_id=request.run_id,
+            optim_step_index=request.step_index,
+            eval_request=EvalRequest(
+                request_id=(
+                    f"{request.run_id}:{request.step_index}:"
+                    f"{occurrence_ordinal}:{candidate_ref.identity_hash}"
+                ),
+                candidate=candidate,
+            ),
+            expected_reward_policy_hash=expected_hash,
+        )
+        if service.load_platform_intent(optim_eval_request) is not None:
+            recovered.append(optim_eval_request)
+    return tuple(recovered)
+
+
 def execute_optim_step_sync(
     runtime: RegisteredRuntime,
     *,
@@ -395,9 +507,26 @@ def execute_optim_step_sync(
     if (
         work_input.dispatch_mode is EvalDispatchMode.PLATFORM
         and not result.resolved_intents
+        and result.status is StepStatus.CONTINUE
+        and not deferred
+    ):
+        deferred = _recover_deferred_platform_intents(
+            runtime,
+            state=state,
+            result=result,
+        )
+    if (
+        work_input.dispatch_mode is EvalDispatchMode.PLATFORM
+        and not result.resolved_intents
         and deferred
         and result.status is StepStatus.CONTINUE
     ):
+        _persist_deferred_intents(
+            runtime,
+            run_id=work_input.run_id,
+            step_index=state.step_index,
+            intents=deferred,
+        )
         pending_step_result_ref = format_object_reference(
             ObjectReference(
                 schema=result_ref.schema_name,

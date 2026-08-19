@@ -16,7 +16,6 @@ from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
     STAGE_OPTIM_STEP,
-    STAGE_RUN_COMPLETION,
 )
 
 from .platform_helpers import (
@@ -50,33 +49,34 @@ def test_inline_platform_copro_submit_to_result(
             dispatch_mode=EvalDispatchMode.INLINE,
         )
         try:
-            run_until_quiescent(
-                pg_engine=pg_engine,
-                registry=context.registry,
-                registration=context.registration,
-                now=NOW,
-            )
-            terminal_result_ref = await_run_completion(
-                run_key=context.run_key,
-                pg_engine=pg_engine,
-                registration=context.registration,
-                now=NOW,
-            )
-            load_terminal_optim_result(context, terminal_result_ref)
-
             work_item_id = lookup_work_item_id(
                 pg_engine,
                 campaign_key=context.campaign_key,
                 work_key=context.work_key,
             )
+            run_until_quiescent(
+                pg_engine=pg_engine,
+                registry=context.registry,
+                registration=context.registration,
+                now=NOW,
+                work_item_id=work_item_id,
+            )
+            terminal_result_ref = await_run_completion(
+                run_key=context.run_key,
+                pg_engine=pg_engine,
+                registration=context.registration,
+                registry=context.registry,
+                now=NOW,
+            )
+            load_terminal_optim_result(context, terminal_result_ref)
+
             assert_stage_coverage(
                 pg_engine,
                 work_item_id,
                 {
-                    STAGE_OPTIM_STEP: 1,
+                    STAGE_OPTIM_STEP: 2,
                     STAGE_EVAL_ROW: 0,
                     STAGE_EVAL_FANIN: 0,
-                    STAGE_RUN_COMPLETION: 1,
                 },
             )
         finally:
@@ -101,27 +101,29 @@ def test_platform_deferral_fanout_fanin_through_admission(
             depth=1,
         )
         try:
+            work_item_id = lookup_work_item_id(
+                pg_engine,
+                campaign_key=context.campaign_key,
+                work_key=context.work_key,
+            )
             run_until_quiescent(
                 pg_engine=pg_engine,
                 registry=context.registry,
                 registration=context.registration,
                 now=NOW,
                 deadline_seconds=180,
+                work_item_id=work_item_id,
             )
             terminal_result_ref = await_run_completion(
                 run_key=context.run_key,
                 pg_engine=pg_engine,
                 registration=context.registration,
+                registry=context.registry,
                 now=NOW,
             )
             load_terminal_optim_result(context, terminal_result_ref)
 
-            work_item_id = lookup_work_item_id(
-                pg_engine,
-                campaign_key=context.campaign_key,
-                work_key=context.work_key,
-            )
-            deferred_intent_count = 1
+            deferred_intent_count = 2
             internal_task_count = 2
             seed_count = 1
             expected_eval_row_count = (
@@ -134,7 +136,6 @@ def test_platform_deferral_fanout_fanin_through_admission(
                     STAGE_OPTIM_STEP: 2,
                     STAGE_EVAL_ROW: expected_eval_row_count,
                     STAGE_EVAL_FANIN: 1,
-                    STAGE_RUN_COMPLETION: 1,
                 },
             )
             fanin_stage_index = expected_eval_row_count + 1

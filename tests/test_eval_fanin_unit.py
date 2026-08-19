@@ -101,6 +101,83 @@ def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
     assert fanin_completion.output_reference
     assert fanin_completion.successors
     assert fanin_completion.successors[0].stage_key.value == "optim_step"
+    assert (
+        fanin_completion.successors[0].stage_index
+        > fanin_successors[0].stage_index
+    )
+
+
+def test_eval_fanin_ignores_other_batch_predecessors(copro_launch) -> None:
+    from whetstone.platform.eval_fanin import PLATFORM_EVAL_ROW_SCHEMA
+
+    runtime, launch = copro_launch
+    control = launch.control
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+    step_completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+    row_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    fanin_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    ]
+    row_outputs: list[str] = []
+    for row_successor in row_successors:
+        row_completion = execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+        )
+        row_outputs.append(row_completion.output_reference)
+    stale_output_ref, _ = runtime.store.put(
+        PLATFORM_EVAL_ROW_SCHEMA,
+        {
+            "schema_version": 1,
+            "optim_eval_request": {},
+            "task_id": "stale-task",
+            "seed_index": 0,
+            "batch_id": "stale-batch",
+            "completed": True,
+        },
+    )
+    stale_output = format_object_reference(stale_output_ref)
+    object.__setattr__(runtime, "ledger_engine", MagicMock())
+    with patch(
+        "dr_platform.inspection.work_items.list_predecessor_stage_outputs",
+        return_value=(
+            *[
+                MagicMock(
+                    stage_key=MagicMock(value=STAGE_EVAL_ROW),
+                    output_reference=output_reference,
+                )
+                for output_reference in row_outputs
+            ],
+            MagicMock(
+                stage_key=MagicMock(value=STAGE_EVAL_ROW),
+                output_reference=stale_output,
+            ),
+        ),
+    ):
+        execute_eval_fanin_sync(
+            runtime,
+            input_reference=fanin_successors[0].input_reference,
+            stage_index=fanin_successors[0].stage_index,
+            work_item_id=1,
+        )
 
 
 def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
@@ -174,6 +251,41 @@ def test_platform_stage_index_mismatch_raises(copro_launch) -> None:
         assert "stage_index mismatch" in str(error)
     else:
         raise AssertionError("expected stage_index mismatch")
+
+
+def test_platform_row_executor_scopes_evaluation_to_task(copro_launch, monkeypatch) -> None:
+    from unittest.mock import MagicMock
+
+    from whetstone.platform.eval_fanin import build_platform_row_executor
+
+    runtime, launch = copro_launch
+    runtime.controller.bind_launch(launch)
+    scoped_engine = MagicMock()
+    scoped_engine.evaluate.return_value = MagicMock()
+    original_for_task_ids = runtime.eval_service._engine.for_task_ids  # noqa: SLF001
+    monkeypatch.setattr(
+        runtime.eval_service._engine,
+        "for_task_ids",
+        lambda task_ids: scoped_engine,
+    )
+    executor = build_platform_row_executor(runtime)
+    from whetstone.testing.toy.experiment import build_toy_experiment
+    from whetstone.optim.contracts import OptimEvalRequest
+    from whetstone.eval.protocol import EvalRequest
+
+    experiment = build_toy_experiment(num_seeds=1)
+    intent = OptimEvalRequest(
+        optim_run_id=launch.run.run_id,
+        optim_step_index=0,
+        eval_request=EvalRequest(
+            request_id="row-eval",
+            candidate=experiment.initial_candidate,
+        ),
+        expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
+    )
+    executor(intent=intent, task_id="task-a", seed_index=0)
+    scoped_engine.evaluate.assert_called_once()
+    _ = original_for_task_ids
 
 
 def test_run_manifest_roundtrip(sqlite_store) -> None:

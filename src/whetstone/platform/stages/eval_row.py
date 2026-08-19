@@ -13,13 +13,17 @@ async def eval_row_workflow(
     input_reference: str,
     stage_index: int,
 ):
-    from whetstone.platform.eval_fanin import execute_eval_row_sync
+    from whetstone.platform.eval_fanin import (
+        build_platform_row_executor,
+        execute_eval_row_sync,
+    )
 
     return await asyncio.to_thread(
         execute_eval_row_sync,
         runtime,
         input_reference=input_reference,
         stage_index=stage_index,
+        row_executor=build_platform_row_executor(runtime),
     )
 
 

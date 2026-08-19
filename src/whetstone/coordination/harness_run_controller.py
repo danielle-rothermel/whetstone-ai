@@ -24,6 +24,7 @@ from whetstone.optim.harness import OptimHarness
 
 if TYPE_CHECKING:
     from whetstone.optim.copro.control import CoproControl
+    from whetstone.optim.gepa.control import GepaControl
 
 RUN_LAUNCH_SCHEMA = "whetstone.optim_run_launch"
 RUN_LAUNCH_SCHEMA_VERSION = 1
@@ -34,7 +35,7 @@ RUN_LAUNCH_BINDING_PREFIX = "whetstone.optim_run_launch:"
 class OptimRunLaunch:
     run: OptimRun
     initial_candidate: Candidate
-    control: CoproControl | None = None
+    control: CoproControl | GepaControl | None = None
 
 
 class HarnessRunController:
@@ -106,9 +107,16 @@ class HarnessRunController:
         candidate = Candidate.model_validate(record["initial_candidate"])
         control = None
         if record.get("control") is not None:
-            from whetstone.optim.copro.control import CoproControl
+            control_payload = record["control"]
+            adapter_key = run.adapter_key
+            if adapter_key == "gepa":
+                from whetstone.optim.gepa.control import GepaControl
 
-            control = CoproControl.model_validate(record["control"])
+                control = GepaControl.model_validate(control_payload)
+            else:
+                from whetstone.optim.copro.control import CoproControl
+
+                control = CoproControl.model_validate(control_payload)
         return OptimRunLaunch(
             run=run,
             initial_candidate=candidate,

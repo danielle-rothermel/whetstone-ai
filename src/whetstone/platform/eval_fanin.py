@@ -11,6 +11,7 @@ from whetstone.coordination.eval_service import (
     EvalEngineService,
     EvalExecutionContext,
 )
+from whetstone.eval.protocol import EvalRequest
 from whetstone.optim.contracts import (
     INTENT_RESOLUTION_SCHEMA_VERSION,
     IntentOutcome,
@@ -66,6 +67,29 @@ def build_inline_row_executor(runtime: RegisteredRuntime):
         service.resolve_optim_eval_request(
             intent,
             context=EvalExecutionContext(dispatch_mode=EvalDispatchMode.INLINE),
+        )
+
+    return executor
+
+
+def build_platform_row_executor(runtime: RegisteredRuntime):
+    """Run one task slice for a deferred intent without claiming platform resolution."""
+
+    def executor(
+        *,
+        intent: OptimEvalRequest,
+        task_id: str,
+        seed_index: int,
+    ) -> None:
+        _ = seed_index
+        service = _require_platform_eval_service(runtime)
+        scoped_engine = service._engine.for_task_ids((task_id,))  # noqa: SLF001
+        scoped_engine.evaluate(
+            EvalRequest(
+                request_id=intent.eval_request.request_id,
+                candidate=intent.eval_request.candidate,
+                metadata=intent.eval_request.metadata,
+            )
         )
 
     return executor
@@ -127,6 +151,22 @@ def _unique_batch_intents(batch, store) -> tuple[OptimEvalRequest, ...]:
     return tuple(intents)
 
 
+def _eval_row_batch_id(runtime: RegisteredRuntime, output_reference: str) -> str:
+    parsed = parse_object_reference(output_reference)
+    if parsed.schema != PLATFORM_EVAL_ROW_SCHEMA:
+        raise ValueError(
+            "eval row predecessor output has the wrong schema: "
+            f"{parsed.schema!r}"
+        )
+    record = runtime.store.get(parsed)
+    if not isinstance(record, dict):
+        raise ValueError("eval row predecessor output is not an object")
+    batch_id = record.get("batch_id")
+    if not isinstance(batch_id, str) or not batch_id:
+        raise ValueError("eval row predecessor output is missing batch_id")
+    return batch_id
+
+
 def _verify_eval_row_predecessors(
     runtime: RegisteredRuntime,
     *,
@@ -148,12 +188,18 @@ def _verify_eval_row_predecessors(
         for predecessor in predecessors
         if predecessor.stage_key.value == STAGE_EVAL_ROW
     ]
-    if len(eval_row_outputs) != len(batch.row_input_refs):
+    batch_eval_row_outputs = [
+        predecessor
+        for predecessor in eval_row_outputs
+        if predecessor.output_reference is not None
+        and _eval_row_batch_id(runtime, predecessor.output_reference) == batch.batch_id
+    ]
+    if len(batch_eval_row_outputs) != len(batch.row_input_refs):
         raise ValueError(
             "eval fan-in ledger predecessors do not match batch row count: "
-            f"expected {len(batch.row_input_refs)}, got {len(eval_row_outputs)}"
+            f"expected {len(batch.row_input_refs)}, got {len(batch_eval_row_outputs)}"
         )
-    for predecessor in eval_row_outputs:
+    for predecessor in batch_eval_row_outputs:
         parsed = parse_object_reference(predecessor.output_reference)
         if parsed.schema != PLATFORM_EVAL_ROW_SCHEMA:
             raise ValueError(
@@ -248,6 +294,16 @@ def execute_eval_fanin_sync(
         batch=batch,
         resolutions=tuple(resolutions),
     )
+    resumed_stage_index = resumed.work_input.platform_stage_index + 1
+    resumed = OptimWorkState(
+        work_input=resumed.work_input.model_copy(
+            update={"platform_stage_index": resumed_stage_index},
+        ),
+        step_index=resumed.step_index,
+        step_result_refs=resumed.step_result_refs,
+        terminal=resumed.terminal,
+        pending_eval_batch_ref=resumed.pending_eval_batch_ref,
+    )
     resumed_ref = _persist_work_state(runtime, resumed)
     return StageCompletion(
         output_reference=output_ref,
@@ -288,6 +344,7 @@ __all__ = [
     "PLATFORM_EVAL_FANIN_SCHEMA",
     "PLATFORM_EVAL_ROW_SCHEMA",
     "build_inline_row_executor",
+    "build_platform_row_executor",
     "execute_eval_fanin_sync",
     "execute_eval_row_sync",
     "pending_platform_resolution",

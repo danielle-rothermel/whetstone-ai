@@ -173,6 +173,56 @@ def stage_workflow_ids(engine: Engine) -> tuple[str, ...]:
         )
 
 
+def diagnose_work_item(engine: Engine, work_item_id: int) -> str:
+    stages = get_work_item_stages(work_item_id, engine=engine)
+    counts: dict[str, dict[str, int]] = {}
+    for summary in stages:
+        stage_key = summary.execution.stage_key.value
+        state = summary.execution.state.value
+        counts.setdefault(stage_key, {})
+        counts[stage_key][state] = counts[stage_key].get(state, 0) + 1
+    return f"work_item_id={work_item_id} stage_counts={counts}"
+
+
+def assert_no_failed_stages(engine: Engine, work_item_id: int) -> None:
+    stages = get_work_item_stages(work_item_id, engine=engine)
+    failed = [
+        summary.execution
+        for summary in stages
+        if summary.execution.state is StageExecutionState.FAILED
+    ]
+    if failed:
+        details = ", ".join(
+            f"{execution.stage_key.value}@{execution.stage_index}"
+            for execution in failed
+        )
+        raise AssertionError(
+            f"platform integration run has FAILED stages: {details}; "
+            f"{diagnose_work_item(engine, work_item_id)}"
+        )
+
+
+def wait_for_run_released(
+    engine: Engine,
+    *,
+    run_key: str,
+    timeout: float = 120,
+) -> None:
+    schema = LedgerSchema()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with engine.connect() as connection:
+            released_at = connection.execute(
+                select(schema.pipeline_runs.c.released_at).where(
+                    schema.pipeline_runs.c.run_key == run_key
+                )
+            ).scalar_one_or_none()
+        if released_at is not None:
+            return
+        time.sleep(0.05)
+    raise TimeoutError(f"run {run_key!r} was not released before deadline")
+
+
 def run_until_quiescent(
     *,
     pg_engine: Engine,
@@ -180,16 +230,20 @@ def run_until_quiescent(
     registration,
     now: datetime,
     deadline_seconds: float = 120,
+    work_item_id: int | None = None,
 ) -> None:
     seen: set[str] = set()
     deadline = time.monotonic() + deadline_seconds
     schema = LedgerSchema()
+    idle_passes = 0
     while time.monotonic() < deadline:
         registration.workflow(now, now)
+        processed_new = False
         for workflow_id in stage_workflow_ids(pg_engine):
             if workflow_id in seen:
                 continue
             seen.add(workflow_id)
+            processed_new = True
             await_dbos_result(workflow_id, registration=registration)
         run_admission_pass(
             pg_engine,
@@ -205,10 +259,21 @@ def run_until_quiescent(
                     )
                 )
             ).first()
-        if pending_stage is None:
-            return
+        if pending_stage is not None:
+            idle_passes = 0
+            continue
+        if processed_new:
+            idle_passes = 0
+            continue
+        idle_passes += 1
+        if idle_passes >= 3:
+            break
         time.sleep(0.05)
-    raise TimeoutError("platform integration run did not quiesce before deadline")
+    else:
+        raise TimeoutError("platform integration run did not quiesce before deadline")
+
+    if work_item_id is not None:
+        assert_no_failed_stages(pg_engine, work_item_id)
 
 
 def await_run_completion(
@@ -216,17 +281,42 @@ def await_run_completion(
     run_key: str,
     pg_engine: Engine,
     registration,
+    registry: PipelineRegistry,
     now: datetime,
+    timeout: float = 120,
 ) -> str:
-    registration.barrier_workflow(now, now)
-    execution = inspect_run_completion(run_key, engine=pg_engine)
-    terminal_result_ref = await_dbos_result(
-        execution.workflow_id,
-        registration=registration,
-    )
-    completed = inspect_run_completion(run_key, engine=pg_engine)
-    assert completed.output_reference == terminal_result_ref
-    return terminal_result_ref
+    deadline = time.monotonic() + timeout
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        registration.barrier_workflow(now, now)
+        run_admission_pass(
+            pg_engine,
+            client=registration.client,
+            registry=registry,
+            clock=lambda: now,
+        )
+        for workflow_id in stage_workflow_ids(pg_engine):
+            await_dbos_result(workflow_id, registration=registration)
+        try:
+            wait_for_run_released(
+                pg_engine,
+                run_key=run_key,
+                timeout=min(5.0, deadline - time.monotonic()),
+            )
+            execution = inspect_run_completion(run_key, engine=pg_engine)
+            terminal_result_ref = await_dbos_result(
+                execution.workflow_id,
+                registration=registration,
+            )
+            completed = inspect_run_completion(run_key, engine=pg_engine)
+            assert completed.output_reference == terminal_result_ref
+            return terminal_result_ref
+        except (LookupError, TimeoutError, AssertionError) as error:
+            last_error = error
+            time.sleep(0.05)
+    raise TimeoutError(
+        f"run completion for {run_key!r} did not finish before deadline"
+    ) from last_error
 
 
 def bootstrap_platform_runtime(
