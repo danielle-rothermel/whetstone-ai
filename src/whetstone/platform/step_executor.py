@@ -7,7 +7,7 @@ from dr_platform.completion.execution import RunCompletionPayload
 from dr_platform.execution.stage_completion import StageCompletion, StageSuccessor
 from dr_store.content_addressing import ObjectReference, format_object_reference, parse_object_reference
 
-from whetstone.coordination.eval_service import EvalDispatchMode, EvalEngineService, EvalExecutionContext
+from whetstone.coordination.eval_service import EvalDispatchMode, EvalExecutionContext
 from whetstone.coordination.harness_run_controller import (
     RUN_LAUNCH_BINDING_PREFIX,
     OptimRunLaunch,
@@ -16,10 +16,6 @@ from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef
 from whetstone.eval.runtime_engine import _task_id
-from whetstone.platform.deferred_intents import (
-    load_persisted_deferred_intents,
-    persist_deferred_intents,
-)
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OptimEvalRequest,
@@ -32,18 +28,13 @@ from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
     STAGE_OPTIM_STEP,
-    EvalBatch,
-    EvalFaninInput,
+    DeferralJoinInput,
     EvalRowInput,
     OPTIM_WORK_INPUT_SCHEMA,
     OptimWorkInput,
-    load_eval_batch_by_id,
-    load_eval_row_input,
     load_run_manifest,
     load_work_input,
-    new_batch_id,
-    persist_eval_batch,
-    persist_eval_fanin_input,
+    persist_deferral_join_input,
     persist_eval_row_input,
 )
 
@@ -60,7 +51,9 @@ class OptimWorkState:
         "step_index",
         "step_result_refs",
         "terminal",
-        "pending_eval_batch_ref",
+        "pending_step_result_ref",
+        "deferral_optim_step_stage_index",
+        "pending_deferred_intents",
     )
 
     def __init__(
@@ -70,13 +63,17 @@ class OptimWorkState:
         step_index: int = 0,
         step_result_refs: tuple[OptimStepResultRef, ...] = (),
         terminal: bool = False,
-        pending_eval_batch_ref: str | None = None,
+        pending_step_result_ref: str | None = None,
+        deferral_optim_step_stage_index: int | None = None,
+        pending_deferred_intents: tuple[OptimEvalRequest, ...] = (),
     ) -> None:
         self.work_input = work_input
         self.step_index = step_index
         self.step_result_refs = step_result_refs
         self.terminal = terminal
-        self.pending_eval_batch_ref = pending_eval_batch_ref
+        self.pending_step_result_ref = pending_step_result_ref
+        self.deferral_optim_step_stage_index = deferral_optim_step_stage_index
+        self.pending_deferred_intents = pending_deferred_intents
 
 
 def _load_launch(runtime: RegisteredRuntime, run_id: str) -> OptimRunLaunch:
@@ -106,6 +103,20 @@ def _require_controller_identity(
         )
 
 
+def _serialize_deferred_intents(
+    intents: tuple[OptimEvalRequest, ...],
+) -> list[dict[str, object]]:
+    return [intent.model_dump(mode="json") for intent in intents]
+
+
+def _deserialize_deferred_intents(
+    payload: object,
+) -> tuple[OptimEvalRequest, ...]:
+    if not isinstance(payload, list):
+        return ()
+    return tuple(OptimEvalRequest.model_validate(item) for item in payload)
+
+
 def _load_work_state(
     runtime: RegisteredRuntime,
     input_reference: str,
@@ -122,14 +133,21 @@ def _load_work_state(
             OptimStepResultRef.model_validate(ref)
             for ref in payload["step_result_refs"]
         )
-        pending = payload.get("pending_eval_batch_ref")
+        pending_step = payload.get("pending_step_result_ref")
+        deferral_origin = payload.get("deferral_optim_step_stage_index")
         return OptimWorkState(
             work_input=work_input,
             step_index=int(payload["step_index"]),
             step_result_refs=step_result_refs,
             terminal=bool(payload["terminal"]),
-            pending_eval_batch_ref=(
-                None if pending is None else str(pending)
+            pending_step_result_ref=(
+                None if pending_step is None else str(pending_step)
+            ),
+            deferral_optim_step_stage_index=(
+                None if deferral_origin is None else int(deferral_origin)
+            ),
+            pending_deferred_intents=_deserialize_deferred_intents(
+                payload.get("pending_deferred_intents", ())
             ),
         )
 
@@ -176,7 +194,11 @@ def _persist_work_state(
         "run_id": state.work_input.run_id,
         "step_index": state.step_index,
         "terminal": state.terminal,
-        "pending_eval_batch_ref": state.pending_eval_batch_ref,
+        "pending_step_result_ref": state.pending_step_result_ref,
+        "deferral_optim_step_stage_index": state.deferral_optim_step_stage_index,
+        "pending_deferred_intents": _serialize_deferred_intents(
+            state.pending_deferred_intents
+        ),
         "step_result_refs": [
             ref.model_dump(mode="json")
             for ref in state.step_result_refs
@@ -245,75 +267,59 @@ def _expand_eval_rows(
     runtime: RegisteredRuntime,
     intents: tuple[OptimEvalRequest, ...],
     *,
-    batch_id: str,
+    deferral_origin_stage_index: int,
+    work_state_ref: str,
 ) -> tuple[EvalRowInput, ...]:
     engine = runtime.eval_service._engine  # noqa: SLF001
     sampling = engine.sampling
     task_ids = tuple(_task_id(task) for task in sampling.tasks)
     num_seeds = sampling.num_seeds
     rows: list[EvalRowInput] = []
+    row_ordinal = 0
     for intent in intents:
         for task_id in task_ids:
             for seed_index in range(num_seeds):
                 rows.append(
                     EvalRowInput(
-                        batch_id=batch_id,
+                        work_state_ref=work_state_ref,
+                        deferral_origin_stage_index=deferral_origin_stage_index,
+                        row_ordinal=row_ordinal,
                         optim_eval_request=intent,
                         task_id=task_id,
                         seed_index=seed_index,
                     )
                 )
+                row_ordinal += 1
     return tuple(rows)
 
 
-def _platform_deferred_successors(
+def _emit_deferred_successors(
     runtime: RegisteredRuntime,
     *,
     state: OptimWorkState,
     deferred_intents: tuple[OptimEvalRequest, ...],
     current_stage_index: int,
     pending_step_result_ref: str,
+    work_state_ref: str,
 ) -> tuple[tuple[StageSuccessor, ...], str]:
-    # Fan-in resolves every unique deferred intent registered on the batch rows.
-    batch_id = new_batch_id()
     row_inputs = _expand_eval_rows(
         runtime,
         deferred_intents,
-        batch_id=batch_id,
+        deferral_origin_stage_index=current_stage_index,
+        work_state_ref=work_state_ref,
     )
     row_refs = [
         persist_eval_row_input(runtime.store, row_input)
         for row_input in row_inputs
     ]
-    primary_intent = deferred_intents[0]
-    fanin_input = EvalFaninInput(
-        batch_id=batch_id,
-        optim_eval_request=primary_intent,
-    )
-    fanin_ref = persist_eval_fanin_input(runtime.store, fanin_input)
-    pending_state = OptimWorkState(
-        work_input=_next_work_input(
-            state,
-            platform_stage_index=current_stage_index + len(row_refs) + 1,
+    join_ref = persist_deferral_join_input(
+        runtime.store,
+        DeferralJoinInput(
+            work_state_ref=work_state_ref,
+            deferral_optim_step_stage_index=current_stage_index,
+            primary_optim_eval_request=deferred_intents[0],
         ),
-        step_index=state.step_index,
-        step_result_refs=state.step_result_refs,
-        terminal=False,
-        pending_eval_batch_ref=batch_id,
     )
-    work_state_ref = _persist_work_state(runtime, pending_state)
-    batch = EvalBatch(
-        batch_id=batch_id,
-        run_id=state.work_input.run_id,
-        step_index=state.step_index,
-        optim_step_stage_index=current_stage_index,
-        row_input_refs=tuple(row_refs),
-        fanin_input_ref=fanin_ref,
-        work_state_ref=work_state_ref,
-        pending_step_result_ref=pending_step_result_ref,
-    )
-    batch_ref = persist_eval_batch(runtime.store, batch)
-    _ = batch_ref
     successors: list[StageSuccessor] = []
     next_index = current_stage_index + 1
     for row_ref in row_refs:
@@ -329,69 +335,72 @@ def _platform_deferred_successors(
         StageSuccessor(
             stage_key=StageKey(STAGE_EVAL_FANIN),
             stage_index=next_index,
-            input_reference=fanin_ref,
+            input_reference=join_ref,
             barrier=True,
         )
     )
     return tuple(successors), work_state_ref
 
 
-def _platform_deferred_resume_from_batch(
-    *,
-    batch: EvalBatch,
-) -> tuple[tuple[StageSuccessor, ...], str]:
-    successors: list[StageSuccessor] = []
-    next_index = batch.optim_step_stage_index + 1
-    for row_ref in batch.row_input_refs:
-        successors.append(
-            StageSuccessor(
-                stage_key=StageKey(STAGE_EVAL_ROW),
-                stage_index=next_index,
-                input_reference=row_ref,
-            )
-        )
-        next_index += 1
-    successors.append(
-        StageSuccessor(
-            stage_key=StageKey(STAGE_EVAL_FANIN),
-            stage_index=next_index,
-            input_reference=batch.fanin_input_ref,
-            barrier=True,
-        )
-    )
-    return tuple(successors), batch.work_state_ref
-
-
-def _unique_deferred_intents_from_batch(
+def _deferred_row_count(
     runtime: RegisteredRuntime,
-    batch: EvalBatch,
-) -> tuple[OptimEvalRequest, ...]:
-    seen: set[str] = set()
-    intents: list[OptimEvalRequest] = []
-    for row_ref in batch.row_input_refs:
-        row = load_eval_row_input(runtime.store, row_ref)
-        key = EvalEngineService._intent_ref(row.optim_eval_request).content_hash
-        if key in seen:
-            continue
-        seen.add(key)
-        intents.append(row.optim_eval_request)
-    return tuple(intents)
+    deferred_intents: tuple[OptimEvalRequest, ...],
+) -> int:
+    engine = runtime.eval_service._engine  # noqa: SLF001
+    return len(deferred_intents) * len(engine.sampling.tasks) * engine.sampling.num_seeds
 
 
-def _recover_deferred_platform_intents(
+def _platform_deferred_successors(
     runtime: RegisteredRuntime,
     *,
     state: OptimWorkState,
-    result: OptimStepResult,
-) -> tuple[OptimEvalRequest, ...]:
-    if state.pending_eval_batch_ref is not None:
-        batch = load_eval_batch_by_id(runtime.store, state.pending_eval_batch_ref)
-        return _unique_deferred_intents_from_batch(runtime, batch)
-
-    return load_persisted_deferred_intents(
-        runtime.store,
-        run_id=state.work_input.run_id,
+    deferred_intents: tuple[OptimEvalRequest, ...],
+    current_stage_index: int,
+    pending_step_result_ref: str,
+) -> tuple[tuple[StageSuccessor, ...], str]:
+    row_count = _deferred_row_count(runtime, deferred_intents)
+    pending_state = OptimWorkState(
+        work_input=_next_work_input(
+            state,
+            platform_stage_index=current_stage_index + row_count + 1,
+        ),
         step_index=state.step_index,
+        step_result_refs=state.step_result_refs,
+        terminal=False,
+        pending_step_result_ref=pending_step_result_ref,
+        deferral_optim_step_stage_index=current_stage_index,
+        pending_deferred_intents=deferred_intents,
+    )
+    work_state_ref = _persist_work_state(runtime, pending_state)
+    return _emit_deferred_successors(
+        runtime,
+        state=state,
+        deferred_intents=deferred_intents,
+        current_stage_index=current_stage_index,
+        pending_step_result_ref=pending_step_result_ref,
+        work_state_ref=work_state_ref,
+    )
+
+
+def _platform_deferred_resume(
+    runtime: RegisteredRuntime,
+    *,
+    state: OptimWorkState,
+) -> tuple[tuple[StageSuccessor, ...], str]:
+    if state.pending_step_result_ref is None:
+        raise ValueError("deferred resume requires a pending step result")
+    if state.deferral_optim_step_stage_index is None:
+        raise ValueError("deferred resume requires a deferral origin stage index")
+    if not state.pending_deferred_intents:
+        raise ValueError("deferred resume requires pending deferred intents")
+    work_state_ref = _persist_work_state(runtime, state)
+    return _emit_deferred_successors(
+        runtime,
+        state=state,
+        deferred_intents=state.pending_deferred_intents,
+        current_stage_index=state.deferral_optim_step_stage_index,
+        pending_step_result_ref=state.pending_step_result_ref,
+        work_state_ref=work_state_ref,
     )
 
 
@@ -421,17 +430,17 @@ def execute_optim_step_sync(
     work_input = state.work_input
     if (
         work_input.dispatch_mode is EvalDispatchMode.PLATFORM
-        and state.pending_eval_batch_ref is not None
+        and state.pending_step_result_ref is not None
+        and state.deferral_optim_step_stage_index == current_stage_index
     ):
-        batch = load_eval_batch_by_id(runtime.store, state.pending_eval_batch_ref)
-        if batch.step_index == state.step_index:
-            successors, output_ref = _platform_deferred_resume_from_batch(
-                batch=batch,
-            )
-            return StageCompletion(
-                output_reference=output_ref,
-                successors=successors,
-            )
+        successors, output_ref = _platform_deferred_resume(
+            runtime,
+            state=state,
+        )
+        return StageCompletion(
+            output_reference=output_ref,
+            successors=successors,
+        )
     launch = _load_launch(runtime, work_input.run_id)
     if launch.control is not None:
         if launch.control.identity_hash() != work_input.control_identity_hash:
@@ -487,24 +496,15 @@ def execute_optim_step_sync(
         and not result.resolved_intents
         and result.status is StepStatus.CONTINUE
         and not deferred
+        and state.pending_deferred_intents
     ):
-        deferred = _recover_deferred_platform_intents(
-            runtime,
-            state=state,
-            result=result,
-        )
+        deferred = state.pending_deferred_intents
     if (
         work_input.dispatch_mode is EvalDispatchMode.PLATFORM
         and not result.resolved_intents
         and deferred
         and result.status is StepStatus.CONTINUE
     ):
-        persist_deferred_intents(
-            runtime.store,
-            run_id=work_input.run_id,
-            step_index=state.step_index,
-            intents=deferred,
-        )
         pending_step_result_ref = format_object_reference(
             ObjectReference(
                 schema=result_ref.schema_name,
