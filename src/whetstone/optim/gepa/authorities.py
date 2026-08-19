@@ -11,7 +11,7 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.coordination.eval_service import EvalEngineService
+from whetstone.coordination.eval_service import EvalEngineService, EvalExecutionContext
 from whetstone.core.identity import (
     TypedRef,
     compute_identity_hash,
@@ -525,7 +525,10 @@ class CanonicalGepaEvalAuthority:
         resolution = EvalEngineService(
             store=self._store,
             engine=subset_engine,
-        ).resolve_optim_eval_request(optim_eval_request)
+        ).resolve_optim_eval_request(
+            optim_eval_request,
+            context=EvalExecutionContext(),
+        )
         if resolution.outcome is not IntentOutcome.COMPLETED:
             return self._failed_result(request, resolution)
         return self._completed_result(request, candidate, resolution)

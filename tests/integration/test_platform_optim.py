@@ -2,207 +2,147 @@
 
 Run locally:
     uv sync --extra platform
-    WHETSTONE_PLATFORM_INTEGRATION=1 uv run pytest -m integration tests/integration/
+    uv run pytest -m integration tests/integration/
 """
 
 from __future__ import annotations
 
-import os
-import time
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
-from uuid import uuid4
-
 import pytest
-from dbos import DBOS, Queue
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine
 
-from dr_platform._core.ledger.schema import LedgerSchema
-from dr_platform.admission.controls import set_stage_capacity
-from dr_platform.admission.runner import run_admission_pass
-from dr_platform.completion.execution import inspect_run_completion
-from dr_platform.pipeline.registry import PipelineRegistry
-from dr_platform.recovery.live_identity import LiveDbosIdentity
-from dr_platform.runtime.database.migrate import upgrade_platform_schema
-from dr_platform.runtime.dbos import (
-    DEFAULT_POOL_SIZE,
-    PlatformDbosConfig,
-    initialize_dbos_runtime,
-)
-from dr_platform.runtime.dispatcher import register_scheduled_dispatcher
-from dr_store.content_addressing import parse_object_reference
-
+from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.core.blocking_store import open_blocking_sqlite_store
-from whetstone.coordination.runtime_bootstrap import (
-    build_toy_copro_control,
-    prepare_copro_run,
-    register_runtime,
+from whetstone.platform.contracts import (
+    STAGE_EVAL_FANIN,
+    STAGE_EVAL_ROW,
+    STAGE_OPTIM_STEP,
+    STAGE_RUN_COMPLETION,
 )
-from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
-from whetstone.platform.contracts import STAGE_EVAL_ROW
-from whetstone.platform.pipeline import EVAL_ROW_QUEUE_CONCURRENCY, register_optim_pipeline
-from whetstone.platform.submit import submit_optim_run
+
+from .platform_helpers import (
+    NOW,
+    assert_fanin_barrier_predecessors,
+    assert_stage_coverage,
+    await_run_completion,
+    bootstrap_platform_runtime,
+    load_terminal_optim_result,
+    lookup_work_item_id,
+    run_until_quiescent,
+    shutdown_platform_runtime,
+)
 
 pytestmark = pytest.mark.integration
 
-NOW = datetime(2026, 7, 17, 12, tzinfo=UTC)
 
-
-def _migrate_platform_schema(engine: Engine) -> LedgerSchema:
-    upgrade_platform_schema(engine.url.render_as_string(hide_password=False))
-    return LedgerSchema()
-
-
-def _await_dbos_result(workflow_id: str, *, registration, timeout: float = 60):
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(
-            registration.client.retrieve_workflow(workflow_id).get_result,
-            polling_interval_sec=0.01,
-        )
-        return future.result(timeout=timeout)
-
-
-def _stage_workflow_ids(engine: Engine) -> tuple[str, ...]:
-    schema = LedgerSchema()
-    with engine.connect() as connection:
-        return tuple(
-            connection.execute(
-                select(schema.stage_attempts.c.workflow_id).order_by(
-                    schema.stage_attempts.c.stage_attempt_id
-                )
-            ).scalars()
-        )
-
-
-def _queue_concurrency(stage_key: str) -> int:
-    if stage_key == STAGE_EVAL_ROW:
-        return EVAL_ROW_QUEUE_CONCURRENCY
-    return 1
-
-
-@pytest.mark.skipif(
-    os.environ.get("WHETSTONE_PLATFORM_INTEGRATION") != "1",
-    reason="set WHETSTONE_PLATFORM_INTEGRATION=1 with Postgres+DBOS configured",
-)
 def test_inline_platform_copro_submit_to_result(
     pg_engine: Engine,
     clean_pg: str,
     tmp_path,
 ) -> None:
-    """Full submit → admission → DBOS stages → run completion → OptimResult."""
-    _migrate_platform_schema(pg_engine)
-    suffix = uuid4().hex[:10]
-    store_path = tmp_path / "integration-store.sqlite"
-    registration = None
-    run_key = f"run-{suffix}"
-
+    """INLINE submit → admission → DBOS optim_step → run completion."""
+    store_path = tmp_path / "integration-inline.sqlite"
     with open_blocking_sqlite_store(str(store_path)) as store:
-        runtime = register_runtime(store=store, ledger_engine=pg_engine)
-        registry = PipelineRegistry()
-        pipeline = register_optim_pipeline(
-            registry,
-            runtime,
-            max_recovery_attempts=1,
+        context = bootstrap_platform_runtime(
+            store=store,
+            pg_engine=pg_engine,
+            clean_pg=clean_pg,
+            now=NOW,
+            dispatch_mode=EvalDispatchMode.INLINE,
         )
-        for stage in pipeline.stages:
-            Queue(
-                stage.queue_name,
-                concurrency=_queue_concurrency(stage.key.value),
+        try:
+            run_until_quiescent(
+                pg_engine=pg_engine,
+                registry=context.registry,
+                registration=context.registration,
+                now=NOW,
             )
-            set_stage_capacity(
-                pipeline=pipeline.identity,
-                stage_key=stage.key,
-                capacity=_queue_concurrency(stage.key.value),
-                engine=pg_engine,
-                clock=lambda: NOW,
+            terminal_result_ref = await_run_completion(
+                run_key=context.run_key,
+                pg_engine=pg_engine,
+                registration=context.registration,
+                now=NOW,
             )
-        assert pipeline.run_completion is not None
-        Queue(pipeline.run_completion.queue_name, concurrency=1)
+            load_terminal_optim_result(context, terminal_result_ref)
 
-        eval_engine = ReferenceEvalRuntimeConfig().build_engine(store)
-        control = build_toy_copro_control(breadth=2, depth=1, engine=eval_engine)
-        launch = prepare_copro_run(
-            runtime,
-            run_id=f"integration-run-{suffix}",
-            control=control,
-            terminal_top_k=1,
-        )
-        submit_optim_run(
-            runtime=runtime,
-            registry=registry,
-            engine=pg_engine,
-            campaign_key=f"campaign-{suffix}",
-            run_key=run_key,
-            work_key=f"work-{suffix}",
-            launch=launch,
-            controller_identity_hash=runtime.controller.runtime_hash,
-            execution_config_reference=f"exec-config-{suffix}",
-        )
-
-        config = PlatformDbosConfig(
-            database_url=clean_pg,
-            system_database_url=clean_pg,
-            max_recovery_attempts=1,
-            pool_size=DEFAULT_POOL_SIZE,
-        )
-        initialize_dbos_runtime(config, app_name=f"whetstone-platform-{suffix}")
-        registration = register_scheduled_dispatcher(
-            live_dbos_identity=LiveDbosIdentity(
-                app_version=f"whetstone-{suffix}",
-                resolve_executor_ids=lambda: frozenset({DBOS.application_version}),
-            ),
-            config=config,
-            engine=pg_engine,
-            registry=registry,
-            sweep_cron=None,
-        )
-        DBOS.launch()
-        DBOS.set_latest_application_version(DBOS.application_version)
-
-        seen: set[str] = set()
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            registration.workflow(NOW, NOW)
-            for workflow_id in _stage_workflow_ids(pg_engine):
-                if workflow_id in seen:
-                    continue
-                seen.add(workflow_id)
-                _await_dbos_result(workflow_id, registration=registration)
-            run_admission_pass(
+            work_item_id = lookup_work_item_id(
                 pg_engine,
-                client=registration.client,
-                registry=registry,
-                clock=lambda: NOW,
+                campaign_key=context.campaign_key,
+                work_key=context.work_key,
             )
-            schema = LedgerSchema()
-            with pg_engine.connect() as connection:
-                pending_stage = connection.execute(
-                    select(schema.stage_executions.c.stage_execution_id).where(
-                        schema.stage_executions.c.state.in_(
-                            ("READY", "ADMITTED", "ENQUEUED")
-                        )
-                    )
-                ).first()
-            if pending_stage is None:
-                break
-            time.sleep(0.05)
+            assert_stage_coverage(
+                pg_engine,
+                work_item_id,
+                {
+                    STAGE_OPTIM_STEP: 1,
+                    STAGE_EVAL_ROW: 0,
+                    STAGE_EVAL_FANIN: 0,
+                    STAGE_RUN_COMPLETION: 1,
+                },
+            )
+        finally:
+            shutdown_platform_runtime(context)
 
-        registration.barrier_workflow(NOW, NOW)
-        execution = inspect_run_completion(run_key, engine=pg_engine)
-        terminal_result_ref = _await_dbos_result(
-            execution.workflow_id,
-            registration=registration,
+
+def test_platform_deferral_fanout_fanin_through_admission(
+    pg_engine: Engine,
+    clean_pg: str,
+    tmp_path,
+) -> None:
+    """PLATFORM deferral → eval_row fan-out → barrier fan-in → resume → result."""
+    store_path = tmp_path / "integration-platform.sqlite"
+    with open_blocking_sqlite_store(str(store_path)) as store:
+        context = bootstrap_platform_runtime(
+            store=store,
+            pg_engine=pg_engine,
+            clean_pg=clean_pg,
+            now=NOW,
+            dispatch_mode=EvalDispatchMode.PLATFORM,
+            breadth=2,
+            depth=1,
         )
-        completed = inspect_run_completion(run_key, engine=pg_engine)
-        assert completed.output_reference == terminal_result_ref
+        try:
+            run_until_quiescent(
+                pg_engine=pg_engine,
+                registry=context.registry,
+                registration=context.registration,
+                now=NOW,
+                deadline_seconds=180,
+            )
+            terminal_result_ref = await_run_completion(
+                run_key=context.run_key,
+                pg_engine=pg_engine,
+                registration=context.registration,
+                now=NOW,
+            )
+            load_terminal_optim_result(context, terminal_result_ref)
 
-        parsed = parse_object_reference(terminal_result_ref)
-        assert parsed.schema == OPTIM_RESULT_SCHEMA
-        result = OptimResult.model_validate(store.get(parsed))
-        assert result.run.record.run_id == launch.run.run_id
-        assert result.proposals
-
-    if registration is not None:
-        registration.close()
-    DBOS.destroy(destroy_registry=True)
+            work_item_id = lookup_work_item_id(
+                pg_engine,
+                campaign_key=context.campaign_key,
+                work_key=context.work_key,
+            )
+            deferred_intent_count = 1
+            internal_task_count = 2
+            seed_count = 1
+            expected_eval_row_count = (
+                deferred_intent_count * internal_task_count * seed_count
+            )
+            assert_stage_coverage(
+                pg_engine,
+                work_item_id,
+                {
+                    STAGE_OPTIM_STEP: 2,
+                    STAGE_EVAL_ROW: expected_eval_row_count,
+                    STAGE_EVAL_FANIN: 1,
+                    STAGE_RUN_COMPLETION: 1,
+                },
+            )
+            fanin_stage_index = expected_eval_row_count + 1
+            assert_fanin_barrier_predecessors(
+                pg_engine,
+                work_item_id,
+                fanin_stage_index=fanin_stage_index,
+                expected_eval_row_count=expected_eval_row_count,
+            )
+        finally:
+            shutdown_platform_runtime(context)

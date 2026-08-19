@@ -71,7 +71,6 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         *,
         store: ObjectStore,
         engine: EvalEngine,
-        dispatch_mode: EvalDispatchMode = EvalDispatchMode.INLINE,
         claim_lease_seconds: float = 300.0,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], None] = time.sleep,
@@ -86,7 +85,6 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             raise ValueError("claim_lease_seconds must be positive")
         self._store = store
         self._engine = engine
-        self._dispatch_mode = dispatch_mode
         self._claim_lease_seconds = claim_lease_seconds
         self._clock = clock
         self._sleep = sleep
@@ -100,23 +98,13 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     def replay_policy(self) -> ReplayPolicy:
         return ReplayPolicy.DURABLE_WORKFLOW
 
-    @property
-    def dispatch_mode(self) -> EvalDispatchMode:
-        return self._dispatch_mode
-
-    def set_dispatch_mode(self, mode: EvalDispatchMode) -> EvalDispatchMode:
-        """Legacy API for non-platform callers; platform paths use EvalExecutionContext."""
-        previous = self._dispatch_mode
-        self._dispatch_mode = mode
-        return previous
-
     def _effective_context(
         self,
         context: EvalExecutionContext | None,
     ) -> EvalExecutionContext:
         if context is not None:
             return context
-        return EvalExecutionContext(dispatch_mode=self._dispatch_mode)
+        return EvalExecutionContext()
 
     @classmethod
     def _platform_intent_key(cls, optim_eval_request: OptimEvalRequest) -> str:

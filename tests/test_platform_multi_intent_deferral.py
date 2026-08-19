@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from dr_store.content_addressing import parse_object_reference
 
 from whetstone.coordination.eval_service import EvalDispatchMode
+from whetstone.coordination.runtime_bootstrap import (
+    build_toy_copro_control,
+    prepare_copro_run,
+    register_runtime,
+)
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.optim.contracts import OptimStepResult
 from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
@@ -11,17 +20,20 @@ from whetstone.platform.contracts import (
     persist_work_input,
 )
 from whetstone.platform.eval_fanin import execute_eval_fanin_sync, execute_eval_row_sync
-from whetstone.platform.step_executor import (
-    execute_optim_step_sync,
-    execute_run_completion_sync,
-)
+from whetstone.platform.step_executor import execute_optim_step_sync
 
 
-def test_platform_deferral_fanout_fanin_resume(copro_launch) -> None:
-    runtime, launch = copro_launch
+def test_platform_multi_intent_deferral_merges_all_resolutions(sqlite_store) -> None:
+    eval_engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    control = build_toy_copro_control(breadth=3, depth=1, engine=eval_engine)
+    runtime = register_runtime(store=sqlite_store, copro_control=control)
+    launch = prepare_copro_run(
+        runtime,
+        run_id=f"multi-intent-{uuid4().hex[:8]}",
+        control=control,
+        terminal_top_k=1,
+    )
 
-    control = launch.control
-    assert control is not None
     runtime.controller.bind_launch(launch)
     work_input = OptimWorkInput(
         run_id=launch.run.run_id,
@@ -48,36 +60,39 @@ def test_platform_deferral_fanout_fanin_resume(copro_launch) -> None:
     ]
     assert row_successors
     assert len(fanin_successors) == 1
-    assert fanin_successors[0].barrier is True
+
+    internal_task_count = 2
+    seed_count = 1
+    deferred_intent_count = len(row_successors) // (internal_task_count * seed_count)
+    assert deferred_intent_count >= 2
 
     for row_successor in row_successors:
-        row_completion = execute_eval_row_sync(
+        execute_eval_row_sync(
             runtime,
             input_reference=row_successor.input_reference,
             stage_index=row_successor.stage_index,
         )
-        assert row_completion.output_reference
 
     fanin_completion = execute_eval_fanin_sync(
         runtime,
         input_reference=fanin_successors[0].input_reference,
         stage_index=fanin_successors[0].stage_index,
     )
-    assert fanin_completion.successors
-    successor = fanin_completion.successors[0]
-    assert successor.stage_key.value == STAGE_OPTIM_STEP
+    fanin_record = runtime.store.get(
+        parse_object_reference(fanin_completion.output_reference)
+    )
+    assert len(fanin_record["resolutions"]) == deferred_intent_count
 
     resumed = execute_optim_step_sync(
         runtime,
-        input_reference=successor.input_reference,
-        stage_index=successor.stage_index,
+        input_reference=fanin_completion.successors[0].input_reference,
+        stage_index=fanin_completion.successors[0].stage_index,
     )
-    assert resumed.output_reference
-    assert parse_object_reference(resumed.output_reference)
     assert not resumed.successors
 
-    terminal_ref = execute_run_completion_sync(
-        runtime,
-        input_reference=resumed.output_reference,
+    binding = runtime.store.resolve(
+        runtime.harness._result_binding_key(launch.run.run_id, 0)  # noqa: SLF001
     )
-    assert parse_object_reference(terminal_ref)
+    assert binding is not None
+    step_result = OptimStepResult.model_validate(runtime.store.get(binding))
+    assert len(step_result.resolved_intents) == deferred_intent_count

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import Engine, create_engine, make_url, text
 
 from dr_platform._core.ledger.schema import LedgerSchema
 from dr_platform.runtime.database.migrate import upgrade_platform_schema
+
+from tests.integration.platform_helpers import NOW
+
+pytest.importorskip("dr_platform")
 
 TEST_DATABASE_URL = os.environ.get(
     "WHETSTONE_TEST_DATABASE_URL",
@@ -37,9 +40,13 @@ def _verify_postgres_available(database_url: str) -> None:
         with engine.connect():
             pass
     except Exception:
+        ci_value = os.environ.get("CI", "").lower()
+        if ci_value and ci_value not in {"false", "0"}:
+            raise
         pytest.skip(
             "postgres unavailable for platform integration tests "
-            f"({database_url})"
+            f"({database_url}); set WHETSTONE_TEST_DATABASE_URL or create "
+            "whetstone_platform_test"
         )
     finally:
         engine.dispose()
@@ -65,8 +72,6 @@ def migrate_platform_schema(engine: Engine) -> LedgerSchema:
 
 @pytest.fixture(scope="session")
 def pg_url() -> str:
-    if os.environ.get("WHETSTONE_PLATFORM_INTEGRATION") != "1":
-        pytest.skip("set WHETSTONE_PLATFORM_INTEGRATION=1 to run integration tests")
     _verify_postgres_available(TEST_DATABASE_URL)
     return TEST_DATABASE_URL
 
@@ -82,6 +87,3 @@ def pg_engine(clean_pg: str) -> Iterator[Engine]:
     engine = create_engine(clean_pg)
     yield engine
     engine.dispose()
-
-
-NOW = datetime(2026, 7, 17, 12, tzinfo=UTC)

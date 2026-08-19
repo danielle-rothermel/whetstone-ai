@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from dr_store.content_addressing import format_object_reference, parse_object_reference
 
-from whetstone.coordination.eval_service import EvalDispatchMode, EvalEngineService
+from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.eval.protocol import EvalRequest
 from whetstone.optim.contracts import OptimEvalRequest
 from whetstone.platform.contracts import (
@@ -27,21 +27,8 @@ from whetstone.platform.step_executor import (
 )
 
 
-def _platform_runtime(toy_runtime):
-    runtime, control = toy_runtime
-    engine = runtime.eval_service._engine  # noqa: SLF001
-    eval_service = EvalEngineService(
-        store=runtime.store,
-        engine=engine,
-        dispatch_mode=EvalDispatchMode.PLATFORM,
-    )
-    object.__setattr__(runtime, "eval_service", eval_service)
-    runtime.harness._evaluation_service = eval_service  # noqa: SLF001
-    return runtime, control
-
-
 def test_platform_intent_serialization(toy_runtime) -> None:
-    _runtime, _control = _platform_runtime(toy_runtime)
+    _runtime, _control = toy_runtime
     from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
@@ -61,7 +48,6 @@ def test_platform_intent_serialization(toy_runtime) -> None:
 
 def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
     runtime, launch = copro_launch
-    runtime, _control = _platform_runtime((runtime, launch.control))
     control = launch.control
     runtime.controller.bind_launch(launch)
     work_input = OptimWorkInput(
@@ -119,7 +105,6 @@ def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
 
 def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
     runtime, launch = copro_launch
-    runtime, _control = _platform_runtime((runtime, launch.control))
     control = launch.control
     runtime.controller.bind_launch(launch)
     work_input = OptimWorkInput(
@@ -170,7 +155,6 @@ def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
 
 def test_platform_stage_index_mismatch_raises(copro_launch) -> None:
     runtime, launch = copro_launch
-    runtime, _control = _platform_runtime((runtime, launch.control))
     control = launch.control
     runtime.controller.bind_launch(launch)
     work_input = OptimWorkInput(
