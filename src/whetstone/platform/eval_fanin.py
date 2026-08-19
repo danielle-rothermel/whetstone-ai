@@ -419,7 +419,7 @@ def _fanin_entry_allowed(
         return None
     if any(resolution is not None for resolution in bound_resolutions):
         return None
-    raise ValueError("platform eval intent is not pending")
+    return None
 
 
 def _resolve_batch_intent(

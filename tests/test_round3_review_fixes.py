@@ -16,6 +16,7 @@ from whetstone.platform.eval_fanin import (
     execute_eval_row_sync,
 )
 from whetstone.platform.step_executor import STAGE_EVAL_FANIN, STAGE_EVAL_ROW, execute_optim_step_sync
+from whetstone.provider.llm_call import derive_rng_seed
 
 
 def test_gepa_zero_budget_uses_terminal_contract_and_zero_delta(tmp_path) -> None:
@@ -79,7 +80,13 @@ def test_for_task_seed_preserves_source_rng_seed(copro_launch) -> None:
     source_rng = dict(engine._sampling.seed_plan.rng_seeds)  # noqa: SLF001
     scoped = engine.for_task_seed(task_id, 0)
     derived_rng = dict(scoped._sampling.seed_plan.rng_seeds)  # noqa: SLF001
-    assert derived_rng.get(f"{task_hash}#0") == source_rng.get(f"{task_hash}#0")
+    source_value = source_rng.get(f"{task_hash}#0")
+    expected = (
+        source_value
+        if source_value is not None
+        else derive_rng_seed(task_hash, 0)
+    )
+    assert derived_rng.get(f"{task_hash}#0") == expected
 
 
 def test_fanin_binds_failed_when_row_returns_failure_evidence(copro_launch) -> None:

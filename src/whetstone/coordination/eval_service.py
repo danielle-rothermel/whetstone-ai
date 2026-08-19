@@ -296,10 +296,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         self._persist_intent_targets(optim_eval_request)
         self._assert_generation_current(optim_eval_request, owned)
         resolved_eval_config = self._engine.eval_config_ref
-        self._clear_platform_intent(optim_eval_request)
         for outcome in row_outcomes:
             if outcome.rejected_detail is not None:
-                return self._bind_if_owned(
+                resolution = self._bind_if_owned(
                     optim_eval_request,
                     IntentResolution(
                         schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -310,6 +309,8 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                     ),
                     owned,
                 )
+                self._clear_platform_intent(optim_eval_request)
+                return resolution
         for outcome in row_outcomes:
             if outcome.failure is not None:
                 if outcome.evidence_ref is None:
@@ -322,7 +323,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                         "evidence_content_hash": outcome.evidence_ref.content_hash,
                     },
                 )
-                return self._bind_if_owned(
+                resolution = self._bind_if_owned(
                     optim_eval_request,
                     IntentResolution(
                         schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -339,6 +340,8 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                     ),
                     owned,
                 )
+                self._clear_platform_intent(optim_eval_request)
+                return resolution
         row_slices = tuple(
             RowEvalSlice(
                 task_id=outcome.task_id,
@@ -355,7 +358,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             optim_eval_request,
             row_slices,
             owned,
-            clear_platform_intent=False,
+            clear_platform_intent=True,
         )
 
     def _assemble_with_heartbeat(
@@ -417,11 +420,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             request,
             row_slices=row_slices,
         )
-        if clear_platform_intent:
-            self._clear_platform_intent(optim_eval_request)
         match result:
             case EvalRejected(detail=detail):
-                return self._bind_if_owned(
+                resolution = self._bind_if_owned(
                     optim_eval_request,
                     IntentResolution(
                         schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -432,6 +433,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                     ),
                     owned,
                 )
+                if clear_platform_intent:
+                    self._clear_platform_intent(optim_eval_request)
+                return resolution
             case EvalEvidenceWithRef(
                 evidence=EvalFailureEvidence() as failure,
                 evidence_ref=evidence_ref,
@@ -444,7 +448,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                         "evidence_content_hash": evidence_ref.content_hash,
                     },
                 )
-                return self._bind_if_owned(
+                resolution = self._bind_if_owned(
                     optim_eval_request,
                     IntentResolution(
                         schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -461,6 +465,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                     ),
                     owned,
                 )
+                if clear_platform_intent:
+                    self._clear_platform_intent(optim_eval_request)
+                return resolution
             case EvalEvidenceWithRef(
                 evidence=EvalEvidence() as evidence,
                 evidence_ref=evidence_ref,
@@ -471,7 +478,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                     if reward_ref is None
                     else reward_ref.record.evidence_refs
                 )
-                return self._bind_if_owned(
+                resolution = self._bind_if_owned(
                     optim_eval_request,
                     IntentResolution(
                         schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
@@ -491,6 +498,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                     ),
                     owned,
                 )
+                if clear_platform_intent:
+                    self._clear_platform_intent(optim_eval_request)
+                return resolution
             case _:
                 raise TypeError(f"unexpected evaluation result: {result!r}")
 

@@ -208,7 +208,13 @@ def test_for_task_ids_preserves_rng_seeds(copro_launch) -> None:
     source_rng = dict(engine._sampling.seed_plan.rng_seeds)  # noqa: SLF001
     scoped = engine.for_task_ids((task_id,))
     derived_rng = dict(scoped._sampling.seed_plan.rng_seeds)  # noqa: SLF001
-    assert derived_rng.get(f"{task_hash}#0") == source_rng.get(f"{task_hash}#0")
+    source_value = source_rng.get(f"{task_hash}#0")
+    expected = (
+        source_value
+        if source_value is not None
+        else derive_rng_seed(task_hash, 0)
+    )
+    assert derived_rng.get(f"{task_hash}#0") == expected
 
 
 def test_resolve_eval_rng_seed_uses_plan_provenance(sqlite_store) -> None:

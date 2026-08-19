@@ -22,6 +22,7 @@ from whetstone.eval.drivers.eval_result import (
 )
 from whetstone.eval.row_slice import RowEvalCompletion, RowEvalSlice
 from whetstone.eval.plan import TaskTrialProvenanceRow, seed_plan_from_provenance
+from whetstone.provider.llm_call import derive_rng_seed
 from whetstone.eval.task_trial import TaskTrialKey
 from whetstone.eval.protocol import (
     EvalEvidenceWithRef,
@@ -214,7 +215,13 @@ class RuntimeEvalEngine:
             TaskTrialProvenanceRow(
                 task_hash=task_hash_by_id[task_id],
                 seed_index=seed_index,
-                rng_seed=source_rng.get(f"{task_hash_by_id[task_id]}#{seed_index}"),
+                rng_seed=(
+                    source_rng.get(f"{task_hash_by_id[task_id]}#{seed_index}")
+                    or derive_rng_seed(
+                        task_hash_by_id[task_id],
+                        seed_index,
+                    )
+                ),
             )
             for task_id in task_ids
             for seed_index in range(source.seed_plan.num_seeds)
@@ -306,6 +313,8 @@ class RuntimeEvalEngine:
             )
         rng_seeds = dict(source.seed_plan.rng_seeds)
         rng_seed = rng_seeds.get(f"{task_hash}#{seed_index}")
+        if rng_seed is None:
+            rng_seed = derive_rng_seed(task_hash, seed_index)
         seed_plan = seed_plan_from_provenance(
             (
                 TaskTrialProvenanceRow(
