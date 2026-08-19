@@ -22,7 +22,7 @@ dependencies = [
 dbos = ["dbos>=2.25.0"]
 postgres = ["psycopg[binary]>=3.3.4"]
 platform = [
-  "dr-platform==0.2.2",
+  "dr-platform==0.2.3",
   "dbos[otel]==2.27.0",
   "psycopg[binary]>=3.3.4",
 ]
