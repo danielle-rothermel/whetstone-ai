@@ -431,7 +431,6 @@ def execute_optim_step_sync(
     if (
         work_input.dispatch_mode is EvalDispatchMode.PLATFORM
         and state.pending_step_result_ref is not None
-        and state.deferral_optim_step_stage_index == current_stage_index
     ):
         successors, output_ref = _platform_deferred_resume(
             runtime,

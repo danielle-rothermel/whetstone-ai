@@ -548,7 +548,7 @@ def _collect_episode_row_records(
     stage_index: int | None,
     deferral_origin: int,
 ) -> tuple[dict[str, object], ...]:
-    if work_item_id is not None and stage_index is not None:
+    if work_item_id is not None and stage_index is not None and runtime.ledger_engine is not None:
         return _verify_episode_eval_row_predecessors(
             runtime,
             work_item_id=work_item_id,
