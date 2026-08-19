@@ -119,7 +119,11 @@ class StepRequestBuilder:
                         {"metric_calls": control.resolved_max_metric_calls}
                     ),
                 ),
-                step_output_contract=OutputContract(returned_proposal_count=0),
+                step_output_contract=(
+                    run.record.terminal_output_contract
+                    if control.resolved_max_metric_calls == 0
+                    else OutputContract(returned_proposal_count=0)
+                ),
             )
 
         if adapter_key != COPRO_ADAPTER_KEY:

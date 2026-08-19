@@ -20,7 +20,8 @@ from whetstone.eval.drivers.eval_result import (
     per_task_count,
     per_task_score,
 )
-from whetstone.eval.row_slice import RowEvalSlice
+from whetstone.eval.row_slice import RowEvalCompletion, RowEvalSlice
+from whetstone.eval.plan import TaskTrialProvenanceRow, seed_plan_from_provenance
 from whetstone.eval.task_trial import TaskTrialKey
 from whetstone.eval.protocol import (
     EvalEvidenceWithRef,
@@ -239,7 +240,11 @@ class RuntimeEvalEngine:
             raise ValueError(
                 f"seed_index {seed_index} is outside plan num_seeds {num_seeds}"
             )
-        derived = self._derive_task_seed_sampling(self._sampling, task_id)
+        derived = self._derive_task_seed_sampling(
+            self._sampling,
+            task_id,
+            seed_index,
+        )
         return RuntimeEvalEngine(
             store=self._store,
             experiment=self._experiment,
@@ -256,27 +261,101 @@ class RuntimeEvalEngine:
     def _derive_task_seed_sampling(
         source: EvalSplit,
         task_id: str,
+        seed_index: int,
     ) -> EvalSplit:
+        from whetstone.eval import EvalDefinition, SamplingDefinition, TaskSet
+
         source_by_id = {_task_id(task): task for task in source.tasks}
         if task_id not in source_by_id:
             raise ValueError(f"derived sampling contains unknown task ID: {task_id!r}")
         selected = (source_by_id[task_id],)
-        task_hash_by_task = {id(selected[0]): task_id}
+        task_hash_by_id = dict(
+            zip(
+                (_task_id(task) for task in source.tasks),
+                source.task_set.task_hashes,
+                strict=True,
+            )
+        )
+        task_hash = task_hash_by_id[task_id]
         namespace, separator, role = source.task_set.manifest_id.rpartition(".")
         if not separator or role != source.split_role:
             raise ValueError(
                 "source sampling manifest does not match its split role"
             )
-        return derive_eval_split(
-            namespace=namespace,
+        rng_seeds = dict(source.seed_plan.rng_seeds)
+        rng_seed = rng_seeds.get(f"{task_hash}#{seed_index}")
+        seed_plan = seed_plan_from_provenance(
+            (
+                TaskTrialProvenanceRow(
+                    task_hash=task_hash,
+                    seed_index=0,
+                    rng_seed=rng_seed,
+                ),
+            ),
+            plan_id=f"{namespace}.{role}",
+            version=source.seed_plan.version,
+        )
+        task_set = TaskSet(
+            manifest_id=f"{namespace}.{role}",
+            version=source.task_set.version,
             dataset_revision=source.task_set.dataset_revision,
+            task_hashes=(task_hash,),
+        )
+        sampling = SamplingDefinition(
+            definition_id=f"{namespace}.{role}.sampling",
+            version=source.sampling_config.definition_ref.version,
+        ).materialize(
+            {
+                "task_set_hash": task_set.identity_hash(),
+                "seed_plan_hash": seed_plan.identity_hash(),
+            }
+        )
+        eval_config = EvalDefinition(
+            definition_id=f"{namespace}.eval",
+            version=source.eval_config.definition_ref.version,
+        ).materialize(
+            sampling=sampling,
+            evaluation_procedure=source.procedure_config,
+            aggregation=source.aggregation_config,
+        )
+        return EvalSplit(
             split_role=source.split_role,
             tasks=selected,
-            task_hash_of=lambda task: task_hash_by_task[id(task)],
-            procedure=source.procedure_config,
-            aggregation=source.aggregation_config,
-            num_seeds=1,
+            task_set=task_set,
+            seed_plan=seed_plan,
+            sampling_config=sampling,
+            procedure_config=source.procedure_config,
+            aggregation_config=source.aggregation_config,
+            eval_config=eval_config,
         )
+
+    def evaluate_row(self, request: EvalRequest) -> RowEvalCompletion:
+        rejected = self._preflight(request)
+        if rejected is not None:
+            return RowEvalCompletion(rejected_detail=rejected.detail)
+        try:
+            result = self._driver.run(
+                experiment=self._experiment,
+                sampling=self._sampling,
+                request=request,
+                eval_config_hash=self.eval_config_ref.config_hash,
+                execution_policy=self._execution_policy,
+                concurrency=self._concurrency,
+                max_wall_seconds=self._max_wall_seconds,
+                partial_log=self._partial_log,
+                prompt_cache=self._prompt_cache,
+            )
+            evidence_with_ref, supplemental_refs = self._persist_success(
+                request,
+                result,
+            )
+            return RowEvalCompletion(
+                evidence_ref=evidence_with_ref.evidence_ref,
+                supplemental_aggregate_refs=supplemental_refs,
+            )
+        except Exception as exc:
+            failure = self._persist_failure(request, exc)
+            return RowEvalCompletion(evidence_ref=failure.evidence_ref)
 
     def assemble_from_row_slices(
         self,
@@ -369,16 +448,20 @@ class RuntimeEvalEngine:
             aggregate_record = self._load_aggregate_record(
                 row_slice.evidence.aggregate_ref
             )
-            supplemental_by_name.setdefault(
-                aggregate_record.name,
-                aggregate_record,
-            )
+            if aggregate_record.name != template.aggregate_name:
+                raise ValueError("row aggregate name must match template")
             partial_aggregate_ref = self._put(
                 AGGREGATE_SCHEMA,
                 aggregate_record.record_content(),
             )
             if partial_aggregate_ref != row_slice.evidence.aggregate_ref:
                 raise ValueError("row aggregate reference diverged")
+            for supplemental_ref in row_slice.supplemental_aggregate_refs:
+                supplemental_record = self._load_aggregate_record(supplemental_ref)
+                supplemental_by_name.setdefault(
+                    supplemental_record.name,
+                    supplemental_record,
+                )
             cache = CacheEvidence(
                 partial_row_count=cache.partial_row_count
                 + row_slice.evidence.cache.partial_row_count,
@@ -582,7 +665,8 @@ class RuntimeEvalEngine:
                 partial_log=self._partial_log,
                 prompt_cache=self._prompt_cache,
             )
-            return self._persist_success(request, result)
+            evidence_with_ref, _ = self._persist_success(request, result)
+            return evidence_with_ref
         except Exception as exc:
             return self._persist_failure(request, exc)
 
@@ -607,18 +691,36 @@ class RuntimeEvalEngine:
         expected = self._experiment.eval_configs.eval_config_for(
             self._sampling.split_role
         )
-        if expected != self._sampling.eval_config:
-            canonical = self._experiment.eval_configs.internal
-            if self._sampling.split_role != canonical.split_role:
-                canonical = self._experiment.eval_configs.official
-            expected_subset = self._derive_sampling(
-                canonical, self._sampling.task_set.task_hashes
-            )
-            if expected_subset != self._sampling:
-                raise ValueError(
-                    "engine sampling must be an exact experiment split "
-                    "binding or exact derived subset"
-                )
+        if expected == self._sampling.eval_config:
+            return
+        canonical = self._experiment.eval_configs.internal
+        if self._sampling.split_role != canonical.split_role:
+            canonical = self._experiment.eval_configs.official
+        if (
+            len(self._sampling.tasks) == 1
+            and self._sampling.seed_plan.num_seeds == 1
+        ):
+            task_id = _task_id(self._sampling.tasks[0])
+            for seed_index in range(canonical.seed_plan.num_seeds):
+                if (
+                    self._derive_task_seed_sampling(
+                        canonical,
+                        task_id,
+                        seed_index,
+                    )
+                    == self._sampling
+                ):
+                    return
+        expected_subset = self._derive_sampling(
+            canonical,
+            tuple(_task_id(task) for task in self._sampling.tasks),
+        )
+        if expected_subset == self._sampling:
+            return
+        raise ValueError(
+            "engine sampling must be an exact experiment split "
+            "binding or exact derived subset"
+        )
 
     def _eval_role(self) -> EvalRole:
         return evaluation_role_for_split(self._sampling.split_role)
@@ -846,7 +948,7 @@ class RuntimeEvalEngine:
 
     def _persist_success(
         self, request: EvalRequest, result: InternalEvalResult
-    ) -> EvalEvidenceWithRef:
+    ) -> tuple[EvalEvidenceWithRef, tuple[TypedRef, ...]]:
         candidate_ref = candidate_reference(request.candidate)
         persisted_candidate = self._put(
             CANDIDATE_RECORD_SCHEMA, request.candidate.record_content()
@@ -954,7 +1056,10 @@ class RuntimeEvalEngine:
         evidence_ref = self._put(
             EVAL_EVIDENCE_SCHEMA, evidence.record_content()
         )
-        return EvalEvidenceWithRef(evidence=evidence, evidence_ref=evidence_ref)
+        return (
+            EvalEvidenceWithRef(evidence=evidence, evidence_ref=evidence_ref),
+            tuple(supplemental_refs),
+        )
 
     def _cache_evidence(
         self, candidate_id: str, request_identities: frozenset[str]

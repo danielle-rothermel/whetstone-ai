@@ -29,7 +29,7 @@ from whetstone.eval.protocol import (
     EvalRequest,
     EvalEngine,
 )
-from whetstone.eval.row_slice import RowEvalSlice
+from whetstone.eval.row_slice import RowEvalCompletion, RowEvalOutcome, RowEvalSlice
 from whetstone.eval.evidence_validation import (
     EvalEvidenceValidation,
 )
@@ -161,11 +161,11 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     def _clear_platform_intent(self, optim_eval_request: OptimEvalRequest) -> None:
         self._store.evict_bindings([self._platform_intent_key(optim_eval_request)])
 
-    def resolve_platform_intent_from_row_slices(
+    def resolve_platform_intent_from_row_outcomes(
         self,
         optim_eval_request: OptimEvalRequest,
         *,
-        row_slices: tuple[RowEvalSlice, ...],
+        row_outcomes: tuple[RowEvalOutcome, ...],
     ) -> IntentResolution:
         with self._resolve_lock:
             previous = self._active_context
@@ -173,12 +173,54 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                 dispatch_mode=EvalDispatchMode.INLINE
             )
             try:
-                return self._resolve_claimed_with_row_slices(
+                return self._resolve_claimed_with_row_outcomes(
                     optim_eval_request,
-                    row_slices,
+                    row_outcomes,
                 )
             finally:
                 self._active_context = previous
+
+    def resolve_platform_intent_from_row_slices(
+        self,
+        optim_eval_request: OptimEvalRequest,
+        *,
+        row_slices: tuple[RowEvalSlice, ...],
+    ) -> IntentResolution:
+        row_outcomes = tuple(
+            RowEvalOutcome(
+                task_id=row_slice.task_id,
+                seed_index=row_slice.seed_index,
+                evidence=row_slice.evidence,
+                supplemental_aggregate_refs=row_slice.supplemental_aggregate_refs,
+            )
+            for row_slice in row_slices
+        )
+        return self.resolve_platform_intent_from_row_outcomes(
+            optim_eval_request,
+            row_outcomes=row_outcomes,
+        )
+
+    def _resolve_claimed_with_row_outcomes(
+        self,
+        intent: OptimEvalRequest,
+        row_outcomes: tuple[RowEvalOutcome, ...],
+    ) -> IntentResolution:
+        existing = self._store.resolve(self._key(intent))
+        if existing is not None:
+            return self._load(existing, expected_optim_eval_request=intent)
+        attested = self._attested_resolution(intent)
+        if attested is not None:
+            return self._bind(intent, attested)
+        owned = self._claim(intent)
+        existing = self._store.resolve(self._key(intent))
+        if existing is not None:
+            return self._load(existing, expected_optim_eval_request=intent)
+        attested = self._attested_resolution(intent)
+        if attested is not None:
+            return self._bind(intent, attested)
+        if owned is None:
+            raise RuntimeError("evaluation claim resolved without a result")
+        return self._assemble_with_heartbeat_outcomes(intent, row_outcomes, owned)
 
     def _resolve_claimed_with_row_slices(
         self,
@@ -201,6 +243,120 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         if owned is None:
             raise RuntimeError("evaluation claim resolved without a result")
         return self._assemble_with_heartbeat(intent, row_slices, owned)
+
+    def _assemble_with_heartbeat_outcomes(
+        self,
+        intent: OptimEvalRequest,
+        row_outcomes: tuple[RowEvalOutcome, ...],
+        owned: _OwnedClaim,
+    ) -> IntentResolution:
+        stop = threading.Event()
+        heartbeat_errors: list[Exception] = []
+
+        def heartbeat() -> None:
+            interval = self._claim_lease_seconds / 3
+            while True:
+                try:
+                    if self._renewal_wait(interval, stop):
+                        return
+                    self._renew_claim(intent, owned)
+                except Exception as exc:
+                    heartbeat_errors.append(exc)
+                    return
+
+        self._renew_claim(intent, owned)
+        thread = threading.Thread(
+            target=heartbeat,
+            name=f"evaluation-heartbeat-{owned.generation}",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            self._assert_generation_current(intent, owned)
+            resolution = self._assemble_and_bind_outcomes(
+                intent,
+                row_outcomes,
+                owned,
+            )
+        finally:
+            stop.set()
+            thread.join()
+        if heartbeat_errors and self._store.resolve(self._key(intent)) is None:
+            raise RuntimeError("evaluation lease heartbeat failed") from (
+                heartbeat_errors[0]
+            )
+        return resolution
+
+    def _assemble_and_bind_outcomes(
+        self,
+        optim_eval_request: OptimEvalRequest,
+        row_outcomes: tuple[RowEvalOutcome, ...],
+        owned: _OwnedClaim,
+    ) -> IntentResolution:
+        self._persist_intent_targets(optim_eval_request)
+        self._assert_generation_current(optim_eval_request, owned)
+        resolved_eval_config = self._engine.eval_config_ref
+        self._clear_platform_intent(optim_eval_request)
+        for outcome in row_outcomes:
+            if outcome.rejected_detail is not None:
+                return self._bind_if_owned(
+                    optim_eval_request,
+                    IntentResolution(
+                        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+                        optim_eval_request=optim_eval_request,
+                        outcome=IntentOutcome.REJECTED,
+                        detail=outcome.rejected_detail,
+                        resolved_eval_config=resolved_eval_config,
+                    ),
+                    owned,
+                )
+        for outcome in row_outcomes:
+            if outcome.failure is not None:
+                if outcome.evidence_ref is None:
+                    raise ValueError("failed row outcome is missing evidence_ref")
+                terminal_failure = TerminalFailure(
+                    code=f"evaluation_{outcome.failure.exception_type}",
+                    message=outcome.failure.message,
+                    details={
+                        "evidence_schema": outcome.evidence_ref.schema_name,
+                        "evidence_content_hash": outcome.evidence_ref.content_hash,
+                    },
+                )
+                return self._bind_if_owned(
+                    optim_eval_request,
+                    IntentResolution(
+                        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+                        optim_eval_request=optim_eval_request,
+                        outcome=IntentOutcome.FAILED,
+                        detail=ResolutionDetail(
+                            classification=ResolutionClass.INFRASTRUCTURE,
+                            message=outcome.failure.message,
+                        ),
+                        eval_result_ref=outcome.evidence_ref,
+                        reward_evidence_refs=(),
+                        resolved_eval_config=resolved_eval_config,
+                        terminal_failure=terminal_failure,
+                    ),
+                    owned,
+                )
+        row_slices = tuple(
+            RowEvalSlice(
+                task_id=outcome.task_id,
+                seed_index=outcome.seed_index,
+                evidence=outcome.evidence,
+                supplemental_aggregate_refs=outcome.supplemental_aggregate_refs,
+            )
+            for outcome in row_outcomes
+            if outcome.evidence is not None
+        )
+        if not row_slices:
+            raise ValueError("row outcomes contain no success evidence")
+        return self._assemble_and_bind(
+            optim_eval_request,
+            row_slices,
+            owned,
+            clear_platform_intent=False,
+        )
 
     def _assemble_with_heartbeat(
         self,
@@ -246,6 +402,8 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         optim_eval_request: OptimEvalRequest,
         row_slices: tuple[RowEvalSlice, ...],
         owned: _OwnedClaim,
+        *,
+        clear_platform_intent: bool = True,
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
         self._assert_generation_current(optim_eval_request, owned)
@@ -259,7 +417,8 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             request,
             row_slices=row_slices,
         )
-        self._clear_platform_intent(optim_eval_request)
+        if clear_platform_intent:
+            self._clear_platform_intent(optim_eval_request)
         match result:
             case EvalRejected(detail=detail):
                 return self._bind_if_owned(

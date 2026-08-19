@@ -260,14 +260,14 @@ def test_platform_row_executor_scopes_evaluation_to_task_seed(
 
     from whetstone.platform.eval_fanin import build_platform_row_executor
 
+    from whetstone.eval.row_slice import RowEvalCompletion
+
     from whetstone.core.identity import TypedRef
-    from whetstone.eval.protocol import EvalEvidenceWithRef
 
     runtime, launch = copro_launch
     runtime.controller.bind_launch(launch)
     scoped_engine = MagicMock()
-    scoped_engine.evaluate.return_value = EvalEvidenceWithRef(
-        evidence=MagicMock(),
+    scoped_engine.evaluate_row.return_value = RowEvalCompletion(
         evidence_ref=TypedRef(
             schema_name="whetstone.eval_evidence",
             content_hash="a" * 64,
@@ -302,7 +302,7 @@ def test_platform_row_executor_scopes_evaluation_to_task_seed(
     )
     executor(intent=intent, task_id="task-a", seed_index=1)
     assert captured == [("task-a", 1)]
-    scoped_engine.evaluate.assert_called_once()
+    scoped_engine.evaluate_row.assert_called_once()
     _ = original_for_task_seed
 
 

@@ -28,8 +28,13 @@ class GepaStepCheckpoint(BaseModel):
 
     @property
     def budget_delta(self) -> BudgetDelta:
+        metric_calls = (
+            0
+            if self.terminal and self.metric_calls_consumed == 0
+            else 1
+        )
         return BudgetDelta(
-            consumed=ImmutableJsonObject({"metric_calls": 1}),
+            consumed=ImmutableJsonObject({"metric_calls": metric_calls}),
         )
 
 

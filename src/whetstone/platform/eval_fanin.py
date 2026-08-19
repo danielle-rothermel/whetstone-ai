@@ -12,8 +12,8 @@ from whetstone.coordination.eval_service import (
     EvalExecutionContext,
 )
 from whetstone.core.identity import TypedRef
-from whetstone.eval.protocol import EvalEvidenceWithRef, EvalRejected, EvalRequest
-from whetstone.eval.row_slice import RowEvalSlice
+from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.row_slice import RowEvalCompletion, RowEvalOutcome
 from whetstone.eval.schema import EvalEvidence, EvalFailureEvidence
 from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA, EVAL_FAILURE_SCHEMA
 from whetstone.optim.contracts import (
@@ -65,7 +65,7 @@ def build_inline_row_executor(runtime: RegisteredRuntime):
         intent: OptimEvalRequest,
         task_id: str,
         seed_index: int,
-    ) -> TypedRef | None:
+    ) -> RowEvalCompletion | None:
         _ = (task_id, seed_index)
         service = runtime.eval_service
         service.resolve_optim_eval_request(
@@ -85,23 +85,37 @@ def build_platform_row_executor(runtime: RegisteredRuntime):
         intent: OptimEvalRequest,
         task_id: str,
         seed_index: int,
-    ) -> TypedRef | None:
+    ) -> RowEvalCompletion | None:
         service = _require_platform_eval_service(runtime)
         scoped_engine = service._engine.for_task_seed(task_id, seed_index)  # noqa: SLF001
-        result = scoped_engine.evaluate(
+        return scoped_engine.evaluate_row(
             EvalRequest(
                 request_id=intent.eval_request.request_id,
                 candidate=intent.eval_request.candidate,
                 metadata=intent.eval_request.metadata,
             )
         )
-        if isinstance(result, EvalRejected):
-            raise ValueError(result.detail.message)
-        if not isinstance(result, EvalEvidenceWithRef):
-            raise TypeError(f"unexpected platform row evaluation result: {result!r}")
-        return result.evidence_ref
 
     return executor
+
+
+def _persist_row_completion(
+    row_record: dict[str, object],
+    completion: RowEvalCompletion | None,
+) -> None:
+    if completion is None:
+        return
+    if completion.evidence_ref is not None:
+        row_record["evidence_ref"] = completion.evidence_ref.model_dump(mode="json")
+    if completion.rejected_detail is not None:
+        row_record["rejected_detail"] = completion.rejected_detail.model_dump(
+            mode="json"
+        )
+    if completion.supplemental_aggregate_refs:
+        row_record["supplemental_aggregate_refs"] = [
+            item.model_dump(mode="json")
+            for item in completion.supplemental_aggregate_refs
+        ]
 
 
 def execute_eval_row_sync(
@@ -129,7 +143,7 @@ def execute_eval_row_sync(
             stage_key="eval_row",
         )
     resolved_executor = row_executor or build_inline_row_executor(runtime)
-    evidence_ref = resolved_executor(
+    completion = resolved_executor(
         intent=row_input.optim_eval_request,
         task_id=row_input.task_id,
         seed_index=row_input.seed_index,
@@ -142,8 +156,7 @@ def execute_eval_row_sync(
         "batch_id": row_input.batch_id,
         "completed": True,
     }
-    if evidence_ref is not None:
-        row_record["evidence_ref"] = evidence_ref.model_dump(mode="json")
+    _persist_row_completion(row_record, completion)
     reference, _ = runtime.store.put(PLATFORM_EVAL_ROW_SCHEMA, row_record)
     runtime.store.bind(input_reference, reference)
     output_ref = format_object_reference(reference)
@@ -191,39 +204,79 @@ def _load_row_evidence(store, evidence_ref: TypedRef) -> EvalEvidence | EvalFail
     )
 
 
-def _batch_row_slices(
+def _row_rejected_detail(record: dict[str, object]) -> ResolutionDetail | None:
+    raw = record.get("rejected_detail")
+    if raw is None:
+        return None
+    return ResolutionDetail.model_validate(raw)
+
+
+def _row_supplemental_aggregate_refs(
+    record: dict[str, object],
+) -> tuple[TypedRef, ...]:
+    raw = record.get("supplemental_aggregate_refs")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("supplemental_aggregate_refs must be a list")
+    return tuple(TypedRef.model_validate(item) for item in raw)
+
+
+def _batch_row_outcomes(
     runtime: RegisteredRuntime,
     batch,
-) -> dict[str, tuple[RowEvalSlice, ...]]:
-    grouped: dict[str, list[RowEvalSlice]] = {}
+) -> dict[str, tuple[RowEvalOutcome, ...]]:
+    grouped: dict[str, list[RowEvalOutcome]] = {}
     for row_ref in batch.row_input_refs:
         row_input = load_eval_row_input(runtime.store, row_ref)
         row_record = _load_completed_row_record(runtime.store, row_ref)
-        evidence_ref = _row_evidence_ref(row_record)
-        if evidence_ref is None:
-            raise ValueError("eval batch row is missing evidence_ref")
-        evidence = _load_row_evidence(runtime.store, evidence_ref)
-        if not isinstance(evidence, EvalEvidence):
-            raise ValueError("platform row assembly requires success evidence")
+        rejected_detail = _row_rejected_detail(row_record)
+        supplemental_refs = _row_supplemental_aggregate_refs(row_record)
+        if rejected_detail is not None:
+            outcome = RowEvalOutcome(
+                task_id=row_input.task_id,
+                seed_index=row_input.seed_index,
+                rejected_detail=rejected_detail,
+            )
+        else:
+            evidence_ref = _row_evidence_ref(row_record)
+            if evidence_ref is None:
+                raise ValueError("eval batch row is missing row outcome")
+            loaded = _load_row_evidence(runtime.store, evidence_ref)
+            if isinstance(loaded, EvalFailureEvidence):
+                outcome = RowEvalOutcome(
+                    task_id=row_input.task_id,
+                    seed_index=row_input.seed_index,
+                    evidence_ref=evidence_ref,
+                    failure=loaded,
+                )
+            else:
+                outcome = RowEvalOutcome(
+                    task_id=row_input.task_id,
+                    seed_index=row_input.seed_index,
+                    evidence_ref=evidence_ref,
+                    evidence=loaded,
+                    supplemental_aggregate_refs=supplemental_refs,
+                )
         intent_key = EvalEngineService._intent_ref(
             row_input.optim_eval_request
         ).content_hash
-        grouped.setdefault(intent_key, []).append(
-            RowEvalSlice(
-                task_id=row_input.task_id,
-                seed_index=row_input.seed_index,
-                evidence=evidence,
-            )
-        )
-    return {key: tuple(slices) for key, slices in grouped.items()}
+        grouped.setdefault(intent_key, []).append(outcome)
+    return {key: tuple(outcomes) for key, outcomes in grouped.items()}
+
+
+def _batch_has_row_outcomes(runtime: RegisteredRuntime, batch) -> bool:
+    for row_ref in batch.row_input_refs:
+        row_record = _load_completed_row_record(runtime.store, row_ref)
+        if _row_evidence_ref(row_record) is not None:
+            return True
+        if _row_rejected_detail(row_record) is not None:
+            return True
+    return False
 
 
 def _batch_has_row_evidence(runtime: RegisteredRuntime, batch) -> bool:
-    for row_ref in batch.row_input_refs:
-        row_record = _load_completed_row_record(runtime.store, row_ref)
-        if _row_evidence_ref(row_record) is None:
-            return False
-    return True
+    return _batch_has_row_outcomes(runtime, batch)
 
 
 def _eval_row_batch_id(runtime: RegisteredRuntime, output_reference: str) -> str:
@@ -351,17 +404,17 @@ def execute_eval_fanin_sync(
     for row_ref in batch.row_input_refs:
         load_eval_row_input(runtime.store, row_ref)
     resolutions: list[IntentResolution] = []
-    if _batch_has_row_evidence(runtime, batch):
-        row_slices_by_intent = _batch_row_slices(runtime, batch)
+    if _batch_has_row_outcomes(runtime, batch):
+        row_outcomes_by_intent = _batch_row_outcomes(runtime, batch)
         for intent in batch_intents:
             intent_key = EvalEngineService._intent_ref(intent).content_hash
-            row_slices = row_slices_by_intent.get(intent_key)
-            if row_slices is None:
-                raise ValueError("eval batch is missing row evidence for intent")
+            row_outcomes = row_outcomes_by_intent.get(intent_key)
+            if row_outcomes is None:
+                raise ValueError("eval batch is missing row outcomes for intent")
             resolutions.append(
-                service.resolve_platform_intent_from_row_slices(
+                service.resolve_platform_intent_from_row_outcomes(
                     intent,
-                    row_slices=row_slices,
+                    row_outcomes=row_outcomes,
                 )
             )
     else:
