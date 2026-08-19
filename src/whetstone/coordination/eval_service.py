@@ -105,6 +105,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         return self._dispatch_mode
 
     def set_dispatch_mode(self, mode: EvalDispatchMode) -> EvalDispatchMode:
+        """Legacy API for non-platform callers; platform paths use EvalExecutionContext."""
         previous = self._dispatch_mode
         self._dispatch_mode = mode
         return previous

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 from dr_platform._core.identities import StageKey
 from dr_platform.admission.runner import AdmissionPayload
 from dr_platform.pipeline.definitions import PipelineDefinition
+from dr_platform.submission.stream import compute_run_membership_digest
 
 from whetstone.platform.contracts import (
     OPTIM_PIPELINE_KEY,
@@ -13,6 +14,7 @@ from whetstone.platform.contracts import (
     STAGE_EVAL_ROW,
     STAGE_OPTIM_STEP,
     STAGE_RUN_COMPLETION,
+    OptimRunManifest,
     OptimWorkInput,
     load_work_input,
     persist_work_input,
@@ -82,6 +84,15 @@ def test_submit_optim_run_builds_member(copro_launch) -> None:
     loaded = load_work_input(runtime.store, member.work.input_reference)
     assert loaded.run_id == launch.run.run_id
     assert loaded.control_identity_hash == launch.control.identity_hash()
+    assert loaded.platform_run_key == "run-1"
+    assert loaded.work_key == "work-1"
+    declaration = kwargs["declaration"]
+    assert declaration.expected_member_count == 1
+    assert declaration.manifest_reference is not None
+    assert declaration.membership_digest == compute_run_membership_digest(
+        members,
+        expected_member_count=1,
+    )
 
 
 def test_stage_args_for_with_admission_payload(toy_runtime) -> None:
@@ -95,15 +106,19 @@ def test_stage_args_for_with_admission_payload(toy_runtime) -> None:
         pipeline_key=OPTIM_PIPELINE_KEY,
         pipeline_version=OPTIM_PIPELINE_VERSION,
         stage_key=StageKey(STAGE_OPTIM_STEP),
+        work_item_id=1,
+        stage_index=0,
         attempt_number=1,
     )
-    assert optim_step_args_for(runtime, payload) == (runtime, "input-ref")
-    payload = payload.model_copy(update={"stage_key": StageKey(STAGE_EVAL_ROW)})
-    assert eval_row_args_for(runtime, payload) == (runtime, "input-ref")
+    assert optim_step_args_for(runtime, payload) == (runtime, "input-ref", 0)
     payload = payload.model_copy(
-        update={"stage_key": StageKey(STAGE_EVAL_FANIN)}
+        update={"stage_key": StageKey(STAGE_EVAL_ROW), "stage_index": 1}
     )
-    assert eval_fanin_args_for(runtime, payload) == (runtime, "input-ref")
+    assert eval_row_args_for(runtime, payload) == (runtime, "input-ref", 1)
+    payload = payload.model_copy(
+        update={"stage_key": StageKey(STAGE_EVAL_FANIN), "stage_index": 2}
+    )
+    assert eval_fanin_args_for(runtime, payload) == (runtime, "input-ref", 2)
 
 
 def test_build_work_input_uses_launch_control(copro_launch) -> None:
@@ -111,6 +126,10 @@ def test_build_work_input_uses_launch_control(copro_launch) -> None:
     work_input = build_work_input(
         launch=launch,
         controller_identity_hash=runtime.controller.runtime_hash,
+        platform_run_key="run-1",
+        work_key="work-1",
     )
     assert work_input.run_id == launch.run.run_id
     assert work_input.control_identity_hash == launch.control.identity_hash()
+    assert work_input.platform_run_key == "run-1"
+    assert work_input.work_key == "work-1"

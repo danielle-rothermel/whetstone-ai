@@ -8,12 +8,19 @@ from dr_platform.submission.stream import (
     RunRegistrationDeclaration,
     SubmissionReceipt,
     WorkInput,
+    compute_run_membership_digest,
     submit,
 )
 
 from whetstone.coordination.harness_run_controller import OptimRunLaunch
 from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
-from whetstone.platform.contracts import OptimWorkInput, persist_work_input
+from whetstone.platform.contracts import (
+    OptimRunManifest,
+    OptimRunMemberEntry,
+    OptimWorkInput,
+    persist_run_manifest,
+    persist_work_input,
+)
 from whetstone.platform.pipeline import OPTIM_PIPELINE_IDENTITY
 
 if TYPE_CHECKING:
@@ -27,6 +34,8 @@ def build_work_input(
     *,
     launch: OptimRunLaunch,
     controller_identity_hash: str,
+    platform_run_key: str = "",
+    work_key: str = "",
     dispatch_mode: EvalDispatchMode | None = None,
 ) -> OptimWorkInput:
     from whetstone.coordination.eval_service import EvalDispatchMode as Mode
@@ -42,6 +51,8 @@ def build_work_input(
         controller_identity_hash=controller_identity_hash,
         control_identity_hash=control_identity_hash,
         dispatch_mode=mode,
+        platform_run_key=platform_run_key,
+        work_key=work_key,
     )
 
 
@@ -62,6 +73,8 @@ def submit_optim_run(
     work_input = build_work_input(
         launch=launch,
         controller_identity_hash=controller_identity_hash,
+        platform_run_key=run_key,
+        work_key=work_key,
         dispatch_mode=dispatch_mode,
     )
     input_reference = persist_work_input(runtime.store, work_input)
@@ -73,13 +86,33 @@ def submit_optim_run(
             labels={"run_id": launch.run.run_id},
         ),
     )
+    members = (member,)
+    membership_digest = compute_run_membership_digest(
+        members,
+        expected_member_count=len(members),
+    )
+    manifest = OptimRunManifest(
+        platform_run_key=run_key,
+        membership_digest=membership_digest,
+        members=(
+            OptimRunMemberEntry(
+                work_key=work_key,
+                run_id=launch.run.run_id,
+            ),
+        ),
+    )
+    manifest_reference = persist_run_manifest(runtime.store, manifest)
     return submit(
         campaign_key=CampaignKey(campaign_key),
         run_key=RunKey(run_key),
         pipeline=OPTIM_PIPELINE_IDENTITY,
         execution_config_reference=execution_config_reference,
-        declaration=RunRegistrationDeclaration(expected_member_count=1),
-        members=[member],
+        declaration=RunRegistrationDeclaration(
+            expected_member_count=len(members),
+            manifest_reference=manifest_reference,
+            membership_digest=membership_digest,
+        ),
+        members=members,
         registry=registry,
         engine=engine,
     )

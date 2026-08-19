@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 async def eval_row_workflow(
     runtime: RegisteredRuntime,
     input_reference: str,
+    stage_index: int,
 ):
     from whetstone.platform.eval_fanin import execute_eval_row_sync
 
@@ -18,14 +19,15 @@ async def eval_row_workflow(
         execute_eval_row_sync,
         runtime,
         input_reference=input_reference,
+        stage_index=stage_index,
     )
 
 
 def eval_row_args_for(
     runtime: RegisteredRuntime,
     payload: AdmissionPayload,
-) -> tuple[RegisteredRuntime, str]:
-    return (runtime, payload.input_reference)
+) -> tuple[RegisteredRuntime, str, int]:
+    return (runtime, payload.input_reference, payload.stage_index)
 
 
 __all__ = ["eval_row_args_for", "eval_row_workflow"]

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import math
 import os
 import shutil
 import sys
@@ -33,6 +32,7 @@ from dr_exec import (
     SpawnFailedOutcome,
     UnbudgetedLimit,
     UntrustedCommandTarget,
+    WorkingDirectoryGrant,
 )
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import ValidationError
@@ -55,7 +55,7 @@ _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
 _MCP_TOOLS_APPROVAL_MODE = "auto"
 _DIRECT_EXEC_SOURCE: Final = (
-    "import os,sys;os.chdir(sys.argv[1]);os.execv(sys.argv[2],sys.argv[2:])"
+    "import os,sys;os.execv(sys.argv[1],sys.argv[1:])"
 )
 
 
@@ -314,9 +314,7 @@ def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
 def _codex_budgets(timeout_seconds: float) -> Budgets:
     unbudgeted = UnbudgetedLimit()
     return Budgets(
-        wall_time=FiniteDurationLimit(
-            max_ns=max(1, math.ceil(timeout_seconds * 1_000_000_000))
-        ),
+        wall_time=FiniteDurationLimit.from_seconds(timeout_seconds),
         input_bytes=unbudgeted,
         payload_output=unbudgeted,
         memory_bytes=unbudgeted,
@@ -587,7 +585,6 @@ class SubprocessCodexRunner:
                 "-I",
                 "-c",
                 _DIRECT_EXEC_SOURCE,
-                working_directory,
                 *command,
             ]
             sandbox_wrapped_command = _MacOsProcessIsolation().wrap(
@@ -613,6 +610,7 @@ class SubprocessCodexRunner:
                     ),
                 ),
                 env=EnvGrant.fixed(isolated_environment),
+                workspace=WorkingDirectoryGrant.caller(root),
                 budgets=_codex_budgets(self._timeout),
             )
             try:

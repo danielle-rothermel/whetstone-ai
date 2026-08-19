@@ -45,6 +45,9 @@ class BlockingObjectStore:
     def resolve(self, key: str) -> ObjectReference | None:
         return self._run(self._store.resolve(key))
 
+    def evict_bindings(self, keys: list[str]) -> int:
+        return self._run(self._store.evict_bindings(keys))
+
 
 class _StoreSession:
     def __init__(self, path: str) -> None:

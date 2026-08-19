@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 async def optim_step_workflow(
     runtime: RegisteredRuntime,
     input_reference: str,
+    stage_index: int,
 ):
     from whetstone.platform.step_executor import execute_optim_step_sync
 
@@ -18,14 +19,15 @@ async def optim_step_workflow(
         execute_optim_step_sync,
         runtime,
         input_reference=input_reference,
+        stage_index=stage_index,
     )
 
 
 def optim_step_args_for(
     runtime: RegisteredRuntime,
     payload: AdmissionPayload,
-) -> tuple[RegisteredRuntime, str]:
-    return (runtime, payload.input_reference)
+) -> tuple[RegisteredRuntime, str, int]:
+    return (runtime, payload.input_reference, payload.stage_index)
 
 
 __all__ = ["optim_step_args_for", "optim_step_workflow"]

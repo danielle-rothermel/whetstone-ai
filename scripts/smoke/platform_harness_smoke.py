@@ -9,11 +9,15 @@ import tempfile
 from dr_store.content_addressing import parse_object_reference
 
 from whetstone.core.blocking_store import open_blocking_sqlite_store
-from whetstone.coordination.runtime_bootstrap import prepare_copro_run, register_runtime
+from whetstone.coordination.runtime_bootstrap import (
+    build_toy_copro_control,
+    prepare_copro_run,
+    register_runtime,
+)
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
 from whetstone.platform.contracts import (
     STAGE_OPTIM_STEP,
-    STAGE_RUN_COMPLETION,
     OptimWorkInput,
     persist_work_input,
 )
@@ -33,7 +37,8 @@ def _inline_platform_driver_smoke() -> None:
         store_path = f"{tmp}/platform-smoke.sqlite"
         with open_blocking_sqlite_store(store_path) as store:
             runtime = register_runtime(store=store)
-            control = runtime.adapter_registry.resolve("copro").control  # type: ignore[attr-defined]
+            engine = ReferenceEvalRuntimeConfig().build_engine(store)
+            control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
             run_id = "platform-smoke-run"
             launch = prepare_copro_run(
                 runtime,
@@ -55,12 +60,9 @@ def _inline_platform_driver_smoke() -> None:
                     input_reference=current_ref,
                 )
                 if not completion.successors:
-                    break
-                successor = completion.successors[0]
-                if successor.stage_key.value == STAGE_RUN_COMPLETION:
                     terminal_ref = execute_run_completion_sync(
                         runtime,
-                        input_reference=successor.input_reference,
+                        input_reference=completion.output_reference,
                     )
                     parsed = parse_object_reference(terminal_ref)
                     assert parsed.schema == OPTIM_RESULT_SCHEMA
@@ -70,11 +72,11 @@ def _inline_platform_driver_smoke() -> None:
                     assert result.run.record.run_id == run_id
                     assert result.proposals
                     return
+                successor = completion.successors[0]
                 assert successor.stage_key.value == STAGE_OPTIM_STEP
                 assert successor.stage_index == stage_index + 1
                 current_ref = successor.input_reference
                 stage_index = successor.stage_index
-            raise RuntimeError("platform smoke did not reach run completion")
 
 
 def main() -> None:

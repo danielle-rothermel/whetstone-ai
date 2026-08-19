@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from dr_platform._core.identities import StageKey
+from dr_platform.completion.execution import RunCompletionPayload
 from dr_platform.execution.stage_completion import StageCompletion, StageSuccessor
 from dr_store.content_addressing import ObjectReference, format_object_reference, parse_object_reference
 
@@ -27,11 +28,11 @@ from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
     STAGE_OPTIM_STEP,
-    STAGE_RUN_COMPLETION,
     EvalBatch,
     EvalFaninInput,
     EvalRowInput,
     OPTIM_WORK_INPUT_SCHEMA,
+    load_run_manifest,
     load_work_input,
     new_batch_id,
     persist_eval_batch,
@@ -41,7 +42,7 @@ from whetstone.platform.contracts import (
 
 OPTIM_WORK_STATE_SCHEMA = "whetstone.optim_work_state"
 OPTIM_WORK_STATE_SCHEMA_VERSION = 1
-STEP_RESULT_BINDING_PREFIX = "whetstone.optim_step_result:"
+RUN_MEMBER_TERMINAL_BINDING_PREFIX = "whetstone.run_member_terminal:"
 
 
 class OptimWorkState:
@@ -73,6 +74,19 @@ class OptimWorkState:
 
 def _load_launch(runtime: RegisteredRuntime, run_id: str) -> OptimRunLaunch:
     return runtime.controller._load_launch(run_id)  # noqa: SLF001
+
+
+def _validate_platform_stage_index(
+    *,
+    stage_index: int,
+    expected: int,
+    stage_key: str,
+) -> None:
+    if stage_index != expected:
+        raise ValueError(
+            f"platform stage_index mismatch for {stage_key}: "
+            f"admission payload has {stage_index}, work state has {expected}"
+        )
 
 
 def _load_work_state(
@@ -114,7 +128,7 @@ def _load_work_state(
     step_result_refs: list[OptimStepResultRef] = []
     while True:
         binding = runtime.store.resolve(
-            f"{STEP_RESULT_BINDING_PREFIX}{work_input.run_id}:{step_index}"
+            _step_result_binding_key(runtime, work_input.run_id, step_index)
         )
         if binding is None:
             break
@@ -156,6 +170,25 @@ def _persist_work_state(
     return format_object_reference(reference)
 
 
+def _step_result_binding_key(
+    runtime: RegisteredRuntime,
+    run_id: str,
+    step_index: int,
+) -> str:
+    return runtime.harness._result_binding_key(run_id, step_index)
+
+
+def _evict_step_result_binding(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    step_index: int,
+) -> None:
+    runtime.store.evict_bindings(
+        [_step_result_binding_key(runtime, run_id, step_index)]
+    )
+
+
 def _bind_step_result(
     runtime: RegisteredRuntime,
     *,
@@ -164,8 +197,24 @@ def _bind_step_result(
     result_ref: TypedRef,
 ) -> None:
     runtime.store.bind(
-        f"{STEP_RESULT_BINDING_PREFIX}{run_id}:{step_index}",
+        _step_result_binding_key(runtime, run_id, step_index),
         result_ref.reference,
+    )
+
+
+def _bind_run_member_terminal(
+    runtime: RegisteredRuntime,
+    *,
+    state: OptimWorkState,
+    work_state_ref: str,
+) -> None:
+    run_key = state.work_input.platform_run_key
+    work_key = state.work_input.work_key
+    if not run_key or not work_key:
+        return
+    runtime.store.bind(
+        f"{RUN_MEMBER_TERMINAL_BINDING_PREFIX}{run_key}:{work_key}",
+        parse_object_reference(work_state_ref),
     )
 
 
@@ -206,7 +255,9 @@ def _platform_deferred_successors(
     state: OptimWorkState,
     deferred_intents: tuple[OptimEvalRequest, ...],
     current_stage_index: int,
-) -> tuple[StageSuccessor, ...]:
+    pending_step_result_ref: str,
+) -> tuple[tuple[StageSuccessor, ...], str]:
+    # Fan-in resolves every unique deferred intent registered on the batch rows.
     batch_id = new_batch_id()
     row_inputs = _expand_eval_rows(
         runtime,
@@ -242,6 +293,7 @@ def _platform_deferred_successors(
         row_input_refs=tuple(row_refs),
         fanin_input_ref=fanin_ref,
         work_state_ref=work_state_ref,
+        pending_step_result_ref=pending_step_result_ref,
     )
     batch_ref = persist_eval_batch(runtime.store, batch)
     _ = batch_ref
@@ -261,21 +313,30 @@ def _platform_deferred_successors(
             stage_key=StageKey(STAGE_EVAL_FANIN),
             stage_index=next_index,
             input_reference=fanin_ref,
+            barrier=True,
         )
     )
-    return tuple(successors)
+    return tuple(successors), work_state_ref
 
 
 def execute_optim_step_sync(
     runtime: RegisteredRuntime,
     *,
     input_reference: str,
+    stage_index: int | None = None,
 ) -> StageCompletion:
     """Run exactly one harness step for a platform member."""
     state = _load_work_state(runtime, input_reference)
     current_stage_index = state.work_input.platform_stage_index
+    if stage_index is not None:
+        _validate_platform_stage_index(
+            stage_index=stage_index,
+            expected=current_stage_index,
+            stage_key=STAGE_OPTIM_STEP,
+        )
     if state.terminal:
         output_ref = _persist_work_state(runtime, state)
+        _bind_run_member_terminal(runtime, state=state, work_state_ref=output_ref)
         return StageCompletion(
             output_reference=output_ref,
             successors=(),
@@ -329,6 +390,37 @@ def execute_optim_step_sync(
         step_request,
         eval_context=eval_context,
     )
+
+    deferred = runtime.harness.last_deferred_platform_intents
+    if (
+        work_input.dispatch_mode is EvalDispatchMode.PLATFORM
+        and not result.resolved_intents
+        and deferred
+        and result.status is StepStatus.CONTINUE
+    ):
+        pending_step_result_ref = format_object_reference(
+            ObjectReference(
+                schema=result_ref.schema_name,
+                content_hash=result_ref.content_hash,
+            )
+        )
+        _evict_step_result_binding(
+            runtime,
+            run_id=work_input.run_id,
+            step_index=state.step_index,
+        )
+        successors, output_ref = _platform_deferred_successors(
+            runtime,
+            state=state,
+            deferred_intents=deferred,
+            current_stage_index=current_stage_index,
+            pending_step_result_ref=pending_step_result_ref,
+        )
+        return StageCompletion(
+            output_reference=output_ref,
+            successors=successors,
+        )
+
     _bind_step_result(
         runtime,
         run_id=work_input.run_id,
@@ -347,25 +439,10 @@ def execute_optim_step_sync(
     output_ref = _persist_work_state(runtime, updated)
 
     if updated.terminal:
+        _bind_run_member_terminal(runtime, state=updated, work_state_ref=output_ref)
         return StageCompletion(
             output_reference=output_ref,
             successors=(),
-        )
-
-    deferred = runtime.harness.last_deferred_platform_intents
-    if (
-        work_input.dispatch_mode is EvalDispatchMode.PLATFORM
-        and not result.resolved_intents
-        and deferred
-    ):
-        return StageCompletion(
-            output_reference=output_ref,
-            successors=_platform_deferred_successors(
-                runtime,
-                state=updated,
-                deferred_intents=deferred,
-                current_stage_index=current_stage_index,
-            ),
         )
 
     return StageCompletion(
@@ -407,9 +484,56 @@ def execute_run_completion_sync(
     )
 
 
+def execute_run_completion_for_run_sync(
+    runtime: RegisteredRuntime,
+    *,
+    payload: RunCompletionPayload,
+) -> str:
+    """Terminalize every member in a released platform run."""
+    manifest = load_run_manifest(runtime.store, payload.manifest_reference)
+    if manifest.membership_digest != payload.membership_digest:
+        raise ValueError("run completion membership digest does not match manifest")
+    if manifest.platform_run_key != str(payload.run_key):
+        raise ValueError("run completion run_key does not match manifest")
+    if len(manifest.members) != payload.member_count:
+        raise ValueError("run completion member_count does not match manifest")
+
+    result_refs: list[str] = []
+    for member in manifest.members:
+        binding = runtime.store.resolve(
+            f"{RUN_MEMBER_TERMINAL_BINDING_PREFIX}"
+            f"{manifest.platform_run_key}:{member.work_key}"
+        )
+        if binding is None:
+            raise ValueError(
+                "run completion requires a terminal work state binding for "
+                f"{member.work_key!r}"
+            )
+        work_state_ref = format_object_reference(binding)
+        result_refs.append(
+            execute_run_completion_sync(
+                runtime,
+                input_reference=work_state_ref,
+            )
+        )
+
+    if len(result_refs) != 1:
+        raise ValueError(
+            "v1 run completion supports exactly one member; "
+            f"got {len(result_refs)}"
+        )
+    return result_refs[0]
+
+
 __all__ = [
     "OptimWorkState",
-    "STEP_RESULT_BINDING_PREFIX",
+    "RUN_MEMBER_TERMINAL_BINDING_PREFIX",
+    "_bind_step_result",
+    "_load_work_state",
+    "_persist_work_state",
+    "_platform_deferred_successors",
+    "_validate_platform_stage_index",
     "execute_optim_step_sync",
+    "execute_run_completion_for_run_sync",
     "execute_run_completion_sync",
 ]

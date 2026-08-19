@@ -28,6 +28,8 @@ PLATFORM_EVAL_FANIN_INPUT_SCHEMA = "whetstone.platform_eval_fanin_input"
 PLATFORM_EVAL_FANIN_INPUT_SCHEMA_VERSION = 1
 PLATFORM_EVAL_BATCH_SCHEMA = "whetstone.platform_eval_batch"
 PLATFORM_EVAL_BATCH_SCHEMA_VERSION = 1
+PLATFORM_RUN_MANIFEST_SCHEMA = "whetstone.platform_run_manifest"
+PLATFORM_RUN_MANIFEST_SCHEMA_VERSION = 1
 
 
 class OptimWorkInput(BaseModel):
@@ -41,6 +43,8 @@ class OptimWorkInput(BaseModel):
     control_identity_hash: StrictStr
     dispatch_mode: EvalDispatchMode = EvalDispatchMode.INLINE
     platform_stage_index: StrictInt = 0
+    platform_run_key: StrictStr = ""
+    work_key: StrictStr = ""
 
     @model_validator(mode="after")
     def _validate(self) -> OptimWorkInput:
@@ -125,6 +129,7 @@ class EvalBatch(BaseModel):
     row_input_refs: tuple[StrictStr, ...]
     fanin_input_ref: StrictStr
     work_state_ref: StrictStr
+    pending_step_result_ref: StrictStr
 
     @model_validator(mode="after")
     def _validate(self) -> EvalBatch:
@@ -142,6 +147,8 @@ class EvalBatch(BaseModel):
             raise ValueError("fanin_input_ref must be non-empty")
         if not self.work_state_ref:
             raise ValueError("work_state_ref must be non-empty")
+        if not self.pending_step_result_ref:
+            raise ValueError("pending_step_result_ref must be non-empty")
         if self.schema_version != PLATFORM_EVAL_BATCH_SCHEMA_VERSION:
             raise ValueError("schema_version is fixed")
         return self
@@ -230,6 +237,65 @@ def new_batch_id() -> str:
     return uuid4().hex
 
 
+class OptimRunMemberEntry(BaseModel):
+    """One optimization member in a platform run manifest."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    work_key: StrictStr
+    run_id: StrictStr
+
+    @model_validator(mode="after")
+    def _validate(self) -> OptimRunMemberEntry:
+        if not self.work_key:
+            raise ValueError("work_key must be non-empty")
+        if not self.run_id:
+            raise ValueError("run_id must be non-empty")
+        return self
+
+
+class OptimRunManifest(BaseModel):
+    """Run-level manifest referenced by dr-platform run completion."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: StrictInt = PLATFORM_RUN_MANIFEST_SCHEMA_VERSION
+    platform_run_key: StrictStr
+    membership_digest: StrictStr
+    members: tuple[OptimRunMemberEntry, ...]
+
+    @model_validator(mode="after")
+    def _validate(self) -> OptimRunManifest:
+        if not self.platform_run_key:
+            raise ValueError("platform_run_key must be non-empty")
+        if not self.membership_digest:
+            raise ValueError("membership_digest must be non-empty")
+        if not self.members:
+            raise ValueError("members must be non-empty")
+        if self.schema_version != PLATFORM_RUN_MANIFEST_SCHEMA_VERSION:
+            raise ValueError("schema_version is fixed")
+        return self
+
+    def record_content(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+def persist_run_manifest(store: ObjectStore, manifest: OptimRunManifest) -> str:
+    reference, _ = store.put(
+        PLATFORM_RUN_MANIFEST_SCHEMA,
+        manifest.record_content(),
+    )
+    return format_object_reference(reference)
+
+
+def load_run_manifest(store: ObjectStore, manifest_reference: str) -> OptimRunManifest:
+    parsed = parse_object_reference(manifest_reference)
+    if parsed.schema != PLATFORM_RUN_MANIFEST_SCHEMA:
+        raise ValueError("run manifest reference has the wrong schema")
+    record = store.get(parsed)
+    return OptimRunManifest.model_validate(record)
+
+
 __all__ = [
     "EvalBatch",
     "EvalFaninInput",
@@ -245,8 +311,12 @@ __all__ = [
     "STAGE_EVAL_ROW",
     "STAGE_OPTIM_STEP",
     "STAGE_RUN_COMPLETION",
+    "OptimRunManifest",
+    "OptimRunMemberEntry",
     "OptimWorkInput",
+    "PLATFORM_RUN_MANIFEST_SCHEMA",
     "load_eval_batch",
+    "load_run_manifest",
     "load_eval_batch_by_id",
     "load_eval_fanin_input",
     "load_eval_row_input",
@@ -255,5 +325,6 @@ __all__ = [
     "persist_eval_batch",
     "persist_eval_fanin_input",
     "persist_eval_row_input",
+    "persist_run_manifest",
     "persist_work_input",
 ]
