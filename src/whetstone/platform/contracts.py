@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from uuid import uuid4
 
 from dr_store import ObjectStore
 from dr_store.content_addressing import format_object_reference, parse_object_reference
@@ -23,11 +22,9 @@ OPTIM_WORK_INPUT_SCHEMA = "whetstone.optim_work_input"
 OPTIM_WORK_INPUT_SCHEMA_VERSION = 1
 
 PLATFORM_EVAL_ROW_INPUT_SCHEMA = "whetstone.platform_eval_row_input"
-PLATFORM_EVAL_ROW_INPUT_SCHEMA_VERSION = 1
-PLATFORM_EVAL_FANIN_INPUT_SCHEMA = "whetstone.platform_eval_fanin_input"
-PLATFORM_EVAL_FANIN_INPUT_SCHEMA_VERSION = 1
-PLATFORM_EVAL_BATCH_SCHEMA = "whetstone.platform_eval_batch"
-PLATFORM_EVAL_BATCH_SCHEMA_VERSION = 1
+PLATFORM_EVAL_ROW_INPUT_SCHEMA_VERSION = 2
+PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA = "whetstone.platform_deferral_join_input"
+PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION = 1
 PLATFORM_RUN_MANIFEST_SCHEMA = "whetstone.platform_run_manifest"
 PLATFORM_RUN_MANIFEST_SCHEMA_VERSION = 1
 
@@ -74,15 +71,21 @@ class EvalRowInput(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: StrictInt = PLATFORM_EVAL_ROW_INPUT_SCHEMA_VERSION
-    batch_id: StrictStr
+    work_state_ref: StrictStr
+    deferral_origin_stage_index: StrictInt
+    row_ordinal: StrictInt
     optim_eval_request: OptimEvalRequest
     task_id: StrictStr
     seed_index: StrictInt
 
     @model_validator(mode="after")
     def _validate(self) -> EvalRowInput:
-        if not self.batch_id:
-            raise ValueError("batch_id must be non-empty")
+        if not self.work_state_ref:
+            raise ValueError("work_state_ref must be non-empty")
+        if self.deferral_origin_stage_index < 0:
+            raise ValueError("deferral_origin_stage_index must be non-negative")
+        if self.row_ordinal < 0:
+            raise ValueError("row_ordinal must be non-negative")
         if not self.task_id:
             raise ValueError("task_id must be non-empty")
         if self.seed_index < 0:
@@ -95,61 +98,23 @@ class EvalRowInput(BaseModel):
         return self.model_dump(mode="json")
 
 
-class EvalFaninInput(BaseModel):
-    """Join input after all eval rows in one batch succeed."""
+class DeferralJoinInput(BaseModel):
+    """Join pointer for one deferred eval episode."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: StrictInt = PLATFORM_EVAL_FANIN_INPUT_SCHEMA_VERSION
-    batch_id: StrictStr
-    optim_eval_request: OptimEvalRequest
-
-    @model_validator(mode="after")
-    def _validate(self) -> EvalFaninInput:
-        if not self.batch_id:
-            raise ValueError("batch_id must be non-empty")
-        if self.schema_version != PLATFORM_EVAL_FANIN_INPUT_SCHEMA_VERSION:
-            raise ValueError("schema_version is fixed")
-        return self
-
-    def record_content(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
-
-
-class EvalBatch(BaseModel):
-    """Fan-out manifest linking deferred intents to eval-row inputs."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    schema_version: StrictInt = PLATFORM_EVAL_BATCH_SCHEMA_VERSION
-    batch_id: StrictStr
-    run_id: StrictStr
-    step_index: StrictInt
-    optim_step_stage_index: StrictInt
-    row_input_refs: tuple[StrictStr, ...]
-    fanin_input_ref: StrictStr
+    schema_version: StrictInt = PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION
     work_state_ref: StrictStr
-    pending_step_result_ref: StrictStr
+    deferral_optim_step_stage_index: StrictInt
+    primary_optim_eval_request: OptimEvalRequest
 
     @model_validator(mode="after")
-    def _validate(self) -> EvalBatch:
-        if not self.batch_id:
-            raise ValueError("batch_id must be non-empty")
-        if not self.run_id:
-            raise ValueError("run_id must be non-empty")
-        if self.step_index < 0:
-            raise ValueError("step_index must be non-negative")
-        if self.optim_step_stage_index < 0:
-            raise ValueError("optim_step_stage_index must be non-negative")
-        if not self.row_input_refs:
-            raise ValueError("row_input_refs must be non-empty")
-        if not self.fanin_input_ref:
-            raise ValueError("fanin_input_ref must be non-empty")
+    def _validate(self) -> DeferralJoinInput:
         if not self.work_state_ref:
             raise ValueError("work_state_ref must be non-empty")
-        if not self.pending_step_result_ref:
-            raise ValueError("pending_step_result_ref must be non-empty")
-        if self.schema_version != PLATFORM_EVAL_BATCH_SCHEMA_VERSION:
+        if self.deferral_optim_step_stage_index < 0:
+            raise ValueError("deferral_optim_step_stage_index must be non-negative")
+        if self.schema_version != PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION:
             raise ValueError("schema_version is fixed")
         return self
 
@@ -189,52 +154,26 @@ def load_eval_row_input(store: ObjectStore, input_reference: str) -> EvalRowInpu
     return EvalRowInput.model_validate(record)
 
 
-def persist_eval_fanin_input(
+def persist_deferral_join_input(
     store: ObjectStore,
-    fanin_input: EvalFaninInput,
+    join_input: DeferralJoinInput,
 ) -> str:
     reference, _ = store.put(
-        PLATFORM_EVAL_FANIN_INPUT_SCHEMA,
-        fanin_input.record_content(),
+        PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA,
+        join_input.record_content(),
     )
     return format_object_reference(reference)
 
 
-def load_eval_fanin_input(store: ObjectStore, input_reference: str) -> EvalFaninInput:
+def load_deferral_join_input(
+    store: ObjectStore,
+    input_reference: str,
+) -> DeferralJoinInput:
     parsed = parse_object_reference(input_reference)
-    if parsed.schema != PLATFORM_EVAL_FANIN_INPUT_SCHEMA:
-        raise ValueError("eval fan-in input reference has the wrong schema")
+    if parsed.schema != PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA:
+        raise ValueError("deferral join input reference has the wrong schema")
     record = store.get(parsed)
-    return EvalFaninInput.model_validate(record)
-
-
-def persist_eval_batch(store: ObjectStore, batch: EvalBatch) -> str:
-    reference, _ = store.put(
-        PLATFORM_EVAL_BATCH_SCHEMA,
-        batch.record_content(),
-    )
-    formatted = format_object_reference(reference)
-    store.bind(f"whetstone.platform_eval_batch:{batch.batch_id}", reference)
-    return formatted
-
-
-def load_eval_batch(store: ObjectStore, input_reference: str) -> EvalBatch:
-    parsed = parse_object_reference(input_reference)
-    if parsed.schema != PLATFORM_EVAL_BATCH_SCHEMA:
-        raise ValueError("eval batch reference has the wrong schema")
-    record = store.get(parsed)
-    return EvalBatch.model_validate(record)
-
-
-def load_eval_batch_by_id(store: ObjectStore, batch_id: str) -> EvalBatch:
-    bound = store.resolve(f"whetstone.platform_eval_batch:{batch_id}")
-    if bound is None:
-        raise ValueError(f"eval batch is not bound: {batch_id!r}")
-    return EvalBatch.model_validate(store.get(bound))
-
-
-def new_batch_id() -> str:
-    return uuid4().hex
+    return DeferralJoinInput.model_validate(record)
 
 
 class OptimRunMemberEntry(BaseModel):
@@ -297,15 +236,13 @@ def load_run_manifest(store: ObjectStore, manifest_reference: str) -> OptimRunMa
 
 
 __all__ = [
-    "EvalBatch",
-    "EvalFaninInput",
+    "DeferralJoinInput",
     "EvalRowInput",
     "OPTIM_PIPELINE_KEY",
     "OPTIM_PIPELINE_VERSION",
     "OPTIM_WORK_INPUT_SCHEMA",
     "OPTIM_WORK_INPUT_SCHEMA_VERSION",
-    "PLATFORM_EVAL_BATCH_SCHEMA",
-    "PLATFORM_EVAL_FANIN_INPUT_SCHEMA",
+    "PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA",
     "PLATFORM_EVAL_ROW_INPUT_SCHEMA",
     "STAGE_EVAL_FANIN",
     "STAGE_EVAL_ROW",
@@ -315,15 +252,11 @@ __all__ = [
     "OptimRunMemberEntry",
     "OptimWorkInput",
     "PLATFORM_RUN_MANIFEST_SCHEMA",
-    "load_eval_batch",
-    "load_run_manifest",
-    "load_eval_batch_by_id",
-    "load_eval_fanin_input",
+    "load_deferral_join_input",
     "load_eval_row_input",
+    "load_run_manifest",
     "load_work_input",
-    "new_batch_id",
-    "persist_eval_batch",
-    "persist_eval_fanin_input",
+    "persist_deferral_join_input",
     "persist_eval_row_input",
     "persist_run_manifest",
     "persist_work_input",
