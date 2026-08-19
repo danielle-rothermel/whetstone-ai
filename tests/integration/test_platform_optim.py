@@ -143,6 +143,7 @@ def test_platform_deferral_fanout_fanin_through_admission(
                 pg_engine,
                 work_item_id,
                 fanin_stage_index=fanin_stage_index,
+                deferral_origin_stage_index=0,
                 expected_eval_row_count=expected_eval_row_count,
             )
         finally:

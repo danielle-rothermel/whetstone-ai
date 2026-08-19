@@ -2,18 +2,16 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from dr_platform._core.identities import StageKey
 from dr_store.content_addressing import format_object_reference, parse_object_reference
 
 from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.eval.protocol import EvalRequest
 from whetstone.optim.contracts import OptimEvalRequest
 from whetstone.platform.contracts import (
-    EvalFaninInput,
-    EvalRowInput,
     OptimWorkInput,
     STAGE_EVAL_FANIN,
-    persist_eval_fanin_input,
-    persist_eval_row_input,
+    STAGE_EVAL_ROW,
     persist_work_input,
 )
 from whetstone.platform.eval_fanin import (
@@ -22,10 +20,7 @@ from whetstone.platform.eval_fanin import (
     execute_eval_row_sync,
     serialize_platform_eval_intent,
 )
-from whetstone.platform.step_executor import (
-    STAGE_EVAL_ROW,
-    execute_optim_step_sync,
-)
+from whetstone.platform.step_executor import execute_optim_step_sync
 
 
 def test_platform_intent_serialization(toy_runtime) -> None:
@@ -110,7 +105,9 @@ def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
     )
 
 
-def test_eval_fanin_ignores_other_batch_predecessors(copro_launch) -> None:
+def test_eval_fanin_ignores_other_episode_predecessors(copro_launch) -> None:
+    from dr_platform.inspection.work_items import PredecessorStageOutput
+
     from whetstone.platform.eval_fanin import PLATFORM_EVAL_ROW_SCHEMA
 
     runtime, launch = copro_launch
@@ -155,27 +152,25 @@ def test_eval_fanin_ignores_other_batch_predecessors(copro_launch) -> None:
             "optim_eval_request": {},
             "task_id": "stale-task",
             "seed_index": 0,
-            "batch_id": "stale-batch",
+            "deferral_origin_stage_index": 0,
+            "row_ordinal": 99,
             "completed": True,
         },
     )
     stale_output = format_object_reference(stale_output_ref)
     object.__setattr__(runtime, "ledger_engine", MagicMock())
+    episode_predecessors = tuple(
+        PredecessorStageOutput(
+            stage_index=index + 1,
+            stage_key=StageKey(STAGE_EVAL_ROW),
+            input_reference=f"row-in-{index}",
+            output_reference=output_reference,
+        )
+        for index, output_reference in enumerate(row_outputs)
+    )
     with patch(
-        "dr_platform.inspection.work_items.list_predecessor_stage_outputs",
-        return_value=(
-            *[
-                MagicMock(
-                    stage_key=MagicMock(value=STAGE_EVAL_ROW),
-                    output_reference=output_reference,
-                )
-                for output_reference in row_outputs
-            ],
-            MagicMock(
-                stage_key=MagicMock(value=STAGE_EVAL_ROW),
-                output_reference=stale_output,
-            ),
-        ),
+        "whetstone.platform.eval_fanin.list_episode_eval_row_predecessors",
+        return_value=episode_predecessors,
     ):
         execute_eval_fanin_sync(
             runtime,
@@ -183,6 +178,7 @@ def test_eval_fanin_ignores_other_batch_predecessors(copro_launch) -> None:
             stage_index=fanin_successors[0].stage_index,
             work_item_id=1,
         )
+    _ = stale_output
 
 
 def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
@@ -219,7 +215,7 @@ def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
         )
     object.__setattr__(runtime, "ledger_engine", MagicMock())
     with patch(
-        "dr_platform.inspection.work_items.list_predecessor_stage_outputs",
+        "whetstone.platform.eval_fanin.list_episode_eval_row_predecessors",
         return_value=(),
     ):
         try:
@@ -230,7 +226,7 @@ def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
                 work_item_id=1,
             )
         except ValueError as error:
-            assert "ledger predecessors do not match batch row count" in str(error)
+            assert "ledger predecessors do not match episode row count" in str(error)
         else:
             raise AssertionError("expected ledger predecessor mismatch")
 
