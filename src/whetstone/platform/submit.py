@@ -70,6 +70,10 @@ def submit_optim_run(
     dispatch_mode: EvalDispatchMode | None = None,
     priority: int = 0,
 ) -> SubmissionReceipt:
+    if controller_identity_hash != runtime.controller.runtime_hash:
+        raise ValueError(
+            "controller identity hash does not match bound runtime"
+        )
     runtime.controller.bind_launch(launch)
     work_input = build_work_input(
         launch=launch,

@@ -211,21 +211,22 @@ class RuntimeEvalEngine:
                 "source sampling manifest does not match its split role"
             )
         source_rng = dict(source.seed_plan.rng_seeds)
-        provenance_rows = tuple(
-            TaskTrialProvenanceRow(
-                task_hash=task_hash_by_id[task_id],
-                seed_index=seed_index,
-                rng_seed=(
-                    source_rng.get(f"{task_hash_by_id[task_id]}#{seed_index}")
-                    or derive_rng_seed(
-                        task_hash_by_id[task_id],
-                        seed_index,
+        provenance_rows_list: list[TaskTrialProvenanceRow] = []
+        for task_id in task_ids:
+            task_hash = task_hash_by_id[task_id]
+            for seed_index in range(source.seed_plan.num_seeds):
+                key = f"{task_hash}#{seed_index}"
+                rng_seed = source_rng.get(key)
+                if rng_seed is None:
+                    rng_seed = derive_rng_seed(task_hash, seed_index)
+                provenance_rows_list.append(
+                    TaskTrialProvenanceRow(
+                        task_hash=task_hash,
+                        seed_index=seed_index,
+                        rng_seed=rng_seed,
                     )
-                ),
-            )
-            for task_id in task_ids
-            for seed_index in range(source.seed_plan.num_seeds)
-        )
+                )
+        provenance_rows = tuple(provenance_rows_list)
         seed_plan = seed_plan_from_provenance(
             provenance_rows,
             plan_id=f"{namespace}.{role}",

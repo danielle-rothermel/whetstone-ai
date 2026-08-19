@@ -36,6 +36,7 @@ from whetstone.platform.contracts import (
     EvalFaninInput,
     EvalRowInput,
     OPTIM_WORK_INPUT_SCHEMA,
+    OptimWorkInput,
     load_eval_batch_by_id,
     load_eval_row_input,
     load_run_manifest,
@@ -92,6 +93,16 @@ def _validate_platform_stage_index(
         raise ValueError(
             f"platform stage_index mismatch for {stage_key}: "
             f"admission payload has {stage_index}, work state has {expected}"
+        )
+
+
+def _require_controller_identity(
+    runtime: RegisteredRuntime,
+    work_input: OptimWorkInput,
+) -> None:
+    if work_input.controller_identity_hash != runtime.controller.runtime_hash:
+        raise ValueError(
+            "work input controller identity does not match bound runtime"
         )
 
 
@@ -392,6 +403,7 @@ def execute_optim_step_sync(
 ) -> StageCompletion:
     """Run exactly one harness step for a platform member."""
     state = _load_work_state(runtime, input_reference)
+    _require_controller_identity(runtime, state.work_input)
     current_stage_index = state.work_input.platform_stage_index
     if stage_index is not None:
         _validate_platform_stage_index(
@@ -559,6 +571,7 @@ def execute_run_completion_sync(
 ) -> str:
     """Terminalize a completed harness loop and return the OptimResult ref."""
     state = _load_work_state(runtime, input_reference)
+    _require_controller_identity(runtime, state.work_input)
     if not state.terminal:
         raise ValueError("run completion requires a terminal harness loop")
     if not state.step_result_refs:
@@ -627,6 +640,7 @@ __all__ = [
     "_load_work_state",
     "_persist_work_state",
     "_platform_deferred_successors",
+    "_require_controller_identity",
     "_validate_platform_stage_index",
     "execute_optim_step_sync",
     "execute_run_completion_for_run_sync",

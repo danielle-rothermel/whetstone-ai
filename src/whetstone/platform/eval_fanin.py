@@ -38,6 +38,7 @@ from whetstone.platform.step_executor import (
     _bind_step_result,
     _load_work_state,
     _persist_work_state,
+    _require_controller_identity,
     _validate_platform_stage_index,
     OptimWorkState,
 )
@@ -136,8 +137,10 @@ def execute_eval_row_sync(
                 output_reference=format_object_reference(existing_binding)
             )
     row_input = load_eval_row_input(runtime.store, input_reference)
+    batch = load_eval_batch_by_id(runtime.store, row_input.batch_id)
+    work_state = _load_work_state(runtime, batch.work_state_ref)
+    _require_controller_identity(runtime, work_state.work_input)
     if stage_index is not None:
-        batch = load_eval_batch_by_id(runtime.store, row_input.batch_id)
         try:
             row_offset = batch.row_input_refs.index(input_reference)
         except ValueError as error:
@@ -564,6 +567,7 @@ def execute_eval_fanin_sync(
     fanin_input = load_eval_fanin_input(runtime.store, input_reference)
     batch = load_eval_batch_by_id(runtime.store, fanin_input.batch_id)
     work_state = _load_work_state(runtime, batch.work_state_ref)
+    _require_controller_identity(runtime, work_state.work_input)
     if stage_index is not None:
         _validate_platform_stage_index(
             stage_index=stage_index,
