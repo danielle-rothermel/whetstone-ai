@@ -11,7 +11,6 @@ from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.testing.toy.experiment import build_toy_experiment
 from whetstone.platform.contracts import (
     OptimWorkInput,
-    load_eval_batch_by_id,
     load_eval_row_input,
     persist_work_input,
 )
@@ -106,12 +105,11 @@ def test_execute_eval_row_rejects_mismatched_controller_identity(
         if successor.stage_key.value == STAGE_EVAL_ROW
     )
     row_input = load_eval_row_input(runtime.store, row_successor.input_reference)
-    batch = load_eval_batch_by_id(runtime.store, row_input.batch_id)
     original_load = _load_work_state
 
     def load_with_tampered(runtime_arg, ref: str):
         state = original_load(runtime_arg, ref)
-        if ref != batch.work_state_ref:
+        if ref != row_input.work_state_ref:
             return state
         return OptimWorkState(
             work_input=state.work_input.model_copy(
@@ -120,7 +118,9 @@ def test_execute_eval_row_rejects_mismatched_controller_identity(
             step_index=state.step_index,
             step_result_refs=state.step_result_refs,
             terminal=state.terminal,
-            pending_eval_batch_ref=state.pending_eval_batch_ref,
+            pending_step_result_ref=state.pending_step_result_ref,
+            deferral_optim_step_stage_index=state.deferral_optim_step_stage_index,
+            pending_deferred_intents=state.pending_deferred_intents,
         )
 
     monkeypatch.setattr(

@@ -128,6 +128,7 @@ def assert_fanin_barrier_predecessors(
     work_item_id: int,
     *,
     fanin_stage_index: int,
+    deferral_origin_stage_index: int,
     expected_eval_row_count: int,
 ) -> None:
     stages = get_work_item_stages(work_item_id, engine=engine)
@@ -143,13 +144,10 @@ def assert_fanin_barrier_predecessors(
         work_item_id,
         below_stage_index=fanin_stage_index,
         engine=engine,
+        stage_key=STAGE_EVAL_ROW,
+        min_stage_index=deferral_origin_stage_index,
     )
-    eval_row_predecessors = [
-        predecessor
-        for predecessor in predecessors
-        if predecessor.stage_key.value == STAGE_EVAL_ROW
-    ]
-    assert len(eval_row_predecessors) == expected_eval_row_count
+    assert len(predecessors) == expected_eval_row_count
 
 
 def await_dbos_result(workflow_id: str, *, registration, timeout: float = 60):

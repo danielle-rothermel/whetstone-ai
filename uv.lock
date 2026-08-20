@@ -340,7 +340,7 @@ wheels = [
 
 [[package]]
 name = "dr-platform"
-version = "0.2.2"
+version = "0.2.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "alembic" },
@@ -351,9 +351,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "sqlalchemy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f9/43/81044717f8f616351f18040e432d08718fd241137d684566729b011e9d02/dr_platform-0.2.2.tar.gz", hash = "sha256:27138bf5a8cd9fbff022482440270a8071a087bdaed64a91391491017ea47992", size = 72201, upload-time = "2026-08-19T18:42:08.798Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/8b/2b/2d156f61d01d78f901c427b606ea2b84ff44ba402ab642c3a5f35ac00c69/dr_platform-0.2.3.tar.gz", hash = "sha256:f53cb3f38bbf70a160d4557029b60a3be241c6d1deccae06ff9ac0a7ca5a67ad", size = 82980, upload-time = "2026-08-19T23:09:30.075Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a5/cc/f4817d12b05d33354b311f834e373391452d9b8598b2b265db1d01a90eb8/dr_platform-0.2.2-py3-none-any.whl", hash = "sha256:7a33c3843cb0cf10d503bf051f9d1cde45d7ab42eeb329ef47c30b807fe4ab6e", size = 105340, upload-time = "2026-08-19T18:42:07.546Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/9d/fdab17be11f76dff4a312ccd2fc20c63347cccec54912002dc5118a9a61a/dr_platform-0.2.3-py3-none-any.whl", hash = "sha256:d9da4f3f1ccd5817d3650bb842104d39794d7b94ee1f63156c8b866895d122a3", size = 109126, upload-time = "2026-08-19T23:09:28.643Z" },
 ]
 
 [[package]]
@@ -1494,7 +1494,7 @@ requires-dist = [
     { name = "dbos", extras = ["otel"], marker = "extra == 'platform'", specifier = "==2.27.0" },
     { name = "dr-exec", specifier = "==0.1.11" },
     { name = "dr-graph", specifier = "==0.1.3" },
-    { name = "dr-platform", marker = "extra == 'platform'", specifier = "==0.2.2" },
+    { name = "dr-platform", marker = "extra == 'platform'", specifier = "==0.2.3" },
     { name = "dr-providers", specifier = "==0.3.1" },
     { name = "dr-serialize", specifier = "==0.1.2" },
     { name = "dr-store", specifier = "==0.2.3" },
