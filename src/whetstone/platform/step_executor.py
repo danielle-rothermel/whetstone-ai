@@ -21,6 +21,10 @@ from whetstone.platform.deferred_intents import (
     load_persisted_deferred_intents,
     persist_deferred_intents,
 )
+from whetstone.platform.work_state_head import (
+    bind_work_state_head,
+    resolve_work_state_head,
+)
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OptimEvalRequest,
@@ -122,6 +126,48 @@ def _deserialize_deferred_intents(
     return tuple(OptimEvalRequest.model_validate(item) for item in payload)
 
 
+def _work_state_from_payload(payload: dict[str, Any]) -> OptimWorkState:
+    work_input = OptimWorkInput.model_validate(payload["work_input"])
+    step_result_refs = tuple(
+        OptimStepResultRef.model_validate(ref)
+        for ref in payload["step_result_refs"]
+    )
+    pending_step = payload.get("pending_step_result_ref")
+    deferral_origin = payload.get("deferral_optim_step_stage_index")
+    return OptimWorkState(
+        work_input=work_input,
+        step_index=int(payload["step_index"]),
+        step_result_refs=step_result_refs,
+        terminal=bool(payload["terminal"]),
+        pending_step_result_ref=(
+            None if pending_step is None else str(pending_step)
+        ),
+        deferral_optim_step_stage_index=(
+            None if deferral_origin is None else int(deferral_origin)
+        ),
+        pending_deferred_intents=_deserialize_deferred_intents(
+            payload.get("pending_deferred_intents", ())
+        ),
+    )
+
+
+def _accept_work_state_head(
+    head: OptimWorkState,
+    work_input: OptimWorkInput,
+) -> bool:
+    if head.work_input.run_id != work_input.run_id:
+        return False
+    if head.work_input.controller_identity_hash != work_input.controller_identity_hash:
+        return False
+    if head.work_input.control_identity_hash != work_input.control_identity_hash:
+        return False
+    if head.work_input.platform_stage_index < work_input.platform_stage_index:
+        return False
+    if head.pending_step_result_ref is not None:
+        return True
+    return head.work_input.platform_stage_index == work_input.platform_stage_index
+
+
 def _load_work_state(
     runtime: RegisteredRuntime,
     input_reference: str,
@@ -131,30 +177,7 @@ def _load_work_state(
         payload = runtime.store.get(parsed)
         if not isinstance(payload, dict):
             raise ValueError("work state record must be an object")
-        from whetstone.platform.contracts import OptimWorkInput
-
-        work_input = OptimWorkInput.model_validate(payload["work_input"])
-        step_result_refs = tuple(
-            OptimStepResultRef.model_validate(ref)
-            for ref in payload["step_result_refs"]
-        )
-        pending_step = payload.get("pending_step_result_ref")
-        deferral_origin = payload.get("deferral_optim_step_stage_index")
-        return OptimWorkState(
-            work_input=work_input,
-            step_index=int(payload["step_index"]),
-            step_result_refs=step_result_refs,
-            terminal=bool(payload["terminal"]),
-            pending_step_result_ref=(
-                None if pending_step is None else str(pending_step)
-            ),
-            deferral_optim_step_stage_index=(
-                None if deferral_origin is None else int(deferral_origin)
-            ),
-            pending_deferred_intents=_deserialize_deferred_intents(
-                payload.get("pending_deferred_intents", ())
-            ),
-        )
+        return _work_state_from_payload(payload)
 
     work_input = load_work_input(runtime.store, input_reference)
     run_binding = runtime.store.resolve(
@@ -164,6 +187,17 @@ def _load_work_state(
         raise ValueError(
             f"optimization run launch is not bound: {work_input.run_id!r}"
         )
+    head_ref = resolve_work_state_head(
+        runtime.store,
+        run_id=work_input.run_id,
+        work_key=work_input.work_key,
+    )
+    if head_ref is not None:
+        head_payload = runtime.store.get(parse_object_reference(head_ref))
+        if isinstance(head_payload, dict):
+            head_state = _work_state_from_payload(head_payload)
+            if _accept_work_state_head(head_state, work_input):
+                return head_state
     # step_index becomes the next harness step to run; in-flight deferral binds may
     # belong to step_index (OptimWorkState retry) or step_index - 1 (work-input replay).
     step_index = 0
@@ -213,7 +247,14 @@ def _persist_work_state(
         "work_input": state.work_input.record_content(),
     }
     reference, _ = runtime.store.put(OPTIM_WORK_STATE_SCHEMA, payload)
-    return format_object_reference(reference)
+    work_state_ref = format_object_reference(reference)
+    bind_work_state_head(
+        runtime.store,
+        run_id=state.work_input.run_id,
+        work_key=state.work_input.work_key,
+        work_state_ref=work_state_ref,
+    )
+    return work_state_ref
 
 
 def _step_result_binding_key(
@@ -333,6 +374,11 @@ def _recover_crash_window_deferral(
     )
     _evict_step_result_binding(
         runtime,
+        run_id=work_input.run_id,
+        step_index=deferral_step_index,
+    )
+    evict_deferred_intents(
+        runtime.store,
         run_id=work_input.run_id,
         step_index=deferral_step_index,
     )
@@ -481,11 +527,6 @@ def _platform_deferred_successors(
         pending_step_result_ref=pending_step_result_ref,
         work_state_ref=work_state_ref,
     )
-    evict_deferred_intents(
-        runtime.store,
-        run_id=state.work_input.run_id,
-        step_index=state.step_index,
-    )
     return successors, output_ref
 
 
@@ -509,11 +550,6 @@ def _platform_deferred_resume(
         pending_step_result_ref=state.pending_step_result_ref,
         work_state_ref=work_state_ref,
     )
-    evict_deferred_intents(
-        runtime.store,
-        run_id=state.work_input.run_id,
-        step_index=state.step_index,
-    )
     return successors, output_ref
 
 
@@ -528,9 +564,15 @@ def execute_optim_step_sync(
     _require_controller_identity(runtime, state.work_input)
     current_stage_index = state.work_input.platform_stage_index
     if stage_index is not None:
+        expected_stage_index = current_stage_index
+        if (
+            state.pending_step_result_ref is not None
+            and state.deferral_optim_step_stage_index is not None
+        ):
+            expected_stage_index = state.deferral_optim_step_stage_index
         _validate_platform_stage_index(
             stage_index=stage_index,
-            expected=current_stage_index,
+            expected=expected_stage_index,
             stage_key=STAGE_OPTIM_STEP,
         )
     if state.terminal:
@@ -548,6 +590,11 @@ def execute_optim_step_sync(
         successors, output_ref = _platform_deferred_resume(
             runtime,
             state=state,
+        )
+        evict_deferred_intents(
+            runtime.store,
+            run_id=work_input.run_id,
+            step_index=state.step_index,
         )
         return StageCompletion(
             output_reference=output_ref,
@@ -668,6 +715,11 @@ def execute_optim_step_sync(
         )
         _evict_step_result_binding(
             runtime,
+            run_id=work_input.run_id,
+            step_index=deferral_step_index,
+        )
+        evict_deferred_intents(
+            runtime.store,
             run_id=work_input.run_id,
             step_index=deferral_step_index,
         )

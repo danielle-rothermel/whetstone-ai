@@ -25,11 +25,13 @@ from whetstone.platform.deferred_intents import (
 from whetstone.platform.eval_fanin import execute_eval_fanin_sync, execute_eval_row_sync
 from whetstone.platform.step_executor import (
     OptimWorkState,
+    _evict_step_result_binding,
     _load_work_state,
     _persist_work_state,
     _platform_deferred_successors,
     execute_optim_step_sync,
 )
+from whetstone.platform.work_state_head import resolve_work_state_head
 
 
 def _complete_deferral_episode(runtime, completion):
@@ -163,6 +165,10 @@ class _CrashBeforeDeferralEmit(RuntimeError):
     pass
 
 
+class _CrashBeforeStepResultEvict(RuntimeError):
+    pass
+
+
 class _CrashBeforePersist(RuntimeError):
     pass
 
@@ -237,7 +243,7 @@ def test_platform_continue_without_eval_not_treated_as_deferral(
         )
 
 
-def test_platform_deferral_evicts_persisted_intents_after_emit(
+def test_platform_deferral_evicts_persisted_intents_after_stage_commit(
     copro_launch,
 ) -> None:
     runtime, launch = copro_launch
@@ -268,6 +274,186 @@ def test_platform_deferral_evicts_persisted_intents_after_emit(
     )
     pending_state = _load_work_state(runtime, completion.output_reference)
     assert pending_state.pending_deferred_intents
+    head_ref = resolve_work_state_head(
+        runtime.store,
+        run_id=launch.run.run_id,
+        work_key=work_input.work_key,
+    )
+    assert head_ref == completion.output_reference
+
+
+def test_platform_deferral_recovers_via_head_pointer_after_emit_crash(
+    copro_launch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, launch = copro_launch
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+    real_evict_step_result = _evict_step_result_binding
+
+    def crash_before_step_result_evict(*args, **kwargs):
+        raise _CrashBeforeStepResultEvict()
+
+    monkeypatch.setattr(
+        "whetstone.platform.step_executor._evict_step_result_binding",
+        crash_before_step_result_evict,
+    )
+
+    with pytest.raises(_CrashBeforeStepResultEvict):
+        execute_optim_step_sync(
+            runtime,
+            input_reference=input_reference,
+            stage_index=0,
+        )
+
+    head_ref = resolve_work_state_head(
+        runtime.store,
+        run_id=launch.run.run_id,
+        work_key=work_input.work_key,
+    )
+    assert head_ref is not None
+    head_state = _load_work_state(runtime, head_ref)
+    assert head_state.pending_deferred_intents
+
+    monkeypatch.setattr(
+        "whetstone.platform.step_executor._evict_step_result_binding",
+        real_evict_step_result,
+    )
+
+    recovered = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+    row_successors, fanin_successors = _row_and_fanin_successors(recovered)
+    assert row_successors
+    assert len(fanin_successors) == 1
+
+
+def test_platform_deferral_recovers_after_emit_crash_via_persisted_intents(
+    copro_launch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, launch = copro_launch
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+
+    def crash_before_step_result_evict(*args, **kwargs):
+        raise _CrashBeforeStepResultEvict()
+
+    monkeypatch.setattr(
+        "whetstone.platform.step_executor._evict_step_result_binding",
+        crash_before_step_result_evict,
+    )
+
+    with pytest.raises(_CrashBeforeStepResultEvict):
+        execute_optim_step_sync(
+            runtime,
+            input_reference=input_reference,
+            stage_index=0,
+        )
+
+    assert load_persisted_deferred_intents(
+        runtime.store,
+        run_id=launch.run.run_id,
+        step_index=0,
+    )
+
+    monkeypatch.setattr(
+        "whetstone.platform.step_executor._evict_step_result_binding",
+        _evict_step_result_binding,
+    )
+
+    recovered = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+    row_successors, fanin_successors = _row_and_fanin_successors(recovered)
+    assert row_successors
+    assert len(fanin_successors) == 1
+
+
+def test_platform_work_input_redrive_prefers_head_over_binding_reconstruction(
+    copro_launch,
+) -> None:
+    runtime, launch = copro_launch
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+
+    completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+    head_state = _load_work_state(runtime, completion.output_reference)
+    assert head_state.pending_deferred_intents
+
+    loaded_via_input = _load_work_state(runtime, input_reference)
+    assert loaded_via_input.pending_deferred_intents == head_state.pending_deferred_intents
+
+    from whetstone.platform.work_state_head import evict_work_state_head
+
+    evict_work_state_head(
+        runtime.store,
+        run_id=launch.run.run_id,
+        work_key=work_input.work_key,
+    )
+    loaded_without_head = _load_work_state(runtime, input_reference)
+    assert not loaded_without_head.pending_deferred_intents
+    assert loaded_without_head.step_index == 0
+
+
+def test_platform_work_input_redrive_rejects_stale_head(
+    copro_launch,
+) -> None:
+    runtime, launch = copro_launch
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+        platform_stage_index=5,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+    stale_state = OptimWorkState(
+        work_input=work_input.model_copy(update={"platform_stage_index": 0}),
+        step_index=0,
+        terminal=False,
+    )
+    stale_ref = _persist_work_state(runtime, stale_state)
+
+    loaded = _load_work_state(runtime, input_reference)
+    assert loaded.step_index == 0
+    assert not loaded.pending_deferred_intents
+    assert stale_ref
 
 
 def test_platform_deferral_recovers_from_persisted_binding_after_crash_window(
