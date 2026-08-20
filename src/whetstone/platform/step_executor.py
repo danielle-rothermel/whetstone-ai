@@ -17,6 +17,7 @@ from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef
 from whetstone.eval.runtime_engine import _task_id
 from whetstone.platform.deferred_intents import (
+    evict_deferred_intents,
     load_persisted_deferred_intents,
     persist_deferred_intents,
 )
@@ -266,7 +267,12 @@ def _bound_unresolved_deferral_step_index(
             continue
         result = OptimStepResult.model_validate(runtime.store.get(binding))
         if result.status is StepStatus.CONTINUE and not result.resolved_intents:
-            return deferral_step_index
+            if load_persisted_deferred_intents(
+                runtime.store,
+                run_id=run_id,
+                step_index=deferral_step_index,
+            ):
+                return deferral_step_index
     return None
 
 
@@ -467,7 +473,7 @@ def _platform_deferred_successors(
         pending_deferred_intents=deferred_intents,
     )
     work_state_ref = _persist_work_state(runtime, pending_state)
-    return _emit_deferred_successors(
+    successors, output_ref = _emit_deferred_successors(
         runtime,
         state=state,
         deferred_intents=deferred_intents,
@@ -475,6 +481,12 @@ def _platform_deferred_successors(
         pending_step_result_ref=pending_step_result_ref,
         work_state_ref=work_state_ref,
     )
+    evict_deferred_intents(
+        runtime.store,
+        run_id=state.work_input.run_id,
+        step_index=state.step_index,
+    )
+    return successors, output_ref
 
 
 def _platform_deferred_resume(
@@ -489,7 +501,7 @@ def _platform_deferred_resume(
     if not state.pending_deferred_intents:
         raise ValueError("deferred resume requires pending deferred intents")
     work_state_ref = _persist_work_state(runtime, state)
-    return _emit_deferred_successors(
+    successors, output_ref = _emit_deferred_successors(
         runtime,
         state=state,
         deferred_intents=state.pending_deferred_intents,
@@ -497,6 +509,12 @@ def _platform_deferred_resume(
         pending_step_result_ref=state.pending_step_result_ref,
         work_state_ref=work_state_ref,
     )
+    evict_deferred_intents(
+        runtime.store,
+        run_id=state.work_input.run_id,
+        step_index=state.step_index,
+    )
+    return successors, output_ref
 
 
 def execute_optim_step_sync(
@@ -548,13 +566,9 @@ def execute_optim_step_sync(
             run_id=work_input.run_id,
             state=state,
         )
-        if bound_unresolved is not None and not load_persisted_deferred_intents(
-            runtime.store,
-            run_id=work_input.run_id,
-            step_index=bound_unresolved,
-        ):
+        if bound_unresolved is not None:
             raise ValueError(
-                "bound unresolved step result requires deferral recovery"
+                "bound deferral with persisted intents but recovery failed"
             )
     launch = _load_launch(runtime, work_input.run_id)
     if launch.control is not None:
@@ -665,7 +679,7 @@ def execute_optim_step_sync(
     _bind_step_result(
         runtime,
         run_id=work_input.run_id,
-        step_index=state.step_index,
+        step_index=step_request.step_index,
         result_ref=result_ref,
     )
     updated = OptimWorkState(
