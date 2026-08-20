@@ -460,6 +460,13 @@ def _finalize_deferred_step(
         step_index=step_index,
         result_ref=merged_ref,
     )
+    from whetstone.platform.deferred_intents import evict_deferred_intents
+
+    evict_deferred_intents(
+        runtime.store,
+        run_id=run_id,
+        step_index=step_index,
+    )
     loaded = _load_work_state(runtime, work_state_ref)
     if loaded.step_index > step_index:
         return loaded

@@ -48,10 +48,20 @@ def load_persisted_deferred_intents(
     )
 
 
+def evict_deferred_intents(
+    store: ObjectStore,
+    *,
+    run_id: str,
+    step_index: int,
+) -> None:
+    store.evict_bindings([deferred_intents_binding_key(run_id, step_index)])
+
+
 __all__ = [
     "PLATFORM_DEFERRED_INTENTS_PREFIX",
     "PLATFORM_DEFERRED_INTENTS_SCHEMA",
     "deferred_intents_binding_key",
+    "evict_deferred_intents",
     "load_persisted_deferred_intents",
     "persist_deferred_intents",
 ]

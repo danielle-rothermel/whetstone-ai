@@ -163,6 +163,8 @@ def _load_work_state(
         raise ValueError(
             f"optimization run launch is not bound: {work_input.run_id!r}"
         )
+    # step_index becomes the next harness step to run; in-flight deferral binds may
+    # belong to step_index (OptimWorkState retry) or step_index - 1 (work-input replay).
     step_index = 0
     step_result_refs: list[OptimStepResultRef] = []
     while True:
@@ -251,18 +253,21 @@ def _bound_unresolved_deferral_step_index(
     run_id: str,
     state: OptimWorkState,
 ) -> int | None:
-    if not state.step_result_refs:
-        return None
-    deferral_step_index = len(state.step_result_refs) - 1
-    binding = runtime.store.resolve(
-        _step_result_binding_key(runtime, run_id, deferral_step_index)
-    )
-    if binding is None:
-        return None
-    result = OptimStepResult.model_validate(runtime.store.get(binding))
-    if result.status is not StepStatus.CONTINUE or result.resolved_intents:
-        return None
-    return deferral_step_index
+    candidates: list[int] = []
+    if state.step_index >= 0:
+        candidates.append(state.step_index)
+    if state.step_index > 0:
+        candidates.append(state.step_index - 1)
+    for deferral_step_index in candidates:
+        binding = runtime.store.resolve(
+            _step_result_binding_key(runtime, run_id, deferral_step_index)
+        )
+        if binding is None:
+            continue
+        result = OptimStepResult.model_validate(runtime.store.get(binding))
+        if result.status is StepStatus.CONTINUE and not result.resolved_intents:
+            return deferral_step_index
+    return None
 
 
 def _recover_crash_window_deferral(
@@ -329,22 +334,6 @@ def _recover_crash_window_deferral(
         output_reference=output_ref,
         successors=successors,
     )
-
-
-def _deferred_recovery_step_index(
-    runtime: RegisteredRuntime,
-    *,
-    run_id: str,
-    state: OptimWorkState,
-) -> int:
-    bound_index = _bound_unresolved_deferral_step_index(
-        runtime,
-        run_id=run_id,
-        state=state,
-    )
-    if bound_index is not None:
-        return bound_index
-    return state.step_index
 
 
 def _bind_run_member_terminal(
@@ -553,6 +542,20 @@ def execute_optim_step_sync(
     )
     if crash_recovery is not None:
         return crash_recovery
+    if work_input.dispatch_mode is EvalDispatchMode.PLATFORM:
+        bound_unresolved = _bound_unresolved_deferral_step_index(
+            runtime,
+            run_id=work_input.run_id,
+            state=state,
+        )
+        if bound_unresolved is not None and not load_persisted_deferred_intents(
+            runtime.store,
+            run_id=work_input.run_id,
+            step_index=bound_unresolved,
+        ):
+            raise ValueError(
+                "bound unresolved step result requires deferral recovery"
+            )
     launch = _load_launch(runtime, work_input.run_id)
     if launch.control is not None:
         if launch.control.identity_hash() != work_input.control_identity_hash:
@@ -612,15 +615,10 @@ def execute_optim_step_sync(
         if state.pending_deferred_intents:
             deferred = state.pending_deferred_intents
         else:
-            recovery_step_index = _deferred_recovery_step_index(
-                runtime,
-                run_id=work_input.run_id,
-                state=state,
-            )
             deferred = load_persisted_deferred_intents(
                 runtime.store,
                 run_id=work_input.run_id,
-                step_index=recovery_step_index,
+                step_index=step_request.step_index,
             )
     if (
         work_input.dispatch_mode is EvalDispatchMode.PLATFORM
@@ -628,10 +626,11 @@ def execute_optim_step_sync(
         and deferred
         and result.status is StepStatus.CONTINUE
     ):
+        deferral_step_index = step_request.step_index
         persist_deferred_intents(
             runtime.store,
             run_id=work_input.run_id,
-            step_index=state.step_index,
+            step_index=deferral_step_index,
             intents=deferred,
         )
         pending_step_result_ref = format_object_reference(
@@ -640,9 +639,15 @@ def execute_optim_step_sync(
                 content_hash=result_ref.content_hash,
             )
         )
+        emit_state = OptimWorkState(
+            work_input=state.work_input,
+            step_index=deferral_step_index,
+            step_result_refs=state.step_result_refs[:deferral_step_index],
+            terminal=False,
+        )
         successors, output_ref = _platform_deferred_successors(
             runtime,
-            state=state,
+            state=emit_state,
             deferred_intents=deferred,
             current_stage_index=current_stage_index,
             pending_step_result_ref=pending_step_result_ref,
@@ -650,7 +655,7 @@ def execute_optim_step_sync(
         _evict_step_result_binding(
             runtime,
             run_id=work_input.run_id,
-            step_index=state.step_index,
+            step_index=deferral_step_index,
         )
         return StageCompletion(
             output_reference=output_ref,
