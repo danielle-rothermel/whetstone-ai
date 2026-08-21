@@ -82,8 +82,8 @@ jobs:
           RELEASE_SHA: ${{ github.sha }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          python_path="$(uv python find 3.13)"
-          project_version="$("$python_path" - <<'PY'
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          project_version="$(python3 - <<'PY'
           import re
           import tomllib
           from pathlib import Path
@@ -129,7 +129,7 @@ jobs:
       - name: Verify distribution names and metadata
         id: verify_artifacts
         run: |
-          "$(uv python find 3.13)" - <<'PY'
+          python3 - <<'PY'
           from email.parser import BytesParser
           from pathlib import Path
           import hashlib
