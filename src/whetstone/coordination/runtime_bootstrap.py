@@ -150,6 +150,14 @@ def register_runtime(
     control = copro_control or build_toy_copro_control(engine=resolved_engine)
     prompt_adapter = PlainPromptAdapter()
     execution_policy = runtime_config.execution_policy
+    engine_policy_hash = getattr(
+        resolved_engine, "execution_policy_identity_hash", None
+    )
+    dummy_policy_hash = (
+        engine_policy_hash()
+        if callable(engine_policy_hash)
+        else execution_policy.identity_hash
+    )
     proposal_policy_hash = compute_identity_hash(
         schema="whetstone.testing.inline_proposal_executor",
         schema_version=1,
@@ -161,7 +169,7 @@ def register_runtime(
             "Reply briefly to: {prompt} with a concise greeting.",
             "Answer {prompt} in one short friendly sentence.",
         ),
-        execution_policy_hash=execution_policy.identity_hash,
+        execution_policy_hash=dummy_policy_hash,
         prompt_adapter_identity_hash=prompt_adapter_identity_hash(prompt_adapter),
         proposal_mode="seed_proposal",
         request_ordinal=0,
