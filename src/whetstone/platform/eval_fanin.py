@@ -27,12 +27,14 @@ from whetstone.optim.contracts import (
     ResolutionClass,
     ResolutionDetail,
 )
+from dr_platform import list_episode_predecessor_outputs
+
 from whetstone.platform.contracts import (
+    STAGE_EVAL_ROW,
     DeferralJoinInput,
     load_deferral_join_input,
     load_eval_row_input,
 )
-from whetstone.platform.deferral_cluster import list_episode_eval_row_predecessors
 from whetstone.platform.step_executor import (
     _bind_step_result,
     _load_work_state,
@@ -308,10 +310,11 @@ def _verify_episode_eval_row_predecessors(
         raise ValueError(
             "eval fan-in predecessor verification requires a ledger engine"
         )
-    predecessors = list_episode_eval_row_predecessors(
+    predecessors = list_episode_predecessor_outputs(
         work_item_id,
-        deferral_origin=deferral_origin,
-        fanin_stage_index=stage_index,
+        stage_index,
+        origin_stage_index=deferral_origin,
+        stage_key=STAGE_EVAL_ROW,
         engine=runtime.ledger_engine,
     )
     if len(predecessors) != expected_row_count:

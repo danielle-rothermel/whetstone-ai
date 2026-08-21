@@ -390,16 +390,15 @@ def bootstrap_platform_runtime(
     )
     initialize_dbos_runtime(config, app_name=f"whetstone-platform-{suffix}")
     registration = register_scheduled_dispatcher(
-        live_dbos_identity=LiveDbosIdentity(
-            app_version=f"whetstone-{suffix}",
-            resolve_executor_ids=lambda: frozenset({DBOS.application_version}),
-        ),
+        live_dbos_identity=LiveDbosIdentity(),
         config=config,
         engine=pg_engine,
         registry=registry,
         sweep_cron=None,
     )
     DBOS.launch()
+    # Pin this process as the current deployment so DBOS does not treat
+    # a prior test's workflows as recoverable work and stall the run.
     DBOS.set_latest_application_version(DBOS.application_version)
 
     return PlatformIntegrationContext(
