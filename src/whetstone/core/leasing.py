@@ -19,15 +19,15 @@ dr-store's.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from dr_store.content_addressing import ObjectReference
 from dr_store.lease import (
     AcquireOutcome,
+    AcquireResult,
     Lease,
     LeaseAuthority,
-    LeaseAuthorityError,
-    LeaseAuthoritySchemaMismatchError,
+    LeaseMaintenance,
     LeaseRequest,
     ReplayPolicy,
     StaleLeaseError,
@@ -59,8 +59,6 @@ if TYPE_CHECKING:
 __all__ = [
     "AcquireOutcome",
     "EffectAcquireResult",
-    "EffectAuthorityError",
-    "EffectAuthoritySchemaMismatchError",
     "EffectLease",
     "EffectLeaseAuthority",
     "EffectLeaseMaintenance",
@@ -73,11 +71,6 @@ __all__ = [
     "TerminalOutcome",
     "effect_request",
 ]
-
-# dr-store owns the lease error taxonomy; whetstone's historical names stay
-# available so consumer ``except`` clauses keep naming the domain concept.
-EffectAuthorityError = LeaseAuthorityError
-EffectAuthoritySchemaMismatchError = LeaseAuthoritySchemaMismatchError
 
 # Lease identity and the lease handle carry no whetstone-typed fields, so the
 # dr-store models are the whetstone models under whetstone's domain names.
@@ -210,7 +203,7 @@ class EffectAcquireResult(BaseModel):
     existing_replay_policy: ReplayPolicy | None = None
 
     @classmethod
-    def _from_lease(cls, result: Any) -> EffectAcquireResult:
+    def _from_lease(cls, result: AcquireResult) -> EffectAcquireResult:
         return cls(
             request=result.request,
             outcome=result.outcome,
@@ -238,7 +231,7 @@ class EffectLeaseMaintenance:
     restart after a transient terminal-publication failure are all dr-store's.
     """
 
-    def __init__(self, maintenance: Any) -> None:
+    def __init__(self, maintenance: LeaseMaintenance) -> None:
         self._maintenance = maintenance
 
     @property

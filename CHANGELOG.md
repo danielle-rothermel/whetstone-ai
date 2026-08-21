@@ -7,8 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- `whetstone.core.effects`. The package was a rename-level duplicate of the
+  generic lease design dr-store now ships as `dr_store.lease.LeaseAuthority`:
+  its authority, models, storage layer, and memory, SQLite, and PostgreSQL
+  backends are deleted in favor of dr-store's.
+
 ### Changed
 
+- Effect leasing runs on `dr_store.lease.LeaseAuthority`.
+  `whetstone.core.leasing` is the boundary: `EffectLeaseAuthority` composes
+  dr-store's authority and owns only the translation between whetstone's
+  identity vocabulary and dr-store's lease vocabulary -- `TypedRef` for
+  terminal result refs and whetstone's `TerminalFailure`. Replay policy,
+  fencing, takeover, and terminal authority are dr-store's.
+  `EffectAuthority` is now `EffectLeaseAuthority` and `AcquireResult` is now
+  `EffectAcquireResult`; `EffectRequest`, `EffectLease`, `EffectTerminal`,
+  `ReplayPolicy`, `TerminalOutcome`, `StaleLeaseError`, and
+  `TerminalConflictError` keep their names. `ToolAdmissionAuthority` is
+  unchanged and still composes the lease authority.
+- A transient failure while publishing a terminal through a maintenance
+  handle is now retryable. The handle restarts its renewer and stays open,
+  where the previous implementation marked terminalization started before
+  calling the authority and so poisoned the handle permanently.
+- **Deliberate dev-mode cutover:** the owned lease table is now dr-store's
+  `dr_store_lease_authority` at dr-store's schema version, replacing
+  `whetstone_effect_authority`. Existing whetstone effect databases are
+  unreadable by this release. Recorded dev data is historical; there is no
+  migration.
 - Pin `dr-exec==0.1.13`. A row worker that raises now surfaces the
   exception's type and message (plus a capped traceback) in the
   `RowWorkerError` the subprocess graph-rollout driver raises, so a
