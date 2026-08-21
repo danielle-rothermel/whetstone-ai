@@ -7,9 +7,9 @@ from types import MappingProxyType
 from typing import Protocol
 from uuid import uuid4
 
-from whetstone.core.effects.authority import (
+from whetstone.core.leasing import (
     AcquireOutcome,
-    EffectAuthority,
+    EffectLeaseAuthority,
     ReplayPolicy,
 )
 from whetstone.core.identity import (
@@ -107,7 +107,7 @@ class EvaluatingToolExecutor:
         self,
         evaluator: ToolEvaluator,
         reward_policy: RewardPolicy,
-        effect_authority: EffectAuthority,
+        effect_authority: EffectLeaseAuthority,
         *,
         owner_id: str,
         replay_policy: ReplayPolicy,
@@ -140,7 +140,7 @@ class EvaluatingToolExecutor:
         if effect_authority is not self._effect_authority:
             raise ValueError(
                 "Tool executor and Tool Call Store must share one exact "
-                "EffectAuthority instance"
+                "EffectLeaseAuthority instance"
             )
         if (
             validated_config.reward_policy_hash

@@ -1,6 +1,6 @@
 """PostgreSQL mis-shaped owned tables raise the domain errors.
 
-Both durability trees verify their owned PostgreSQL tables through
+Whetstone's Tool admission tree verifies its owned PostgreSQL tables through
 ``dr_store.relational``. These tests pin that a deliberately mis-shaped
 table surfaces the whetstone domain error with its structured
 ``table``/``aspect``/``expected``/``actual`` fields populated.
@@ -14,15 +14,11 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import create_engine, make_url, text
 
-from whetstone.core.effects._postgres import _PostgreSQLStore
-from whetstone.core.effects.models import EffectAuthoritySchemaMismatchError
 from whetstone.optim.tools._postgres import _PostgreSQLAdmissionBackend
 from whetstone.optim.tools.admission import ToolAdmissionSchemaMismatchError
 
 pytestmark = pytest.mark.integration
 
-_EFFECT_TABLE = "whetstone_effect_authority"
-_EFFECT_METADATA_TABLE = "whetstone_effect_authority_metadata"
 _TOOL_SCHEMA_TABLE = "whetstone_tool_admission_schema"
 _TOOL_ENTRY_TABLE = "whetstone_tool_admission_entry"
 _TOOL_CAPACITY_TABLE = "whetstone_tool_admission_capacity"
@@ -50,85 +46,6 @@ def _assert_structured(error: object, *, table: str, aspect: str) -> None:
     assert getattr(error, "expected") != getattr(error, "actual")
     assert repr(getattr(error, "expected")) in str(error)
     assert repr(getattr(error, "actual")) in str(error)
-
-
-def test_effect_authority_postgres_wrong_column_raises_domain_error(
-    clean_pg: str,
-) -> None:
-    """A wrong effect-authority column reports the domain error."""
-    _execute(
-        clean_pg,
-        f"""
-        CREATE TABLE {_EFFECT_TABLE} (
-            semantic_key TEXT COLLATE "C" PRIMARY KEY,
-            unexpected_column TEXT COLLATE "C" NOT NULL
-        )
-        """,
-        f"""
-        CREATE TABLE {_EFFECT_METADATA_TABLE} (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            schema_version INTEGER NOT NULL
-        )
-        """,
-    )
-
-    with pytest.raises(EffectAuthoritySchemaMismatchError) as caught:
-        _PostgreSQLStore(_libpq_dsn(clean_pg)).initialize()
-
-    _assert_structured(caught.value, table=_EFFECT_TABLE, aspect="columns")
-
-
-def test_effect_authority_postgres_missing_constraint_raises_domain_error(
-    clean_pg: str,
-) -> None:
-    """A dropped effect-authority CHECK reports the domain error."""
-    _execute(
-        clean_pg,
-        f"""
-        CREATE TABLE {_EFFECT_TABLE} (
-            semantic_key TEXT COLLATE "C" PRIMARY KEY,
-            request_hash TEXT COLLATE "C" NOT NULL,
-            replay_policy TEXT COLLATE "C" NOT NULL CHECK (
-                replay_policy IN (
-                    'idempotent', 'durable_workflow', 'no_redrive'
-                )
-            ),
-            state TEXT COLLATE "C" NOT NULL CHECK (
-                state IN (
-                    'leased', 'succeeded', 'failed', 'recovery_required'
-                )
-            ),
-            owner_id TEXT COLLATE "C" NOT NULL,
-            attempt_id TEXT COLLATE "C" NOT NULL,
-            fence BIGINT NOT NULL,
-            expires_at TEXT COLLATE "C",
-            terminal_json TEXT COLLATE "C",
-            CHECK (
-                (state = 'leased' AND expires_at IS NOT NULL
-                    AND terminal_json IS NULL)
-                OR
-                (state != 'leased' AND expires_at IS NULL
-                    AND terminal_json IS NOT NULL)
-            )
-        )
-        """,
-        f"""
-        CREATE TABLE {_EFFECT_METADATA_TABLE} (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            schema_version INTEGER NOT NULL
-        )
-        """,
-    )
-
-    with pytest.raises(EffectAuthoritySchemaMismatchError) as caught:
-        _PostgreSQLStore(_libpq_dsn(clean_pg)).initialize()
-
-    _assert_structured(
-        caught.value,
-        table=_EFFECT_TABLE,
-        aspect="PRIMARY KEY and CHECK constraints",
-    )
-    assert "fence > 0" in str(caught.value)
 
 
 def test_tool_admission_postgres_wrong_column_raises_domain_error(

@@ -12,7 +12,7 @@ from dr_store.relational import (
 )
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from whetstone.core.effects.authority import (
+from whetstone.core.leasing import (
     EffectRequest,
     EffectTerminal,
     ReplayPolicy,

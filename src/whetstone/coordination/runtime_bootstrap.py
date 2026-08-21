@@ -17,7 +17,7 @@ from whetstone.coordination.harness_run_controller import (
     RunRequest,
 )
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
+from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
 from whetstone.core.roles import EvalRole
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -126,7 +126,7 @@ def register_runtime(
         if sqlite_path is None:
             sqlite_path = f"/tmp/whetstone-runtime-{uuid4().hex}.sqlite"
         store = persistent_sqlite(sqlite_path)
-    effect_authority = EffectAuthority.memory()
+    effect_authority = EffectLeaseAuthority.memory()
     runtime_config = ReferenceEvalRuntimeConfig()
     resolved_engine = engine or runtime_config.build_engine(store)
     eval_service = EvalEngineService(store=store, engine=resolved_engine)

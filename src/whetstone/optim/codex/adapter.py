@@ -6,7 +6,7 @@ from typing import Any, Protocol
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import TerminalFailure, TypedRef
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput

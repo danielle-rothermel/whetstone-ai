@@ -7,7 +7,7 @@ from datetime import timedelta
 import pytest
 
 from whetstone.coordination.eval_service import EvalEngineService
-from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
+from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -175,7 +175,7 @@ def _build_gepa_adapter(store, *, run_id: str, max_metric_calls: int):
 
 
 def _harness(store, engine, adapter):
-    effect_authority = EffectAuthority.memory()
+    effect_authority = EffectLeaseAuthority.memory()
     return OptimHarness(
         store=store,
         adapter_registry=MappingAdapterRegistry({GEPA_ADAPTER_KEY: adapter}),

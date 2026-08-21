@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import (
     ImmutableJsonObject,
     TerminalFailure,

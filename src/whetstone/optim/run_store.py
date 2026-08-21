@@ -5,7 +5,7 @@ from typing import Any
 
 from dr_store import BindingConflictError, ObjectStore
 
-from whetstone.core.effects.authority import (
+from whetstone.core.leasing import (
     ReplayPolicy,
 )
 from whetstone.core.identity import (

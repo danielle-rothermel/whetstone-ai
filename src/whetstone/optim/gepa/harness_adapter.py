@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import ImmutableJsonObject
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput

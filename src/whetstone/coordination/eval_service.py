@@ -17,7 +17,7 @@ from whetstone.coordination.eval_claims import (
     _OwnedClaim,
     _wait_for_renewal,
 )
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import (
     TerminalFailure,
     TypedRef,

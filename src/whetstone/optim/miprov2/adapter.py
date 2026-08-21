@@ -4,7 +4,7 @@ from typing import Any
 
 from dr_store import ObjectStore
 
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import (
     TerminalFailure,
     TypedRef,

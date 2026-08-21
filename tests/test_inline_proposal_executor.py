@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.proposal.proposer import (
