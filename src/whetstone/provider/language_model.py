@@ -13,6 +13,7 @@ from dr_providers import (
     ProviderFailureError,
     ProviderTransportResponse,
     ReasoningEffort,
+    RequestControl,
     Transcript,
 )
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
@@ -159,9 +160,22 @@ def reasoning_effort_from_parameter(value: Any) -> ReasoningEffort | None:
 def provider_call_config_with_parameters(
     config: ProviderCallConfig,
     parameters: Mapping[str, Any],
+    *,
+    seed: int | None = None,
 ) -> ProviderCallConfig:
+    """Apply eval parameters, and the eval-derived seed when transportable.
+
+    ``seed`` is threaded separately from ``parameters`` so it stays sourced
+    from eval derivation. It is applied only when the definition advertises
+    ``RequestControl.SEED``; seedless protocols (Responses, Anthropic
+    Messages) cannot transport it and would refuse config construction.
+    """
     controls = config.controls
     updates: dict[str, Any] = {}
+    if seed is not None and config.definition.constraints.supports(
+        RequestControl.SEED
+    ):
+        updates["seed"] = seed
     if TEMPERATURE_PARAMETER in parameters:
         updates["temperature"] = parameters.get(TEMPERATURE_PARAMETER)
     if TOKEN_LIMIT_PARAMETER in parameters:
@@ -196,9 +210,14 @@ def provider_call_request_from_parameters(
     config: ProviderCallConfig,
     messages: tuple[PromptMessage, ...],
     parameters: Mapping[str, Any],
+    seed: int | None = None,
 ) -> ProviderCallRequest:
     return ProviderCallRequest(
-        config=provider_call_config_with_parameters(config, parameters),
+        config=provider_call_config_with_parameters(
+            config,
+            parameters,
+            seed=seed,
+        ),
         transcript=Transcript(messages=messages),
     )
 

@@ -25,7 +25,16 @@ from whetstone.platform.step_executor import (
     execute_optim_step_sync,
 )
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
-from whetstone.provider.llm_call import derive_rng_seed
+from dr_providers import RequestControl, openrouter_chat_config
+
+from whetstone.provider.language_model import PlainPromptAdapter
+from whetstone.provider.llm_call import (
+    build_provider_request,
+    derive_rng_seed,
+)
+from whetstone.testing.toy.experiment import (
+    _reference_provider_call_config,
+)
 
 
 def test_for_task_ids_preserves_explicit_zero_rng_seed(sqlite_store) -> None:
@@ -150,4 +159,57 @@ def test_submit_optim_run_rejects_mismatched_controller_identity(
             members=(OptimRunMemberSpec(work_key="work-1", launch=launch),),
             controller_identity_hash="0" * 64,
             execution_config_reference="exec-config-ref",
+        )
+
+
+def test_build_provider_request_carries_derived_seed() -> None:
+    """The eval-derived rng_seed reaches the provider config controls."""
+    config = openrouter_chat_config(model="seed-test-model")
+    assert config.definition.constraints.supports(RequestControl.SEED)
+    rng_seed = derive_rng_seed("candidate-a", "task-a", 0)
+    request = build_provider_request(
+        provider_config=config,
+        rng_seed=rng_seed,
+        prompt="hello",
+        prompt_adapter=PlainPromptAdapter(),
+    )
+    assert request.config.controls.seed == rng_seed
+    assert request.config.controls.identity_payload()["seed"] == rng_seed
+
+
+def test_provider_seed_participates_in_request_identity() -> None:
+    """Distinct eval seeds yield distinct provider request identities."""
+    config = openrouter_chat_config(model="seed-test-model")
+    identities = {
+        build_provider_request(
+            provider_config=config,
+            rng_seed=seed,
+            prompt="hello",
+            prompt_adapter=PlainPromptAdapter(),
+        ).identity_hash
+        for seed in (11, 12)
+    }
+    assert len(identities) == 2
+
+
+def test_toy_provider_definition_transports_seed() -> None:
+    """The toy eval path is seeded, so its definition must advertise SEED."""
+    request = build_provider_request(
+        provider_config=_reference_provider_call_config(),
+        rng_seed=4242,
+        prompt="hello",
+        prompt_adapter=PlainPromptAdapter(),
+    )
+    assert request.config.controls.seed == 4242
+
+
+def test_build_provider_request_rejects_caller_supplied_seed() -> None:
+    """Seed stays single-sourced from eval derivation."""
+    with pytest.raises(ValueError, match="must not include seed"):
+        build_provider_request(
+            provider_config=openrouter_chat_config(model="seed-test-model"),
+            rng_seed=5,
+            prompt="hello",
+            parameters={"seed": 9},
+            prompt_adapter=PlainPromptAdapter(),
         )

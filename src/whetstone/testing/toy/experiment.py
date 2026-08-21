@@ -12,6 +12,7 @@ from dr_providers import (
     ProviderCallDefinition,
     ProviderKind,
     Protocol,
+    RequestControl,
     TokenLimitParameter,
 )
 from pydantic import BaseModel, ConfigDict, StrictStr
@@ -126,7 +127,17 @@ def _reference_provider_call_config() -> ProviderCallConfig:
             "model": "fake-model",
         },
         constraints=ControlConstraints(
-            token_limit_parameter=TokenLimitParameter.MAX_TOKENS
+            # The toy graph runs the seeded eval path, so the definition must
+            # advertise SEED or config construction refuses the derived seed.
+            supported_controls=frozenset(
+                {
+                    RequestControl.TEMPERATURE,
+                    RequestControl.TOP_P,
+                    RequestControl.TOKEN_LIMIT,
+                    RequestControl.SEED,
+                }
+            ),
+            token_limit_parameter=TokenLimitParameter.MAX_TOKENS,
         ),
     )
     return ProviderCallConfig(definition=definition, controls={}, extensions={})
