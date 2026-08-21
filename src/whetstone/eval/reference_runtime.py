@@ -12,7 +12,7 @@ from whetstone.eval.drivers.subprocess_graph_rollout import (
 )
 from whetstone.eval.protocol import EvalEngine
 from whetstone.eval.runtime_engine import RuntimeEvalEngine
-from whetstone.execution._file_lock import ensure_private_directory
+from dr_store.localfs import ensure_private_directory
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy

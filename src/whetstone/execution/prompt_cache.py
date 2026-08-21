@@ -30,8 +30,9 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.execution._file_lock import (
+from dr_store.localfs import (
     FileLock,
+    LocalFsError,
     ensure_private_directory,
     fsync_file,
     fsync_parent_directory,
@@ -459,7 +460,7 @@ class PromptResultCache:
             raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return _StoredStats()
-        except OSError as exc:
+        except (OSError, LocalFsError) as exc:
             raise PromptCacheError(
                 f"prompt-cache stats unreadable at {path}: {exc}"
             ) from exc
@@ -646,7 +647,7 @@ class PromptResultCache:
     ) -> _AccountingJournal:
         try:
             raw = self._read_private_bytes(path)
-        except OSError as exc:
+        except (OSError, LocalFsError) as exc:
             raise PromptCacheError(
                 f"prompt-cache accounting journal unreadable at {path}: {exc}"
             ) from exc
@@ -738,7 +739,7 @@ class PromptResultCache:
             raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return None
-        except OSError as exc:
+        except (OSError, LocalFsError) as exc:
             raise PromptCacheError(
                 f"prompt-cache entry unreadable at {path}: {exc}"
             ) from exc

@@ -26,9 +26,10 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.execution._file_lock import (
+from dr_store.localfs import (
     FileLock,
     PrivateDirectory,
+    PrivatePathViolationError,
     fsync_file,
 )
 
@@ -684,7 +685,7 @@ def _open_record_directory(
         return parent.open_child(name, create=create)
     except FileNotFoundError:
         raise
-    except OSError as exc:
+    except (OSError, PrivatePathViolationError) as exc:
         raise ValueError(
             "partial storage must be a current per-key record directory"
         ) from exc

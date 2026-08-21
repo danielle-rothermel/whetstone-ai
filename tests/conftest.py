@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from whetstone.core.blocking_store import open_blocking_sqlite_store
+from dr_store.testing import temp_sqlite_store
 from whetstone.coordination.runtime_bootstrap import (
     build_toy_copro_control,
     copro_run_request,
@@ -16,9 +16,8 @@ from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA
 
 
 @pytest.fixture
-def sqlite_store(tmp_path):
-    path = tmp_path / "store.sqlite"
-    with open_blocking_sqlite_store(str(path)) as store:
+def sqlite_store():
+    with temp_sqlite_store() as store:
         yield store
 
 

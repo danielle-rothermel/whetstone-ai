@@ -8,7 +8,7 @@ import tempfile
 
 from dr_store.content_addressing import parse_object_reference
 
-from whetstone.core.blocking_store import open_blocking_sqlite_store
+from dr_store.sync import open_sqlite
 from whetstone.coordination.runtime_bootstrap import (
     build_toy_copro_control,
     prepare_copro_run,
@@ -35,7 +35,7 @@ def _bootstrap_import_smoke() -> None:
 def _inline_platform_driver_smoke() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store_path = f"{tmp}/platform-smoke.sqlite"
-        with open_blocking_sqlite_store(store_path) as store:
+        with open_sqlite(store_path) as store:
             runtime = register_runtime(store=store)
             engine = ReferenceEvalRuntimeConfig().build_engine(store)
             control = build_toy_copro_control(breadth=2, depth=1, engine=engine)

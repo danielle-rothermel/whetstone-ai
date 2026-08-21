@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 
 from dr_serialize import decode_strict_json_bytes
-from whetstone.core.blocking_store import persistent_blocking_sqlite_store
+from dr_store.sync import close_persistent, persistent_sqlite
 
 from whetstone.core.effects.authority import (
     EffectAuthority,
@@ -32,7 +32,7 @@ def build_server_from_env(
 ) -> EvaluateCandidateServer:
     env = environ if environ is not None else dict(os.environ)
     sqlite_path = env[McpEnvironmentKey.SQLITE_PATH]
-    store = persistent_blocking_sqlite_store(sqlite_path)
+    store = persistent_sqlite(sqlite_path)
     tool_config_raw = _strict_env_json(env[McpEnvironmentKey.TOOL_CONFIG])
     tool_config = ToolConfig.model_validate_json(tool_config_raw)
     binding_raw = _strict_env_json(env[McpEnvironmentKey.CAPACITY_BINDING])
@@ -78,7 +78,11 @@ def _strict_env_json(raw: str) -> bytes:
 
 
 def main() -> None:
-    build_server_from_env().run(transport="stdio")
+    sqlite_path = os.environ[McpEnvironmentKey.SQLITE_PATH]
+    try:
+        build_server_from_env().run(transport="stdio")
+    finally:
+        close_persistent(sqlite_path)
 
 
 if __name__ == "__main__":

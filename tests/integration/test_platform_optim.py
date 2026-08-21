@@ -11,7 +11,7 @@ import pytest
 from sqlalchemy import Engine
 
 from whetstone.coordination.eval_service import EvalDispatchMode
-from whetstone.core.blocking_store import open_blocking_sqlite_store
+from dr_store.sync import open_sqlite
 from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
@@ -40,7 +40,7 @@ def test_inline_platform_copro_submit_to_result(
 ) -> None:
     """INLINE submit → admission → DBOS optim_step → run completion."""
     store_path = tmp_path / "integration-inline.sqlite"
-    with open_blocking_sqlite_store(str(store_path)) as store:
+    with open_sqlite(str(store_path)) as store:
         context = bootstrap_platform_runtime(
             store=store,
             pg_engine=pg_engine,
@@ -90,7 +90,7 @@ def test_platform_deferral_fanout_fanin_through_admission(
 ) -> None:
     """PLATFORM deferral → eval_row fan-out → barrier fan-in → resume → result."""
     store_path = tmp_path / "integration-platform.sqlite"
-    with open_blocking_sqlite_store(str(store_path)) as store:
+    with open_sqlite(str(store_path)) as store:
         context = bootstrap_platform_runtime(
             store=store,
             pg_engine=pg_engine,
@@ -158,7 +158,7 @@ def test_platform_deferral_survives_fanin_retry(
 ) -> None:
     """PLATFORM deferral completes after fan-in replay (preemptible idempotency contract)."""
     store_path = tmp_path / "integration-preemptible-retry.sqlite"
-    with open_blocking_sqlite_store(str(store_path)) as store:
+    with open_sqlite(str(store_path)) as store:
         context = bootstrap_platform_runtime(
             store=store,
             pg_engine=pg_engine,

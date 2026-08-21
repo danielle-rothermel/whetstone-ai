@@ -34,14 +34,14 @@ def test_load_launch_deserializes_gepa_control(tmp_path) -> None:
 
     from whetstone.coordination.harness_run_controller import OptimRunLaunch
     from whetstone.coordination.runtime_bootstrap import register_runtime
-    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from dr_store.sync import open_sqlite
     from whetstone.optim.contracts import OptimRun, OutputContract, StepMode
     from whetstone.testing.toy.experiment import build_toy_experiment
 
     from whetstone.testing.toy.experiment import TOY_MUTATION_FIELD, toy_template_render_contract
 
     sqlite_path = str(tmp_path / "gepa-load.sqlite")
-    with open_blocking_sqlite_store(sqlite_path) as store:
+    with open_sqlite(sqlite_path) as store:
         runtime = register_runtime(store=store)
         experiment = build_toy_experiment(num_seeds=1)
         control = _toy_gepa_control(

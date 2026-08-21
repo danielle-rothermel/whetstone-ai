@@ -347,7 +347,7 @@ def test_supplemental_reaggregation_is_order_independent(sqlite_store) -> None:
 def test_gepa_build_next_zero_budget_uses_terminal_contract(tmp_path) -> None:
     from tests.test_gepa_harness_adapter import _toy_gepa_control
     from whetstone.coordination.step_request_builder import StepRequestBuilder
-    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from dr_store.sync import open_sqlite
     from whetstone.core.identity import TypedRef
     from whetstone.optim.contracts import (
         BudgetState,
@@ -385,7 +385,7 @@ def test_gepa_build_next_zero_budget_uses_terminal_contract(tmp_path) -> None:
         reward_policy=experiment.reward_policy,
     )
     run_ref = optimization_run_reference(run)
-    with open_blocking_sqlite_store(str(tmp_path / "builder.sqlite")) as store:
+    with open_sqlite(str(tmp_path / "builder.sqlite")) as store:
         builder = StepRequestBuilder(store=store)
         first = builder.build_first(
             run=run_ref,

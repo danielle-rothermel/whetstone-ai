@@ -40,7 +40,7 @@ from whetstone.coordination.runtime_bootstrap import (
     prepare_copro_run,
     register_runtime,
 )
-from whetstone.core.blocking_store import BlockingObjectStore
+from dr_store.sync import BlockingObjectStore
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
 from whetstone.platform.contracts import (

@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 from whetstone.eval.schema import RowAccounting
-from whetstone.execution._file_lock import (
+from dr_store.localfs import (
     fsync_parent_directory,
     open_private_regular_file,
 )
