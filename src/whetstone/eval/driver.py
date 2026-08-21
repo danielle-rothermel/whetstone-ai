@@ -13,7 +13,7 @@ from whetstone.experiment.env import Experiment
 from whetstone.experiment.sampling import EvalSplit
 from whetstone.provider.policy import ProviderExecutionPolicy
 
-__all__ = ["EvalDriver"]
+__all__ = ["ClosableEvalDriver", "EvalDriver"]
 
 
 @runtime_checkable
@@ -51,3 +51,17 @@ class EvalDriver(Protocol):
     def task_model_identity_hash(self, experiment: Experiment) -> str: ...
 
     def expected_model_route(self, experiment: Experiment) -> str: ...
+
+
+@runtime_checkable
+class ClosableEvalDriver(Protocol):
+    """A driver holding resources that outlive a single ``run``.
+
+    Only some drivers own anything to release: the in-process driver owns
+    nothing, while the worker-pool driver owns worker processes. Keeping the
+    capability off :class:`EvalDriver` is what lets a caller ask, with a
+    runtime check, whether this particular driver has a lifetime to end,
+    instead of obliging every driver to carry an empty ``close``.
+    """
+
+    def close(self) -> None: ...

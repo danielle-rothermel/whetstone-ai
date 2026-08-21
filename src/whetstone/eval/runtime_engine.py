@@ -14,7 +14,7 @@ from whetstone.eval.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
-from whetstone.eval.driver import EvalDriver
+from whetstone.eval.driver import ClosableEvalDriver, EvalDriver
 from whetstone.eval.drivers.eval_result import (
     InternalEvalResult,
     per_task_count,
@@ -53,7 +53,6 @@ from whetstone.eval.schema_names import (
 )
 from whetstone.optim.contracts import ResolutionClass, ResolutionDetail
 from whetstone.eval.traces import ExecutedComponentStep, ExecutedComponentTracePayload, ExecutedRowState
-from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.binding import (
@@ -75,7 +74,7 @@ from whetstone.provider.policy import (
     ProviderExecutionPolicy,
 )
 
-__all__ = ["RuntimeEvalEngine", "SamplingTaskView"]
+__all__ = ["DEFAULT_CONCURRENCY", "RuntimeEvalEngine", "SamplingTaskView"]
 
 
 @runtime_checkable
@@ -102,8 +101,25 @@ class _EngineSamplingView:
     tasks: tuple[_EngineTaskView, ...]
 
 
+#: Default number of rollout rows this engine drives at once.
+DEFAULT_CONCURRENCY = 5
+
+
 class RuntimeEvalEngine:
-    """Generic evaluation engine with env-specific flow injected via driver."""
+    """Generic evaluation engine with env-specific flow injected via driver.
+
+    An engine constructed with a driver owns that driver's lifetime: closing
+    the engine (or leaving its ``with`` block) closes the driver when the
+    driver has anything to close. A subprocess driver's worker processes
+    otherwise live until interpreter exit, because the driver's own ``close``
+    is not reachable from ``ReferenceEvalRuntimeConfig.build_engine``.
+
+    Engines derived through :meth:`for_task_ids` or :meth:`for_task_seed`
+    share the root engine's driver and deliberately do **not** own it: their
+    ``close`` is a no-op, so closing a derived engine cannot pull the worker
+    pool out from under the root engine or its sibling derivations. Only the
+    engine that was handed the driver closes it.
+    """
 
     def __init__(
         self,
@@ -117,6 +133,7 @@ class RuntimeEvalEngine:
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
         prompt_cache: PromptResultCache | None = None,
+        owns_driver: bool = True,
     ) -> None:
         self._store = store
         self._experiment = experiment
@@ -127,7 +144,31 @@ class RuntimeEvalEngine:
         self._max_wall_seconds = max_wall_seconds
         self._partial_log = partial_log
         self._prompt_cache = prompt_cache
+        self._owns_driver = owns_driver
+        self._closed = False
         self._validate_sampling_contract()
+
+    def close(self) -> None:
+        """Release the driver this engine owns, once.
+
+        Idempotent, and a no-op for a driver with nothing to release (the
+        in-process driver) or for a derived engine, which borrows the root
+        engine's driver rather than owning it.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        if not self._owns_driver:
+            return
+        driver = self._driver
+        if isinstance(driver, ClosableEvalDriver):
+            driver.close()
+
+    def __enter__(self) -> RuntimeEvalEngine:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
     @property
     def experiment(self) -> Experiment:
@@ -260,6 +301,7 @@ class RuntimeEvalEngine:
             max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
+            owns_driver=False,
         )
 
     def for_task_seed(self, task_id: str, seed_index: int) -> RuntimeEvalEngine:
@@ -285,6 +327,7 @@ class RuntimeEvalEngine:
             max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
+            owns_driver=False,
         )
 
     @staticmethod
@@ -436,9 +479,7 @@ class RuntimeEvalEngine:
         supplemental_rows_by_name: dict[str, dict[str, dict[int, RowValue]]] = {}
         supplemental_refs: list[TypedRef] = []
         cache = CacheEvidence()
-        concurrency_halved = False
         deadline_reached = False
-        guard_timeouts = 0
         for row_slice in row_slices:
             task_hash = task_hash_by_id.get(row_slice.task_id)
             if task_hash is None:
@@ -508,9 +549,7 @@ class RuntimeEvalEngine:
                 source_call_ids=cache.source_call_ids
                 + row_slice.evidence.cache.source_call_ids,
             )
-            concurrency_halved = concurrency_halved or row_slice.evidence.concurrency_halved
             deadline_reached = deadline_reached or row_slice.evidence.deadline_reached
-            guard_timeouts += row_slice.evidence.guard_timeouts
 
         task_rows = tuple(
             TaskRows(
@@ -568,9 +607,7 @@ class RuntimeEvalEngine:
             ),
             outputs=(),
             supplemental_aggregates=supplemental_aggregates,
-            concurrency_halved=concurrency_halved,
             deadline_reached=deadline_reached,
-            guard_timeouts=guard_timeouts,
         )
         ordered_outputs = sorted(
             output_rows,
@@ -680,9 +717,7 @@ class RuntimeEvalEngine:
             aggregate_status=aggregate.aggregation_output.status.value,
             reward_ref=reward_ref,
             cache=cache,
-            concurrency_halved=concurrency_halved,
             deadline_reached=deadline_reached,
-            guard_timeouts=guard_timeouts,
         )
         evidence_ref = self._put(
             EVAL_EVIDENCE_SCHEMA,
@@ -1106,9 +1141,7 @@ class RuntimeEvalEngine:
             aggregate_status=aggregate.aggregation_output.status.value,
             reward_ref=reward_ref,
             cache=cache,
-            concurrency_halved=result.concurrency_halved,
             deadline_reached=result.deadline_reached,
-            guard_timeouts=result.guard_timeouts,
         )
         evidence_ref = self._put(
             EVAL_EVIDENCE_SCHEMA, evidence.record_content()

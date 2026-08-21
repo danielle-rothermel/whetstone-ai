@@ -5,6 +5,7 @@ import json
 import math
 import time
 from dataclasses import dataclass
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -71,25 +72,66 @@ def process_request_hash(model: BaseModel) -> str:
     return _process_payload_hash(model.model_dump(mode="json"))
 
 
-def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
-    """Validate one phase wall and convert it to an absolute deadline."""
+MAX_REPRESENTABLE_WALL_SECONDS: Final = 9_223_372_036.854_774
+"""The longest finite wall dr-exec can express as a positive limit.
+
+``FiniteDurationLimit.from_seconds`` converts seconds to a nanosecond count
+and rejects anything reaching ``sys.maxsize`` nanoseconds. This is the
+largest float strictly under that ceiling — roughly 292 years.
+"""
+
+
+def validated_phase_wall_seconds(
+    max_wall_seconds: float | None, /
+) -> float | None:
+    """Reject an unusable phase wall and normalise an unbounded one.
+
+    This is the drivers' single owner of what a caller may pass as an
+    operation deadline, so the in-process and subprocess drivers cannot
+    drift on which walls are legal.
+
+    A negative or NaN wall is a caller mistake: it names no interval, so it
+    is raised at the call boundary rather than quietly expiring the batch and
+    persisting rows as deadline misses. Positive infinity names "no
+    deadline", which is exactly ``None``. Zero is a legal, already-elapsed
+    wall: the operation is over before any row runs.
+
+    A finite wall longer than :data:`MAX_REPRESENTABLE_WALL_SECONDS` is more
+    generous than any deadline dr-exec can express, so it reads as "no
+    deadline" too. Passing it through would let the subprocess driver's
+    conversion fail and collapse a century-long wall into an immediate
+    expiry — the opposite of what the caller asked for. Both drivers apply
+    the one rule here so neither can disagree about where "generous" ends.
+    """
     if max_wall_seconds is None:
         return None
     if type(max_wall_seconds) not in (int, float):
         raise ValueError(
-            "max_wall_seconds must be a finite nonnegative real number"
+            "max_wall_seconds must be a nonnegative real number of seconds, "
+            f"not {max_wall_seconds!r}"
         )
     try:
         seconds = float(max_wall_seconds)
     except OverflowError:
         raise ValueError(
-            "max_wall_seconds must be a finite nonnegative real number "
+            "max_wall_seconds must be a nonnegative real number "
             "representable as seconds"
         ) from None
-    if not math.isfinite(seconds) or seconds < 0:
+    if math.isnan(seconds) or seconds < 0:
         raise ValueError(
-            "max_wall_seconds must be a finite nonnegative real number"
+            "max_wall_seconds must be a nonnegative real number of seconds, "
+            f"not {max_wall_seconds!r}"
         )
+    if math.isinf(seconds) or seconds > MAX_REPRESENTABLE_WALL_SECONDS:
+        return None
+    return seconds
+
+
+def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
+    """Validate one phase wall and convert it to an absolute deadline."""
+    seconds = validated_phase_wall_seconds(max_wall_seconds)
+    if seconds is None:
+        return None
     return time.monotonic() + seconds
 
 
@@ -101,10 +143,12 @@ def remaining_phase_wall_seconds(deadline: float | None) -> float | None:
 
 
 __all__ = [
+    "MAX_REPRESENTABLE_WALL_SECONDS",
     "RolloutRowOutput",
     "ProcessTask",
     "_process_payload_hash",
     "process_request_hash",
     "remaining_phase_wall_seconds",
     "start_phase_deadline",
+    "validated_phase_wall_seconds",
 ]

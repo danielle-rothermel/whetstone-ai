@@ -6,7 +6,7 @@ from typing import Literal
 
 from dr_providers import ProviderKind
 from dr_store import ObjectStore
-from pydantic import BaseModel, ConfigDict, StrictStr
+from pydantic import BaseModel, ConfigDict, PositiveFloat, StrictStr
 
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.drivers.subprocess_graph_rollout import (
@@ -46,6 +46,9 @@ class ReferenceEvalRuntimeConfig(BaseModel):
     prompt_cache_path: StrictStr | None = None
     row_job_entrypoint: StrictStr = "whetstone.eval.drivers.graph_worker:run_row"
     driver_mode: Literal["in_process", "subprocess"] = "in_process"
+    #: Per-row wall budget for the subprocess driver. A row outrunning it is
+    #: killed in its worker and reported as a unit timeout.
+    unit_deadline_seconds: PositiveFloat = 86_400.0
     env_name: StrictStr = "whetstone.toy"
     split_role: StrictStr = "internal_eval"
     transport_api_key_env: StrictStr = "WHETSTONE_TOY_API_KEY"
@@ -89,6 +92,7 @@ class ReferenceEvalRuntimeConfig(BaseModel):
             driver = SubprocessGraphRolloutEvalDriver(
                 row_job_entrypoint=self.row_job_entrypoint,
                 transport_api_key_env=self.transport_api_key_env,
+                unit_deadline_seconds=self.unit_deadline_seconds,
                 eval_runner=runner,
                 mutation_field=field,
                 render_contract=contract,

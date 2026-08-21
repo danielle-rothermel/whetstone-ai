@@ -43,7 +43,7 @@ EVAL_TRACES_SCHEMA = "whetstone.eval_component_traces"
 EVAL_TRACES_SCHEMA_VERSION = 2
 EVAL_OUTPUTS_SCHEMA = "whetstone.eval_outputs"
 EVAL_OUTPUTS_SCHEMA_VERSION = 4
-EVAL_EVIDENCE_SCHEMA_VERSION = 3
+EVAL_EVIDENCE_SCHEMA_VERSION = 4
 
 
 class RowAccounting(BaseModel):
@@ -394,7 +394,7 @@ class EvalEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     candidate: CandidateRef
     eval_config_ref: EvalConfigRef
     eval_role: EvalRole
@@ -420,9 +420,7 @@ class EvalEvidence(BaseModel):
     aggregate_status: StrictStr
     reward_ref: RewardRef | None = None
     cache: CacheEvidence = Field(default_factory=CacheEvidence)
-    concurrency_halved: StrictBool = False
     deadline_reached: StrictBool = False
-    guard_timeouts: StrictInt = 0
 
     @model_validator(mode="after")
     def _validate_dataset_hash(self) -> EvalEvidence:
