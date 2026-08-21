@@ -26,9 +26,8 @@ from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.contracts import OptimRun, OutputContract, StepMode
 from whetstone.optim.harness import OptimHarness
 from whetstone.optim.proposal.proposer import (
-    ProposalExecutorDurabilityContract,
+    InlineProposalExecutor,
     ProposerConfig,
-    _durable_proposal_executor,
     prompt_adapter_identity_hash,
 )
 from whetstone.provider.language_model import PlainPromptAdapter
@@ -62,25 +61,6 @@ class RegisteredRuntime:
     eval_service: EvalEngineService
     adapter_registry: MappingAdapterRegistry
     ledger_engine: Engine | None = None
-
-
-def _inline_proposal_executor(*, policy_identity_hash: str):
-    def execute(
-        *,
-        config,
-        request,
-        transport,
-        count: int,
-    ):
-        return transport.draft(config, request, count)
-
-    return _durable_proposal_executor(
-        durability_contract=ProposalExecutorDurabilityContract(
-            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
-            policy_identity_hash=policy_identity_hash,
-        ),
-        execute=execute,
-    )
 
 
 def build_toy_copro_control(
@@ -201,7 +181,7 @@ def register_runtime(
     copro_adapter = CoproAdapter(
         control=control,
         transport=transport,
-        proposal_executor=_inline_proposal_executor(
+        proposal_executor=InlineProposalExecutor(
             policy_identity_hash=proposal_policy_hash,
         ),
     )

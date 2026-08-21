@@ -57,6 +57,7 @@ __all__ = [
     "PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION",
     "DurableProposalExecutor",
     "FakeProposerTransport",
+    "InlineProposalExecutor",
     "require_canonical_proposal_executor",
     "ProposalDraft",
     "ProposalExecutorDurabilityContract",
@@ -372,6 +373,35 @@ def _durable_proposal_executor(
         durability_contract=durability_contract,
         execute=execute,
         _token=_DURABLE_PROPOSAL_EXECUTOR_TOKEN,
+    )
+
+
+def _inline_proposal_execution(
+    *,
+    config: ProposerRouteConfig,
+    request: ProposalRequest,
+    transport: ProposerTransport,
+    count: int,
+) -> tuple[ProposalDraft, ...]:
+    return transport.draft(config, request, count)
+
+
+def InlineProposalExecutor(
+    *,
+    policy_identity_hash: str,
+) -> DurableProposalExecutor:
+    """Build the canonical in-process proposal executor.
+
+    The draft call runs inline on the caller's thread with no external
+    durability layer. ``policy_identity_hash`` names the caller's inline
+    durability policy and must match the optimizer control that binds it.
+    """
+    return _durable_proposal_executor(
+        durability_contract=ProposalExecutorDurabilityContract(
+            recovery_policy=ReplayPolicy.DURABLE_WORKFLOW,
+            policy_identity_hash=policy_identity_hash,
+        ),
+        execute=_inline_proposal_execution,
     )
 
 
