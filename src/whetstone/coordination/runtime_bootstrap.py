@@ -12,7 +12,10 @@ from whetstone.coordination.harness_run_controller import (
 )
 from whetstone.coordination.run_controller_registry import register_run_controller
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from whetstone.core.blocking_store import BlockingObjectStore, open_blocking_sqlite_store
+from whetstone.core.blocking_store import (
+    BlockingObjectStore,
+    persistent_blocking_sqlite_store,
+)
 from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
 from whetstone.core.roles import EvalRole
@@ -128,7 +131,7 @@ def register_runtime(
     if store is None:
         if sqlite_path is None:
             sqlite_path = f"/tmp/whetstone-runtime-{uuid4().hex}.sqlite"
-        store = open_blocking_sqlite_store(sqlite_path)
+        store = persistent_blocking_sqlite_store(sqlite_path)
     effect_authority = EffectAuthority.memory()
     runtime_config = ReferenceEvalRuntimeConfig()
     engine = runtime_config.build_engine(store)
