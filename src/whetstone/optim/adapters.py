@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import (
@@ -62,6 +62,8 @@ class AdapterOutput(BaseModel):
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
     proposed_status: StepStatus = StepStatus.CONTINUE
     terminal_failure: TerminalFailure | None = None
+    #: A COMPLETE Step that accepted no improvement over the seed candidate.
+    seed_retained: StrictBool = False
     state_delta: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )
@@ -86,6 +88,15 @@ class AdapterOutput(BaseModel):
             if self.optim_eval_requests:
                 raise ValueError(
                     "a failed Adapter Output requests no Evaluations"
+                )
+        if self.seed_retained:
+            if self.proposed_status is not StepStatus.COMPLETE:
+                raise ValueError(
+                    "only a COMPLETE Adapter Output may retain the seed"
+                )
+            if self.accepted_candidates:
+                raise ValueError(
+                    "a seed-retaining Adapter Output accepts no candidates"
                 )
         return self
 

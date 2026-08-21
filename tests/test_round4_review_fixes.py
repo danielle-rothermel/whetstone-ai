@@ -361,6 +361,7 @@ def test_gepa_build_next_zero_budget_uses_terminal_contract(tmp_path) -> None:
         step_result_reference,
     )
     from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+    from whetstone.optim.gepa.step_contract import gepa_step_output_contract
     from whetstone.experiment.candidate import Candidate, candidate_reference
     from whetstone.optim.gepa.step_engine import GEPA_STATE_KEY
     from whetstone.testing.toy.experiment import (
@@ -433,7 +434,12 @@ def test_gepa_build_next_zero_budget_uses_terminal_contract(tmp_path) -> None:
             control=control,
             mutation_field=TOY_MUTATION_FIELD,
         )
-    assert next_request.step_output_contract == run.terminal_output_contract
+    assert next_request.step_output_contract == gepa_step_output_contract(
+        run_ref
+    )
+    assert next_request.step_output_contract.honors_terminal(
+        run.terminal_output_contract
+    )
 
 
 def test_preemptible_retry_through_deferral_fanin_resume(copro_launch) -> None:

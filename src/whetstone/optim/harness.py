@@ -335,6 +335,7 @@ class OptimHarness(OptimRunStore):
             budget=budget,
             status=output.proposed_status,
             terminal_failure=output.terminal_failure,
+            seed_retained=output.seed_retained,
         )
         result_ref = self._put_result(result)
         if result_ref != step_result_reference(result).record_ref:
@@ -643,8 +644,8 @@ class OptimHarness(OptimRunStore):
         contract = request.step_output_contract
         expected_count = (
             0
-            if output.proposed_status is StepStatus.FAILED
-            else contract.returned_proposal_count
+            if output.seed_retained
+            else contract.accepted_count_for(output.proposed_status)
         )
         if len(output.accepted_candidates) != expected_count:
             raise ValueError(
@@ -654,7 +655,7 @@ class OptimHarness(OptimRunStore):
             )
         if contract.require_distinct_bases:
             bases = [
-                candidate.base_ref for candidate in output.accepted_candidates
+                candidate.base_ref for candidate in output.proposed_candidates
             ]
             if len(bases) != len(set(bases)):
                 raise ValueError(
@@ -676,10 +677,12 @@ class OptimHarness(OptimRunStore):
             )
         if (
             output.proposed_status is StepStatus.COMPLETE
-            and contract != request.run.record.terminal_output_contract
+            and not contract.honors_terminal(
+                request.run.record.terminal_output_contract
+            )
         ):
             raise ValueError(
-                "a COMPLETE Step must use the run terminal output contract"
+                "a COMPLETE Step must honor the run terminal output contract"
             )
 
     @staticmethod
@@ -1160,6 +1163,7 @@ class OptimHarness(OptimRunStore):
             step_results=step_results,
             cost=cost,
             terminal_failure=last.terminal_failure,
+            seed_retained=last.seed_retained,
         )
 
     @staticmethod

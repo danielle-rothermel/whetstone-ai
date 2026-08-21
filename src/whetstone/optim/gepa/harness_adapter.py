@@ -183,6 +183,20 @@ class GepaHarnessAdapter:
                 base_candidate=base_ref,
                 fields=field_bindings,
             )
+            history_delta = ImmutableJsonObject(
+                {GEPA_TERMINAL_ARTIFACT_KEY: artifact_ref.model_dump(mode="json")}
+            )
+            if terminal.best_candidate == self._seed_candidate:
+                # GEPA searched and accepted nothing better than the seed.
+                # That is a clean completion, not a failure, and it proposes
+                # no candidate the run can carry forward.
+                return AdapterOutput(
+                    proposed_status=StepStatus.COMPLETE,
+                    seed_retained=True,
+                    state_delta=state_delta,
+                    history_delta=history_delta,
+                    budget_delta=checkpoint.budget_delta,
+                )
             components = tuple(
                 GepaCandidateComponent(name=name, text=terminal.best_candidate[name])
                 for name in self._control.component_names
@@ -199,9 +213,7 @@ class GepaHarnessAdapter:
                 proposed_candidates=(candidate,),
                 proposed_status=StepStatus.COMPLETE,
                 state_delta=state_delta,
-                history_delta=ImmutableJsonObject(
-                    {GEPA_TERMINAL_ARTIFACT_KEY: artifact_ref.model_dump(mode="json")}
-                ),
+                history_delta=history_delta,
                 budget_delta=checkpoint.budget_delta,
             )
         return AdapterOutput(

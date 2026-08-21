@@ -57,10 +57,13 @@ __all__ = [
     "INTENT_RESOLUTION_SCHEMA",
     "INTENT_RESOLUTION_SCHEMA_VERSION",
     "OPTIM_RESULT_SCHEMA",
+    "OPTIM_RESULT_SCHEMA_VERSION",
     "OPTIM_RUN_SCHEMA",
     "OPTIM_RUN_SCHEMA_VERSION",
     "STEP_REQUEST_SCHEMA",
+    "STEP_REQUEST_SCHEMA_VERSION",
     "STEP_RESULT_SCHEMA",
+    "STEP_RESULT_SCHEMA_VERSION",
     "BudgetDelta",
     "BudgetState",
     "OptimEvalRequest",
@@ -87,13 +90,20 @@ __all__ = [
     "step_result_reference",
 ]
 
+#: Persisted-format contracts. Step Request, Step Result, and Optimization
+#: Result records are content-addressed: their wire keys are their identity,
+#: so the exact key sets are pinned by golden tests rather than derived from
+#: model field names. Bump the matching version whenever a key set changes.
 INTENT_RESOLUTION_SCHEMA = "whetstone.optim_intent_resolution"
 INTENT_RESOLUTION_SCHEMA_VERSION = -1
 OPTIM_RUN_SCHEMA = "whetstone.optim_run"
 OPTIM_RUN_SCHEMA_VERSION = 1
 STEP_REQUEST_SCHEMA = "whetstone.optim_step_request"
+STEP_REQUEST_SCHEMA_VERSION = 2
 STEP_RESULT_SCHEMA = "whetstone.optim_step_result"
+STEP_RESULT_SCHEMA_VERSION = 2
 OPTIM_RESULT_SCHEMA = "whetstone.optim_result"
+OPTIM_RESULT_SCHEMA_VERSION = 2
 
 
 def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
@@ -142,10 +152,46 @@ class ResolutionClass(StrEnum):
 
 
 class OutputContract(BaseModel):
+    """Accepted-candidate cardinality a Step must satisfy.
+
+    ``returned_proposal_count`` binds a continuing Step. An optimizer whose
+    Step may terminalize on its own schedule sets
+    ``terminal_proposal_count`` to the cardinality that applies instead when
+    the Step reports COMPLETE; leaving it unset binds both cases to
+    ``returned_proposal_count``.
+
+    ``require_distinct_bases`` constrains proposed candidates only.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     returned_proposal_count: NonNegativeInt
+    terminal_proposal_count: NonNegativeInt | None = None
     require_distinct_bases: StrictBool = False
+
+    def accepted_count_for(self, status: StepStatus) -> int:
+        """Accepted-candidate cardinality this contract binds for ``status``."""
+        if status is StepStatus.FAILED:
+            return 0
+        if (
+            status is StepStatus.COMPLETE
+            and self.terminal_proposal_count is not None
+        ):
+            return self.terminal_proposal_count
+        return self.returned_proposal_count
+
+    def honors_terminal(self, terminal: OutputContract) -> bool:
+        """Whether a COMPLETE Step under this contract satisfies ``terminal``.
+
+        A step contract may differ from the run terminal contract in how it
+        binds a *continuing* step, but it must terminalize on the run's own
+        terminal cardinality and distinct-base rule.
+        """
+        return (
+            self.accepted_count_for(StepStatus.COMPLETE)
+            == terminal.accepted_count_for(StepStatus.COMPLETE)
+            and self.require_distinct_bases == terminal.require_distinct_bases
+        )
 
 
 def _validate_budget_values(
@@ -657,6 +703,10 @@ class OptimStepResult(BaseModel):
     budget: BudgetState = Field(default_factory=BudgetState)
     status: StepStatus
     terminal_failure: TerminalFailure | None = None
+    #: A COMPLETE Step that terminalized on the seed with no accepted
+    #: improvement. Distinct from a failure: the run completed and simply
+    #: found nothing better than the candidate it started from.
+    seed_retained: StrictBool = False
     provenance_note: NonEmptyId | None = None
     provenance_ordinal: NonNegativeInt | None = None
 
@@ -872,12 +922,23 @@ class OptimStepResult(BaseModel):
                     "every nested terminal failure must equal the exact "
                     "outer Step failure"
                 )
+        if self.seed_retained:
+            if self.status is not StepStatus.COMPLETE:
+                raise ValueError(
+                    "only a COMPLETE Step Result may retain the seed"
+                )
+            if self.accepted_candidates:
+                raise ValueError(
+                    "a seed-retaining Step Result accepts no candidates"
+                )
         if self.status is not StepStatus.FAILED:
             contract = request.step_output_contract
-            if (
-                len(self.accepted_candidates)
-                != contract.returned_proposal_count
-            ):
+            expected_accepted = (
+                0
+                if self.seed_retained
+                else contract.accepted_count_for(self.status)
+            )
+            if len(self.accepted_candidates) != expected_accepted:
                 raise ValueError(
                     "Step Result violates returned proposal cardinality"
                 )
@@ -887,7 +948,7 @@ class OptimStepResult(BaseModel):
                         candidate.record.base_ref.schema_name,
                         candidate.record.base_ref.content_hash,
                     )
-                    for candidate in self.accepted_candidates
+                    for candidate in self.proposed_candidates
                 ]
                 if len(bases) != len(set(bases)):
                     raise ValueError(
@@ -901,11 +962,12 @@ class OptimStepResult(BaseModel):
             )
         if (
             self.status is StepStatus.COMPLETE
-            and self.request.record.step_output_contract
-            != self.request.record.run.record.terminal_output_contract
+            and not self.request.record.step_output_contract.honors_terminal(
+                self.request.record.run.record.terminal_output_contract
+            )
         ):
             raise ValueError(
-                "a COMPLETE Step must use the run terminal output contract"
+                "a COMPLETE Step must honor the run terminal output contract"
             )
         expected_budget = request.budget.debit(self.budget_delta)
         if self.budget != expected_budget:
@@ -968,6 +1030,9 @@ class OptimResult(BaseModel):
         default_factory=lambda: ImmutableJsonObject({})
     )
     terminal_failure: TerminalFailure | None = None
+    #: The run completed with the seed candidate retained and no accepted
+    #: improvement; mirrors the final Step Result.
+    seed_retained: StrictBool = False
     provenance_note: NonEmptyId | None = None
     provenance_ordinal: NonNegativeInt | None = None
 
@@ -1029,6 +1094,11 @@ class OptimResult(BaseModel):
             raise ValueError(
                 "Optimization Result failure must match the final Step Result"
             )
+        if self.seed_retained != last.seed_retained:
+            raise ValueError(
+                "Optimization Result seed_retained must match the final Step "
+                "Result"
+            )
         if last.status is StepStatus.FAILED and self.proposals:
             raise ValueError(
                 "a failed Optimization Result claims no proposals"
@@ -1043,24 +1113,16 @@ class OptimResult(BaseModel):
                     "accepted candidates"
                 )
             contract = self.run.record.terminal_output_contract
-            if len(self.proposals) != contract.returned_proposal_count:
+            expected_proposals = (
+                0
+                if self.seed_retained
+                else contract.accepted_count_for(StepStatus.COMPLETE)
+            )
+            if len(self.proposals) != expected_proposals:
                 raise ValueError(
                     "Optimization Result violates terminal proposal "
                     "cardinality"
                 )
-            if contract.require_distinct_bases:
-                bases = [
-                    (
-                        proposal.candidate.record.base_ref.schema_name,
-                        proposal.candidate.record.base_ref.content_hash,
-                    )
-                    for proposal in self.proposals
-                ]
-                if len(bases) != len(set(bases)):
-                    raise ValueError(
-                        "Optimization Result violates the terminal "
-                        "distinct-base contract"
-                    )
         return self
 
     @property
