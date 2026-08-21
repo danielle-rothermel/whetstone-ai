@@ -26,7 +26,11 @@ from whetstone.platform.step_executor import execute_optim_step_sync
 def test_platform_multi_intent_deferral_merges_all_resolutions(sqlite_store) -> None:
     eval_engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
     control = build_toy_copro_control(breadth=3, depth=1, engine=eval_engine)
-    runtime = register_runtime(store=sqlite_store, copro_control=control)
+    runtime = register_runtime(
+        store=sqlite_store,
+        engine=eval_engine,
+        copro_control=control,
+    )
     launch = prepare_copro_run(
         runtime,
         run_id=f"multi-intent-{uuid4().hex[:8]}",

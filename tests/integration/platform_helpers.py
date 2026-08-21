@@ -340,7 +340,18 @@ def bootstrap_platform_runtime(
     run_key = f"run-{suffix}"
     work_key = f"work-{suffix}"
 
-    runtime = register_runtime(store=store, ledger_engine=pg_engine)
+    eval_engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    control = build_toy_copro_control(
+        breadth=breadth,
+        depth=depth,
+        engine=eval_engine,
+    )
+    runtime = register_runtime(
+        store=store,
+        ledger_engine=pg_engine,
+        engine=eval_engine,
+        copro_control=control,
+    )
     registry = PipelineRegistry()
     pipeline = register_optim_pipeline(
         registry,
@@ -362,8 +373,6 @@ def bootstrap_platform_runtime(
     assert pipeline.run_completion is not None
     Queue(pipeline.run_completion.queue_name, concurrency=1)
 
-    eval_engine = ReferenceEvalRuntimeConfig().build_engine(store)
-    control = build_toy_copro_control(breadth=breadth, depth=depth, engine=eval_engine)
     launch = prepare_copro_run(
         runtime,
         run_id=f"integration-run-{suffix}",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from dr_store.sync import open_sqlite
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.experiment.candidate import Candidate
@@ -61,6 +63,21 @@ def _toy_gepa_control(*, max_metric_calls: int = 2, sqlite_path: str):
             component_names=("generate",),
             num_predictors=1,
             max_metric_calls=max_metric_calls,
+        )
+
+
+def test_gepa_harness_adapter_rejects_seed_component_order(tmp_path) -> None:
+    control = _toy_gepa_control(
+        max_metric_calls=2,
+        sqlite_path=str(tmp_path / "gepa-seed-order.sqlite"),
+    )
+    with pytest.raises(ValueError, match="component order"):
+        GepaHarnessAdapter(
+            control=control,
+            seed_candidate={"other": "seed"},
+            trainset=(),
+            valset=None,
+            adapter_factory=GepaHarnessAdapterFactory(factory=MagicMock()),
         )
 
 

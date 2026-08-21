@@ -4,7 +4,7 @@ from typing import Any
 
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.experiment.candidate import candidate_reference
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import OptimStepRequest, StepMode, StepStatus
 from whetstone.optim.gepa.adapter import project_gepa_terminal
@@ -23,6 +23,46 @@ from whetstone.optim.gepa.step_engine import (
 
 GEPA_ADAPTER_KEY = "gepa"
 GEPA_TERMINAL_ARTIFACT_KEY = "terminal_artifact_ref"
+
+
+def gepa_candidate_field_name(
+    *,
+    component_name: str,
+    component_names: tuple[str, ...],
+    mutation_field: str,
+) -> str:
+    if len(component_names) == 1:
+        return mutation_field
+    return component_name
+
+
+def seed_components_from_candidate(
+    candidate: Candidate,
+    *,
+    component_names: tuple[str, ...],
+    mutation_field: str,
+) -> dict[str, str]:
+    mapped: dict[str, str] = {}
+    for name in component_names:
+        field = gepa_candidate_field_name(
+            component_name=name,
+            component_names=component_names,
+            mutation_field=mutation_field,
+        )
+        try:
+            value = candidate.payload[field]
+        except KeyError as exc:
+            raise ValueError(
+                "GEPA launch candidate is missing seed component "
+                f"{name!r} at payload field {field!r}"
+            ) from exc
+        if not isinstance(value, str):
+            raise ValueError(
+                "GEPA launch candidate seed component "
+                f"{name!r} must be a string"
+            )
+        mapped[name] = value
+    return mapped
 
 
 class GepaHarnessAdapterFactory:
@@ -56,8 +96,13 @@ class GepaHarnessAdapter:
         valset: tuple[GepaDataInstance, ...] | None,
         adapter_factory: GepaHarnessAdapterFactory,
     ) -> None:
+        ordered_seed = dict(seed_candidate)
+        if tuple(ordered_seed) != control.component_names:
+            raise ValueError(
+                "seed_candidate component order conflicts with GepaControl"
+            )
         self._control = control
-        self._seed_candidate = dict(seed_candidate)
+        self._seed_candidate = ordered_seed
         self._trainset = trainset
         self._valset = valset
         self._adapter_factory = adapter_factory
@@ -78,6 +123,10 @@ class GepaHarnessAdapter:
     @property
     def control(self) -> GepaControl:
         return self._control
+
+    @property
+    def seed_candidate(self) -> dict[str, str]:
+        return dict(self._seed_candidate)
 
     def invoke(
         self,
@@ -122,10 +171,10 @@ class GepaHarnessAdapter:
             field_bindings = tuple(
                 GepaCandidateFieldBinding(
                     component_name=name,
-                    candidate_field=(
-                        mutation_field
-                        if len(self._control.component_names) == 1
-                        else name
+                    candidate_field=gepa_candidate_field_name(
+                        component_name=name,
+                        component_names=self._control.component_names,
+                        mutation_field=mutation_field,
                     ),
                 )
                 for name in self._control.component_names
@@ -167,4 +216,6 @@ __all__ = [
     "GEPA_TERMINAL_ARTIFACT_KEY",
     "GepaHarnessAdapter",
     "GepaHarnessAdapterFactory",
+    "gepa_candidate_field_name",
+    "seed_components_from_candidate",
 ]

@@ -151,6 +151,27 @@ def register_runtime(
     resolved_engine = engine or runtime_config.build_engine(store)
     eval_service = EvalEngineService(store=store, engine=resolved_engine)
     control = copro_control or build_toy_copro_control(engine=resolved_engine)
+    if (
+        control.expected_reward_policy_hash
+        != resolved_engine.reward_policy_identity_hash()
+    ):
+        raise ValueError(
+            "register_runtime copro_control reward policy must match "
+            "the engine reward_policy_identity_hash"
+        )
+    if (
+        control.provider_execution_policy_hash
+        != resolved_engine.execution_policy_identity_hash()
+    ):
+        raise ValueError(
+            "register_runtime copro_control provider execution policy "
+            "must match the engine execution_policy_identity_hash"
+        )
+    if control.eval_config_ref != resolved_engine.eval_config_ref:
+        raise ValueError(
+            "register_runtime copro_control eval_config_ref must match "
+            "the engine eval_config_ref"
+        )
     prompt_adapter = PlainPromptAdapter()
     execution_policy = runtime_config.execution_policy
     engine_policy_hash = getattr(
@@ -241,6 +262,20 @@ def prepare_copro_run(
 ) -> OptimRunLaunch:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 
+    try:
+        adapter = runtime.adapter_registry.resolve(COPRO_ADAPTER_KEY)
+    except KeyError as exc:
+        raise ValueError(
+            "prepare_copro_run requires a COPRO adapter"
+        ) from exc
+    bound_control = getattr(adapter, "control", None)
+    if (
+        bound_control is not None
+        and bound_control.reference() != control.reference()
+    ):
+        raise ValueError(
+            "prepare_copro_run control must match the registered COPRO adapter"
+        )
     resolved = experiment or build_toy_experiment(num_seeds=1)
     if (
         resolved.reward_policy.identity_hash()
@@ -284,10 +319,13 @@ def prepare_gepa_run(
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
 ) -> OptimRunLaunch:
-    from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+    from whetstone.optim.gepa.harness_adapter import (
+        GEPA_ADAPTER_KEY,
+        seed_components_from_candidate,
+    )
 
     try:
-        runtime.adapter_registry.resolve(GEPA_ADAPTER_KEY)
+        adapter = runtime.adapter_registry.resolve(GEPA_ADAPTER_KEY)
     except KeyError as exc:
         raise ValueError(
             "prepare_gepa_run requires a GEPA adapter; pass it via "
@@ -300,6 +338,32 @@ def prepare_gepa_run(
             "the control reward_policy_hash"
         )
     candidate = initial_candidate or resolved.initial_candidate
+    field = mutation_field or TOY_MUTATION_FIELD
+    bound_control = getattr(adapter, "control", None)
+    if (
+        bound_control is not None
+        and bound_control.reference() != control.reference()
+    ):
+        raise ValueError(
+            "prepare_gepa_run control must match the registered GEPA adapter"
+        )
+    bound_seed = getattr(adapter, "seed_candidate", None)
+    if bound_seed is not None:
+        component_names = (
+            bound_control.component_names
+            if bound_control is not None
+            else tuple(bound_seed)
+        )
+        mapped = seed_components_from_candidate(
+            candidate,
+            component_names=component_names,
+            mutation_field=field,
+        )
+        if mapped != dict(bound_seed):
+            raise ValueError(
+                "prepare_gepa_run initial candidate must match "
+                "the adapter seed candidate"
+            )
     run = OptimRun(
         run_id=run_id,
         optimizer_config=control.reference(),
@@ -311,7 +375,7 @@ def prepare_gepa_run(
         template_render_contract=(
             render_contract or toy_template_render_contract()
         ),
-        mutation_field=mutation_field or TOY_MUTATION_FIELD,
+        mutation_field=field,
         reward_policy=resolved.reward_policy,
     )
     launch = OptimRunLaunch(

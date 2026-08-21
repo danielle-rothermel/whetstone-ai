@@ -23,10 +23,14 @@ def sqlite_store():
 
 @pytest.fixture
 def toy_runtime(sqlite_store):
-    runtime = register_runtime(store=sqlite_store)
     runtime_config = ReferenceEvalRuntimeConfig()
     engine = runtime_config.build_engine(sqlite_store)
     control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    runtime = register_runtime(
+        store=sqlite_store,
+        engine=engine,
+        copro_control=control,
+    )
     return runtime, control
 
 
