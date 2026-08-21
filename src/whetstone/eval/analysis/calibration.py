@@ -64,7 +64,7 @@ def _validate_anchor_evidence(
     evaluated: EvalEvidenceWithRef,
     expected_eval_config_ref: EvalConfigRef,
     expected_eval_role: EvalRole,
-    expected_task_ids: tuple[str, ...],
+    expected_task_hashes: tuple[str, ...],
     expected_samples: int,
     expected_reward_policy_hash: str,
 ) -> None:
@@ -75,18 +75,18 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed its Eval Config")
     if evidence.eval_role is not expected_eval_role:
         raise ValueError("calibration evidence changed its Evaluation Role")
-    if evidence.task_hashes != expected_task_ids:
+    if evidence.task_hashes != expected_task_hashes:
         raise ValueError("calibration evidence changed task identity order")
     if evidence.num_seeds != expected_samples:
         raise ValueError("calibration evidence changed sample count")
-    if len(evidence.per_task_values) != len(expected_task_ids):
+    if len(evidence.per_task_values) != len(expected_task_hashes):
         raise ValueError("calibration evidence has incomplete per-task values")
     if evidence.per_task_counts != (expected_samples,) * len(
-        expected_task_ids
+        expected_task_hashes
     ):
         raise ValueError("calibration evidence changed per-task sample counts")
     if evidence.row_accounting.planned != (
-        len(expected_task_ids) * expected_samples
+        len(expected_task_hashes) * expected_samples
     ):
         raise ValueError("calibration evidence changed planned row accounting")
     if evidence.reward_ref is None:
@@ -131,10 +131,8 @@ def run_anchor_calibration(
     if bootstrap_resamples < 1:
         raise ValueError("bootstrap_resamples must be at least 1")
 
-    from whetstone.eval.preview.anchor import calibration_task_hashes
-
-    calibration_task_ids = calibration_task_hashes(engine, task_ids)
-    subset_engine = engine.for_task_ids(calibration_task_ids)
+    subset_engine = engine.for_task_ids(task_ids)
+    calibrated_task_hashes = subset_engine.sampling.task_hashes
     baseline_request = EvalRequest(
         request_id=f"calibration:{baseline_purpose}",
         candidate=baseline_candidate,
@@ -184,7 +182,7 @@ def run_anchor_calibration(
             evaluated=evaluated,
             expected_eval_config_ref=expected_eval_config_ref,
             expected_eval_role=expected_eval_role,
-            expected_task_ids=calibration_task_ids,
+            expected_task_hashes=calibrated_task_hashes,
             expected_samples=samples,
             expected_reward_policy_hash=reward_policy_hash,
         )

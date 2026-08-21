@@ -162,7 +162,6 @@ def run_baseline_preview(
         if budget_ratio is None
         else f"budget ratio {budget_ratio:g}"
     )
-    calibration_task_ids = calibration_task_hashes(engine, task_ids)
     calibration = run_anchor_calibration(
         engine=engine,
         baseline_candidate=baseline_candidate,
@@ -171,7 +170,7 @@ def run_baseline_preview(
         ceiling_purpose=ceiling_purpose,
         baseline_log_label=baseline_log_label,
         ceiling_log_label=ceiling_log_label,
-        task_ids=calibration_task_ids,
+        task_ids=task_ids,
         pool_ceiling=pool_ceiling,
         power_config=power_config,
         bootstrap_level=bootstrap_level,

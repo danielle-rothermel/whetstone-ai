@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `run_anchor_calibration` subsets the engine by the caller's task IDs and
+  checks anchor evidence against the subset's task hashes; it previously
+  passed task hashes to an ID-keyed lookup and could not run against any
+  engine whose task IDs differ from their hashes. `run_baseline_preview` no
+  longer pre-converts IDs to hashes before calling it.
+
+### Added
+
+- Closed-form tests for `eval/analysis`: bootstrap mean and paired-delta
+  intervals, power decomposition and minimum detectable difference, and
+  anchor calibration.
+
 ### Changed
 
 - The effect-authority and tool-admission SQL backends now verify their
