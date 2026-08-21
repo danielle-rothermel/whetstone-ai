@@ -111,10 +111,19 @@ class GepaCandidateComponent(BaseModel):
 
 
 class GepaDataInstance(BaseModel):
+    """One GEPA training instance, keyed by the engine-resolvable task id.
+
+    ``data_id`` is the canonical task identity the evaluation engine resolves
+    through ``EvalEngine.for_task_ids``. ``task_hash`` carries the content
+    identity of the same task so identity checks stay hash-based without
+    forcing a translation at the engine seam.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     upstream_position: StrictInt
     data_id: StrictStr
+    task_hash: StrictStr
     data_ref: TypedRef
     loader_identity_hash: StrictStr
 
@@ -124,6 +133,7 @@ class GepaDataInstance(BaseModel):
             raise ValueError("GEPA upstream_position cannot be negative")
         if not self.data_id:
             raise ValueError("GEPA data_id must be non-empty")
+        require_full_hash(self.task_hash, field="task_hash")
         require_full_hash(
             self.loader_identity_hash,
             field="loader_identity_hash",

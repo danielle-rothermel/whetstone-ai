@@ -342,7 +342,7 @@ def run_gepa_engine[DataInst](
         raise ValueError(
             "seed_candidate component order conflicts with GepaControl"
         )
-    observed_train_ids = tuple(cast(Any, item).data_id for item in trainset)
+    observed_train_ids = tuple(cast(Any, item).task_hash for item in trainset)
     if observed_train_ids != control.trainset_task_hashes:
         raise ValueError("trainset order/identity conflicts with GepaControl")
     if valset is None:
@@ -351,7 +351,7 @@ def run_gepa_engine[DataInst](
     elif control.source_valset_task_hashes is None:
         raise ValueError("GepaControl binds valset omission to the trainset")
     else:
-        observed_val_ids = tuple(cast(Any, item).data_id for item in valset)
+        observed_val_ids = tuple(cast(Any, item).task_hash for item in valset)
         if observed_val_ids != control.valset_task_hashes:
             raise ValueError(
                 "valset order/identity conflicts with GepaControl"
