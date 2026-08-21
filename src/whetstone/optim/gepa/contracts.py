@@ -20,6 +20,7 @@ from whetstone.core.identity import (
     reject_non_json,
     require_full_hash,
 )
+from whetstone.optim.contracts import IntentResolution
 from whetstone.optim.gepa.prompts import GepaRenderedPrompt
 from whetstone.optim.proposal.proposer import ProposerConfig
 
@@ -48,6 +49,18 @@ class GepaEffectConflictError(RuntimeError):
 
 
 class GepaEffectContext(BaseModel):
+    """Identifies the GEPA search whose effects these are.
+
+    Deliberately step-agnostic. ``run_one_gepa_iteration`` re-runs upstream
+    ``optimize`` from the seed on every harness step with a larger
+    ``max_metric_calls``, and relies on the durable effect cache to replay the
+    already-completed prefix instead of paying for it again. Binding the
+    harness step index into this identity would change every slot on every
+    step and defeat that replay, so the executing harness step is stamped onto
+    the ``OptimEvalRequest`` at execution time instead -- a replayed effect
+    returns its recorded result and never reaches the intent layer.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
@@ -111,10 +124,19 @@ class GepaCandidateComponent(BaseModel):
 
 
 class GepaDataInstance(BaseModel):
+    """One GEPA training instance, keyed by the engine-resolvable task id.
+
+    ``data_id`` is the canonical task identity the evaluation engine resolves
+    through ``EvalEngine.for_task_ids``. ``task_hash`` carries the content
+    identity of the same task so identity checks stay hash-based without
+    forcing a translation at the engine seam.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     upstream_position: StrictInt
     data_id: StrictStr
+    task_hash: StrictStr
     data_ref: TypedRef
     loader_identity_hash: StrictStr
 
@@ -124,6 +146,7 @@ class GepaDataInstance(BaseModel):
             raise ValueError("GEPA upstream_position cannot be negative")
         if not self.data_id:
             raise ValueError("GEPA data_id must be non-empty")
+        require_full_hash(self.task_hash, field="task_hash")
         require_full_hash(
             self.loader_identity_hash,
             field="loader_identity_hash",
@@ -368,11 +391,22 @@ class GepaEvaluationRow(BaseModel):
 
 
 class GepaEvaluationEffectResult(BaseModel):
+    """One recorded GEPA evaluation effect, replayable across steps.
+
+    ``resolution`` is the harness Intent Resolution the executing step
+    obtained. It is recorded with the effect so that a step replaying this
+    effect from the durable cache can reconstruct the same search evidence
+    the executing step emitted, instead of silently dropping it. A step that
+    crashes after recording effects but before persisting its checkpoint must
+    still report evidence for every evaluation its search caused.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_hash: StrictStr
     rows: tuple[GepaEvaluationRow, ...]
     logical_metric_calls: StrictInt
+    resolution: IntentResolution | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> GepaEvaluationEffectResult:
@@ -454,6 +488,10 @@ class GepaProposalEffectResult(BaseModel):
     cost: float | None = None
     failed: StrictBool = False
     failure_detail: StrictStr | None = None
+    #: The provider answered, but the reflection parser or the component
+    #: format contract rejected its response. Retryable, unlike a transport
+    #: or provider failure.
+    rejected_by_parser: StrictBool = False
 
     @model_validator(mode="after")
     def _validate(self) -> GepaProposalEffectResult:
@@ -476,6 +514,10 @@ class GepaProposalEffectResult(BaseModel):
                     "failed GEPA proposal requires detail and no parsed "
                     "components"
                 )
+        elif self.rejected_by_parser:
+            raise ValueError(
+                "only a failed GEPA proposal may be rejected by the parser"
+            )
         elif (
             not self.raw_response
             or not self.parsed_components
@@ -522,6 +564,16 @@ class GepaEvaluationEffectAuthority(Protocol):
         request: GepaEvaluationEffectRequest,
     ) -> GepaEvaluationEffectResult: ...
 
+    def collect_replayed(
+        self,
+        result: GepaEvaluationEffectResult,
+    ) -> None:
+        """Re-collect an effect the broker served from the durable cache.
+
+        A replayed effect issues no new intent, but the evaluation it stands
+        for remains evidence the replaying Step must report.
+        """
+
 
 class GepaProposalEffectAuthority(Protocol):
     @property
@@ -535,6 +587,45 @@ class GepaProposalEffectAuthority(Protocol):
 
 GepaEffectRequest = GepaEvaluationEffectRequest | GepaProposalEffectRequest
 GepaEffectResult = GepaEvaluationEffectResult | GepaProposalEffectResult
+
+
+class GepaSkippedMutation(BaseModel):
+    """One rejected reflection response, retried or dropped.
+
+    Recorded so a rejected reflection is visible rather than silently
+    narrowing the search. One entry is appended per rejected *attempt*, so a
+    rejection that the bounded retry recovered from still appears here with
+    ``exhausted=False``. Only ``exhausted=True`` means the component was
+    left unmutated -- count those, not the entries, to count dropped
+    mutations.
+
+    Each Step persists the ones its own search produced under
+    ``GEPA_SKIPPED_MUTATIONS_KEY`` in that Step's state, so a rejection on a
+    continuing Step is durable immediately. The terminal effect transcript
+    carries only the terminal Step's own skips; a run's full skip record is
+    the union of every Step's state.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    component_name: StrictStr
+    attempt_ordinal: StrictInt
+    rejection_detail: StrictStr
+    raw_response: StrictStr = ""
+    provider_attempt_refs: tuple[TypedRef, ...] = ()
+    #: True when this rejection consumed the last permitted attempt, so the
+    #: component was left unchanged.
+    exhausted: StrictBool = False
+
+    @model_validator(mode="after")
+    def _validate(self) -> GepaSkippedMutation:
+        if not self.component_name:
+            raise ValueError("skipped mutation component_name is required")
+        if not self.rejection_detail:
+            raise ValueError("skipped mutation rejection_detail is required")
+        if self.attempt_ordinal < 0:
+            raise ValueError("skipped mutation attempt_ordinal cannot be negative")
+        return self
 
 
 class GepaEffectTranscriptEntry(BaseModel):
@@ -569,6 +660,10 @@ class GepaEffectTranscript(BaseModel):
     context: GepaEffectContext
     entries: tuple[GepaEffectTranscriptEntry, ...]
     score_mismatch_evidence: tuple[GepaScoreMismatchEvidence, ...] = ()
+    #: Reflection responses rejected by the parser or format contract, one
+    #: entry per rejected attempt. Present so a rejection is visible, never
+    #: silent; ``exhausted=True`` marks the ones that dropped a mutation.
+    skipped_mutations: tuple[GepaSkippedMutation, ...] = ()
 
     @model_validator(mode="after")
     def _validate(self) -> GepaEffectTranscript:
@@ -739,6 +834,7 @@ class GepaEffectRecorder:
             GepaScoreMismatchEvidence,
             ...,
         ] = (),
+        skipped_mutations: tuple[GepaSkippedMutation, ...] = (),
     ) -> GepaEffectTranscript:
         if effect_count < 0:
             raise ValueError("GEPA effect_count cannot be negative")
@@ -813,6 +909,7 @@ class GepaEffectRecorder:
             context=context,
             entries=tuple(entries),
             score_mismatch_evidence=score_mismatch_evidence,
+            skipped_mutations=skipped_mutations,
         )
 
     @staticmethod
@@ -884,6 +981,7 @@ __all__ = [
     "GepaCandidateComponent",
     "GepaComponentTraceProjection",
     "GepaDataInstance",
+    "GepaSkippedMutation",
     "GepaEffectBroker",
     "GepaEffectConflictError",
     "GepaEffectContext",

@@ -13,7 +13,9 @@ from whetstone.optim.gepa.authorities import (
 from whetstone.optim.gepa.contracts import (
     GepaEffectContext,
     GepaEffectRecorder,
+    GepaSkippedMutation,
 )
+from whetstone.optim.contracts import SearchEvidence
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaDetailedResult
 from whetstone.optim.gepa.prompts import GepaPromptServices
@@ -74,6 +76,8 @@ class CanonicalGepaAdapterFactory:
         self._evaluation_authority = evaluation_authority
         self._proposal_authority = proposal_authority
         self._prompt_services = prompt_services
+        self._step_index: int | None = None
+        self._adapters: list[WhetstoneGepaAdapter] = []
 
     @property
     def runtime_hash(self) -> str:
@@ -99,6 +103,66 @@ class CanonicalGepaAdapterFactory:
             },
         )
 
+    def begin_step(self, *, step_index: int) -> None:
+        """Bind this Step and drop evidence from earlier Steps.
+
+        ``step_index`` is the harness step index. It deliberately stays out of
+        the effect context, whose identity must remain step-agnostic so this
+        Step can replay the prefix its predecessors already paid for. The
+        authority stamps it onto the ``OptimEvalRequest`` of each evaluation
+        it actually executes, so a fresh evaluation carries the Step that
+        caused it while a replayed one never reaches the intent layer.
+        """
+        if step_index < 0:
+            raise ValueError("GEPA factory step_index cannot be negative")
+        self._step_index = step_index
+        self._evaluation_authority.begin_step(step_index=step_index)
+        self._adapters.clear()
+
+    def _require_step(self) -> int:
+        if self._step_index is None:
+            raise ValueError(
+                "GEPA factory requires begin_step before it serves a Step"
+            )
+        return self._step_index
+
+    def search_evidence(
+        self,
+        *,
+        run_id: str,
+        step_index: int,
+    ) -> tuple[SearchEvidence, ...]:
+        """Evidence for every evaluation this Step's search drove."""
+        authority = self._evaluation_authority
+        resolutions = authority.resolved_intents
+        replayed = authority.replayed_flags
+        return tuple(
+            (
+                SearchEvidence.from_replayed_resolution
+                if was_replayed
+                else SearchEvidence.from_resolution
+            )(
+                resolution,
+                optim_run_id=run_id,
+                optim_step_index=step_index,
+            )
+            for resolution, was_replayed in zip(
+                resolutions, replayed, strict=True
+            )
+        )
+
+    def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
+        """Reflection responses this Step's search rejected, in order.
+
+        Read off the live adapters rather than the terminal transcript, so a
+        rejection on a continuing Step is durable on that Step's own result.
+        """
+        return tuple(
+            skipped
+            for adapter in self._adapters
+            for skipped in adapter.skipped_mutations
+        )
+
     def create(
         self,
         *,
@@ -112,7 +176,7 @@ class CanonicalGepaAdapterFactory:
             evaluation_authority=self._evaluation_authority,
             proposal_authority=self._proposal_authority,
         )
-        return WhetstoneGepaAdapter(
+        adapter = WhetstoneGepaAdapter(
             context=GepaEffectContext(
                 run_id=self._run_id,
                 control_identity_hash=control.identity_hash(),
@@ -126,6 +190,8 @@ class CanonicalGepaAdapterFactory:
             proposal_authority=self._proposal_authority.binding,
             prompt_services=self._prompt_services,
         )
+        self._adapters.append(adapter)
+        return adapter
 
     def persist_result(
         self,
@@ -161,6 +227,7 @@ class CanonicalGepaAdapterFactory:
             context=expected_context,
             effect_count=adapter.effect_count,
             score_mismatch_evidence=adapter.score_mismatch_evidence,
+            skipped_mutations=adapter.skipped_mutations,
         )
         transcript_ref = recorder.persist_transcript(transcript)
         return GepaResultArtifactStore(self._store).persist(

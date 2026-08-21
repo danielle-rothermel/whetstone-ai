@@ -19,16 +19,18 @@ from whetstone.platform.step_executor import STAGE_EVAL_FANIN, STAGE_EVAL_ROW, e
 from whetstone.provider.llm_call import derive_rng_seed
 
 
-def test_gepa_zero_budget_uses_terminal_contract_and_zero_delta(tmp_path) -> None:
+def test_gepa_zero_budget_binds_the_step_contract_and_zero_delta(tmp_path) -> None:
     from tests.test_gepa_harness_adapter import _toy_gepa_control
     from whetstone.coordination.step_request_builder import StepRequestBuilder
     from whetstone.optim.contracts import (
         OptimRun,
         OutputContract,
         StepMode,
+        StepStatus,
         optimization_run_reference,
     )
     from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+    from whetstone.optim.gepa.step_contract import gepa_step_output_contract
     from whetstone.optim.gepa.step_engine import GepaStepCheckpoint, run_one_gepa_iteration
     from whetstone.testing.toy.experiment import (
         TOY_MUTATION_FIELD,
@@ -58,7 +60,15 @@ def test_gepa_zero_budget_uses_terminal_contract_and_zero_delta(tmp_path) -> Non
         initial_candidate=experiment.initial_candidate,
         control=control,
     )
-    assert request.step_output_contract == run.terminal_output_contract
+    # GEPA binds one honest contract on every step: a continuing step
+    # returns nothing and a completing step returns the run terminal count.
+    assert request.step_output_contract == gepa_step_output_contract(run_ref)
+    assert request.step_output_contract.honors_terminal(
+        run.terminal_output_contract
+    )
+    assert request.step_output_contract.accepted_count_for(
+        StepStatus.COMPLETE
+    ) == run.terminal_output_contract.returned_proposal_count
 
     _, checkpoint = run_one_gepa_iteration(
         control=control,

@@ -5,23 +5,97 @@ All notable changes to `whetstone-ai` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- `run_anchor_calibration` subsets the engine by the caller's task IDs and
-  checks anchor evidence against the subset's task hashes; it previously
-  passed task hashes to an ID-keyed lookup and could not run against any
-  engine whose task IDs differ from their hashes. `run_baseline_preview` no
-  longer pre-converts IDs to hashes before calling it.
+## 0.1.2 - 2026-08-21
 
 ### Added
+
+- `build_inline_proposal_executor` builds an in-process proposal executor,
+  alongside `DbosProposalExecutor`.
+- `SearchEvidence` records the eval and reward refs for evaluations an
+  optimizer drives inside its own search, bound to the run and step that
+  drove them through `optim_run_id` and `optim_step_index`. The harness
+  verifies both against the Step Request before persisting the entry on
+  `OptimStepResult.search_evidence`, so the binding is harness-verified
+  rather than adapter-attested.
+- A terminal step may report `seed_retained=True` with no accepted
+  candidates, so "the search kept the seed" is representable without a
+  substitute candidate. `OptimResult` mirrors the final step. Only a step
+  whose output contract sets `terminal_proposal_count` may claim it, and
+  only for the run's own seed: the adapter names the retained candidate and
+  the harness checks it against the new `OptimRun.initial_candidate_ref`,
+  which `OptimStepResult.retained_candidate_ref` then records.
+- GEPA persists the reflection responses its search rejected on every step's
+  own state under `skipped_mutations`, not only on the terminal effect
+  transcript, so a skip on a continuing step survives a process death.
+- `OutputContract.terminal_proposal_count` lets one contract state both the
+  continuing and terminal accepted-candidate cardinality, for optimizers
+  whose step may terminalize on its own schedule.
+- Each optimizer owns a step-contract provider, resolved by adapter key,
+  that declares its first-step and continuation contracts and parses its own
+  launch control. `StepRequestBuilder` and `HarnessRunController` dispatch
+  through that registry.
 
 - Closed-form tests for `eval/analysis`: bootstrap mean and paired-delta
   intervals, power decomposition and minimum detectable difference, and
   anchor calibration.
 
 ### Changed
+
+- `CanonicalGepaEvalAuthority` calls the `EvalEngine` identity-hash methods,
+  so a `RuntimeEvalEngine` binds directly.
+- The GEPA data registry keys entries by the engine-resolvable `task_id` and
+  carries `task_hash` alongside; the evaluation seam needs no translation.
+  Registry schema and loader projection are version 2.
+- The GEPA completed-result check verifies the candidate against the outputs
+  record's candidate ref instead of an absent top-level `candidate_id`.
+- Every GEPA step binds one contract that permits either continuing with no
+  proposals or terminalizing with the run terminal cardinality. A COMPLETE
+  step must honor the run terminal cardinality rather than be the identical
+  contract object.
+- `OutputContract.require_distinct_bases` constrains proposed candidates
+  rather than accepted ones, so a step may accept two candidates sharing a
+  base. It is enforced at Step granularity; the Optimization Result needs no
+  separate check.
+- A rejected GEPA reflection response is retried once with the rejection fed
+  back into the prompt; a second rejection skips that component's mutation
+  instead of ending the run. Each rejected attempt records a
+  `GepaSkippedMutation` on its own step's state (the terminal step's also
+  appear on the terminal effect transcript), with `exhausted=True` marking the attempts that actually
+  dropped a mutation. Provider and transport failures still surface
+  immediately.
+- A GEPA evaluation's `OptimEvalRequest` carries the harness step index as
+  `optim_step_index`, matching every other adapter. It previously carried the
+  per-step effect ordinal, which `run_one_gepa_iteration` resets each step, so
+  two steps executing the same candidate on the same batch could mint
+  byte-identical requests and therefore identical intent and claim keys in
+  `EvalEngineService`. The index is stamped on when an evaluation actually
+  executes, not carried in `GepaEffectContext`: the effect context and
+  `GepaEffectSlot` stay step-agnostic so that a step can replay the prefix
+  earlier steps already paid for, since `run_one_gepa_iteration` re-runs
+  `optimize` from the seed each step. `invocation_ordinal` remains
+  effect-replay ordering only.
+- A GEPA evaluation effect records the harness Intent Resolution it obtained,
+  so a step replaying that effect from the durable cache reconstructs the same
+  `SearchEvidence` the executing step emitted. A step that crashed after
+  recording its effects but before persisting its adapter checkpoint therefore
+  retries with its search evidence intact rather than silently incomplete.
+  Replayed entries rebind to the step reporting them through
+  `SearchEvidence.from_replayed_resolution`.
+- The GEPA step output contract derives its terminal cardinality from the run
+  terminal contract's COMPLETE cardinality rather than its continuing
+  `returned_proposal_count`, so a run that binds the two differently no longer
+  rejects every honest completing step.
+- The harness checks each `SearchEvidence` entry's refs against the store
+  before persisting it: a COMPLETED or FAILED entry must cite an
+  eval-result record of the expected schema, and its refs must resolve. A
+  dangling or wrong-schema ref is now a contract violation rather than
+  harness-verified evidence.
+- Optimization Run, Step Request, Step Result, and Optimization Result records
+  are schema version 3: `OptimRun` gains `initial_candidate_ref`, and Step
+  Result gains `retained_candidate_ref`. The GEPA reflection prompt and
+  upstream adapter identity are version 2. `OutputContract`'s
+  `terminal_proposal_count` key and `OptimRun`'s new key both change the
+  content and identity hashes of every previously stored `OptimRun` record.
 
 - The effect-authority and tool-admission SQL backends now verify their
   owned SQLite and PostgreSQL tables through the shared
@@ -83,6 +157,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `EvalEvidence` is at `schema_version` 4. The worker pool cannot produce
   `concurrency_halved` or `guard_timeouts`, so both fields are gone;
   `deadline_reached` is unchanged. Evidence written at version 3 is not read.
+
+### Fixed
+
+- `run_anchor_calibration` subsets the engine by the caller's task IDs and
+  checks anchor evidence against the subset's task hashes; it previously
+  passed task hashes to an ID-keyed lookup and could not run against any
+  engine whose task IDs differ from their hashes. `run_baseline_preview` no
+  longer pre-converts IDs to hashes before calling it.
 
 ### Removed
 

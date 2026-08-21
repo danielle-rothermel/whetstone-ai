@@ -34,12 +34,19 @@ from whetstone.optim.adapters import (
     AdapterRegistry,
     OptimizerAdapter,
 )
+from whetstone.eval.schema_names import (
+    EVAL_EVIDENCE_SCHEMA,
+    EVAL_FAILURE_SCHEMA,
+)
+from whetstone.experiment.reward import REWARD_SCHEMA
 from whetstone.optim.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     OPTIM_RESULT_SCHEMA,
     BudgetState,
+    IntentOutcome,
     OptimEvalRequest,
     IntentResolution,
+    SearchEvidence,
     OptimProposal,
     OptimResult,
     OptimRunRef,
@@ -324,6 +331,7 @@ class OptimHarness(OptimRunStore):
             proposed_candidates=proposed_refs,
             accepted_candidates=accepted_refs,
             resolved_intents=resolutions,
+            search_evidence=output.search_evidence,
             tool_evidence=tool_evidence,
             state_ref=self._persist_snapshot(
                 STATE_SNAPSHOT_SCHEMA, output.state_delta
@@ -335,6 +343,12 @@ class OptimHarness(OptimRunStore):
             budget=budget,
             status=output.proposed_status,
             terminal_failure=output.terminal_failure,
+            seed_retained=output.seed_retained,
+            retained_candidate_ref=(
+                None
+                if output.retained_candidate is None
+                else self._persist_candidate(output.retained_candidate)
+            ),
         )
         result_ref = self._put_result(result)
         if result_ref != step_result_reference(result).record_ref:
@@ -607,9 +621,8 @@ class OptimHarness(OptimRunStore):
             raise RuntimeError("unrecognized Effect acquisition outcome")
         return acquisition.lease
 
-    @classmethod
     def _validate_checkpoint(
-        cls,
+        self,
         checkpoint: AdapterCheckpoint,
         *,
         request: OptimStepRequest,
@@ -624,9 +637,9 @@ class OptimHarness(OptimRunStore):
             raise ValueError(
                 "durable adapter checkpoint belongs to another adapter"
             )
-        cls._validate_output(request, checkpoint.output)
-        cls._validate_output_candidates(request, checkpoint.output)
-        cls._validate_output_intents(request, checkpoint.output)
+        self._validate_output(request, checkpoint.output)
+        self._validate_output_candidates(request, checkpoint.output)
+        self._validate_output_intents(request, checkpoint.output)
 
     @staticmethod
     def _validate_output(
@@ -641,10 +654,30 @@ class OptimHarness(OptimRunStore):
                 "Optim Eval Request IDs must be unique within a Step"
             )
         contract = request.step_output_contract
+        if output.seed_retained:
+            if contract.terminal_proposal_count is None:
+                raise ValueError(
+                    "only a Step whose output contract sets "
+                    "terminal_proposal_count -- a search-dependent terminal "
+                    "cardinality -- may retain the seed; this contract binds "
+                    "terminal cardinality unconditionally"
+                )
+            seed_ref = request.run.record.initial_candidate_ref
+            if seed_ref is None:
+                raise ValueError(
+                    "a seed-retaining Step requires the run to name its "
+                    "initial_candidate_ref"
+                )
+            retained = output.retained_candidate
+            if retained is None or candidate_reference(retained) != seed_ref:
+                raise ValueError(
+                    "a seed-retaining Step must retain the exact run initial "
+                    "candidate"
+                )
         expected_count = (
             0
-            if output.proposed_status is StepStatus.FAILED
-            else contract.returned_proposal_count
+            if output.seed_retained
+            else contract.accepted_count_for(output.proposed_status)
         )
         if len(output.accepted_candidates) != expected_count:
             raise ValueError(
@@ -654,7 +687,7 @@ class OptimHarness(OptimRunStore):
             )
         if contract.require_distinct_bases:
             bases = [
-                candidate.base_ref for candidate in output.accepted_candidates
+                candidate.base_ref for candidate in output.proposed_candidates
             ]
             if len(bases) != len(set(bases)):
                 raise ValueError(
@@ -676,10 +709,12 @@ class OptimHarness(OptimRunStore):
             )
         if (
             output.proposed_status is StepStatus.COMPLETE
-            and contract != request.run.record.terminal_output_contract
+            and not contract.honors_terminal(
+                request.run.record.terminal_output_contract
+            )
         ):
             raise ValueError(
-                "a COMPLETE Step must use the run terminal output contract"
+                "a COMPLETE Step must honor the run terminal output contract"
             )
 
     @staticmethod
@@ -722,8 +757,48 @@ class OptimHarness(OptimRunStore):
                         f"run mutation diff: {error}"
                     ) from error
 
-    @staticmethod
+    def _require_resolvable_evidence(self, evidence: SearchEvidence) -> None:
+        """Bind search evidence to the evaluation it claims to cite.
+
+        The model alone accepts any non-null ref, so an adapter could pair a
+        truthful run/step with an unrelated -- or dangling -- record and have
+        it persisted as harness-verified evidence. The store is available
+        here, so the refs are checked for the expected schema and for actual
+        resolution before the entry is accepted.
+        """
+        expected = {
+            IntentOutcome.COMPLETED: EVAL_EVIDENCE_SCHEMA,
+            IntentOutcome.FAILED: EVAL_FAILURE_SCHEMA,
+        }.get(evidence.outcome)
+        ref = evidence.eval_result_ref
+        if expected is None or ref is None:
+            return
+        if ref.schema_name != expected:
+            raise ValueError(
+                f"{evidence.outcome.value} search evidence eval_result_ref "
+                f"must use schema {expected!r}"
+            )
+        if (
+            evidence.reward_ref is not None
+            and evidence.reward_ref.record_ref.schema_name != REWARD_SCHEMA
+        ):
+            raise ValueError(
+                "search evidence reward_ref must use the Reward schema"
+            )
+        # Every ref the entry cites -- including the nested reward evidence
+        # refs -- is exactly the set the harness persists, so each one must
+        # resolve before the entry is accepted.
+        for item in evidence.evidence_refs:
+            try:
+                self._store.get(item.reference)
+            except Exception as error:
+                raise ValueError(
+                    "search evidence must cite records the store resolves: "
+                    f"{item.schema_name}"
+                ) from error
+
     def _validate_output_intents(
+        self,
         request: OptimStepRequest,
         output: AdapterOutput,
     ) -> None:
@@ -742,6 +817,16 @@ class OptimHarness(OptimRunStore):
             )
         }
         reward_policy = request.run.record.reward_policy
+        for evidence in output.search_evidence:
+            if evidence.optim_run_id != request.run_id:
+                raise ValueError(
+                    "search evidence belongs to another optimization run"
+                )
+            if evidence.optim_step_index != request.step_index:
+                raise ValueError(
+                    "search evidence belongs to another optimization step"
+                )
+            self._require_resolvable_evidence(evidence)
         for optim_eval_request in output.optim_eval_requests:
             if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(
@@ -1160,6 +1245,7 @@ class OptimHarness(OptimRunStore):
             step_results=step_results,
             cost=cost,
             terminal_failure=last.terminal_failure,
+            seed_retained=last.seed_retained,
         )
 
     @staticmethod

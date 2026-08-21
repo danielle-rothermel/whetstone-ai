@@ -19,15 +19,19 @@ from whetstone.optim.gepa.contracts import (
     GepaProposalAuthorityBinding,
     GepaProposalEffectRequest,
     GepaScoreMismatchEvidence,
+    GepaSkippedMutation,
     GepaTrajectoryProjection,
 )
 from whetstone.optim.gepa.prompts import (
     GepaPromptServices,
     GepaReflectionRequest,
+    GepaRejectedAttempt,
 )
 
 GEPA_UPSTREAM_ADAPTER_SCHEMA = "whetstone.gepa.upstream_adapter"
-GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION = 1
+GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION = 2
+#: One reflection attempt plus one bounded retry with the rejection fed back.
+GEPA_REFLECTION_MAX_ATTEMPTS = 2
 GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH = compute_identity_hash(
     schema=GEPA_UPSTREAM_ADAPTER_SCHEMA,
     schema_version=GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION,
@@ -37,6 +41,7 @@ GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH = compute_identity_hash(
         "data_mapping": "integer_position_plus_typed_task_ref/v1",
         "effect_replay": "semantic_plus_ordinal/v1",
         "reflection_projection": "canonical_trajectory/v1",
+        "reflection_retry_policy": "bounded_single_retry_then_skip/v1",
         "merge_proposals": False,
     },
 )
@@ -86,6 +91,7 @@ class WhetstoneGepaAdapter:
         self._rng = random.Random(evaluation_authority.selection_seed)
         self._score_mismatch_warned = False
         self._score_mismatch_evidence: list[GepaScoreMismatchEvidence] = []
+        self._skipped_mutations: list[GepaSkippedMutation] = []
 
     @property
     def runtime_hash(self) -> str:
@@ -167,6 +173,7 @@ class WhetstoneGepaAdapter:
         self._rng = random.Random(self._evaluation_authority.selection_seed)
         self._score_mismatch_warned = False
         self._score_mismatch_evidence.clear()
+        self._skipped_mutations.clear()
 
     def _slot(self) -> GepaEffectSlot:
         slot = GepaEffectSlot(
@@ -363,11 +370,41 @@ class WhetstoneGepaAdapter:
         for component_name in selected:
             if not concrete_dataset.get(component_name):
                 continue
+            replacement = self._propose_one_component(
+                candidate=candidate,
+                concrete_dataset=concrete_dataset,
+                selected=selected,
+                component_name=component_name,
+            )
+            if replacement is not None:
+                replacements[component_name] = replacement
+        return replacements
+
+    def _propose_one_component(
+        self,
+        *,
+        candidate: Mapping[str, str],
+        concrete_dataset: Mapping[str, tuple[dict[str, Any], ...]],
+        selected: tuple[str, ...],
+        component_name: str,
+    ) -> str | None:
+        """Reflect once, retry once on rejection, then skip the mutation.
+
+        A reflection response that will not parse or fails the component's
+        format contract is a normal model failure, not an infrastructure
+        error. Retrying once with the rejection fed back recovers most of
+        them; a second rejection records a skipped mutation in the step
+        evidence and leaves this component unchanged, so the search
+        continues instead of ending the whole optimization.
+        """
+        prior_attempt: GepaRejectedAttempt | None = None
+        for attempt_index in range(GEPA_REFLECTION_MAX_ATTEMPTS):
             reflection_request = GepaReflectionRequest(
                 candidate=dict(candidate),
-                reflective_dataset=concrete_dataset,
+                reflective_dataset=dict(concrete_dataset),
                 components_to_update=selected,
                 component_name=component_name,
+                prior_attempt=prior_attempt,
             )
             rendered = self._prompt_services.reflection_builder.render(
                 self._prompt_services.descriptor,
@@ -388,9 +425,33 @@ class WhetstoneGepaAdapter:
                     "GEPA proposal result belongs to another effect request"
                 )
             if result.failed:
-                raise RuntimeError(
-                    result.failure_detail or "GEPA proposal effect failed"
+                # A rejected response is retryable; a transport or provider
+                # failure is not, and must still surface.
+                if not result.rejected_by_parser:
+                    raise RuntimeError(
+                        result.failure_detail or "GEPA proposal effect failed"
+                    )
+                prior_attempt = GepaRejectedAttempt(
+                    raw_response=result.raw_response or "",
+                    rejection_detail=(
+                        result.failure_detail
+                        or "GEPA reflection response was rejected"
+                    ),
                 )
+                self._skipped_mutations.append(
+                    GepaSkippedMutation(
+                        component_name=component_name,
+                        attempt_ordinal=attempt_index,
+                        rejection_detail=prior_attempt.rejection_detail,
+                        raw_response=prior_attempt.raw_response,
+                        provider_attempt_refs=result.provider_attempt_refs,
+                        exhausted=(
+                            attempt_index
+                            == GEPA_REFLECTION_MAX_ATTEMPTS - 1
+                        ),
+                    )
+                )
+                continue
             expected = (component_name,)
             actual = tuple(item.name for item in result.parsed_components)
             if actual != expected:
@@ -407,11 +468,22 @@ class WhetstoneGepaAdapter:
                 raise ValueError(
                     "GEPA proposal authority and adapter parser disagree"
                 )
-            replacements[component_name] = replacement
-        return replacements
+            return replacement
+        return None
+
+    @property
+    def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
+        """Rejected reflection attempts recorded during this step.
+
+        One entry per rejected attempt, including a rejection the bounded
+        retry then recovered from; ``exhausted=True`` marks the attempts
+        that actually dropped the component's mutation.
+        """
+        return tuple(self._skipped_mutations)
 
 
 __all__ = [
+    "GEPA_REFLECTION_MAX_ATTEMPTS",
     "GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH",
     "GEPA_UPSTREAM_ADAPTER_SCHEMA",
     "GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION",

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import (
@@ -18,6 +18,7 @@ from whetstone.experiment.candidate import Candidate
 from whetstone.optim.contracts import (
     BudgetDelta,
     OptimEvalRequest,
+    SearchEvidence,
     OptimStepRequest,
     StepKind,
     StepMode,
@@ -59,9 +60,22 @@ class AdapterOutput(BaseModel):
     proposed_candidates: tuple[Candidate, ...] = ()
     accepted_candidates: tuple[Candidate, ...] = ()
     optim_eval_requests: tuple[OptimEvalRequest, ...] = ()
+    #: Evidence for evaluations the adapter drove inside its own search.
+    #: The harness verifies each entry's run and step against the Step
+    #: Request, then carries it onto the Step Result unchanged.
+    search_evidence: tuple[SearchEvidence, ...] = ()
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
     proposed_status: StepStatus = StepStatus.CONTINUE
     terminal_failure: TerminalFailure | None = None
+    #: A COMPLETE Step that accepted no improvement over the seed candidate.
+    #: Only a contract with search-dependent terminal cardinality may claim
+    #: it, and only for the run's own initial candidate; the harness checks
+    #: both against the Step Request.
+    seed_retained: StrictBool = False
+    #: The candidate a ``seed_retained`` Step kept. Present exactly when
+    #: ``seed_retained`` is set, so the harness can verify the claim names
+    #: the run's seed rather than any candidate the search happened to like.
+    retained_candidate: Candidate | None = None
     state_delta: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )
@@ -87,6 +101,33 @@ class AdapterOutput(BaseModel):
                 raise ValueError(
                     "a failed Adapter Output requests no Evaluations"
                 )
+        if self.seed_retained:
+            if self.proposed_status is not StepStatus.COMPLETE:
+                raise ValueError(
+                    "only a COMPLETE Adapter Output may retain the seed"
+                )
+            if self.accepted_candidates:
+                raise ValueError(
+                    "a seed-retaining Adapter Output accepts no candidates"
+                )
+            if self.retained_candidate is None:
+                raise ValueError(
+                    "a seed-retaining Adapter Output must name the retained "
+                    "candidate"
+                )
+        elif self.retained_candidate is not None:
+            raise ValueError(
+                "only a seed-retaining Adapter Output names a retained "
+                "candidate"
+            )
+        search_ids = [
+            evidence.eval_request_id for evidence in self.search_evidence
+        ]
+        if len(set(search_ids)) != len(search_ids):
+            raise ValueError(
+                "Adapter Output search evidence Eval Request IDs must be "
+                "unique"
+            )
         return self
 
     def record_content(self) -> dict[str, Any]:

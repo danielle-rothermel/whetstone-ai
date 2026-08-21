@@ -6,9 +6,12 @@ from typing import TYPE_CHECKING
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
 
+from whetstone.coordination.step_contracts import (
+    resolve_step_contract_provider,
+)
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef, compute_identity_hash, require_full_hash
-from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OPTIM_RUN_SCHEMA,
@@ -93,6 +96,14 @@ class HarnessRunController:
         return self._runtime_hash
 
     def bind_launch(self, launch: OptimRunLaunch) -> OptimRunRef:
+        seed_ref = launch.run.initial_candidate_ref
+        if seed_ref is not None and seed_ref != candidate_reference(
+            launch.initial_candidate
+        ):
+            raise ValueError(
+                "run initial_candidate_ref must address the exact launch "
+                "initial candidate"
+            )
         run_ref = optimization_run_reference(launch.run)
         self._store.put(OPTIM_RUN_SCHEMA, run_ref.record.record_content())
         payload_ref, _ = self._store.put(
@@ -140,18 +151,9 @@ class HarnessRunController:
         candidate = Candidate.model_validate(record["initial_candidate"])
         control = None
         if record.get("control") is not None:
-            from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
-
-            control_payload = record["control"]
-            adapter_key = run.adapter_key
-            if adapter_key == GEPA_ADAPTER_KEY:
-                from whetstone.optim.gepa.control import GepaControl
-
-                control = GepaControl.model_validate(control_payload)
-            else:
-                from whetstone.optim.copro.control import CoproControl
-
-                control = CoproControl.model_validate(control_payload)
+            control = resolve_step_contract_provider(
+                run.adapter_key
+            ).parse_control(record["control"])
         return OptimRunLaunch(
             run=run,
             initial_candidate=candidate,
@@ -176,10 +178,11 @@ class HarnessRunController:
         bound = self._harness.bind_run(launch.run)
         adapter_key = bound.record.adapter_key
         control = launch.control
-        from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
-
-        if control is None and adapter_key == COPRO_ADAPTER_KEY:
-            raise ValueError("COPRO run launch requires the exact control")
+        provider = resolve_step_contract_provider(adapter_key)
+        if control is None and provider.requires_control():
+            raise ValueError(
+                f"{adapter_key!r} run launch requires the exact control"
+            )
         step_results: list[OptimStepResultRef] = []
         prior_results: list[OptimStepResult] = []
         step_request = self._step_builder.build_first(

@@ -43,6 +43,7 @@ def _factory() -> tuple[CanonicalGepaAdapterFactory, MagicMock]:
 
 def test_create_does_not_import_effect_runtime() -> None:
     factory, control = _factory()
+    factory.begin_step(step_index=0)
     with patch.dict(sys.modules, {"whetstone.optim.gepa.effect_runtime": None}):
         with patch("whetstone.optim.gepa.factory.WhetstoneGepaAdapter") as adapter_cls:
             adapter = factory.create(control=control)

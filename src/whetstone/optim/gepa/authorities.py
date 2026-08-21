@@ -25,6 +25,7 @@ from whetstone.eval.schema import (
     EVAL_TRACES_SCHEMA,
     EVAL_OUTPUTS_SCHEMA,
     EvalEvidence,
+    EvalOutputsRecord,
 )
 from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
 from whetstone.experiment.binding import EvalConfigRef
@@ -36,6 +37,7 @@ from whetstone.experiment.candidate import (
 from whetstone.optim.contracts import (
     OptimEvalRequest,
     IntentOutcome,
+    IntentResolution,
 )
 from whetstone.optim.gepa.contracts import (
     GepaCandidateComponent,
@@ -68,14 +70,14 @@ GEPA_REFLECTION_BASE_SCHEMA = "whetstone.gepa.reflection_base"
 GEPA_CANDIDATE_ASSEMBLER_SCHEMA = "whetstone.gepa.candidate_assembler"
 GEPA_CANDIDATE_ASSEMBLER_SCHEMA_VERSION = 1
 GEPA_DATA_REGISTRY_SCHEMA = "whetstone.gepa.data_registry"
-GEPA_DATA_REGISTRY_SCHEMA_VERSION = 1
+GEPA_DATA_REGISTRY_SCHEMA_VERSION = 2
 GEPA_DATA_RECORD_SCHEMA = "whetstone.gepa.reflection_input"
 GEPA_DATA_LOADER_IDENTITY_HASH = compute_identity_hash(
     schema="whetstone.gepa.data_loader",
-    schema_version=1,
+    schema_version=2,
     payload={
         "source": "EvalEngine.sampling.tasks",
-        "projection": "task_hash+task_id+ordered_prompt_inputs/v1",
+        "projection": "task_id_keyed+task_hash+ordered_prompt_inputs/v2",
         "gold_included": False,
     },
 )
@@ -146,6 +148,9 @@ class GepaDataRegistry:
         ids = tuple(entry.data_id for entry in entries)
         if len(ids) != len(set(ids)):
             raise ValueError("GEPA data registry identities must be unique")
+        hashes = tuple(entry.task_hash for entry in entries)
+        if len(hashes) != len(set(hashes)):
+            raise ValueError("GEPA data registry task hashes must be unique")
         if tuple(entry.upstream_position for entry in entries) != tuple(
             range(len(entries))
         ):
@@ -199,7 +204,8 @@ class GepaDataRegistry:
             entries.append(
                 GepaDataInstance(
                     upstream_position=index,
-                    data_id=task_hash,
+                    data_id=task_id,
+                    task_hash=task_hash,
                     data_ref=TypedRef(
                         schema_name=ref.schema,
                         content_hash=ref.content_hash,
@@ -227,6 +233,7 @@ class GepaDataRegistry:
                     {
                         "upstream_position": entry.upstream_position,
                         "data_id": entry.data_id,
+                        "task_hash": entry.task_hash,
                         "data_ref": entry.data_ref.model_dump(mode="json"),
                     }
                     for entry in self._entries
@@ -237,6 +244,10 @@ class GepaDataRegistry:
     @property
     def data_ids(self) -> tuple[str, ...]:
         return tuple(entry.data_id for entry in self._entries)
+
+    @property
+    def task_hashes(self) -> tuple[str, ...]:
+        return tuple(entry.task_hash for entry in self._entries)
 
     @property
     def entries(self) -> tuple[GepaDataInstance, ...]:
@@ -374,18 +385,21 @@ class CanonicalGepaEvalAuthority:
             raise ValueError(
                 "GEPA evaluation engine conflicts with the control metric"
             )
-        if engine.task_model_identity_hash != control.task_model_identity_hash:
+        if (
+            engine.task_model_identity_hash()
+            != control.task_model_identity_hash
+        ):
             raise ValueError(
                 "GEPA evaluation engine conflicts with the task-model route"
             )
         if (
-            engine.execution_policy_identity_hash
+            engine.execution_policy_identity_hash()
             != control.evaluation_execution_policy_hash
         ):
             raise ValueError(
                 "GEPA evaluation engine conflicts with execution policy"
             )
-        if engine.reward_policy_identity_hash != control.reward_policy_hash:
+        if engine.reward_policy_identity_hash() != control.reward_policy_hash:
             raise ValueError(
                 "GEPA evaluation engine conflicts with reward policy"
             )
@@ -394,7 +408,7 @@ class CanonicalGepaEvalAuthority:
             raise ValueError(
                 "GEPA evaluation engine must use a single-repeat plan"
             )
-        expected_data_ids = tuple(
+        expected_task_hashes = tuple(
             dict.fromkeys(
                 (
                     *control.trainset_task_hashes,
@@ -403,8 +417,8 @@ class CanonicalGepaEvalAuthority:
             )
         )
         if (
-            data_registry.data_ids != expected_data_ids
-            or engine.sampling.task_hashes != expected_data_ids
+            data_registry.task_hashes != expected_task_hashes
+            or engine.sampling.task_hashes != expected_task_hashes
         ):
             raise ValueError(
                 "GEPA data registry/engine sampling conflicts with control"
@@ -422,6 +436,9 @@ class CanonicalGepaEvalAuthority:
         self._control = control
         self._candidate_assembler = candidate_assembler
         self._data_registry = data_registry
+        self._resolutions: list[IntentResolution] = []
+        self._replayed: list[bool] = []
+        self._step_index: int | None = None
         self._submission_projector = submission_projector or (
             DefaultGepaSubmissionProjector(
                 submission_result_field=control.submission_result_field,
@@ -508,11 +525,18 @@ class CanonicalGepaEvalAuthority:
             self._data_registry.require_exact(item)
             self._store.get(item.data_ref.reference)
         candidate = self._candidate_assembler.assemble(request.candidate)
+        # data_id is the engine-resolvable task id; no translation needed.
         task_ids = tuple(item.data_id for item in request.data)
         subset_engine = self._engine.for_task_ids(task_ids)
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.slot.context.run_id,
-            optim_step_index=request.slot.invocation_ordinal,
+            # The harness step that is actually executing this evaluation.
+            # It is stamped here rather than carried in the effect context,
+            # whose identity stays step-agnostic so a later step can replay
+            # this effect instead of paying for it again. Two steps that
+            # execute the same batch therefore still mint distinct intent
+            # and claim keys, while a replayed effect never gets here.
+            optim_step_index=self._require_step(),
             eval_request=EvalRequest(
                 request_id=(
                     f"{request.slot.context.run_id}:gepa:"
@@ -530,9 +554,73 @@ class CanonicalGepaEvalAuthority:
             optim_eval_request,
             context=EvalExecutionContext(),
         )
+        self._resolutions.append(resolution)
+        self._replayed.append(False)
         if resolution.outcome is not IntentOutcome.COMPLETED:
             return self._failed_result(request, resolution)
         return self._completed_result(request, candidate, resolution)
+
+    @property
+    def replayed_flags(self) -> tuple[bool, ...]:
+        """Whether each collected resolution was replayed, in order.
+
+        A replayed resolution names the Step that executed it, so the Step
+        reporting it must rebind the run/step rather than cross-check them.
+        """
+        return tuple(self._replayed)
+
+    @property
+    def resolved_intents(self) -> tuple[IntentResolution, ...]:
+        """Eval resolutions this authority produced since the last reset.
+
+        The harness cannot observe GEPA's evaluations through Adapter Output
+        eval requests, because upstream ``optimize`` drives them inside the
+        authority. Exposing them here lets a GEPA step carry the same
+        eval/reward evidence refs a COPRO step does.
+        """
+        return tuple(self._resolutions)
+
+    def begin_step(self, *, step_index: int) -> None:
+        """Bind the executing Step and drop earlier Steps' resolutions.
+
+        The bound index is stamped onto the ``OptimEvalRequest`` of every
+        evaluation this Step actually executes. Effects replayed from the
+        durable cache do not reach ``evaluate`` and are re-collected from
+        their recorded resolutions instead.
+        """
+        if step_index < 0:
+            raise ValueError(
+                "GEPA evaluation authority step_index cannot be negative"
+            )
+        self._step_index = step_index
+        self._resolutions.clear()
+        self._replayed.clear()
+
+    def _require_step(self) -> int:
+        if self._step_index is None:
+            raise ValueError(
+                "GEPA evaluation authority requires begin_step before it "
+                "executes an evaluation"
+            )
+        return self._step_index
+
+    def collect_replayed(
+        self,
+        result: GepaEvaluationEffectResult,
+    ) -> None:
+        """Re-collect the resolution of an effect replayed from the cache.
+
+        A replayed effect never reaches ``evaluate``, so without this the
+        evaluation it stands for would vanish from the Step's search
+        evidence -- exactly what happens when a Step crashes after recording
+        its effects but before persisting its checkpoint. The recorded
+        resolution is the executing Step's, so its refs are reused verbatim
+        and only the reporting Step rebinds.
+        """
+        self._require_step()
+        if result.resolution is not None:
+            self._resolutions.append(result.resolution)
+            self._replayed.append(True)
 
     def _require_request_binding(
         self,
@@ -583,6 +671,7 @@ class CanonicalGepaEvalAuthority:
                 for item in request.data
             ),
             logical_metric_calls=len(request.data),
+            resolution=resolution,
         )
 
     def _completed_result(
@@ -604,7 +693,7 @@ class CanonicalGepaEvalAuthority:
         if (
             evidence.candidate != candidate
             or evidence.task_hashes
-            != tuple(item.data_id for item in request.data)
+            != tuple(item.task_hash for item in request.data)
             or evidence.num_seeds != 1
             or len(evidence.per_task_values) != len(request.data)
             or evidence.row_accounting.planned != len(request.data)
@@ -617,16 +706,19 @@ class CanonicalGepaEvalAuthority:
         output_record = self._store.get(evidence.outputs_ref.reference)
         if not isinstance(output_record, dict):
             raise ValueError("GEPA evaluation outputs must be an object")
+        # The outputs record names its candidate through the candidate ref
+        # the authority already holds; it carries no top-level candidate_id.
+        outputs = EvalOutputsRecord.model_validate(output_record)
+        if outputs.candidate != candidate:
+            raise ValueError(
+                "GEPA evaluation output record names another candidate"
+            )
         raw_rows = output_record.get("outputs")
         if not isinstance(raw_rows, list) or len(raw_rows) != len(
             request.data
         ):
             raise ValueError(
                 "GEPA evaluation outputs do not align with requested data"
-            )
-        if output_record.get("candidate_id") != candidate.record.candidate_id:
-            raise ValueError(
-                "GEPA evaluation output record names another candidate"
             )
         common_refs = (
             evidence_ref,
@@ -664,6 +756,7 @@ class CanonicalGepaEvalAuthority:
             request_hash=request.identity_hash(),
             rows=rows,
             logical_metric_calls=len(rows),
+            resolution=resolution,
         )
 
     def _project_row(
@@ -684,8 +777,8 @@ class CanonicalGepaEvalAuthority:
         data_record = self._store.get(data.data_ref.reference)
         if (
             not isinstance(data_record, dict)
-            or data_record.get("task_hash") != data.data_id
-            or not isinstance(data_record.get("task_id"), str)
+            or data_record.get("task_hash") != data.task_hash
+            or data_record.get("task_id") != data.data_id
             or not isinstance(data_record.get("prompt_inputs"), dict)
         ):
             raise ValueError(
@@ -693,7 +786,8 @@ class CanonicalGepaEvalAuthority:
             )
         if (
             raw.get("candidate_id") != candidate_id
-            or raw.get("task_id") != data_record["task_id"]
+            or raw.get("task_id") != data.data_id
+            or raw.get("task_hash") != data.task_hash
             or raw.get("seed_index") != 0
         ):
             raise ValueError(
@@ -1016,6 +1110,8 @@ class CanonicalGepaProposalAuthority:
                 raw,
             )
         except (KeyError, TypeError, ValueError) as exc:
+            # The provider answered; its content did not satisfy the parser
+            # or the component format. That is retryable.
             return GepaProposalEffectResult(
                 request_hash=request.identity_hash(),
                 raw_response=raw,
@@ -1025,6 +1121,7 @@ class CanonicalGepaProposalAuthority:
                 usage=usage,
                 cost=draft.cost,
                 failed=True,
+                rejected_by_parser=True,
                 failure_detail=str(exc) or type(exc).__name__,
             )
         return GepaProposalEffectResult(
