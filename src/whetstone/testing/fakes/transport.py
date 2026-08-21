@@ -11,8 +11,13 @@ from dr_providers.outcomes.evidence import ProviderHttpRequestEvidence
 from dr_providers.outcomes.models import ProviderTransportResponse
 
 from whetstone.provider.driver import TransportCall
+from whetstone.provider.policy import ProviderExecutionPolicy
 
-__all__ = ["FakeLlmTransport", "fake_llm_transport"]
+__all__ = [
+    "FakeLlmTransport",
+    "fake_llm_transport",
+    "fake_llm_transport_factory",
+]
 
 
 def fake_llm_transport(
@@ -64,3 +69,9 @@ class FakeLlmTransport:
         self, request: ProviderCallRequest
     ) -> ProviderInvocationEvidence:
         return self._transport(request)
+
+
+def fake_llm_transport_factory(
+    policy: ProviderExecutionPolicy,
+) -> FakeLlmTransport:
+    return FakeLlmTransport(transport_policy=policy.transport_policy)

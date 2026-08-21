@@ -17,7 +17,7 @@ from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
 from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
-from whetstone.testing.fakes.transport import FakeLlmTransport
+from whetstone.testing.fakes.transport import fake_llm_transport_factory
 from whetstone.testing.toy.experiment import (
     TOY_MUTATION_FIELD,
     build_toy_experiment,
@@ -59,11 +59,6 @@ class ReferenceEvalRuntimeConfig(BaseModel):
             raise ValueError(f"unknown split role {self.split_role!r}")
         execution_policy = self.execution_policy
 
-        def transport_factory(
-            policy: ProviderExecutionPolicy,
-        ) -> FakeLlmTransport:
-            return FakeLlmTransport(transport_policy=policy.transport_policy)
-
         if self.driver_mode == "subprocess":
             driver = SubprocessGraphRolloutEvalDriver(
                 row_job_entrypoint=self.row_job_entrypoint,
@@ -71,14 +66,14 @@ class ReferenceEvalRuntimeConfig(BaseModel):
                 eval_runner=FakeEvalProcedureRunner(),
                 mutation_field=TOY_MUTATION_FIELD,
                 render_contract=toy_template_render_contract(),
-                transport_factory=transport_factory,
+                transport_factory=fake_llm_transport_factory,
             )
         else:
             driver = GraphRolloutEvalDriver(
                 eval_runner=FakeEvalProcedureRunner(),
                 mutation_field=TOY_MUTATION_FIELD,
                 render_contract=toy_template_render_contract(),
-                transport_factory=transport_factory,
+                transport_factory=fake_llm_transport_factory,
             )
         partial_log = None
         if self.partial_log_path is not None:

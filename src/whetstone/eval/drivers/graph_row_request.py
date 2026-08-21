@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import importlib
 from collections.abc import Mapping
 from typing import Any
 
 from dr_graph import GraphConfig
 from dr_providers import ProviderCallConfig
-from pydantic import BaseModel, ConfigDict, JsonValue, StrictInt, StrictStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    JsonValue,
+    StrictInt,
+    StrictStr,
+    field_validator,
+)
 
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.traces import ExecutedComponentStep, ExecutedRowState
@@ -14,9 +22,83 @@ from whetstone.execution.fanout import FanoutStatus
 __all__ = [
     "GraphRowRequest",
     "decode_graph_row_output",
+    "import_path_for_callable",
+    "import_path_for_type",
+    "resolve_import_path",
     "rollout_row_output_from_worker_payload",
     "worker_request_identities",
 ]
+
+
+def _split_import_path(path: str) -> tuple[str, str]:
+    module_name, separator, object_name = path.partition(":")
+    if (
+        not separator
+        or not module_name
+        or not object_name
+        or ":" in object_name
+        or "." in object_name
+        or any(not part.isidentifier() for part in module_name.split("."))
+        or not object_name.isidentifier()
+    ):
+        raise ValueError(
+            "import path must be 'importable.module:top_level_name'"
+        )
+    return module_name, object_name
+
+
+def resolve_import_path(path: str) -> object:
+    """Import a top-level ``module:name`` symbol for worker reconstruction."""
+    module_name, object_name = _split_import_path(path)
+    module = importlib.import_module(module_name)
+    try:
+        candidate = getattr(module, object_name)
+    except AttributeError as exc:
+        raise ValueError(
+            f"{path!r} does not name an attribute of {module_name}"
+        ) from exc
+    if (
+        getattr(candidate, "__module__", None) != module_name
+        or getattr(candidate, "__name__", None) != object_name
+    ):
+        raise TypeError(
+            f"{path!r} does not name a top-level object defined in its module"
+        )
+    return candidate
+
+
+def _import_path_for_top_level(obj: object) -> str:
+    name = getattr(obj, "__name__", None)
+    module_name = getattr(obj, "__module__", None)
+    qualname = getattr(obj, "__qualname__", None)
+    if (
+        not isinstance(name, str)
+        or not name
+        or not isinstance(module_name, str)
+        or not module_name
+    ):
+        raise ValueError("object is not a top-level importable symbol")
+    if qualname != name:
+        raise ValueError(
+            f"{name!r} is not a top-level symbol (qualname={qualname!r})"
+        )
+    path = f"{module_name}:{name}"
+    resolved = resolve_import_path(path)
+    if resolved is not obj:
+        raise ValueError(f"{path!r} does not resolve to the provided object")
+    return path
+
+
+def import_path_for_callable(obj: object) -> str:
+    if not callable(obj):
+        raise TypeError("object is not callable")
+    return _import_path_for_top_level(obj)
+
+
+def import_path_for_type(obj: type[Any]) -> str:
+    if not isinstance(obj, type):
+        raise TypeError("object is not a type")
+    return _import_path_for_top_level(obj)
 
 
 class GraphRowRequest(BaseModel):
@@ -42,8 +124,25 @@ class GraphRowRequest(BaseModel):
     prompt_inputs: dict[str, StrictStr] = {}
     gold: StrictStr = ""
     transport_api_key_env: StrictStr = "WHETSTONE_TOY_API_KEY"
+    transport_factory: StrictStr
+    eval_runner: StrictStr
+    prompt_adapter_type: StrictStr
+    prompt_adapter: JsonValue
     partial_log_path: StrictStr | None = None
     prompt_cache_path: StrictStr | None = None
+
+    @field_validator("transport_factory", "eval_runner", "prompt_adapter_type")
+    @classmethod
+    def _collaborator_path_is_top_level(cls, value: str) -> str:
+        _split_import_path(value)
+        return value
+
+    @field_validator("prompt_adapter")
+    @classmethod
+    def _prompt_adapter_is_object(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            raise ValueError("prompt_adapter must be a JSON object")
+        return value
 
     @property
     def parsed_graph_config(self) -> GraphConfig:
