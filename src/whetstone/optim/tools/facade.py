@@ -21,13 +21,14 @@ from whetstone.optim.tools._postgres import (
     _PostgreSQLAdmissionBackend,
 )
 from whetstone.optim.tools._sqlite import _SQLiteAdmissionBackend
+from dr_store.relational import TransactionObserver
+
 from whetstone.optim.tools.admission import (
     ToolCallState,
     ToolCallStoreConflictError,
     ToolCallStoreEntry,
     _AdmissionBackend,
     _capacity_scope_key,
-    _SQLiteTransactionObserver,
     _validate_admission_attempt,
     tool_effect_request,
 )
@@ -64,7 +65,7 @@ class ToolAdmissionAuthority:
         cls,
         path: str | Path,
         *,
-        _transaction_observer: _SQLiteTransactionObserver | None = None,
+        _transaction_observer: TransactionObserver | None = None,
     ) -> ToolAdmissionAuthority:
         return cls(
             _SQLiteAdmissionBackend(

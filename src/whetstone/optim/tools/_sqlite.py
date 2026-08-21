@@ -3,6 +3,14 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from dr_store.relational import (
+    RelationalContractMismatchError,
+    TransactionObserver,
+    connect_sqlite,
+    sqlite_owned_tables,
+    verify_sqlite_table,
+)
+
 from whetstone.optim.tools.admission import (
     _CAPACITY_TABLE,
     _ENTRY_TABLE,
@@ -23,25 +31,23 @@ from whetstone.optim.tools.admission import (
     _is_exact_schema_version_row,
     _raise_owned_table_inventory_mismatch,
     _replay_or_conflict,
+    _reraise_schema_mismatch,
     _scope_key,
-    _SQLiteTransactionObserver,
 )
 from whetstone.optim.tools.contracts import (
     ToolCapacityScope,
 )
 
-type _ColumnContract = tuple[str, str, bool, int]
-
-_SQLITE_SCHEMA_COLUMNS: tuple[_ColumnContract, ...] = (
+_SQLITE_SCHEMA_COLUMNS = (
     ("component", "TEXT", True, 1),
     ("version", "INTEGER", True, 0),
 )
-_SQLITE_ENTRY_COLUMNS: tuple[_ColumnContract, ...] = (
+_SQLITE_ENTRY_COLUMNS = (
     ("store_namespace_key", "TEXT", True, 1),
     ("call_id", "TEXT", True, 2),
     ("entry_json", "TEXT", True, 0),
 )
-_SQLITE_CAPACITY_COLUMNS: tuple[_ColumnContract, ...] = (
+_SQLITE_CAPACITY_COLUMNS = (
     ("store_namespace_key", "TEXT", True, 1),
     ("tool_config_hash", "TEXT", True, 2),
     ("capacity_scope", "TEXT", True, 3),
@@ -103,38 +109,14 @@ CREATE TABLE IF NOT EXISTS {_CAPACITY_TABLE} (
 """
 
 
-def _sqlite_columns(
-    connection: sqlite3.Connection,
-    table: str,
-) -> tuple[_ColumnContract, ...]:
-    rows = connection.execute(f'PRAGMA table_info("{table}")').fetchall()
-    return tuple(
-        (str(name), str(column_type), bool(not_null), int(primary_key))
-        for _, name, column_type, not_null, _, primary_key in rows
-    )
-
-
-def _normalized_sql(value: str) -> str:
-    return " ".join(value.split())
-
-
-def _sqlite_owned_tables(connection: sqlite3.Connection) -> set[str]:
-    rows = connection.execute(
-        """
-        SELECT name FROM sqlite_master
-        WHERE type = 'table' AND name IN (?, ?, ?)
-        ORDER BY name
-        """,
-        (_SCHEMA_TABLE, _ENTRY_TABLE, _CAPACITY_TABLE),
-    ).fetchall()
-    if not all(len(row) == 1 and type(row[0]) is str for row in rows):
-        raise ToolAdmissionSchemaMismatchError(
-            table="<catalog>",
-            aspect="owned table inventory",
-            expected="text table names",
-            actual=rows,
+def _owned_tables(connection: sqlite3.Connection) -> set[str]:
+    try:
+        return sqlite_owned_tables(
+            connection,
+            (_SCHEMA_TABLE, _ENTRY_TABLE, _CAPACITY_TABLE),
         )
-    return {row[0] for row in rows}
+    except RelationalContractMismatchError as exc:
+        _reraise_schema_mismatch(exc)
 
 
 def _verify_sqlite_schema(connection: sqlite3.Connection) -> None:
@@ -147,38 +129,15 @@ def _verify_sqlite_schema(connection: sqlite3.Connection) -> None:
             _SQLITE_CREATE_CAPACITY,
         ),
     ):
-        actual = _sqlite_columns(connection, table)
-        if actual != expected_columns:
-            raise ToolAdmissionSchemaMismatchError(
+        try:
+            verify_sqlite_table(
+                connection,
                 table=table,
-                aspect="columns",
-                expected=expected_columns,
-                actual=actual,
+                create_sql=create_sql,
+                columns=expected_columns,
             )
-        raw_sql = connection.execute(
-            """
-            SELECT sql FROM sqlite_master
-            WHERE type = 'table' AND name = ?
-            """,
-            (table,),
-        ).fetchone()
-        actual_sql = (
-            None
-            if raw_sql is None or not isinstance(raw_sql[0], str)
-            else _normalized_sql(raw_sql[0])
-        )
-        expected_sql = _normalized_sql(create_sql).replace(
-            "CREATE TABLE IF NOT EXISTS",
-            "CREATE TABLE",
-            1,
-        )
-        if actual_sql != expected_sql:
-            raise ToolAdmissionSchemaMismatchError(
-                table=table,
-                aspect="table definition",
-                expected=expected_sql,
-                actual=actual_sql,
-            )
+        except RelationalContractMismatchError as exc:
+            _reraise_schema_mismatch(exc)
 
 
 class _SQLiteAdmissionBackend:
@@ -186,7 +145,7 @@ class _SQLiteAdmissionBackend:
         self,
         path: str | Path,
         *,
-        transaction_observer: _SQLiteTransactionObserver | None = None,
+        transaction_observer: TransactionObserver | None = None,
     ) -> None:
         self._path = str(path)
         if not self._path:
@@ -200,35 +159,18 @@ class _SQLiteAdmissionBackend:
     def _connect(
         self, *, observe_transaction: bool = False
     ) -> sqlite3.Connection:
-        connection = sqlite3.connect(
-            self._path, timeout=30.0, isolation_level=None
+        return connect_sqlite(
+            self._path,
+            observer=(
+                self._transaction_observer if observe_transaction else None
+            ),
         )
-        connection.execute("PRAGMA busy_timeout = 30000")
-        if observe_transaction and self._transaction_observer is not None:
-            observer = self._transaction_observer
-
-            def authorize(
-                action_code: int,
-                argument_1: str | None,
-                _argument_2: str | None,
-                _database_name: str | None,
-                _trigger_name: str | None,
-            ) -> int:
-                if (
-                    action_code == sqlite3.SQLITE_TRANSACTION
-                    and argument_1 == "BEGIN"
-                ):
-                    observer.transaction_attempted()
-                return sqlite3.SQLITE_OK
-
-            connection.set_authorizer(authorize)
-        return connection
 
     def initialize(self) -> None:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            tables = _sqlite_owned_tables(connection)
+            tables = _owned_tables(connection)
             unversioned = {_ENTRY_TABLE, _CAPACITY_TABLE}
             versioned = {_SCHEMA_TABLE, _ENTRY_TABLE, _CAPACITY_TABLE}
             if not tables:

@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
-from contextlib import AbstractContextManager
-from typing import Any, Protocol, cast
+from typing import Any, cast
+
+from dr_store.relational import (
+    ConnectFactory,
+    RelationalContractMismatchError,
+    verify_postgres_table,
+)
 
 from whetstone.optim.tools.admission import (
     _CAPACITY_TABLE,
@@ -26,6 +30,7 @@ from whetstone.optim.tools.admission import (
     _is_exact_schema_version_row,
     _raise_owned_table_inventory_mismatch,
     _replay_or_conflict,
+    _reraise_schema_mismatch,
     _scope_key,
 )
 from whetstone.optim.tools.contracts import (
@@ -38,6 +43,7 @@ type _PostgreSQLColumnContract = tuple[
     str,
     str,
     bool,
+    int,
     str | None,
     str | None,
     str | None,
@@ -46,28 +52,30 @@ type _PostgreSQLColumnContract = tuple[
 ]
 
 _POSTGRES_SCHEMA_COLUMNS: tuple[_PostgreSQLColumnContract, ...] = (
-    ("component", "text", True, "pg_catalog", "C", "c", True, -1),
-    ("version", "bigint", True, None, None, None, None, None),
+    ("component", "text", True, 1, "pg_catalog", "C", "c", True, -1),
+    ("version", "bigint", True, 2, None, None, None, None, None),
 )
 _POSTGRES_ENTRY_COLUMNS: tuple[_PostgreSQLColumnContract, ...] = (
     (
         "store_namespace_key",
         "text",
         True,
+        1,
         "pg_catalog",
         "C",
         "c",
         True,
         -1,
     ),
-    ("call_id", "text", True, "pg_catalog", "C", "c", True, -1),
-    ("entry_json", "text", True, "pg_catalog", "C", "c", True, -1),
+    ("call_id", "text", True, 2, "pg_catalog", "C", "c", True, -1),
+    ("entry_json", "text", True, 3, "pg_catalog", "C", "c", True, -1),
 )
 _POSTGRES_CAPACITY_COLUMNS: tuple[_PostgreSQLColumnContract, ...] = (
     (
         "store_namespace_key",
         "text",
         True,
+        1,
         "pg_catalog",
         "C",
         "c",
@@ -78,16 +86,27 @@ _POSTGRES_CAPACITY_COLUMNS: tuple[_PostgreSQLColumnContract, ...] = (
         "tool_config_hash",
         "text",
         True,
+        2,
         "pg_catalog",
         "C",
         "c",
         True,
         -1,
     ),
-    ("capacity_scope", "text", True, "pg_catalog", "C", "c", True, -1),
-    ("capacity_scope_id", "text", True, "pg_catalog", "C", "c", True, -1),
-    ("max_accepted_calls", "bigint", True, None, None, None, None, None),
-    ("consumed", "bigint", True, None, None, None, None, None),
+    ("capacity_scope", "text", True, 3, "pg_catalog", "C", "c", True, -1),
+    ("capacity_scope_id", "text", True, 4, "pg_catalog", "C", "c", True, -1),
+    (
+        "max_accepted_calls",
+        "bigint",
+        True,
+        5,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ),
+    ("consumed", "bigint", True, 6, None, None, None, None, None),
 )
 
 type _PostgreSQLConstraint = tuple[
@@ -236,282 +255,29 @@ def _entry_lock_key(key: _EntryKey) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
-_POSTGRES_COLUMNS_SQL = """
-SELECT column_record.column_name,
-       column_record.data_type,
-       column_record.is_nullable,
-       collation_namespace.nspname,
-       collation_record.collname,
-       collation_record.collprovider,
-       collation_record.collisdeterministic,
-       collation_record.collencoding
-FROM information_schema.columns AS column_record
-JOIN pg_catalog.pg_namespace AS table_namespace
-  ON table_namespace.nspname = column_record.table_schema
-JOIN pg_catalog.pg_class AS table_record
-  ON table_record.relnamespace = table_namespace.oid
- AND table_record.relname = column_record.table_name
-JOIN pg_catalog.pg_attribute AS attribute_record
-  ON attribute_record.attrelid = table_record.oid
- AND attribute_record.attname = column_record.column_name
-LEFT JOIN pg_catalog.pg_collation AS collation_record
-  ON collation_record.oid = attribute_record.attcollation
-LEFT JOIN pg_catalog.pg_namespace AS collation_namespace
-  ON collation_namespace.oid = collation_record.collnamespace
-WHERE column_record.table_schema = current_schema()
-  AND column_record.table_name = %s
-ORDER BY column_record.ordinal_position
-"""
 _POSTGRES_SERVER_ENCODING_SQL = "SHOW server_encoding"
-_POSTGRES_CONSTRAINTS_SQL = """
-SELECT cls.relname, constraint_record.contype,
-       COALESCE(
-           array_agg(attribute_record.attname::text ORDER BY key.ordinality)
-               FILTER (WHERE attribute_record.attname IS NOT NULL),
-           ARRAY[]::text[]
-       ),
-       CASE
-           WHEN constraint_record.contype = 'c'
-           THEN pg_get_expr(
-               constraint_record.conbin,
-               constraint_record.conrelid,
-               true
-           )
-           ELSE NULL
-       END,
-       constraint_record.condeferrable,
-       constraint_record.condeferred,
-       constraint_record.convalidated,
-       constraint_record.connoinherit
-FROM pg_catalog.pg_constraint AS constraint_record
-JOIN pg_catalog.pg_class AS cls
-  ON cls.oid = constraint_record.conrelid
-JOIN pg_catalog.pg_namespace AS namespace_record
-  ON namespace_record.oid = cls.relnamespace
-LEFT JOIN LATERAL unnest(constraint_record.conkey)
-    WITH ORDINALITY AS key(attnum, ordinality)
-  ON true
-LEFT JOIN pg_catalog.pg_attribute AS attribute_record
-  ON attribute_record.attrelid = constraint_record.conrelid
- AND attribute_record.attnum = key.attnum
-WHERE namespace_record.nspname = current_schema()
-  AND cls.relname IN (%s, %s, %s)
-  AND constraint_record.contype IN ('p', 'c')
-GROUP BY cls.relname,
-         constraint_record.contype,
-         constraint_record.conname,
-         constraint_record.conbin,
-         constraint_record.conrelid,
-         constraint_record.condeferrable,
-         constraint_record.condeferred,
-         constraint_record.convalidated,
-         constraint_record.connoinherit
-ORDER BY cls.relname, constraint_record.contype, constraint_record.conname
-"""
+type _Connect = ConnectFactory
 
 
-class _Cursor(Protocol):
-    rowcount: int
-
-    def execute(
-        self, query: str, params: tuple[Any, ...] | None = None
-    ) -> Any: ...
-
-    def fetchone(self) -> tuple[Any, ...] | None: ...
-
-    def fetchall(self) -> list[tuple[Any, ...]]: ...
-
-    def __enter__(self) -> _Cursor: ...
-
-    def __exit__(self, *args: object) -> None: ...
-
-
-class _Connection(Protocol):
-    def cursor(self) -> _Cursor: ...
-
-    def __enter__(self) -> _Connection: ...
-
-    def __exit__(self, *args: object) -> None: ...
-
-
-_Connect = Callable[[str], AbstractContextManager[_Connection]]
-
-
-def _postgres_columns(
-    cursor: _Cursor,
-    table: str,
-) -> tuple[_PostgreSQLColumnContract, ...]:
-    cursor.execute(_POSTGRES_COLUMNS_SQL, (table,))
-    return tuple(
-        (
-            str(name),
-            str(column_type),
-            str(is_nullable) == "NO",
-            (None if collation_schema is None else str(collation_schema)),
-            None if collation_name is None else str(collation_name),
-            (None if collation_provider is None else str(collation_provider)),
-            (
-                None
-                if collation_is_deterministic is None
-                else bool(collation_is_deterministic)
-            ),
-            (None if collation_encoding is None else int(collation_encoding)),
-        )
-        for (
-            name,
-            column_type,
-            is_nullable,
-            collation_schema,
-            collation_name,
-            collation_provider,
-            collation_is_deterministic,
-            collation_encoding,
-        ) in cursor.fetchall()
-    )
-
-
-def _postgres_constraints(
-    rows: list[tuple[Any, ...]],
-) -> tuple[_PostgreSQLConstraint, ...]:
-    constraints: list[_PostgreSQLConstraint] = []
-    for row in rows:
-        if len(row) != 8:
-            raise ToolAdmissionSchemaMismatchError(
-                table="<catalog>",
-                aspect="constraint row shape",
-                expected=8,
-                actual=row,
-            )
-        (
-            table,
-            constraint_type,
-            columns,
-            expression,
-            deferrable,
-            deferred,
-            validated,
-            no_inherit,
-        ) = row
-        if not isinstance(columns, (list, tuple)) or not all(
-            isinstance(column, str) for column in columns
-        ):
-            raise ToolAdmissionSchemaMismatchError(
-                table=str(table),
-                aspect="constrained columns",
-                expected="a sequence of column names",
-                actual=columns,
-            )
-        flags = (deferrable, deferred, validated, no_inherit)
-        if not all(isinstance(flag, bool) for flag in flags):
-            raise ToolAdmissionSchemaMismatchError(
-                table=str(table),
-                aspect="constraint flags",
-                expected="four booleans",
-                actual=flags,
-            )
-        constraints.append(
-            (
-                str(table),
-                str(constraint_type),
-                tuple(columns),
-                None if expression is None else str(expression),
-                deferrable,
-                deferred,
-                validated,
-                no_inherit,
-            )
-        )
-    return tuple(constraints)
-
-
-def _describe_postgres_constraint(
-    constraint: _PostgreSQLConstraint,
-) -> str:
-    (
-        table,
-        constraint_type,
-        columns,
-        expression,
-        deferrable,
-        deferred,
-        validated,
-        no_inherit,
-    ) = constraint
-    if constraint_type == "p":
-        definition = f"PRIMARY KEY ({', '.join(columns)})"
-    else:
-        definition = f"CHECK ({expression}) on columns ({', '.join(columns)})"
-    return (
-        f"{table} {definition} [deferrable={deferrable}, "
-        f"deferred={deferred}, validated={validated}, "
-        f"no_inherit={no_inherit}]"
-    )
-
-
-def _verify_postgres_constraints(rows: list[tuple[Any, ...]]) -> None:
-    remaining = list(_postgres_constraints(rows))
-    missing: list[_PostgreSQLConstraint] = []
-    for expected in _POSTGRES_CONSTRAINTS:
-        if expected in remaining:
-            remaining.remove(expected)
-        else:
-            missing.append(expected)
-    if not missing and not remaining:
-        return
-    details: list[str] = []
-    if missing:
-        details.append(
-            "missing "
-            + "; ".join(
-                _describe_postgres_constraint(constraint)
-                for constraint in missing
-            )
-        )
-    if remaining:
-        details.append(
-            "unexpected "
-            + "; ".join(
-                _describe_postgres_constraint(constraint)
-                for constraint in remaining
-            )
-        )
-    affected_tables = sorted(
-        {constraint[0] for constraint in (*missing, *remaining)}
-    )
-    raise ToolAdmissionSchemaMismatchError(
-        table=(
-            affected_tables[0]
-            if len(affected_tables) == 1
-            else "<constraint catalog>"
-        ),
-        aspect="PRIMARY KEY and CHECK constraints",
-        expected="; ".join(
-            _describe_postgres_constraint(constraint)
-            for constraint in _POSTGRES_CONSTRAINTS
-        ),
-        actual="; ".join(details),
-    )
-
-
-def _verify_postgres_schema(cursor: _Cursor) -> None:
+def _verify_postgres_schema(connection: Any) -> None:
     for table, expected_columns in (
         (_SCHEMA_TABLE, _POSTGRES_SCHEMA_COLUMNS),
         (_ENTRY_TABLE, _POSTGRES_ENTRY_COLUMNS),
         (_CAPACITY_TABLE, _POSTGRES_CAPACITY_COLUMNS),
     ):
-        actual = _postgres_columns(cursor, table)
-        if actual != expected_columns:
-            raise ToolAdmissionSchemaMismatchError(
+        try:
+            verify_postgres_table(
+                connection,
                 table=table,
-                aspect="columns",
-                expected=expected_columns,
-                actual=actual,
+                columns=expected_columns,
+                constraints=tuple(
+                    constraint
+                    for constraint in _POSTGRES_CONSTRAINTS
+                    if constraint[0] == table
+                ),
             )
-    cursor.execute(
-        _POSTGRES_CONSTRAINTS_SQL,
-        (_SCHEMA_TABLE, _ENTRY_TABLE, _CAPACITY_TABLE),
-    )
-    _verify_postgres_constraints(cursor.fetchall())
+        except RelationalContractMismatchError as exc:
+            _reraise_schema_mismatch(exc)
 
 
 class _PostgreSQLAdmissionBackend:
@@ -574,7 +340,8 @@ class _PostgreSQLAdmissionBackend:
                     insert_metadata = False
                 else:
                     _raise_owned_table_inventory_mismatch(tables)
-                _verify_postgres_schema(cursor)
+            _verify_postgres_schema(connection)
+            with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT version FROM {_SCHEMA_TABLE}
@@ -621,11 +388,11 @@ class _PostgreSQLAdmissionBackend:
                     )
 
     @staticmethod
-    def _lock_entry(cursor: _Cursor, key: _EntryKey) -> None:
+    def _lock_entry(cursor: Any, key: _EntryKey) -> None:
         cursor.execute(_POSTGRES_ENTRY_LOCK_SQL, (_entry_lock_key(key),))
 
     @staticmethod
-    def _load(cursor: _Cursor, key: _EntryKey) -> ToolCallStoreEntry | None:
+    def _load(cursor: Any, key: _EntryKey) -> ToolCallStoreEntry | None:
         cursor.execute(
             f"""
             SELECT entry_json FROM {_ENTRY_TABLE}
