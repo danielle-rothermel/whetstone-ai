@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from dr_store.sync import BlockingObjectStore, open_sqlite
 
@@ -159,6 +161,69 @@ def test_prepare_copro_run_uses_caller_experiment(sqlite_store) -> None:
     )
     assert launch.run.reward_policy == experiment.reward_policy
     assert launch.initial_candidate == experiment.initial_candidate
+
+
+def test_build_toy_copro_control_binds_engine_hashes(sqlite_store) -> None:
+    from dr_providers import ProviderKind
+
+    from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.testing.toy.experiment import build_toy_experiment
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig(
+        provider_kind=ProviderKind.ANTHROPIC,
+    ).build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    assert (
+        control.expected_reward_policy_hash
+        == engine.reward_policy_identity_hash()
+    )
+    assert (
+        control.provider_execution_policy_hash
+        == engine.execution_policy_identity_hash()
+    )
+
+
+def test_prepare_copro_run_rejects_mismatched_reward_policy(
+    sqlite_store,
+) -> None:
+    from whetstone.coordination.runtime_bootstrap import (
+        build_toy_copro_control,
+        prepare_copro_run,
+    )
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.experiment.reward import RewardPolicy, RewardTerm
+    from whetstone.testing.toy.experiment import build_toy_experiment
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    runtime = register_runtime(
+        store=sqlite_store,
+        engine=engine,
+        copro_control=control,
+    )
+    other = replace(
+        experiment,
+        reward_policy=RewardPolicy(
+            policy_name="other-reward",
+            terms=(RewardTerm(name="score", weight=1.0),),
+        ),
+    )
+    with pytest.raises(ValueError, match="reward policy must match"):
+        prepare_copro_run(
+            runtime,
+            run_id="mismatched-reward",
+            control=control,
+            experiment=other,
+        )
 
 
 def test_register_runtime_accepts_caller_proposer_transport(sqlite_store) -> None:

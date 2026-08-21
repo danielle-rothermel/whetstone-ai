@@ -32,7 +32,6 @@ from whetstone.optim.proposal.proposer import (
     prompt_adapter_identity_hash,
 )
 from whetstone.provider.language_model import PlainPromptAdapter
-from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
 from whetstone.testing.fakes.proposer import DummyProposerTransport
 from whetstone.testing.toy.experiment import (
     TOY_MUTATION_FIELD,
@@ -93,14 +92,8 @@ def build_toy_copro_control(
     from whetstone.optim.copro.control import CoproInjectedDefaults, configure_copro
     from whetstone.sandbox.copro_step import toy_copro_proposal_contract
 
-    experiment = build_toy_experiment(num_seeds=1)
     if engine is None:
         raise ValueError("engine is required to bind COPRO evaluation authority")
-    execution_policy = ProviderExecutionPolicy(
-        transport_policy=default_transport_policy(
-            api_key_env="WHETSTONE_TOY_API_KEY",
-        )
-    )
     prompt_adapter = PlainPromptAdapter()
     defaults = CoproInjectedDefaults(
         prompt_model=ProposerConfig(
@@ -113,8 +106,8 @@ def build_toy_copro_control(
         eval_config_ref=engine.eval_config_ref,
         eval_role=EvalRole.INTERNAL,
         provider_execution_policy_ref=engine.provider_execution_policy_ref,
-        expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
-        provider_execution_policy_hash=execution_policy.identity_hash,
+        expected_reward_policy_hash=engine.reward_policy_identity_hash(),
+        provider_execution_policy_hash=engine.execution_policy_identity_hash(),
         prompt_adapter=prompt_adapter,
     )
     return configure_copro(
@@ -249,6 +242,14 @@ def prepare_copro_run(
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 
     resolved = experiment or build_toy_experiment(num_seeds=1)
+    if (
+        resolved.reward_policy.identity_hash()
+        != control.expected_reward_policy_hash
+    ):
+        raise ValueError(
+            "prepare_copro_run experiment reward policy must match "
+            "the control expected_reward_policy_hash"
+        )
     candidate = initial_candidate or resolved.initial_candidate
     run = OptimRun(
         run_id=run_id,
@@ -293,6 +294,11 @@ def prepare_gepa_run(
             "register_runtime(..., extra_adapters={...})"
         ) from exc
     resolved = experiment or build_toy_experiment(num_seeds=1)
+    if resolved.reward_policy.identity_hash() != control.reward_policy_hash:
+        raise ValueError(
+            "prepare_gepa_run experiment reward policy must match "
+            "the control reward_policy_hash"
+        )
     candidate = initial_candidate or resolved.initial_candidate
     run = OptimRun(
         run_id=run_id,
