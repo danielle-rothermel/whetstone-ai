@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from dr_platform._core.identities import StageKey
 from dr_store.content_addressing import format_object_reference, parse_object_reference
 
@@ -140,10 +141,7 @@ def test_eval_fanin_resolution_with_mock_row_executor(copro_launch) -> None:
     assert fanin_completion.output_reference
     assert fanin_completion.successors
     assert fanin_completion.successors[0].stage_key.value == "optim_step"
-    assert (
-        fanin_completion.successors[0].stage_index
-        > fanin_successors[0].stage_index
-    )
+    assert fanin_completion.successors[0].stage_index > fanin_successors[0].stage_index
 
 
 def test_eval_fanin_ignores_other_episode_predecessors(copro_launch) -> None:
@@ -443,4 +441,62 @@ def test_run_manifest_roundtrip(sqlite_store) -> None:
     reference = persist_run_manifest(sqlite_store, manifest)
     loaded = load_run_manifest(sqlite_store, reference)
     assert loaded == manifest
+    assert format_object_reference(parse_object_reference(reference)) == reference
+
+
+def test_run_manifest_rejects_duplicate_work_keys() -> None:
+    from whetstone.platform.contracts import OptimRunManifest, OptimRunMemberEntry
+
+    with pytest.raises(ValueError, match="work_key"):
+        OptimRunManifest(
+            platform_run_key="run-1",
+            membership_digest="digest-1",
+            members=(
+                OptimRunMemberEntry(work_key="work-1", run_id="harness-run-1"),
+                OptimRunMemberEntry(work_key="work-1", run_id="harness-run-2"),
+            ),
+        )
+
+
+def test_run_manifest_rejects_duplicate_run_ids() -> None:
+    from whetstone.platform.contracts import OptimRunManifest, OptimRunMemberEntry
+
+    with pytest.raises(ValueError, match="run_id"):
+        OptimRunManifest(
+            platform_run_key="run-1",
+            membership_digest="digest-1",
+            members=(
+                OptimRunMemberEntry(work_key="work-1", run_id="harness-run-1"),
+                OptimRunMemberEntry(work_key="work-2", run_id="harness-run-1"),
+            ),
+        )
+
+
+def test_run_result_roundtrip(sqlite_store) -> None:
+    from whetstone.platform.contracts import (
+        OptimPlatformRunResult,
+        OptimRunMemberResult,
+        load_run_result,
+        persist_run_result,
+    )
+
+    run_result = OptimPlatformRunResult(
+        platform_run_key="run-1",
+        membership_digest="digest-1",
+        member_results=(
+            OptimRunMemberResult(
+                work_key="work-1",
+                run_id="harness-run-1",
+                result_reference="whetstone.optim_result:aaaa",
+            ),
+            OptimRunMemberResult(
+                work_key="work-2",
+                run_id="harness-run-2",
+                result_reference="whetstone.optim_result:bbbb",
+            ),
+        ),
+    )
+    reference = persist_run_result(sqlite_store, run_result)
+    loaded = load_run_result(sqlite_store, reference)
+    assert loaded == run_result
     assert format_object_reference(parse_object_reference(reference)) == reference

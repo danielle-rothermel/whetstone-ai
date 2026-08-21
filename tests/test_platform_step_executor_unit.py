@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+from dr_platform._core.ledger.states import StageExecutionState
+from dr_platform.completion.execution import RunCompletionPayload, StateCount
+from dr_store.content_addressing import format_object_reference
 
 from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.coordination.runtime_bootstrap import (
@@ -12,9 +17,15 @@ from whetstone.coordination.runtime_bootstrap import (
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.platform.contracts import (
+    OPTIM_PIPELINE_KEY,
+    OPTIM_PIPELINE_VERSION,
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
+    OptimRunManifest,
+    OptimRunMemberEntry,
     OptimWorkInput,
+    load_run_result,
+    persist_run_manifest,
     persist_work_input,
 )
 from whetstone.platform.deferred_intents import (
@@ -24,12 +35,14 @@ from whetstone.platform.deferred_intents import (
 )
 from whetstone.platform.eval_fanin import execute_eval_fanin_sync, execute_eval_row_sync
 from whetstone.platform.step_executor import (
+    RUN_MEMBER_TERMINAL_BINDING_PREFIX,
     OptimWorkState,
     _evict_step_result_binding,
     _load_work_state,
     _persist_work_state,
     _platform_deferred_successors,
     execute_optim_step_sync,
+    execute_run_completion_for_run_sync,
 )
 from whetstone.platform.work_state_head import resolve_work_state_head
 
@@ -84,6 +97,7 @@ def _row_and_fanin_successors(completion):
         if successor.stage_key.value == STAGE_EVAL_FANIN
     ]
     return row_successors, fanin_successors
+
 
 def test_platform_deferral_recovers_when_cached_step_clears_deferred(
     copro_launch,
@@ -198,9 +212,7 @@ def test_platform_continue_without_eval_not_treated_as_deferral(
 
     def continue_without_eval(step_request, *, eval_context=None):
         if step_request.step_index == 0:
-            result, result_ref = real_run_step(
-                step_request, eval_context=eval_context
-            )
+            result, result_ref = real_run_step(step_request, eval_context=eval_context)
             runtime.harness._last_deferred_platform_intents = ()  # noqa: SLF001
             evict_deferred_intents(
                 runtime.store,
@@ -414,7 +426,9 @@ def test_platform_work_input_redrive_prefers_head_over_binding_reconstruction(
     assert head_state.pending_deferred_intents
 
     loaded_via_input = _load_work_state(runtime, input_reference)
-    assert loaded_via_input.pending_deferred_intents == head_state.pending_deferred_intents
+    assert (
+        loaded_via_input.pending_deferred_intents == head_state.pending_deferred_intents
+    )
 
     from whetstone.platform.work_state_head import evict_work_state_head
 
@@ -674,3 +688,134 @@ def test_platform_deferral_ignores_stale_prior_step_persisted_intents(
     recovered_state = _load_work_state(runtime, recovered.output_reference)
     assert recovered_state.pending_deferred_intents == step1_persisted
     assert recovered_state.pending_deferred_intents != stale_step0_intents
+
+
+def _bind_terminal_placeholder(
+    runtime, *, run_key: str, work_key: str, token: str
+) -> str:
+    reference, _ = runtime.store.put(
+        "whetstone.test_terminal_placeholder",
+        {"token": token},
+    )
+    runtime.store.bind(
+        f"{RUN_MEMBER_TERMINAL_BINDING_PREFIX}{run_key}:{work_key}",
+        reference,
+    )
+    return format_object_reference(reference)
+
+
+def _run_completion_payload(
+    *,
+    run_key: str,
+    manifest_reference: str,
+    membership_digest: str,
+    member_count: int,
+) -> RunCompletionPayload:
+    return RunCompletionPayload(
+        campaign_key="campaign-1",
+        run_key=run_key,
+        pipeline_key=OPTIM_PIPELINE_KEY,
+        pipeline_version=OPTIM_PIPELINE_VERSION,
+        execution_config_reference="exec-config-ref",
+        manifest_reference=manifest_reference,
+        membership_digest=membership_digest,
+        member_count=member_count,
+        released_at=datetime(2026, 8, 20, tzinfo=UTC),
+        release_terminal_state_counts=(
+            StateCount(state=StageExecutionState.SUCCEEDED, count=member_count),
+            StateCount(state=StageExecutionState.FAILED, count=0),
+            StateCount(state=StageExecutionState.CANCELLED, count=0),
+        ),
+    )
+
+
+def test_run_completion_for_run_persists_single_member_aggregate(toy_runtime) -> None:
+    runtime, _control = toy_runtime
+    members = (OptimRunMemberEntry(work_key="work-1", run_id="harness-1"),)
+    manifest = OptimRunManifest(
+        platform_run_key="run-1",
+        membership_digest="digest-1",
+        members=members,
+    )
+    manifest_reference = persist_run_manifest(runtime.store, manifest)
+    _bind_terminal_placeholder(
+        runtime,
+        run_key="run-1",
+        work_key="work-1",
+        token="terminal-1",
+    )
+    payload = _run_completion_payload(
+        run_key="run-1",
+        manifest_reference=manifest_reference,
+        membership_digest="digest-1",
+        member_count=1,
+    )
+    with patch(
+        "whetstone.platform.step_executor.execute_run_completion_sync",
+        return_value="whetstone.optim_result:member-1",
+    ):
+        result_ref = execute_run_completion_for_run_sync(runtime, payload=payload)
+    loaded = load_run_result(runtime.store, result_ref)
+    assert loaded.platform_run_key == "run-1"
+    assert loaded.membership_digest == "digest-1"
+    assert len(loaded.member_results) == 1
+    assert loaded.member_results[0].work_key == "work-1"
+    assert loaded.member_results[0].run_id == "harness-1"
+    assert (
+        loaded.member_results[0].result_reference == "whetstone.optim_result:member-1"
+    )
+
+
+def test_run_completion_for_run_persists_multi_member_aggregate(toy_runtime) -> None:
+    runtime, _control = toy_runtime
+    members = (
+        OptimRunMemberEntry(work_key="work-a", run_id="harness-a"),
+        OptimRunMemberEntry(work_key="work-b", run_id="harness-b"),
+    )
+    manifest = OptimRunManifest(
+        platform_run_key="run-1",
+        membership_digest="digest-2",
+        members=members,
+    )
+    manifest_reference = persist_run_manifest(runtime.store, manifest)
+    _bind_terminal_placeholder(
+        runtime,
+        run_key="run-1",
+        work_key="work-a",
+        token="terminal-a",
+    )
+    _bind_terminal_placeholder(
+        runtime,
+        run_key="run-1",
+        work_key="work-b",
+        token="terminal-b",
+    )
+    payload = _run_completion_payload(
+        run_key="run-1",
+        manifest_reference=manifest_reference,
+        membership_digest="digest-2",
+        member_count=2,
+    )
+    with patch(
+        "whetstone.platform.step_executor.execute_run_completion_sync",
+        side_effect=[
+            "whetstone.optim_result:member-a",
+            "whetstone.optim_result:member-b",
+        ],
+    ):
+        result_ref = execute_run_completion_for_run_sync(runtime, payload=payload)
+    loaded = load_run_result(runtime.store, result_ref)
+    assert loaded.platform_run_key == "run-1"
+    assert loaded.membership_digest == "digest-2"
+    assert tuple(item.work_key for item in loaded.member_results) == (
+        "work-a",
+        "work-b",
+    )
+    assert tuple(item.run_id for item in loaded.member_results) == (
+        "harness-a",
+        "harness-b",
+    )
+    assert tuple(item.result_reference for item in loaded.member_results) == (
+        "whetstone.optim_result:member-a",
+        "whetstone.optim_result:member-b",
+    )

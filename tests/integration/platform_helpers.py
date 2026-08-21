@@ -43,9 +43,16 @@ from whetstone.coordination.runtime_bootstrap import (
 from whetstone.core.blocking_store import BlockingObjectStore
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
-from whetstone.platform.contracts import STAGE_EVAL_FANIN, STAGE_EVAL_ROW
-from whetstone.platform.pipeline import EVAL_ROW_QUEUE_CONCURRENCY, register_optim_pipeline
-from whetstone.platform.submit import submit_optim_run
+from whetstone.platform.contracts import (
+    STAGE_EVAL_FANIN,
+    STAGE_EVAL_ROW,
+    load_run_result,
+)
+from whetstone.platform.pipeline import (
+    EVAL_ROW_QUEUE_CONCURRENCY,
+    register_optim_pipeline,
+)
+from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
 
 if TYPE_CHECKING:
     from dr_platform.runtime.dispatcher import DispatcherRegistration
@@ -369,8 +376,7 @@ def bootstrap_platform_runtime(
         engine=pg_engine,
         campaign_key=campaign_key,
         run_key=run_key,
-        work_key=work_key,
-        launch=launch,
+        members=(OptimRunMemberSpec(work_key=work_key, launch=launch),),
         controller_identity_hash=runtime.controller.runtime_hash,
         execution_config_reference=f"exec-config-{suffix}",
         dispatch_mode=dispatch_mode,
@@ -413,7 +419,12 @@ def load_terminal_optim_result(
     context: PlatformIntegrationContext,
     terminal_result_ref: str,
 ) -> OptimResult:
-    parsed = parse_object_reference(terminal_result_ref)
+    run_result = load_run_result(context.store, terminal_result_ref)
+    assert run_result.platform_run_key == context.run_key
+    assert len(run_result.member_results) == 1
+    member = run_result.member_results[0]
+    assert member.work_key == context.work_key
+    parsed = parse_object_reference(member.result_reference)
     assert parsed.schema == OPTIM_RESULT_SCHEMA
     result = OptimResult.model_validate(context.store.get(parsed))
     assert result.run.record.run_id == context.launch.run.run_id
