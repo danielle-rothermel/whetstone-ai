@@ -20,17 +20,18 @@ from whetstone.core.identity import (
     reject_non_json,
     require_full_hash,
 )
+from whetstone.optim.contracts import IntentResolution
 from whetstone.optim.gepa.prompts import GepaRenderedPrompt
 from whetstone.optim.proposal.proposer import ProposerConfig
 
 GEPA_EFFECT_CONTEXT_SCHEMA = "whetstone.gepa.effect_context"
-GEPA_EFFECT_CONTEXT_SCHEMA_VERSION = 2
+GEPA_EFFECT_CONTEXT_SCHEMA_VERSION = 1
 GEPA_EVALUATION_EFFECT_SCHEMA = "whetstone.gepa.evaluation_effect"
 GEPA_EVALUATION_EFFECT_SCHEMA_VERSION = 1
 GEPA_PROPOSAL_EFFECT_SCHEMA = "whetstone.gepa.proposal_effect"
 GEPA_PROPOSAL_EFFECT_SCHEMA_VERSION = 1
 GEPA_EFFECT_SLOT_SCHEMA = "whetstone.gepa.effect_slot"
-GEPA_EFFECT_SLOT_SCHEMA_VERSION = 2
+GEPA_EFFECT_SLOT_SCHEMA_VERSION = 1
 GEPA_EVALUATION_REQUEST_RECORD_SCHEMA = (
     "whetstone.gepa.evaluation_effect_request"
 )
@@ -48,20 +49,21 @@ class GepaEffectConflictError(RuntimeError):
 
 
 class GepaEffectContext(BaseModel):
-    """Identifies the harness Step whose search drives these effects.
+    """Identifies the GEPA search whose effects these are.
 
-    ``optim_step_index`` is the harness step index, not the effect ordinal.
-    Upstream ``optimize`` restarts its effect ordinals at zero on every step,
-    so without the step index two steps that replay the same candidate on the
-    same batch would mint byte-identical effect slots, effect requests, and
-    ``OptimEvalRequest`` values -- and therefore collide on the intent and
-    claim keys ``EvalEngineService`` derives from the request.
+    Deliberately step-agnostic. ``run_one_gepa_iteration`` re-runs upstream
+    ``optimize`` from the seed on every harness step with a larger
+    ``max_metric_calls``, and relies on the durable effect cache to replay the
+    already-completed prefix instead of paying for it again. Binding the
+    harness step index into this identity would change every slot on every
+    step and defeat that replay, so the executing harness step is stamped onto
+    the ``OptimEvalRequest`` at execution time instead -- a replayed effect
+    returns its recorded result and never reaches the intent layer.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
-    optim_step_index: StrictInt
     control_identity_hash: StrictStr
     source_manifest_identity_hash: StrictStr
     adapter_identity_hash: StrictStr
@@ -70,10 +72,6 @@ class GepaEffectContext(BaseModel):
     def _validate(self) -> GepaEffectContext:
         if not self.run_id:
             raise ValueError("GEPA effect run_id must be non-empty")
-        if self.optim_step_index < 0:
-            raise ValueError(
-                "GEPA effect optim_step_index cannot be negative"
-            )
         for field_name in (
             "control_identity_hash",
             "source_manifest_identity_hash",
@@ -393,11 +391,22 @@ class GepaEvaluationRow(BaseModel):
 
 
 class GepaEvaluationEffectResult(BaseModel):
+    """One recorded GEPA evaluation effect, replayable across steps.
+
+    ``resolution`` is the harness Intent Resolution the executing step
+    obtained. It is recorded with the effect so that a step replaying this
+    effect from the durable cache can reconstruct the same search evidence
+    the executing step emitted, instead of silently dropping it. A step that
+    crashes after recording effects but before persisting its checkpoint must
+    still report evidence for every evaluation its search caused.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     request_hash: StrictStr
     rows: tuple[GepaEvaluationRow, ...]
     logical_metric_calls: StrictInt
+    resolution: IntentResolution | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> GepaEvaluationEffectResult:
@@ -554,6 +563,16 @@ class GepaEvaluationEffectAuthority(Protocol):
         self,
         request: GepaEvaluationEffectRequest,
     ) -> GepaEvaluationEffectResult: ...
+
+    def collect_replayed(
+        self,
+        result: GepaEvaluationEffectResult,
+    ) -> None:
+        """Re-collect an effect the broker served from the durable cache.
+
+        A replayed effect issues no new intent, but the evaluation it stands
+        for remains evidence the replaying Step must report.
+        """
 
 
 class GepaProposalEffectAuthority(Protocol):

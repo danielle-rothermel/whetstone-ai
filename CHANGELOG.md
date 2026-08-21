@@ -66,11 +66,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A GEPA evaluation's `OptimEvalRequest` carries the harness step index as
   `optim_step_index`, matching every other adapter. It previously carried the
   per-step effect ordinal, which `run_one_gepa_iteration` resets each step, so
-  two steps replaying the same candidate on the same batch could mint
+  two steps executing the same candidate on the same batch could mint
   byte-identical requests and therefore identical intent and claim keys in
-  `EvalEngineService`. `GepaEffectContext` now carries `optim_step_index` and
-  is schema version 2, as is `GepaEffectSlot`; `invocation_ordinal` remains
+  `EvalEngineService`. The index is stamped on when an evaluation actually
+  executes, not carried in `GepaEffectContext`: the effect context and
+  `GepaEffectSlot` stay step-agnostic so that a step can replay the prefix
+  earlier steps already paid for, since `run_one_gepa_iteration` re-runs
+  `optimize` from the seed each step. `invocation_ordinal` remains
   effect-replay ordering only.
+- A GEPA evaluation effect records the harness Intent Resolution it obtained,
+  so a step replaying that effect from the durable cache reconstructs the same
+  `SearchEvidence` the executing step emitted. A step that crashed after
+  recording its effects but before persisting its adapter checkpoint therefore
+  retries with its search evidence intact rather than silently incomplete.
+  Replayed entries rebind to the step reporting them through
+  `SearchEvidence.from_replayed_resolution`.
+- The GEPA step output contract derives its terminal cardinality from the run
+  terminal contract's COMPLETE cardinality rather than its continuing
+  `returned_proposal_count`, so a run that binds the two differently no longer
+  rejects every honest completing step.
+- The harness checks each `SearchEvidence` entry's refs against the store
+  before persisting it: a COMPLETED or FAILED entry must cite an
+  eval-result record of the expected schema, and its refs must resolve. A
+  dangling or wrong-schema ref is now a contract violation rather than
+  harness-verified evidence.
 - Optimization Run, Step Request, Step Result, and Optimization Result records
   are schema version 3: `OptimRun` gains `initial_candidate_ref`, and Step
   Result gains `retained_candidate_ref`. The GEPA reflection prompt and

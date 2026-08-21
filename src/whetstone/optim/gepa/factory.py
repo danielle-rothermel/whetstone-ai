@@ -106,15 +106,17 @@ class CanonicalGepaAdapterFactory:
     def begin_step(self, *, step_index: int) -> None:
         """Bind this Step and drop evidence from earlier Steps.
 
-        ``step_index`` is the harness step index. It enters every effect
-        context this Step mints, so effect slots, effect requests, and the
-        derived ``OptimEvalRequest`` values stay distinct across Steps that
-        replay the same candidate on the same batch.
+        ``step_index`` is the harness step index. It deliberately stays out of
+        the effect context, whose identity must remain step-agnostic so this
+        Step can replay the prefix its predecessors already paid for. The
+        authority stamps it onto the ``OptimEvalRequest`` of each evaluation
+        it actually executes, so a fresh evaluation carries the Step that
+        caused it while a replayed one never reaches the intent layer.
         """
         if step_index < 0:
             raise ValueError("GEPA factory step_index cannot be negative")
         self._step_index = step_index
-        self._evaluation_authority.reset_resolved_intents()
+        self._evaluation_authority.begin_step(step_index=step_index)
         self._adapters.clear()
 
     def _require_step(self) -> int:
@@ -131,13 +133,22 @@ class CanonicalGepaAdapterFactory:
         step_index: int,
     ) -> tuple[SearchEvidence, ...]:
         """Evidence for every evaluation this Step's search drove."""
+        authority = self._evaluation_authority
+        resolutions = authority.resolved_intents
+        replayed = authority.replayed_flags
         return tuple(
-            SearchEvidence.from_resolution(
+            (
+                SearchEvidence.from_replayed_resolution
+                if was_replayed
+                else SearchEvidence.from_resolution
+            )(
                 resolution,
                 optim_run_id=run_id,
                 optim_step_index=step_index,
             )
-            for resolution in self._evaluation_authority.resolved_intents
+            for resolution, was_replayed in zip(
+                resolutions, replayed, strict=True
+            )
         )
 
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
@@ -168,7 +179,6 @@ class CanonicalGepaAdapterFactory:
         adapter = WhetstoneGepaAdapter(
             context=GepaEffectContext(
                 run_id=self._run_id,
-                optim_step_index=self._require_step(),
                 control_identity_hash=control.identity_hash(),
                 source_manifest_identity_hash=(
                     control.gepa_source_manifest_hash
@@ -197,7 +207,6 @@ class CanonicalGepaAdapterFactory:
             )
         expected_context = GepaEffectContext(
             run_id=self._run_id,
-            optim_step_index=self._require_step(),
             control_identity_hash=control.identity_hash(),
             source_manifest_identity_hash=control.gepa_source_manifest_hash,
             adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,

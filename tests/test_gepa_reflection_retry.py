@@ -128,7 +128,6 @@ def _adapter(bodies: list[str]) -> tuple[WhetstoneGepaAdapter, ScriptedProposalB
     adapter = WhetstoneGepaAdapter(
         context=GepaEffectContext(
             run_id="gepa-retry-run",
-            optim_step_index=0,
             control_identity_hash="f" * 64,
             source_manifest_identity_hash="0" * 64,
             adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,

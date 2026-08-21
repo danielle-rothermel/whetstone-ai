@@ -35,6 +35,11 @@ class HarnessGepaEffectBroker(GepaEffectBroker):
         self._recorder.record_request(request)
         cached = self._recorder.load_evaluation_result(request)
         if cached is not None:
+            # A replayed effect costs nothing and mints no intent, but the
+            # evaluation it stands for is still evidence this Step must
+            # report -- otherwise a retry after a mid-step crash silently
+            # drops it from the Step Result.
+            self._evaluation_authority.collect_replayed(cached)
             return cached
         result = self._evaluation_authority.evaluate(request)
         return self._recorder.record_evaluation_result(request, result)

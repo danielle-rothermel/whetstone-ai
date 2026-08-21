@@ -402,10 +402,15 @@ def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     second_ids = {e.eval_request_id for e in second.search_evidence}
     assert first_ids
     assert second_ids
-    # Step 2 reports its own evaluations, not step 1's replayed again.
-    # Disjoint, not merely unequal: re-reporting step 1's evidence alongside
-    # a new entry is exactly the cumulative failure this guards against.
-    assert not (first_ids & second_ids)
+    # ``run_one_gepa_iteration`` re-runs the search from the seed, so step 2
+    # replays step 1's evaluations from the effect cache and reports them as
+    # its own evidence -- an evaluation its search relied on must stay
+    # reachable from its Step Result. What it must not do is re-execute
+    # them, and it must add evidence of its own.
+    assert second_ids > first_ids
+    # Every entry is bound to the Step reporting it, replayed or executed.
+    assert {e.optim_step_index for e in first.search_evidence} == {0}
+    assert {e.optim_step_index for e in second.search_evidence} == {1}
 
 
 def _gepa_run(experiment, control, *, run_id: str) -> OptimRun:
@@ -427,13 +432,16 @@ def _gepa_run(experiment, control, *, run_id: str) -> OptimRun:
 def test_gepa_eval_requests_carry_the_harness_step_index(
     sqlite_store,
 ) -> None:
-    """Two GEPA steps must not mint identical eval intents.
+    """A freshly executed GEPA eval carries the Step that executed it.
 
     ``run_one_gepa_iteration`` resets the effect ordinal every step, so an
     ``optim_step_index`` taken from the effect ordinal would let two steps
-    that replay the same candidate on the same batch produce byte-identical
+    that execute the same candidate on the same batch produce byte-identical
     ``OptimEvalRequest`` values -- and therefore identical intent and claim
-    keys inside ``EvalEngineService``.
+    keys inside ``EvalEngineService``. The executing harness step is stamped
+    on at execution time, which separates the keys without disturbing the
+    step-agnostic effect replay identity: an evaluation replayed from the
+    effect cache issues no request at all.
     """
     from whetstone.coordination.eval_service import EvalEngineService as _Svc
 
@@ -475,12 +483,17 @@ def test_gepa_eval_requests_carry_the_harness_step_index(
     assert first_requests and second_requests
     # The index is the harness step index, not a per-step effect ordinal.
     assert {r.optim_step_index for r in first_requests} == {0}
-    assert {r.optim_step_index for r in second_requests} == {1}
-    # And that difference reaches the keys EvalEngineService derives.
+    # Step 2 replays step 1's evaluation (which keeps step 1's stamp, since
+    # step 1 executed it) and executes at least one fresh evaluation of its
+    # own, which carries step 2.
+    assert {r.optim_step_index for r in second_requests} == {0, 1}
+    fresh = tuple(r for r in second_requests if r.optim_step_index == 1)
+    assert fresh
+    # The freshly executed request's key is distinct from every step-0 key.
     first_keys = {_Svc._intent_ref(r).content_hash for r in first_requests}
-    second_keys = {_Svc._intent_ref(r).content_hash for r in second_requests}
-    assert not (first_keys & second_keys)
-    # The step evidence agrees with the requests it projects.
+    fresh_keys = {_Svc._intent_ref(r).content_hash for r in fresh}
+    assert not (first_keys & fresh_keys)
+    # Evidence binds to the Step reporting it, replayed or executed.
     assert {e.optim_step_index for e in first.search_evidence} == {0}
     assert {e.optim_step_index for e in second.search_evidence} == {1}
     assert {e.optim_run_id for e in second.search_evidence} == {run_id}
@@ -523,4 +536,216 @@ def test_search_evidence_bound_to_another_step_is_rejected(
         harness._validate_output_intents(
             request,
             AdapterOutput(search_evidence=(wrong_run,)),
+        )
+
+
+def test_gepa_step_replays_the_prior_step_prefix_without_re_executing(
+    sqlite_store,
+) -> None:
+    """Step N+1 replays step N's evaluations instead of paying again.
+
+    ``run_one_gepa_iteration`` re-runs upstream ``optimize`` from the seed on
+    every step with a larger ``max_metric_calls``, so the already-completed
+    prefix is re-requested every step. The durable effect cache is what keeps
+    that from being a cost blowup, and it only works while the effect replay
+    identity stays step-agnostic. Binding the harness step into the effect
+    context would re-execute the whole prefix on every step.
+    """
+    run_id = "gepa-replay-prefix"
+    experiment, engine, control, adapter, authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    executions: list[str] = []
+    inner_evaluate = authority.evaluate
+
+    def counting_evaluate(request):
+        executions.append(request.identity_hash())
+        return inner_evaluate(request)
+
+    authority.evaluate = counting_evaluate  # type: ignore[method-assign]
+
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+
+    first_request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    first, first_ref = harness.run_step(first_request)
+    assert first.status is StepStatus.CONTINUE
+    first_executions = tuple(executions)
+    assert first_executions
+
+    second_request = builder.build_next(
+        prior=first,
+        prior_ref=first_ref,
+        prior_results=(first,),
+        control=control,
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+    second, _second_ref = harness.run_step(second_request)
+    second_executions = tuple(executions[len(first_executions):])
+
+    # The prefix step 1 already paid for is replayed, not re-executed.
+    assert not (set(first_executions) & set(second_executions))
+    # And step 2 still reports the replayed prefix as its own evidence.
+    assert {e.eval_request_id for e in second.search_evidence} > {
+        e.eval_request_id for e in first.search_evidence
+    }
+
+
+def test_a_replayed_gepa_step_keeps_its_search_evidence(
+    sqlite_store,
+) -> None:
+    """A retry with a warm effect cache reports identical search evidence.
+
+    A durable step that crashes after its evaluation effects are recorded but
+    before its adapter checkpoint is persisted retries with every effect
+    already cached. The evidence for those evaluations must be reconstructed
+    from the recorded effect results rather than dropped.
+    """
+    run_id = "gepa-evidence-replayed"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+
+    first, _first_ref = harness.run_step(request)
+    assert first.search_evidence
+
+    # The same step again, with the effect cache warm and no checkpoint: the
+    # crash-then-retry shape. Every effect now replays.
+    retry_run_id = run_id
+    _experiment2, engine2, control2, adapter2, authority2 = (
+        _build_gepa_adapter(
+            sqlite_store, run_id=retry_run_id, max_metric_calls=8
+        )
+    )
+    del _experiment2, control2
+    executed: list[str] = []
+    inner = authority2.evaluate
+
+    def counting(request_):
+        executed.append(request_.identity_hash())
+        return inner(request_)
+
+    authority2.evaluate = counting  # type: ignore[method-assign]
+    harness2 = _harness(sqlite_store, engine2, adapter2)
+    bound2 = harness2.bind_run(run)
+    retry_request = builder.build_first(
+        run=bound2,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    retried, _retry_ref = harness2.run_step(retry_request)
+
+    # Nothing was re-executed, and the evidence survived the replay intact.
+    assert not executed
+    assert retried.search_evidence == first.search_evidence
+
+
+def test_search_evidence_with_a_wrong_schema_ref_is_rejected(
+    sqlite_store,
+) -> None:
+    """A COMPLETED entry must cite an evaluation-evidence record.
+
+    The model alone accepts any non-null ref, so without the harness check an
+    adapter could pair a truthful run/step with an unrelated record and have
+    it persisted as harness-verified evidence.
+    """
+    from whetstone.core.identity import TypedRef
+    from whetstone.optim.adapters import AdapterOutput
+
+    run_id = "gepa-evidence-wrong-schema"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness.run_step(request)
+    truthful = next(
+        e
+        for e in result.search_evidence
+        if e.outcome is IntentOutcome.COMPLETED
+    )
+
+    # A ref that resolves, but to a record of the wrong kind.
+    wrong_schema = truthful.model_copy(
+        update={
+            "eval_result_ref": TypedRef(
+                schema_name="whetstone.eval_outputs",
+                content_hash=truthful.eval_result_ref.content_hash,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="must use schema"):
+        harness._validate_output_intents(
+            request,
+            AdapterOutput(search_evidence=(wrong_schema,)),
+        )
+
+
+def test_search_evidence_with_a_dangling_ref_is_rejected(
+    sqlite_store,
+) -> None:
+    """A COMPLETED entry must cite a record the store actually resolves."""
+    from whetstone.core.identity import TypedRef
+    from whetstone.optim.adapters import AdapterOutput
+
+    run_id = "gepa-evidence-dangling"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness.run_step(request)
+    truthful = next(
+        e
+        for e in result.search_evidence
+        if e.outcome is IntentOutcome.COMPLETED
+    )
+
+    # Right schema, but nothing is stored under that content hash.
+    dangling = truthful.model_copy(
+        update={
+            "eval_result_ref": TypedRef(
+                schema_name=truthful.eval_result_ref.schema_name,
+                content_hash="b" * 64,
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="records the store resolves"):
+        harness._validate_output_intents(
+            request,
+            AdapterOutput(search_evidence=(dangling,)),
         )

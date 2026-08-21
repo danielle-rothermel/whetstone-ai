@@ -437,6 +437,8 @@ class CanonicalGepaEvalAuthority:
         self._candidate_assembler = candidate_assembler
         self._data_registry = data_registry
         self._resolutions: list[IntentResolution] = []
+        self._replayed: list[bool] = []
+        self._step_index: int | None = None
         self._submission_projector = submission_projector or (
             DefaultGepaSubmissionProjector(
                 submission_result_field=control.submission_result_field,
@@ -528,10 +530,13 @@ class CanonicalGepaEvalAuthority:
         subset_engine = self._engine.for_task_ids(task_ids)
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.slot.context.run_id,
-            # The harness step index, not the effect ordinal: upstream
-            # ``optimize`` restarts effect ordinals every step, so the
-            # ordinal alone would let two steps mint identical intent keys.
-            optim_step_index=request.slot.context.optim_step_index,
+            # The harness step that is actually executing this evaluation.
+            # It is stamped here rather than carried in the effect context,
+            # whose identity stays step-agnostic so a later step can replay
+            # this effect instead of paying for it again. Two steps that
+            # execute the same batch therefore still mint distinct intent
+            # and claim keys, while a replayed effect never gets here.
+            optim_step_index=self._require_step(),
             eval_request=EvalRequest(
                 request_id=(
                     f"{request.slot.context.run_id}:gepa:"
@@ -550,9 +555,19 @@ class CanonicalGepaEvalAuthority:
             context=EvalExecutionContext(),
         )
         self._resolutions.append(resolution)
+        self._replayed.append(False)
         if resolution.outcome is not IntentOutcome.COMPLETED:
             return self._failed_result(request, resolution)
         return self._completed_result(request, candidate, resolution)
+
+    @property
+    def replayed_flags(self) -> tuple[bool, ...]:
+        """Whether each collected resolution was replayed, in order.
+
+        A replayed resolution names the Step that executed it, so the Step
+        reporting it must rebind the run/step rather than cross-check them.
+        """
+        return tuple(self._replayed)
 
     @property
     def resolved_intents(self) -> tuple[IntentResolution, ...]:
@@ -565,9 +580,47 @@ class CanonicalGepaEvalAuthority:
         """
         return tuple(self._resolutions)
 
-    def reset_resolved_intents(self) -> None:
-        """Drop resolutions so the next Step collects only its own."""
+    def begin_step(self, *, step_index: int) -> None:
+        """Bind the executing Step and drop earlier Steps' resolutions.
+
+        The bound index is stamped onto the ``OptimEvalRequest`` of every
+        evaluation this Step actually executes. Effects replayed from the
+        durable cache do not reach ``evaluate`` and are re-collected from
+        their recorded resolutions instead.
+        """
+        if step_index < 0:
+            raise ValueError(
+                "GEPA evaluation authority step_index cannot be negative"
+            )
+        self._step_index = step_index
         self._resolutions.clear()
+        self._replayed.clear()
+
+    def _require_step(self) -> int:
+        if self._step_index is None:
+            raise ValueError(
+                "GEPA evaluation authority requires begin_step before it "
+                "executes an evaluation"
+            )
+        return self._step_index
+
+    def collect_replayed(
+        self,
+        result: GepaEvaluationEffectResult,
+    ) -> None:
+        """Re-collect the resolution of an effect replayed from the cache.
+
+        A replayed effect never reaches ``evaluate``, so without this the
+        evaluation it stands for would vanish from the Step's search
+        evidence -- exactly what happens when a Step crashes after recording
+        its effects but before persisting its checkpoint. The recorded
+        resolution is the executing Step's, so its refs are reused verbatim
+        and only the reporting Step rebinds.
+        """
+        self._require_step()
+        if result.resolution is not None:
+            self._resolutions.append(result.resolution)
+            self._replayed.append(True)
 
     def _require_request_binding(
         self,
@@ -618,6 +671,7 @@ class CanonicalGepaEvalAuthority:
                 for item in request.data
             ),
             logical_metric_calls=len(request.data),
+            resolution=resolution,
         )
 
     def _completed_result(
@@ -702,6 +756,7 @@ class CanonicalGepaEvalAuthority:
             request_hash=request.identity_hash(),
             rows=rows,
             logical_metric_calls=len(rows),
+            resolution=resolution,
         )
 
     def _project_row(

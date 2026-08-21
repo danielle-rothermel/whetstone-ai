@@ -160,7 +160,6 @@ def test_eval_authority_evaluates_against_a_real_engine(sqlite_store) -> None:
         slot=GepaEffectSlot(
             context=GepaEffectContext(
                 run_id="gepa-authority-eval",
-                optim_step_index=0,
                 control_identity_hash=control.identity_hash(),
                 source_manifest_identity_hash=(
                     control.gepa_source_manifest_hash
@@ -177,6 +176,9 @@ def test_eval_authority_evaluates_against_a_real_engine(sqlite_store) -> None:
         authority=authority.binding,
     )
 
+    # The authority stamps the executing harness step onto the request it
+    # mints, so a direct unit-level drive must bind one first.
+    authority.begin_step(step_index=0)
     result = authority.evaluate(request)
 
     assert result.request_hash == request.identity_hash()

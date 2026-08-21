@@ -749,6 +749,46 @@ class SearchEvidence(BaseModel):
             reward_evidence_refs=resolution.reward_evidence_refs,
         )
 
+    @classmethod
+    def from_replayed_resolution(
+        cls,
+        resolution: IntentResolution,
+        *,
+        optim_run_id: str,
+        optim_step_index: int,
+    ) -> SearchEvidence:
+        """Project a replayed Intent Resolution onto this Step's evidence.
+
+        An optimizer that re-runs its search from the seed each Step replays
+        the effects earlier Steps already paid for. The replayed resolution
+        still names the Step that executed it, but the evidence belongs to
+        the Step reporting it, so the run/step binding is taken from the
+        reporting Step rather than cross-checked against the recorded
+        request. The evidence refs are the exact recorded refs; no new
+        evaluation was caused and none is claimed.
+        """
+        if str(resolution.optim_eval_request.optim_run_id) != str(
+            optim_run_id
+        ):
+            raise ValueError(
+                "replayed search evidence must belong to the exact "
+                "optimization run"
+            )
+        return cls(
+            eval_request_id=(
+                resolution.optim_eval_request.eval_request.request_id
+            ),
+            optim_run_id=optim_run_id,
+            optim_step_index=optim_step_index,
+            candidate=_candidate.candidate_reference(
+                resolution.optim_eval_request.eval_request.candidate
+            ),
+            outcome=resolution.outcome,
+            eval_result_ref=resolution.eval_result_ref,
+            reward_ref=resolution.reward_ref,
+            reward_evidence_refs=resolution.reward_evidence_refs,
+        )
+
     @property
     def evidence_refs(self) -> tuple[TypedRef, ...]:
         """Every stored ref this evidence cites, in a stable order."""

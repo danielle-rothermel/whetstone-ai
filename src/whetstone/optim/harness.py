@@ -34,12 +34,19 @@ from whetstone.optim.adapters import (
     AdapterRegistry,
     OptimizerAdapter,
 )
+from whetstone.eval.schema_names import (
+    EVAL_EVIDENCE_SCHEMA,
+    EVAL_FAILURE_SCHEMA,
+)
+from whetstone.experiment.reward import REWARD_SCHEMA
 from whetstone.optim.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     OPTIM_RESULT_SCHEMA,
     BudgetState,
+    IntentOutcome,
     OptimEvalRequest,
     IntentResolution,
+    SearchEvidence,
     OptimProposal,
     OptimResult,
     OptimRunRef,
@@ -614,9 +621,8 @@ class OptimHarness(OptimRunStore):
             raise RuntimeError("unrecognized Effect acquisition outcome")
         return acquisition.lease
 
-    @classmethod
     def _validate_checkpoint(
-        cls,
+        self,
         checkpoint: AdapterCheckpoint,
         *,
         request: OptimStepRequest,
@@ -631,9 +637,9 @@ class OptimHarness(OptimRunStore):
             raise ValueError(
                 "durable adapter checkpoint belongs to another adapter"
             )
-        cls._validate_output(request, checkpoint.output)
-        cls._validate_output_candidates(request, checkpoint.output)
-        cls._validate_output_intents(request, checkpoint.output)
+        self._validate_output(request, checkpoint.output)
+        self._validate_output_candidates(request, checkpoint.output)
+        self._validate_output_intents(request, checkpoint.output)
 
     @staticmethod
     def _validate_output(
@@ -751,8 +757,45 @@ class OptimHarness(OptimRunStore):
                         f"run mutation diff: {error}"
                     ) from error
 
-    @staticmethod
+    def _require_resolvable_evidence(self, evidence: SearchEvidence) -> None:
+        """Bind search evidence to the evaluation it claims to cite.
+
+        The model alone accepts any non-null ref, so an adapter could pair a
+        truthful run/step with an unrelated -- or dangling -- record and have
+        it persisted as harness-verified evidence. The store is available
+        here, so the refs are checked for the expected schema and for actual
+        resolution before the entry is accepted.
+        """
+        expected = {
+            IntentOutcome.COMPLETED: EVAL_EVIDENCE_SCHEMA,
+            IntentOutcome.FAILED: EVAL_FAILURE_SCHEMA,
+        }.get(evidence.outcome)
+        ref = evidence.eval_result_ref
+        if expected is None or ref is None:
+            return
+        if ref.schema_name != expected:
+            raise ValueError(
+                f"{evidence.outcome.value} search evidence eval_result_ref "
+                f"must use schema {expected!r}"
+            )
+        refs: tuple[TypedRef, ...] = (ref,)
+        if evidence.reward_ref is not None:
+            if evidence.reward_ref.record_ref.schema_name != REWARD_SCHEMA:
+                raise ValueError(
+                    "search evidence reward_ref must use the Reward schema"
+                )
+            refs = (*refs, evidence.reward_ref.record_ref)
+        for item in refs:
+            try:
+                self._store.get(item.reference)
+            except Exception as error:
+                raise ValueError(
+                    "search evidence must cite records the store resolves: "
+                    f"{item.schema_name}"
+                ) from error
+
     def _validate_output_intents(
+        self,
         request: OptimStepRequest,
         output: AdapterOutput,
     ) -> None:
@@ -780,6 +823,7 @@ class OptimHarness(OptimRunStore):
                 raise ValueError(
                     "search evidence belongs to another optimization step"
                 )
+            self._require_resolvable_evidence(evidence)
         for optim_eval_request in output.optim_eval_requests:
             if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(

@@ -114,6 +114,47 @@ def test_gepa_first_step_is_honest_about_terminalizing(tmp_path) -> None:
     assert contract == gepa_step_output_contract(run_ref)
 
 
+def test_gepa_contract_derives_the_terminal_cardinality(tmp_path) -> None:
+    """The GEPA step contract honors a split run terminal contract.
+
+    A run may bind ``returned_proposal_count`` and
+    ``terminal_proposal_count`` to different values. ``honors_terminal``
+    compares COMPLETE cardinalities, so deriving the GEPA step contract from
+    the run's *continuing* count would reject every honest completing step.
+    """
+    control = _toy_gepa_control(
+        max_metric_calls=4,
+        sqlite_path=str(tmp_path / "gepa-split-terminal.sqlite"),
+    )
+    experiment = build_toy_experiment(num_seeds=1)
+    terminal = OutputContract(
+        returned_proposal_count=3,
+        terminal_proposal_count=1,
+    )
+    assert terminal.returned_proposal_count != terminal.terminal_proposal_count
+    run = OptimRun(
+        run_id="gepa-split-terminal",
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=terminal,
+        template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+    run_ref = optimization_run_reference(run)
+
+    contract = gepa_step_output_contract(run_ref)
+
+    # The run's COMPLETE cardinality, not its continuing count of 3.
+    assert contract.accepted_count_for(StepStatus.COMPLETE) == 1
+    assert contract.accepted_count_for(StepStatus.CONTINUE) == 0
+    assert contract.honors_terminal(terminal)
+
+
 def test_copro_contracts_are_unchanged(copro_launch) -> None:
     """COPRO's seed round still asks for breadth - 1 proposals."""
     runtime, launch = copro_launch
