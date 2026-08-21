@@ -582,8 +582,9 @@ class GepaSkippedMutation(BaseModel):
 
     Each Step persists the ones its own search produced under
     ``GEPA_SKIPPED_MUTATIONS_KEY`` in that Step's state, so a rejection on a
-    continuing Step is durable immediately; the terminal effect transcript
-    aggregates them for the run.
+    continuing Step is durable immediately. The terminal effect transcript
+    carries only the terminal Step's own skips; a run's full skip record is
+    the union of every Step's state.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

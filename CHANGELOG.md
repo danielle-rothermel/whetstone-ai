@@ -59,8 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A rejected GEPA reflection response is retried once with the rejection fed
   back into the prompt; a second rejection skips that component's mutation
   instead of ending the run. Each rejected attempt records a
-  `GepaSkippedMutation` on its own step's state and on the terminal effect
-  transcript, with `exhausted=True` marking the attempts that actually
+  `GepaSkippedMutation` on its own step's state (the terminal step's also
+  appear on the terminal effect transcript), with `exhausted=True` marking the attempts that actually
   dropped a mutation. Provider and transport failures still surface
   immediately.
 - A GEPA evaluation's `OptimEvalRequest` carries the harness step index as
