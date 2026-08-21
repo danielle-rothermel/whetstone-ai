@@ -221,7 +221,26 @@ class EffectAuthorityError(RuntimeError):
 
 
 class EffectAuthoritySchemaMismatchError(EffectAuthorityError):
-    pass
+    """An owned effect-authority table diverges from the pinned contract."""
+
+    def __init__(
+        self,
+        *,
+        table: str,
+        aspect: str,
+        expected: object,
+        actual: object,
+    ) -> None:
+        self.table = table
+        self.aspect = aspect
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"incompatible effect-authority table {table!r}: expected exact "
+            f"{aspect} {expected!r}, found {actual!r}; apply the "
+            "effect-authority schema migration before constructing "
+            "EffectAuthority"
+        )
 
 
 class StaleLeaseError(EffectAuthorityError):

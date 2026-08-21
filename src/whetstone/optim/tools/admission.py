@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 from enum import UNIQUE, StrEnum, verify
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from dr_serialize import decode_strict_json_bytes
+from dr_store.relational import (
+    RelationalContractMismatchError,
+    raise_owned_table_inventory_mismatch,
+    require_persisted_integer,
+)
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from whetstone.core.effects.authority import (
@@ -67,6 +72,17 @@ class ToolAdmissionSchemaMismatchError(RuntimeError):
             "admission schema migration before constructing "
             "ToolAdmissionAuthority"
         )
+
+
+def _reraise_schema_mismatch(
+    exc: RelationalContractMismatchError,
+) -> NoReturn:
+    raise ToolAdmissionSchemaMismatchError(
+        table=exc.table,
+        aspect=exc.aspect,
+        expected=exc.expected,
+        actual=exc.actual,
+    ) from exc
 
 
 @verify(UNIQUE)
@@ -283,11 +299,12 @@ def _decode_entry(raw: object) -> ToolCallStoreEntry:
 
 
 def _decode_persisted_count(raw: object, *, field: str) -> int:
-    if type(raw) is not int:
+    try:
+        return require_persisted_integer(raw, field=field)
+    except RelationalContractMismatchError as exc:
         raise RuntimeError(
             f"persisted Tool admission {field} is not an integer"
-        )
-    return raw
+        ) from exc
 
 
 def _is_exact_schema_version_row(row: tuple[Any, ...] | None) -> bool:
@@ -309,17 +326,18 @@ def _is_exact_schema_metadata(rows: list[tuple[Any, ...]]) -> bool:
     )
 
 
-def _raise_owned_table_inventory_mismatch(tables: set[str]) -> None:
-    raise ToolAdmissionSchemaMismatchError(
-        table="<database>",
-        aspect="owned table inventory",
-        expected=(
-            set(),
-            {_ENTRY_TABLE, _CAPACITY_TABLE},
-            {_SCHEMA_TABLE, _ENTRY_TABLE, _CAPACITY_TABLE},
-        ),
-        actual=tables,
-    )
+def _raise_owned_table_inventory_mismatch(tables: set[str]) -> NoReturn:
+    try:
+        raise_owned_table_inventory_mismatch(
+            tables=tables,
+            allowed=(
+                set(),
+                {_ENTRY_TABLE, _CAPACITY_TABLE},
+                {_SCHEMA_TABLE, _ENTRY_TABLE, _CAPACITY_TABLE},
+            ),
+        )
+    except RelationalContractMismatchError as exc:
+        _reraise_schema_mismatch(exc)
 
 
 def _replay_or_conflict(
@@ -405,12 +423,6 @@ class _AdmissionBackend(Protocol):
     ) -> int: ...
 
     def close(self) -> None: ...
-
-
-class _SQLiteTransactionObserver(Protocol):
-    def transaction_attempted(self) -> None: ...
-
-    def transaction_acquired(self) -> None: ...
 
 
 type _EntryKey = tuple[str, str]

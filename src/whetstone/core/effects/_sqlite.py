@@ -3,16 +3,22 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+
+from dr_store.relational import (
+    RelationalContractMismatchError,
+    TransactionObserver,
+    connect_sqlite,
+    verify_sqlite_table,
+)
 
 from whetstone.core.effects._storage import (
     _T,
     _decode_row,
-    _require_persisted_text,
+    _persisted_text,
+    _reraise_schema_mismatch,
     _row_insert_values,
     _row_match_values,
     _row_update_values,
-    _SQLiteTransactionObserver,
     _Transition,
 )
 from whetstone.core.effects.models import (
@@ -73,19 +79,19 @@ CREATE TABLE {_METADATA_TABLE_NAME} (
 """
 
 _SQLITE_TABLE_COLUMNS = (
-    ("semantic_key", "TEXT", 0, None, 1),
-    ("request_hash", "TEXT", 1, None, 0),
-    ("replay_policy", "TEXT", 1, None, 0),
-    ("state", "TEXT", 1, None, 0),
-    ("owner_id", "TEXT", 1, None, 0),
-    ("attempt_id", "TEXT", 1, None, 0),
-    ("fence", "INTEGER", 1, None, 0),
-    ("expires_at", "TEXT", 0, None, 0),
-    ("terminal_json", "TEXT", 0, None, 0),
+    ("semantic_key", "TEXT", False, 1),
+    ("request_hash", "TEXT", True, 0),
+    ("replay_policy", "TEXT", True, 0),
+    ("state", "TEXT", True, 0),
+    ("owner_id", "TEXT", True, 0),
+    ("attempt_id", "TEXT", True, 0),
+    ("fence", "INTEGER", True, 0),
+    ("expires_at", "TEXT", False, 0),
+    ("terminal_json", "TEXT", False, 0),
 )
 _SQLITE_METADATA_COLUMNS = (
-    ("singleton", "INTEGER", 0, None, 1),
-    ("schema_version", "INTEGER", 1, None, 0),
+    ("singleton", "INTEGER", False, 1),
+    ("schema_version", "INTEGER", True, 0),
 )
 
 _SELECT_ROW_SQLITE = f"""
@@ -122,52 +128,32 @@ SELECT strftime('%Y-%m-%dT%H:%M:%f000+00:00', 'now')
 """
 
 
-def _normalized_sql(value: str) -> str:
-    return " ".join(value.split())
-
-
-def _sqlite_schema_sql(
+def _table_exists(
     connection: sqlite3.Connection, table_name: str
-) -> str | None:
+) -> bool:
     raw = connection.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
         (table_name,),
     ).fetchone()
-    return None if raw is None else str(raw[0])
-
-
-def _sqlite_columns(
-    connection: sqlite3.Connection, table_name: str
-) -> tuple[tuple[Any, ...], ...]:
-    return tuple(
-        (name, column_type, not_null, default, primary_key)
-        for (
-            _column_id,
-            name,
-            column_type,
-            not_null,
-            default,
-            primary_key,
-        ) in connection.execute(f"PRAGMA table_info({table_name})")
-    )
+    return raw is not None
 
 
 def _verify_sqlite_schema(connection: sqlite3.Connection) -> None:
-    table_sql = _sqlite_schema_sql(connection, _TABLE_NAME)
-    metadata_sql = _sqlite_schema_sql(connection, _METADATA_TABLE_NAME)
-    if (
-        table_sql is None
-        or metadata_sql is None
-        or _normalized_sql(table_sql) != _normalized_sql(_SQLITE_CREATE_TABLE)
-        or _normalized_sql(metadata_sql)
-        != _normalized_sql(_SQLITE_CREATE_METADATA_TABLE)
-        or _sqlite_columns(connection, _TABLE_NAME) != _SQLITE_TABLE_COLUMNS
-        or _sqlite_columns(connection, _METADATA_TABLE_NAME)
-        != _SQLITE_METADATA_COLUMNS
-    ):
-        raise EffectAuthoritySchemaMismatchError(
-            "incompatible SQLite effect-authority schema"
+    try:
+        verify_sqlite_table(
+            connection,
+            table=_TABLE_NAME,
+            create_sql=_SQLITE_CREATE_TABLE,
+            columns=_SQLITE_TABLE_COLUMNS,
         )
+        verify_sqlite_table(
+            connection,
+            table=_METADATA_TABLE_NAME,
+            create_sql=_SQLITE_CREATE_METADATA_TABLE,
+            columns=_SQLITE_METADATA_COLUMNS,
+        )
+    except RelationalContractMismatchError as exc:
+        _reraise_schema_mismatch(exc)
     versions = connection.execute(
         f"SELECT singleton, schema_version FROM {_METADATA_TABLE_NAME}"
     ).fetchall()
@@ -179,7 +165,10 @@ def _verify_sqlite_schema(connection: sqlite3.Connection) -> None:
         or versions[0] != (1, _SCHEMA_VERSION)
     ):
         raise EffectAuthoritySchemaMismatchError(
-            "incompatible SQLite effect-authority schema version"
+            table=_METADATA_TABLE_NAME,
+            aspect="schema version",
+            expected=[(1, _SCHEMA_VERSION)],
+            actual=versions,
         )
 
 
@@ -188,7 +177,7 @@ class _SQLiteStore:
         self,
         path: str | Path,
         *,
-        transaction_observer: _SQLiteTransactionObserver | None = None,
+        transaction_observer: TransactionObserver | None = None,
     ) -> None:
         raw_path = str(path)
         if not raw_path:
@@ -203,39 +192,20 @@ class _SQLiteStore:
     def _connect(
         self, *, observe_transaction: bool = False
     ) -> sqlite3.Connection:
-        connection = sqlite3.connect(
+        return connect_sqlite(
             self._path,
-            timeout=30.0,
-            isolation_level=None,
+            observer=(
+                self._transaction_observer if observe_transaction else None
+            ),
         )
-        connection.execute("PRAGMA busy_timeout = 30000")
-        if observe_transaction and self._transaction_observer is not None:
-            observer = self._transaction_observer
-
-            def authorize(
-                action_code: int,
-                argument_1: str | None,
-                _argument_2: str | None,
-                _database_name: str | None,
-                _trigger_name: str | None,
-            ) -> int:
-                if (
-                    action_code == sqlite3.SQLITE_TRANSACTION
-                    and argument_1 == "BEGIN"
-                ):
-                    observer.transaction_attempted()
-                return sqlite3.SQLITE_OK
-
-            connection.set_authorizer(authorize)
-        return connection
 
     def initialize(self) -> None:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            table_sql = _sqlite_schema_sql(connection, _TABLE_NAME)
-            metadata_sql = _sqlite_schema_sql(connection, _METADATA_TABLE_NAME)
-            if table_sql is None and metadata_sql is None:
+            has_table = _table_exists(connection, _TABLE_NAME)
+            has_metadata = _table_exists(connection, _METADATA_TABLE_NAME)
+            if not has_table and not has_metadata:
                 connection.execute(_SQLITE_CREATE_TABLE)
                 connection.execute(_SQLITE_CREATE_METADATA_TABLE)
                 connection.execute(
@@ -246,9 +216,21 @@ class _SQLiteStore:
                     """,
                     (_SCHEMA_VERSION,),
                 )
-            elif table_sql is None or metadata_sql is None:
+            elif not has_table or not has_metadata:
                 raise EffectAuthoritySchemaMismatchError(
-                    "incomplete SQLite effect-authority schema"
+                    table=(
+                        _TABLE_NAME if not has_table else _METADATA_TABLE_NAME
+                    ),
+                    aspect="owned table inventory",
+                    expected={_TABLE_NAME, _METADATA_TABLE_NAME},
+                    actual={
+                        name
+                        for name, present in (
+                            (_TABLE_NAME, has_table),
+                            (_METADATA_TABLE_NAME, has_metadata),
+                        )
+                        if present
+                    },
                 )
             _verify_sqlite_schema(connection)
             connection.commit()
@@ -281,7 +263,7 @@ class _SQLiteStore:
                 raise _AuthorityCorruptionError(
                     "SQLite did not return authority time"
                 )
-            now_text = _require_persisted_text(
+            now_text = _persisted_text(
                 now_raw[0], field="SQLite authority time"
             )
             now = _require_utc(

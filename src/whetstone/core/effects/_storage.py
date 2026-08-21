@@ -3,11 +3,17 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Any, Protocol, TypeVar
+from typing import Any, NoReturn, Protocol, TypeVar
 
 from dr_serialize import decode_strict_json_bytes
+from dr_store.relational import (
+    RelationalContractMismatchError,
+    require_persisted_integer,
+    require_persisted_text,
+)
 
 from whetstone.core.effects.models import (
+    EffectAuthoritySchemaMismatchError,
     EffectRequest,
     EffectTerminal,
     ReplayPolicy,
@@ -40,10 +46,35 @@ class _Store(Protocol):
     def close(self) -> None: ...
 
 
-class _SQLiteTransactionObserver(Protocol):
-    def transaction_attempted(self) -> None: ...
+def _reraise_schema_mismatch(
+    exc: RelationalContractMismatchError,
+) -> NoReturn:
+    raise EffectAuthoritySchemaMismatchError(
+        table=exc.table,
+        aspect=exc.aspect,
+        expected=exc.expected,
+        actual=exc.actual,
+    ) from exc
 
-    def transaction_acquired(self) -> None: ...
+
+def _persisted_text(value: object, *, field: str) -> str:
+    """Read text storage, reporting corruption in authority terms."""
+    try:
+        return require_persisted_text(value, field=field)
+    except RelationalContractMismatchError as exc:
+        raise _AuthorityCorruptionError(
+            f"persisted {field} must have text storage"
+        ) from exc
+
+
+def _persisted_integer(value: object, *, field: str) -> int:
+    """Read integer storage, reporting corruption in authority terms."""
+    try:
+        return require_persisted_integer(value, field=field)
+    except RelationalContractMismatchError as exc:
+        raise _AuthorityCorruptionError(
+            f"persisted {field} must have integer storage"
+        ) from exc
 
 
 def _timestamp_text(value: datetime | None) -> str | None:
@@ -96,22 +127,6 @@ def _row_match_values(row: _EffectRow) -> tuple[Any, ...]:
     )
 
 
-def _require_persisted_text(value: object, *, field: str) -> str:
-    if type(value) is not str:
-        raise _AuthorityCorruptionError(
-            f"persisted {field} must have text storage"
-        )
-    return value
-
-
-def _require_persisted_integer(value: object, *, field: str) -> int:
-    if type(value) is not int:
-        raise _AuthorityCorruptionError(
-            f"persisted {field} must have integer storage"
-        )
-    return value
-
-
 def _decode_row(
     semantic_key: str,
     raw: tuple[Any, ...] | None,
@@ -128,26 +143,26 @@ def _decode_row(
         expires_at,
         terminal_json,
     ) = raw
-    request_hash_text = _require_persisted_text(
+    request_hash_text = _persisted_text(
         request_hash,
         field="request_hash",
     )
-    replay_policy_text = _require_persisted_text(
+    replay_policy_text = _persisted_text(
         replay_policy, field="replay_policy"
     )
-    state_text = _require_persisted_text(state, field="state")
-    owner_id_text = _require_persisted_text(owner_id, field="owner_id")
-    attempt_id_text = _require_persisted_text(attempt_id, field="attempt_id")
-    fence_integer = _require_persisted_integer(fence, field="fence")
+    state_text = _persisted_text(state, field="state")
+    owner_id_text = _persisted_text(owner_id, field="owner_id")
+    attempt_id_text = _persisted_text(attempt_id, field="attempt_id")
+    fence_integer = _persisted_integer(fence, field="fence")
     expires_at_text = (
         None
         if expires_at is None
-        else _require_persisted_text(expires_at, field="expires_at")
+        else _persisted_text(expires_at, field="expires_at")
     )
     terminal_text = (
         None
         if terminal_json is None
-        else _require_persisted_text(terminal_json, field="terminal_json")
+        else _persisted_text(terminal_json, field="terminal_json")
     )
     request = EffectRequest.model_validate(
         {
