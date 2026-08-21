@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
 from uuid import uuid4
+from dr_store.sync import (
+    BlockingObjectStore,
+    persistent_sqlite,
+)
 
 from whetstone.coordination.eval_service import EvalEngineService
 from whetstone.coordination.harness_run_controller import (
@@ -12,10 +16,6 @@ from whetstone.coordination.harness_run_controller import (
 )
 from whetstone.coordination.run_controller_registry import register_run_controller
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from dr_store.sync import (
-    BlockingObjectStore,
-    persistent_sqlite,
-)
 from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
 from whetstone.core.roles import EvalRole

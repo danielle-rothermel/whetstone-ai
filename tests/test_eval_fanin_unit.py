@@ -25,7 +25,7 @@ from whetstone.platform.eval_fanin import (
 from whetstone.platform.step_executor import execute_optim_step_sync
 
 
-def _emit_platform_deferral(copro_launch):
+def _emit_platform_deferral(copro_launch, *, stage_index: int = 0):
     runtime, launch = copro_launch
     control = launch.control
     runtime.controller.bind_launch(launch)
@@ -34,12 +34,13 @@ def _emit_platform_deferral(copro_launch):
         controller_identity_hash=runtime.controller.runtime_hash,
         control_identity_hash=control.identity_hash(),
         dispatch_mode=EvalDispatchMode.PLATFORM,
+        platform_stage_index=stage_index,
     )
     input_reference = persist_work_input(runtime.store, work_input)
     step_completion = execute_optim_step_sync(
         runtime,
         input_reference=input_reference,
-        stage_index=0,
+        stage_index=stage_index,
     )
     row_successors = [
         successor
@@ -512,7 +513,12 @@ def test_eval_fanin_scopes_predecessor_read_to_the_deferral_episode(
     """
     from dr_platform.inspection.work_items import PredecessorStageOutput
 
-    runtime, row_successors, fanin_successor = _emit_platform_deferral(copro_launch)
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(
+        copro_launch,
+        # A nonzero origin makes the assertion discriminate real wiring from
+        # a hardcoded origin_stage_index=0.
+        stage_index=3,
+    )
     platform_executor = build_platform_row_executor(runtime)
     row_outputs = []
     for row_successor in row_successors:
@@ -546,7 +552,7 @@ def test_eval_fanin_scopes_predecessor_read_to_the_deferral_episode(
     list_predecessors.assert_called_once_with(
         1,
         fanin_successor.stage_index,
-        origin_stage_index=0,
+        origin_stage_index=3,
         stage_key=STAGE_EVAL_ROW,
         engine=runtime.ledger_engine,
     )

@@ -163,18 +163,25 @@ def provider_call_config_with_parameters(
     *,
     seed: int | None = None,
 ) -> ProviderCallConfig:
-    """Apply eval parameters, and the eval-derived seed when transportable.
+    """Apply eval parameters and the eval-derived seed.
 
     ``seed`` is threaded separately from ``parameters`` so it stays sourced
-    from eval derivation. It is applied only when the definition advertises
-    ``RequestControl.SEED``; seedless protocols (Responses, Anthropic
-    Messages) cannot transport it and would refuse config construction.
+    from eval derivation. A definition that cannot transport
+    ``RequestControl.SEED`` refuses here rather than running unseeded:
+    the eval contract requires the seed on the wire, and a silent omission
+    would be invisible to identity-based evidence.
     """
     controls = config.controls
     updates: dict[str, Any] = {}
-    if seed is not None and config.definition.constraints.supports(
-        RequestControl.SEED
-    ):
+    if seed is not None:
+        if not config.definition.constraints.supports(RequestControl.SEED):
+            raise ValueError(
+                "definition "
+                f"{config.definition.definition_id!r} does not advertise "
+                "RequestControl.SEED and cannot transport the eval-derived "
+                "rng_seed; use a seed-advertising definition for seeded "
+                "eval traffic"
+            )
         updates["seed"] = seed
     if TEMPERATURE_PARAMETER in parameters:
         updates["temperature"] = parameters.get(TEMPERATURE_PARAMETER)

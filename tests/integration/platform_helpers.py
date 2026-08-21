@@ -397,8 +397,9 @@ def bootstrap_platform_runtime(
         sweep_cron=None,
     )
     DBOS.launch()
-    # Pin this process as the current deployment so DBOS does not treat
-    # a prior test's workflows as recoverable work and stall the run.
+    # Pin this process as the current deployment. Without this, workflows
+    # left in a reused Postgres database by a *different* prior application
+    # version are treated as recoverable work and stall the run.
     DBOS.set_latest_application_version(DBOS.application_version)
 
     return PlatformIntegrationContext(

@@ -14,6 +14,14 @@ from typing import Any, Literal, NewType, Self
 from uuid import uuid4
 
 from dr_providers import ProviderCallRequest
+from dr_store.localfs import (
+    FileLock,
+    PrivatePathViolationError,
+    ensure_private_directory,
+    fsync_file,
+    fsync_parent_directory,
+    open_private_regular_file,
+)
 from dr_serialize import (
     StrictJsonDecodeError,
     build_identity_document,
@@ -30,14 +38,6 @@ from pydantic import (
     model_validator,
 )
 
-from dr_store.localfs import (
-    FileLock,
-    LocalFsError,
-    ensure_private_directory,
-    fsync_file,
-    fsync_parent_directory,
-    open_private_regular_file,
-)
 from whetstone.execution.call_support import CallTelemetry, call_telemetry
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.driver import (
@@ -460,7 +460,7 @@ class PromptResultCache:
             raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return _StoredStats()
-        except (OSError, LocalFsError) as exc:
+        except (OSError, PrivatePathViolationError) as exc:
             raise PromptCacheError(
                 f"prompt-cache stats unreadable at {path}: {exc}"
             ) from exc
@@ -647,7 +647,7 @@ class PromptResultCache:
     ) -> _AccountingJournal:
         try:
             raw = self._read_private_bytes(path)
-        except (OSError, LocalFsError) as exc:
+        except (OSError, PrivatePathViolationError) as exc:
             raise PromptCacheError(
                 f"prompt-cache accounting journal unreadable at {path}: {exc}"
             ) from exc
@@ -739,7 +739,7 @@ class PromptResultCache:
             raw = self._read_private_bytes(path)
         except FileNotFoundError:
             return None
-        except (OSError, LocalFsError) as exc:
+        except (OSError, PrivatePathViolationError) as exc:
             raise PromptCacheError(
                 f"prompt-cache entry unreadable at {path}: {exc}"
             ) from exc

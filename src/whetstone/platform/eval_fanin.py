@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 from dr_platform._core.identities import StageKey
 from dr_platform.execution.stage_completion import StageCompletion, StageSuccessor
+from dr_platform import list_episode_predecessor_outputs
 from dr_store.content_addressing import format_object_reference, parse_object_reference
 
 from whetstone.coordination.eval_service import (
@@ -27,7 +28,6 @@ from whetstone.optim.contracts import (
     ResolutionClass,
     ResolutionDetail,
 )
-from dr_platform import list_episode_predecessor_outputs
 
 from whetstone.platform.contracts import (
     STAGE_EVAL_ROW,

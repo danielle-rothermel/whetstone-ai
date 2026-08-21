@@ -203,6 +203,19 @@ def test_toy_provider_definition_transports_seed() -> None:
     assert request.config.controls.seed == 4242
 
 
+def test_seedless_definition_refuses_seeded_request() -> None:
+    """A definition that cannot transport SEED must refuse, not run unseeded."""
+    from dr_providers import openai_responses_config
+
+    with pytest.raises(ValueError, match="does not advertise"):
+        build_provider_request(
+            provider_config=openai_responses_config(model="seed-test-model"),
+            rng_seed=4242,
+            prompt="hello",
+            prompt_adapter=PlainPromptAdapter(),
+        )
+
+
 def test_build_provider_request_rejects_caller_supplied_seed() -> None:
     """Seed stays single-sourced from eval derivation."""
     with pytest.raises(ValueError, match="must not include seed"):

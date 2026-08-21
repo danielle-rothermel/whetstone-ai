@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 from dr_serialize import decode_strict_json_bytes
 from dr_store.sync import close_persistent, persistent_sqlite
@@ -82,7 +83,12 @@ def main() -> None:
     try:
         build_server_from_env().run(transport="stdio")
     finally:
-        close_persistent(sqlite_path)
+        # Suppress close failures so they cannot replace an exception
+        # from the server run itself.
+        try:
+            close_persistent(sqlite_path)
+        except Exception as exc:  # noqa: BLE001 - shutdown best effort
+            print(f"store close failed during shutdown: {exc}", file=sys.stderr)
 
 
 if __name__ == "__main__":
