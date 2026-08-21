@@ -183,6 +183,18 @@ class RuntimeEvalEngine:
         return self._sampling_view()
 
     @property
+    def sampling_split(self) -> EvalSplit:
+        """The complete sampling artifacts this engine evaluates against.
+
+        ``sampling`` exposes only the narrow protocol view. A caller that
+        must reproduce this engine's exact Task Set, TaskTrial Plan, and
+        Sampling Config -- rather than merely read its tasks -- needs the
+        split itself.
+        """
+
+        return self._sampling
+
+    @property
     def plan_snapshot(self) -> EvalPlanSnapshot:
         return EvalPlanSnapshot(
             graph_hash=self._experiment.rollout_graph.graph_hash,

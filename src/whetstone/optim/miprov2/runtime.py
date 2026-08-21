@@ -2214,6 +2214,11 @@ class Miprov2Driver:
             ),
             budget=budget,
             bootstrap_plans=planned.plans,
+            # A run that plans no fewshot candidates -- a zero-shot run --
+            # has no bootstrap phase to enter, so it opens in proposal.
+            phase=(
+                "bootstrap" if planned.plans else "proposal"
+            ),
         )
 
     def plan(self, state: Miprov2State) -> Miprov2DriverPlan:

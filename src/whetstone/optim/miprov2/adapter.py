@@ -107,6 +107,64 @@ def _terminalized(state: Miprov2State, *, failure: str) -> Miprov2State:
     )
 
 
+def fold_resolution(
+    store: ObjectStore,
+    state: Miprov2State,
+    resolution: IntentResolution,
+    *,
+    driver: Miprov2Driver | None = None,
+) -> Miprov2State:
+    """Fold one resolved Evaluation Intent into the MIPROv2 state.
+
+    The state snapshot a Step persists is taken *before* the harness
+    resolves that Step's Evaluation Intents, so both the adapter running the
+    next Step and the step contract deriving its Step Request must apply the
+    same resolutions to reach the same phase. Keeping the projection here
+    means they cannot drift apart.
+    """
+
+    resolved_driver = driver or Miprov2Driver()
+    evidence = Miprov2EvidenceResolver(store)
+    context = load_miprov2_intent_context(store, resolution.optim_eval_request)
+    if context.control_identity_hash != state.control.identity_hash():
+        raise ValueError("Intent Resolution belongs to another control")
+    if resolution.outcome is IntentOutcome.REJECTED:
+        return _terminalized(
+            state, failure=_rejection_detail(context.intent_id, resolution)
+        )
+    if context.effect_kind == "bootstrap":
+        if resolution.outcome is IntentOutcome.COMPLETED:
+            result = evidence.resolve_bootstrap(resolution)
+        else:
+            result = evidence.resolve_bootstrap_failure(resolution)
+        return resolved_driver.fold_bootstrap(state, result)
+    if resolution.outcome is IntentOutcome.COMPLETED:
+        resolved = evidence.resolve_evaluation(resolution)
+    else:
+        resolved = evidence.resolve_evaluation_failure(resolution)
+    return resolved_driver.fold_evaluation(state, resolved)
+
+
+def fold_prior_resolutions(
+    store: ObjectStore,
+    state: Miprov2State,
+    prior: OptimStepResult,
+    *,
+    driver: Miprov2Driver | None = None,
+) -> Miprov2State:
+    """Fold every Intent Resolution the prior Step produced, in order."""
+
+    resolved_driver = driver or Miprov2Driver()
+    for resolution in prior.resolved_intents:
+        state = fold_resolution(
+            store,
+            state,
+            resolution,
+            driver=resolved_driver,
+        )
+    return state
+
+
 class Miprov2Adapter:
     def __init__(
         self,
@@ -597,26 +655,12 @@ class Miprov2Adapter:
         resolution: IntentResolution,
     ) -> Miprov2State:
 
-        context = load_miprov2_intent_context(
-            self._store, resolution.optim_eval_request
+        return fold_resolution(
+            self._store,
+            state,
+            resolution,
+            driver=self._driver,
         )
-        if context.control_identity_hash != state.control.identity_hash():
-            raise ValueError("Intent Resolution belongs to another control")
-        if resolution.outcome is IntentOutcome.REJECTED:
-            return _terminalized(
-                state, failure=_rejection_detail(context.intent_id, resolution)
-            )
-        if context.effect_kind == "bootstrap":
-            if resolution.outcome is IntentOutcome.COMPLETED:
-                result = self._evidence.resolve_bootstrap(resolution)
-            else:
-                result = self._evidence.resolve_bootstrap_failure(resolution)
-            return self._driver.fold_bootstrap(state, result)
-        if resolution.outcome is IntentOutcome.COMPLETED:
-            resolved = self._evidence.resolve_evaluation(resolution)
-        else:
-            resolved = self._evidence.resolve_evaluation_failure(resolution)
-        return self._driver.fold_evaluation(state, resolved)
 
     def _load_request_state(
         self,
@@ -685,9 +729,12 @@ class Miprov2Adapter:
         state: Miprov2State,
         prior: OptimStepResult,
     ) -> Miprov2State:
-        for resolution in prior.resolved_intents:
-            state = self.fold_resolution(state, resolution)
-        return state
+        return fold_prior_resolutions(
+            self._store,
+            state,
+            prior,
+            driver=self._driver,
+        )
 
     def _require_transport_bindings(self, state: Miprov2State) -> None:
         current_executor_contract: ProposalExecutorDurabilityContract = (
@@ -777,6 +824,9 @@ __all__ = [
     "MIPROV2_PROMOTION",
     "MIPROV2_PROPOSAL",
     "MIPROV2_SAMPLE",
+    "MIPROV2_FAILED",
     "MIPROV2_STATE_KEY",
     "Miprov2Adapter",
+    "fold_prior_resolutions",
+    "fold_resolution",
 ]

@@ -28,6 +28,7 @@ from whetstone.optim.harness import OptimHarness
 if TYPE_CHECKING:
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
+    from whetstone.optim.miprov2.control import Miprov2Control
 
 RUN_LAUNCH_SCHEMA = "whetstone.optim_run_launch"
 RUN_LAUNCH_SCHEMA_VERSION = 1
@@ -71,7 +72,7 @@ class RunRequest(BaseModel):
 class OptimRunLaunch:
     run: OptimRun
     initial_candidate: Candidate
-    control: CoproControl | GepaControl | None = None
+    control: CoproControl | GepaControl | Miprov2Control | None = None
 
 
 class HarnessRunController:

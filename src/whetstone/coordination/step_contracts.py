@@ -78,12 +78,16 @@ class StepContractProvider(Protocol):
 def _providers() -> dict[str, StepContractProvider]:
     from whetstone.optim.copro.step_contract import CoproStepContractProvider
     from whetstone.optim.gepa.step_contract import GepaStepContractProvider
+    from whetstone.optim.miprov2.step_contract import (
+        Miprov2StepContractProvider,
+    )
 
     return {
         provider.adapter_key: provider
         for provider in (
             CoproStepContractProvider(),
             GepaStepContractProvider(),
+            Miprov2StepContractProvider(),
         )
     }
 
