@@ -11,13 +11,14 @@ import pytest
 from sqlalchemy import Engine
 
 from whetstone.coordination.eval_service import EvalDispatchMode
-from whetstone.core.blocking_store import open_blocking_sqlite_store
+from dr_store.sync import open_sqlite
 from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
     STAGE_OPTIM_STEP,
 )
 
+from .conftest import migrate_platform_schema
 from .platform_helpers import (
     NOW,
     assert_fanin_barrier_predecessors,
@@ -40,7 +41,7 @@ def test_inline_platform_copro_submit_to_result(
 ) -> None:
     """INLINE submit → admission → DBOS optim_step → run completion."""
     store_path = tmp_path / "integration-inline.sqlite"
-    with open_blocking_sqlite_store(str(store_path)) as store:
+    with open_sqlite(str(store_path)) as store:
         context = bootstrap_platform_runtime(
             store=store,
             pg_engine=pg_engine,
@@ -90,7 +91,7 @@ def test_platform_deferral_fanout_fanin_through_admission(
 ) -> None:
     """PLATFORM deferral → eval_row fan-out → barrier fan-in → resume → result."""
     store_path = tmp_path / "integration-platform.sqlite"
-    with open_blocking_sqlite_store(str(store_path)) as store:
+    with open_sqlite(str(store_path)) as store:
         context = bootstrap_platform_runtime(
             store=store,
             pg_engine=pg_engine,
@@ -158,7 +159,7 @@ def test_platform_deferral_survives_fanin_retry(
 ) -> None:
     """PLATFORM deferral completes after fan-in replay (preemptible idempotency contract)."""
     store_path = tmp_path / "integration-preemptible-retry.sqlite"
-    with open_blocking_sqlite_store(str(store_path)) as store:
+    with open_sqlite(str(store_path)) as store:
         context = bootstrap_platform_runtime(
             store=store,
             pg_engine=pg_engine,
@@ -192,3 +193,62 @@ def test_platform_deferral_survives_fanin_retry(
             load_terminal_optim_result(context, terminal_result_ref)
         finally:
             shutdown_platform_runtime(context)
+
+
+def test_episode_predecessor_read_scopes_to_the_second_deferral_episode(
+    pg_engine: Engine,
+) -> None:
+    """Two episodes on one work item must not leak rows across the boundary.
+
+    ``seed_double_deferral_episode`` lays down optim/eval/fan-in stages twice
+    on a single work item. Whetstone's fan-in relies on the origin filter to
+    read only the current episode's eval rows; without it the second fan-in
+    would also see the first episode's rows.
+    """
+    from dr_platform import (
+        list_episode_predecessor_outputs,
+        list_predecessor_stage_outputs,
+    )
+    from dr_platform.testing import seed_double_deferral_episode
+
+    migrate_platform_schema(pg_engine)
+    with pg_engine.begin() as connection:
+        work_item_id, first_origin, first_fanin, second_origin, second_fanin = (
+            seed_double_deferral_episode(
+                connection,
+                eval_row_key=STAGE_EVAL_ROW,
+                optim_step_key=STAGE_OPTIM_STEP,
+                fanin_key=STAGE_EVAL_FANIN,
+            )
+        )
+
+    first_episode = list_episode_predecessor_outputs(
+        work_item_id,
+        first_fanin,
+        origin_stage_index=first_origin,
+        stage_key=STAGE_EVAL_ROW,
+        engine=pg_engine,
+    )
+    second_episode = list_episode_predecessor_outputs(
+        work_item_id,
+        second_fanin,
+        origin_stage_index=second_origin,
+        stage_key=STAGE_EVAL_ROW,
+        engine=pg_engine,
+    )
+
+    assert tuple(row.stage_index for row in first_episode) == (1, 2)
+    assert tuple(row.stage_index for row in second_episode) == (5, 6)
+    assert tuple(row.output_reference for row in second_episode) == (
+        "row:out:5",
+        "row:out:6",
+    )
+
+    # Without the origin filter the second fan-in would see all four rows.
+    unscoped = list_predecessor_stage_outputs(
+        work_item_id,
+        second_fanin,
+        engine=pg_engine,
+        stage_key=STAGE_EVAL_ROW,
+    )
+    assert tuple(row.stage_index for row in unscoped) == (1, 2, 5, 6)

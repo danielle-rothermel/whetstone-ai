@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from whetstone.core.blocking_store import open_blocking_sqlite_store
+from dr_store.sync import open_sqlite
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.experiment.candidate import Candidate
 from whetstone.optim.adapters import AdapterOutput
@@ -40,7 +40,7 @@ from whetstone.testing.toy.experiment import (
 
 def _toy_gepa_control(*, max_metric_calls: int = 2, sqlite_path: str):
     experiment = build_toy_experiment(num_seeds=1)
-    with open_blocking_sqlite_store(sqlite_path) as store:
+    with open_sqlite(sqlite_path) as store:
         engine = ReferenceEvalRuntimeConfig().build_engine(store)
         task_hashes = engine.sampling.task_hashes[:1]
         prompt_adapter = PlainPromptAdapter()

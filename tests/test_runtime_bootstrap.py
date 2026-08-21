@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from whetstone.coordination.runtime_bootstrap import register_runtime
-from whetstone.core.blocking_store import BlockingObjectStore
+from dr_store.sync import BlockingObjectStore
 
 
 def test_register_runtime_is_idempotent_for_same_store(sqlite_store) -> None:

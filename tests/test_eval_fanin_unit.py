@@ -25,7 +25,7 @@ from whetstone.platform.eval_fanin import (
 from whetstone.platform.step_executor import execute_optim_step_sync
 
 
-def _emit_platform_deferral(copro_launch):
+def _emit_platform_deferral(copro_launch, *, stage_index: int = 0):
     runtime, launch = copro_launch
     control = launch.control
     runtime.controller.bind_launch(launch)
@@ -34,12 +34,13 @@ def _emit_platform_deferral(copro_launch):
         controller_identity_hash=runtime.controller.runtime_hash,
         control_identity_hash=control.identity_hash(),
         dispatch_mode=EvalDispatchMode.PLATFORM,
+        platform_stage_index=stage_index,
     )
     input_reference = persist_work_input(runtime.store, work_input)
     step_completion = execute_optim_step_sync(
         runtime,
         input_reference=input_reference,
-        stage_index=0,
+        stage_index=stage_index,
     )
     row_successors = [
         successor
@@ -208,7 +209,7 @@ def test_eval_fanin_ignores_other_episode_predecessors(copro_launch) -> None:
         for index, output_reference in enumerate(row_outputs)
     )
     with patch(
-        "whetstone.platform.eval_fanin.list_episode_eval_row_predecessors",
+        "whetstone.platform.eval_fanin.list_episode_predecessor_outputs",
         return_value=episode_predecessors,
     ):
         execute_eval_fanin_sync(
@@ -333,7 +334,7 @@ def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:
         )
     object.__setattr__(runtime, "ledger_engine", MagicMock())
     with patch(
-        "whetstone.platform.eval_fanin.list_episode_eval_row_predecessors",
+        "whetstone.platform.eval_fanin.list_episode_predecessor_outputs",
         return_value=(),
     ):
         try:
@@ -500,3 +501,58 @@ def test_run_result_roundtrip(sqlite_store) -> None:
     loaded = load_run_result(sqlite_store, reference)
     assert loaded == run_result
     assert format_object_reference(parse_object_reference(reference)) == reference
+
+
+def test_eval_fanin_scopes_predecessor_read_to_the_deferral_episode(
+    copro_launch,
+) -> None:
+    """Fan-in must read eval rows above the deferring step, not the whole item.
+
+    The origin filter is what keeps a second deferral episode from seeing the
+    first episode's rows; it is passed to the upstream episode reader.
+    """
+    from dr_platform.inspection.work_items import PredecessorStageOutput
+
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(
+        copro_launch,
+        # A nonzero origin makes the assertion discriminate real wiring from
+        # a hardcoded origin_stage_index=0.
+        stage_index=3,
+    )
+    platform_executor = build_platform_row_executor(runtime)
+    row_outputs = []
+    for row_successor in row_successors:
+        row_completion = execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+            row_executor=platform_executor,
+        )
+        row_outputs.append(row_completion.output_reference)
+    object.__setattr__(runtime, "ledger_engine", MagicMock())
+    episode_predecessors = tuple(
+        PredecessorStageOutput(
+            stage_index=index + 1,
+            stage_key=StageKey(STAGE_EVAL_ROW),
+            input_reference=f"row-in-{index}",
+            output_reference=output_reference,
+        )
+        for index, output_reference in enumerate(row_outputs)
+    )
+    with patch(
+        "whetstone.platform.eval_fanin.list_episode_predecessor_outputs",
+        return_value=episode_predecessors,
+    ) as list_predecessors:
+        execute_eval_fanin_sync(
+            runtime,
+            input_reference=fanin_successor.input_reference,
+            stage_index=fanin_successor.stage_index,
+            work_item_id=1,
+        )
+    list_predecessors.assert_called_once_with(
+        1,
+        fanin_successor.stage_index,
+        origin_stage_index=3,
+        stage_key=STAGE_EVAL_ROW,
+        engine=runtime.ledger_engine,
+    )

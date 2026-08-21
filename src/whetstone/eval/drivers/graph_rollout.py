@@ -32,7 +32,7 @@ from whetstone.experiment.graph.llm_call_run_node import (
 )
 from whetstone.experiment.graph.run_node_registry import build_run_node
 from whetstone.experiment.sampling import EvalSplit
-from whetstone.execution._file_lock import ensure_private_directory
+from dr_store.localfs import ensure_private_directory
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.provider.driver import TransportCall

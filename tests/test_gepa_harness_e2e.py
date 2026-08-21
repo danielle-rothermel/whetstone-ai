@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from whetstone.coordination.eval_service import EvalEngineService
 from whetstone.coordination.harness_run_controller import OptimRunLaunch
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from whetstone.core.blocking_store import open_blocking_sqlite_store
+from dr_store.sync import open_sqlite
 from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
 from whetstone.core.identity import TypedRef
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -68,7 +68,7 @@ def _toy_gepa_control(*, max_metric_calls: int, store) -> object:
 
 def test_gepa_harness_e2e_terminalizes(tmp_path) -> None:
     sqlite_path = str(tmp_path / "gepa-e2e.sqlite")
-    with open_blocking_sqlite_store(sqlite_path) as store:
+    with open_sqlite(sqlite_path) as store:
         control = _toy_gepa_control(max_metric_calls=2, store=store)
         experiment = build_toy_experiment(num_seeds=1)
         engine = ReferenceEvalRuntimeConfig().build_engine(store)

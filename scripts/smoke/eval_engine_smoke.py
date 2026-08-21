@@ -144,7 +144,7 @@ def _p1_preview_smoke() -> None:
 def _graph_rollout_driver_smoke() -> None:
     import tempfile
 
-    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from dr_store.sync import open_sqlite
     from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
     from whetstone.eval.preview.persisted import load_component_traces
     from whetstone.eval.protocol import EvalRequest
@@ -170,7 +170,7 @@ def _graph_rollout_driver_smoke() -> None:
             transport_policy=policy.transport_policy
         ),
     )
-    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_blocking_sqlite_store(
+    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_sqlite(
         handle.name
     ) as store:
         engine = RuntimeEvalEngine(
@@ -202,7 +202,7 @@ def _graph_rollout_driver_smoke() -> None:
 def _reference_runtime_smoke() -> None:
     import tempfile
 
-    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from dr_store.sync import open_sqlite
 
     from whetstone.eval.protocol import EvalRequest
     from whetstone.eval.reference_runtime import (
@@ -222,7 +222,7 @@ def _reference_runtime_smoke() -> None:
         ToyTask,
         build_toy_experiment,
     )
-    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_blocking_sqlite_store(
+    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_sqlite(
         handle.name
     ) as store:
         runtime = ReferenceEvalRuntimeConfig.model_validate({})
@@ -241,14 +241,14 @@ def _reference_runtime_with_cache_smoke() -> None:
     import tempfile
     from pathlib import Path
 
-    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from dr_store.sync import open_sqlite
     from whetstone.eval.protocol import EvalRequest
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-    from whetstone.execution._file_lock import ensure_private_directory
+    from dr_store.localfs import ensure_private_directory
 
     with tempfile.TemporaryDirectory() as tmp, tempfile.NamedTemporaryFile(
         suffix=".sqlite"
-    ) as handle, open_blocking_sqlite_store(handle.name) as store:
+    ) as handle, open_sqlite(handle.name) as store:
         cache_root = Path(tmp).resolve() / "cache"
         partial_path = Path(tmp).resolve() / "partials.jsonl"
         ensure_private_directory(cache_root)
@@ -281,11 +281,11 @@ def _reference_runtime_with_cache_smoke() -> None:
 def _subprocess_driver_smoke() -> None:
     import tempfile
 
-    from whetstone.core.blocking_store import open_blocking_sqlite_store
+    from dr_store.sync import open_sqlite
     from whetstone.eval.protocol import EvalRequest
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 
-    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_blocking_sqlite_store(
+    with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_sqlite(
         handle.name
     ) as store:
         runtime = ReferenceEvalRuntimeConfig.model_validate(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import stat
 import resource
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -22,12 +23,40 @@ from pydantic import (
 )
 
 from whetstone.eval.schema import RowAccounting
-from whetstone.execution._file_lock import (
-    fsync_parent_directory,
-    open_private_regular_file,
-)
 
 MATRIX_SCHEMA_VERSION = 1
+
+
+def _open_output_file(path: Path, flags: int) -> int:
+    """Open a matrix output file directly, without private-tree policy.
+
+    Matrix outputs live in a caller-chosen directory; ``dr_store.localfs``
+    would chmod that directory to ``0o700`` and refuse symlinked ancestors
+    (for example macOS ``/var``), neither of which this writer may impose.
+    """
+    for optional in (os.O_CLOEXEC, os.O_NOFOLLOW):
+        flags |= optional
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode):
+            raise OSError(f"matrix output path is not a regular file: {path}")
+        if status.st_uid != os.geteuid():
+            raise PermissionError(
+                f"matrix output path is not owned by the current user: {path}"
+            )
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _fsync_output_parent(path: Path) -> None:
+    descriptor = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 class MatrixTreatmentBase(BaseModel):
@@ -119,7 +148,7 @@ def atomic_write_model(path: Path, model: BaseModel) -> None:
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     descriptor: int | None = None
     try:
-        descriptor = open_private_regular_file(
+        descriptor = _open_output_file(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
         )
@@ -129,7 +158,7 @@ def atomic_write_model(path: Path, model: BaseModel) -> None:
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(temporary, path)
-        fsync_parent_directory(path)
+        _fsync_output_parent(path)
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -177,7 +206,7 @@ def append_status(path: Path, status: MatrixTreatmentStatus) -> None:
 
 @contextmanager
 def run_lock(path: Path) -> Iterator[None]:
-    descriptor = open_private_regular_file(
+    descriptor = _open_output_file(
         path,
         os.O_RDWR | os.O_CREAT,
     )

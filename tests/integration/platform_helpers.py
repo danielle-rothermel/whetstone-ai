@@ -40,7 +40,7 @@ from whetstone.coordination.runtime_bootstrap import (
     prepare_copro_run,
     register_runtime,
 )
-from whetstone.core.blocking_store import BlockingObjectStore
+from dr_store.sync import BlockingObjectStore
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
 from whetstone.platform.contracts import (
@@ -390,16 +390,16 @@ def bootstrap_platform_runtime(
     )
     initialize_dbos_runtime(config, app_name=f"whetstone-platform-{suffix}")
     registration = register_scheduled_dispatcher(
-        live_dbos_identity=LiveDbosIdentity(
-            app_version=f"whetstone-{suffix}",
-            resolve_executor_ids=lambda: frozenset({DBOS.application_version}),
-        ),
+        live_dbos_identity=LiveDbosIdentity(),
         config=config,
         engine=pg_engine,
         registry=registry,
         sweep_cron=None,
     )
     DBOS.launch()
+    # Pin this process as the current deployment. Without this, workflows
+    # left in a reused Postgres database by a *different* prior application
+    # version are treated as recoverable work and stall the run.
     DBOS.set_latest_application_version(DBOS.application_version)
 
     return PlatformIntegrationContext(

@@ -14,6 +14,12 @@ from pathlib import Path
 from typing import Literal, Self, cast
 
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
+from dr_store.localfs import (
+    FileLock,
+    PrivateDirectory,
+    PrivatePathViolationError,
+    fsync_file,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -26,11 +32,6 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.execution._file_lock import (
-    FileLock,
-    PrivateDirectory,
-    fsync_file,
-)
 
 __all__ = [
     "PARTIAL_FRAME_SCHEMA",
@@ -684,7 +685,7 @@ def _open_record_directory(
         return parent.open_child(name, create=create)
     except FileNotFoundError:
         raise
-    except OSError as exc:
+    except (OSError, PrivatePathViolationError) as exc:
         raise ValueError(
             "partial storage must be a current per-key record directory"
         ) from exc
