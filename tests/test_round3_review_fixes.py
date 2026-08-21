@@ -19,7 +19,7 @@ from whetstone.platform.step_executor import STAGE_EVAL_FANIN, STAGE_EVAL_ROW, e
 from whetstone.provider.llm_call import derive_rng_seed
 
 
-def test_gepa_zero_budget_uses_terminal_contract_and_zero_delta(tmp_path) -> None:
+def test_gepa_zero_budget_binds_the_step_contract_and_zero_delta(tmp_path) -> None:
     from tests.test_gepa_harness_adapter import _toy_gepa_control
     from whetstone.coordination.step_request_builder import StepRequestBuilder
     from whetstone.optim.contracts import (

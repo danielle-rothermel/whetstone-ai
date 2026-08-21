@@ -38,14 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proposals or terminalizing with the run terminal cardinality. A COMPLETE
   step must honor the run terminal cardinality rather than be the identical
   contract object.
-- `OutputContract.require_distinct_bases` constrains proposed candidates.
+- `OutputContract.require_distinct_bases` constrains proposed candidates
+  rather than accepted ones, so a step may accept two candidates sharing a
+  base. It is enforced at Step granularity; the Optimization Result needs no
+  separate check.
 - A rejected GEPA reflection response is retried once with the rejection fed
   back into the prompt; a second rejection skips that component's mutation
-  and records a `GepaSkippedMutation` on the effect transcript instead of
-  ending the run. Provider and transport failures still surface immediately.
+  instead of ending the run. Each rejected attempt records a
+  `GepaSkippedMutation` on the terminal effect transcript, with
+  `exhausted=True` marking the attempts that actually dropped a mutation.
+  Provider and transport failures still surface immediately.
 - Step Request, Step Result, and Optimization Result records are schema
   version 2; the GEPA reflection prompt and upstream adapter identity are
-  version 2.
+  version 2. `OutputContract`'s new `terminal_proposal_count` key changes the
+  content and identity hashes of every previously stored `OptimRun` record,
+  so `OptimRun` is schema version 2 as well.
 
 ### Fixed
 

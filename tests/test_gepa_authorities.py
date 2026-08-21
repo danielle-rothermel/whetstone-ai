@@ -14,6 +14,7 @@ from whetstone.optim.gepa.authorities import (
 )
 from whetstone.optim.gepa.contracts import (
     GepaCandidateComponent,
+    GepaDataInstance,
     GepaEffectContext,
     GepaEffectSlot,
     GepaEvaluationEffectRequest,
@@ -186,3 +187,71 @@ def test_eval_authority_evaluates_against_a_real_engine(sqlite_store) -> None:
         assert row.evidence_refs
         assert row.trajectory is not None
         assert row.trajectory.data_id == entry.data_id
+
+
+# --- data registry uniqueness ---------------------------------------------
+
+
+def _data_instance(
+    *, position: int, data_id: str, task_hash: str, loader_hash: str
+) -> GepaDataInstance:
+    from whetstone.core.identity import TypedRef
+
+    return GepaDataInstance(
+        upstream_position=position,
+        data_id=data_id,
+        task_hash=task_hash,
+        data_ref=TypedRef(
+            schema_name="whetstone.toy.task",
+            content_hash=task_hash,
+        ),
+        loader_identity_hash=loader_hash,
+    )
+
+
+def test_the_data_registry_rejects_duplicate_task_hashes() -> None:
+    """Two entries for one task would make the eval seam ambiguous."""
+    loader_hash = "c" * 64
+    shared = "d" * 64
+    entries = (
+        _data_instance(
+            position=0,
+            data_id="task-one",
+            task_hash=shared,
+            loader_hash=loader_hash,
+        ),
+        _data_instance(
+            position=1,
+            data_id="task-two",
+            task_hash=shared,
+            loader_hash=loader_hash,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="task hashes must be unique"):
+        GepaDataRegistry(
+            loader_identity_hash=loader_hash, entries=entries
+        )
+
+
+def test_the_data_registry_rejects_duplicate_data_ids() -> None:
+    loader_hash = "c" * 64
+    entries = (
+        _data_instance(
+            position=0,
+            data_id="task-one",
+            task_hash="d" * 64,
+            loader_hash=loader_hash,
+        ),
+        _data_instance(
+            position=1,
+            data_id="task-one",
+            task_hash="e" * 64,
+            loader_hash=loader_hash,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="identities must be unique"):
+        GepaDataRegistry(
+            loader_identity_hash=loader_hash, entries=entries
+        )

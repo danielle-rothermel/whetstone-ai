@@ -12,17 +12,26 @@ from whetstone.coordination.step_contracts import (
     step_contract_provider_keys,
 )
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from whetstone.core.identity import ImmutableJsonObject, TypedRef
+from whetstone.core.identity import (
+    IdentityRef,
+    ImmutableJsonObject,
+    TypedRef,
+    typed_ref_for_record,
+)
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import (
     OptimRun,
     OptimStepRequest,
+    OptimStepResult,
     OutputContract,
     StepKind,
     StepMode,
     StepStatus,
     optimization_run_reference,
+    step_request_reference,
 )
+from whetstone.optim.harness import OptimHarness
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 from whetstone.optim.gepa.adapter import GepaTerminalResult
 from whetstone.optim.gepa.engine import GepaDetailedResult
@@ -121,6 +130,109 @@ def test_copro_contracts_are_unchanged(copro_launch) -> None:
     )
     assert request.step_output_contract.terminal_proposal_count is None
     assert not request.pools["attempt_history"]
+
+
+# --- honoring the run terminal contract -----------------------------------
+
+
+def test_honors_terminal_accepts_a_differing_continuing_count() -> None:
+    """The intended relaxation: only the terminal side has to agree."""
+    terminal = OutputContract(returned_proposal_count=1)
+    step = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+    )
+    assert step.honors_terminal(terminal)
+
+
+def test_honors_terminal_rejects_a_differing_terminal_count() -> None:
+    terminal = OutputContract(returned_proposal_count=2)
+    step = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+    )
+    assert not step.honors_terminal(terminal)
+
+
+def test_honors_terminal_rejects_a_differing_distinct_base_rule() -> None:
+    terminal = OutputContract(
+        returned_proposal_count=1,
+        require_distinct_bases=True,
+    )
+    step = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+        require_distinct_bases=False,
+    )
+    assert not step.honors_terminal(terminal)
+
+
+def test_a_complete_step_with_a_foreign_terminal_count_is_rejected() -> None:
+    """The predicate is a real guard on the harness path, not decoration."""
+    experiment = build_toy_experiment(num_seeds=1)
+    base = experiment.initial_candidate
+    run = _distinct_base_run(
+        "honors-terminal",
+        OutputContract(returned_proposal_count=1),
+    )
+    # The step promises to terminalize on 2 accepted candidates; the run
+    # terminal contract says 1.
+    step_contract = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=2,
+    )
+    request = OptimStepRequest(
+        run=optimization_run_reference(run),
+        step_id="honors-terminal:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(base,),
+        step_output_contract=step_contract,
+    )
+    first = _derived(base, candidate_id="one")
+    second = _root_candidate("other-base")
+    output = AdapterOutput(
+        proposed_candidates=(first, second),
+        accepted_candidates=(first, second),
+        proposed_status=StepStatus.COMPLETE,
+    )
+
+    with pytest.raises(ValueError, match="honor the run terminal"):
+        OptimHarness._validate_output(request, output)
+
+
+def test_a_complete_step_result_with_a_foreign_terminal_count_is_rejected(
+) -> None:
+    """The same guard binds the persisted Step Result."""
+    experiment = build_toy_experiment(num_seeds=1)
+    base = experiment.initial_candidate
+    run = _distinct_base_run(
+        "honors-terminal-result",
+        OutputContract(returned_proposal_count=1),
+    )
+    step_contract = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+        require_distinct_bases=True,
+    )
+    request = OptimStepRequest(
+        run=optimization_run_reference(run),
+        step_id="honors-terminal-result:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(base,),
+        step_output_contract=step_contract,
+    )
+    proposed = candidate_reference(_derived(base, candidate_id="one"))
+
+    # Cardinality matches; only the distinct-base rule disagrees with the run.
+    with pytest.raises(ValueError, match="honor the run terminal"):
+        OptimStepResult(
+            request=step_request_reference(request),
+            proposed_candidates=(proposed,),
+            accepted_candidates=(proposed,),
+            status=StepStatus.COMPLETE,
+        )
 
 
 # --- no-improvement termination -------------------------------------------
@@ -241,13 +353,231 @@ def test_only_a_complete_output_may_retain_the_seed() -> None:
         )
 
 
-def test_distinct_bases_constrains_proposed_not_accepted() -> None:
+# --- distinct bases -------------------------------------------------------
+
+
+def _root_candidate(candidate_id: str) -> Candidate:
+    """A second root candidate, so a request can offer two distinct bases."""
+    candidate = Candidate(
+        candidate_id=candidate_id,
+        base_ref=typed_ref_for_record(
+            "whetstone.test.root", {"root": candidate_id}
+        ),
+        payload={
+            TOY_MUTATION_FIELD: f"{candidate_id}, reply to: {{prompt}}"
+        },
+    )
+    return candidate_reference(candidate).record
+
+
+def _derived(base: Candidate, *, candidate_id: str) -> Candidate:
+    """A candidate mutated from ``base``, so it binds ``base`` as its base."""
+    candidate = Candidate(
+        candidate_id=candidate_id,
+        base_ref=candidate_reference(base).record_ref,
+        payload={
+            TOY_MUTATION_FIELD: f"{candidate_id}, reply to: {{prompt}}"
+        },
+    )
+    return candidate_reference(candidate).record
+
+
+def _distinct_base_run(run_id: str, contract: OutputContract) -> OptimRun:
+    experiment = build_toy_experiment(num_seeds=1)
+    return OptimRun(
+        run_id=run_id,
+        optimizer_config=IdentityRef(
+            record_ref=TypedRef(
+                schema_name="whetstone.optim_control",
+                content_hash="b" * 64,
+            ),
+            record_hash="c" * 64,
+        ),
+        adapter_key=COPRO_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=contract,
+        template_render_contract=toy_template_render_contract(),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+
+
+def _distinct_base_request(
+    run_id: str,
+    contract: OutputContract,
+    bases: tuple[Candidate, ...],
+) -> OptimStepRequest:
+    """A step request bound to a require_distinct_bases terminal contract."""
+    run = _distinct_base_run(run_id, contract)
+    return OptimStepRequest(
+        run=optimization_run_reference(run),
+        step_id=f"{run_id}:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=bases,
+        step_output_contract=contract,
+    )
+
+
+def test_distinct_bases_rejects_duplicate_based_proposed_candidates() -> None:
+    """The rule the contract states: proposed candidates need distinct bases."""
+    experiment = build_toy_experiment(num_seeds=1)
+    base = experiment.initial_candidate
     contract = OutputContract(
         returned_proposal_count=1,
         require_distinct_bases=True,
     )
-    assert contract.accepted_count_for(StepStatus.COMPLETE) == 1
-    assert contract.accepted_count_for(StepStatus.FAILED) == 0
+    request = _distinct_base_request("distinct-proposed", contract, (base,))
+    # Both proposals are mutations of the one request candidate, so they
+    # share a base_ref.
+    first = _derived(base, candidate_id="one")
+    second = _derived(base, candidate_id="two")
+    output = AdapterOutput(
+        proposed_candidates=(first, second),
+        accepted_candidates=(first,),
+        proposed_status=StepStatus.COMPLETE,
+    )
+
+    with pytest.raises(ValueError, match="distinct-base output contract"):
+        OptimHarness._validate_output(request, output)
+
+
+def test_distinct_bases_allows_duplicate_based_accepted_candidates() -> None:
+    """D1: the rule constrains proposed only, so accepted may repeat a base.
+
+    This is what makes seed-retained termination representable: an adapter
+    must not be forced to fabricate a distinct base to accept a candidate.
+    """
+    base_a = build_toy_experiment(num_seeds=1).initial_candidate
+    contract = OutputContract(
+        returned_proposal_count=2,
+        require_distinct_bases=False,
+    )
+    request = _distinct_base_request(
+        "distinct-accepted", contract, (base_a,)
+    )
+    # Two distinct candidates mutated from the one base: their base_refs
+    # collide, which the pre-D1 rule rejected on accepted_candidates.
+    first = _derived(base_a, candidate_id="one")
+    second = _derived(base_a, candidate_id="two")
+    output = AdapterOutput(
+        proposed_candidates=(first, second),
+        accepted_candidates=(first, second),
+        proposed_status=StepStatus.CONTINUE,
+    )
+
+    # Accepted candidates sharing a base are legal; the harness only checks
+    # proposed, so this passes and would have raised before D1.
+    OptimHarness._validate_output(request, output)
+
+    # Turning the rule on now rejects it, because proposed shares the base.
+    strict = request.model_copy(
+        update={
+            "step_output_contract": contract.model_copy(
+                update={"require_distinct_bases": True}
+            )
+        }
+    )
+    with pytest.raises(ValueError, match="distinct-base output contract"):
+        OptimHarness._validate_output(strict, output)
+
+
+def test_step_result_rejects_duplicate_based_proposed_candidates() -> None:
+    """The Step Result validator enforces the same rule as the harness."""
+    experiment = build_toy_experiment(num_seeds=1)
+    base = experiment.initial_candidate
+    contract = OutputContract(
+        returned_proposal_count=1,
+        require_distinct_bases=True,
+    )
+    request = _distinct_base_request("distinct-step-result", contract, (base,))
+    first = candidate_reference(_derived(base, candidate_id="one"))
+    second = candidate_reference(_derived(base, candidate_id="two"))
+
+    with pytest.raises(ValueError, match="distinct-base output"):
+        OptimStepResult(
+            request=step_request_reference(request),
+            proposed_candidates=(first, second),
+            accepted_candidates=(first,),
+            status=StepStatus.COMPLETE,
+        )
+
+
+def test_duplicate_based_terminal_proposals_are_unreachable() -> None:
+    """No OptimResult-level distinct-base check is needed, and why.
+
+    Terminal proposals equal the final Step's accepted candidates, accepted
+    is a sub-multiset of proposed, and a COMPLETE Step must honor the run's
+    distinct-base flag. So the Step Result rule already excludes duplicate
+    bases from the terminal proposals; this pins that derivation.
+    """
+    base_a = build_toy_experiment(num_seeds=1).initial_candidate
+    base_b = _root_candidate("second-base")
+    contract = OutputContract(
+        returned_proposal_count=2,
+        require_distinct_bases=True,
+    )
+    run = _distinct_base_run("distinct-terminal", contract)
+    run_ref = optimization_run_reference(run)
+    request = OptimStepRequest(
+        run=run_ref,
+        step_id="distinct-terminal:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(base_a, base_b),
+        step_output_contract=contract,
+    )
+    # The only way to accept two candidates sharing base_a is to propose
+    # them both, which the Step Result rule rejects outright.
+    first = candidate_reference(_derived(base_a, candidate_id="one"))
+    second = candidate_reference(_derived(base_a, candidate_id="two"))
+    with pytest.raises(ValueError, match="distinct-base output"):
+        OptimStepResult(
+            request=step_request_reference(request),
+            proposed_candidates=(first, second),
+            accepted_candidates=(first, second),
+            status=StepStatus.COMPLETE,
+        )
+
+    # A COMPLETE step cannot escape by relaxing its own contract, because
+    # honors_terminal compares require_distinct_bases against the run.
+    relaxed = contract.model_copy(update={"require_distinct_bases": False})
+    assert not relaxed.honors_terminal(run.terminal_output_contract)
+
+
+def test_optim_result_seed_retained_must_mirror_the_final_step() -> None:
+    """The consumer reads seed_retained off the run, so it cannot disagree.
+
+    This is the field that distinguishes a real no-improvement run from a
+    fabricated substitute candidate.
+    """
+    from whetstone.optim.contracts import OptimResult, step_result_reference
+
+    experiment = build_toy_experiment(num_seeds=1)
+    contract = OutputContract(returned_proposal_count=1)
+    run = _distinct_base_run("seed-retained-mirror", contract)
+    run_ref = optimization_run_reference(run)
+    request = OptimStepRequest(
+        run=run_ref,
+        step_id="seed-retained-mirror:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        step_output_contract=contract,
+    )
+    step_result = OptimStepResult(
+        request=step_request_reference(request),
+        status=StepStatus.COMPLETE,
+        seed_retained=True,
+    )
+
+    with pytest.raises(ValueError, match="seed_retained must match"):
+        OptimResult(
+            run=run_ref,
+            proposals=(),
+            step_results=(step_result_reference(step_result),),
+            seed_retained=False,
+        )
 
 
 def test_a_seed_retaining_run_terminalizes_through_the_harness(

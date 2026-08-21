@@ -10,6 +10,8 @@ change and must bump the matching schema version here and in
 
 from __future__ import annotations
 
+from whetstone.core.identity import IdentityRef, TypedRef
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OPTIM_RESULT_SCHEMA_VERSION,
@@ -19,12 +21,24 @@ from whetstone.optim.contracts import (
     STEP_REQUEST_SCHEMA_VERSION,
     STEP_RESULT_SCHEMA,
     STEP_RESULT_SCHEMA_VERSION,
+    IntentOutcome,
     OptimResult,
     OptimRun,
     OptimStepRequest,
     OptimStepResult,
     OutputContract,
     SearchEvidence,
+    StepKind,
+    StepMode,
+    StepStatus,
+    optimization_run_reference,
+    step_request_reference,
+    step_result_reference,
+)
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    build_toy_experiment,
+    toy_template_render_contract,
 )
 
 GOLDEN_SCHEMA_NAMES = {
@@ -35,7 +49,7 @@ GOLDEN_SCHEMA_NAMES = {
 }
 
 GOLDEN_SCHEMA_VERSIONS = {
-    "optim_run": 1,
+    "optim_run": 2,
     "step_request": 2,
     "step_result": 2,
     "optim_result": 2,
@@ -126,6 +140,72 @@ GOLDEN_OPTIM_RUN_KEYS = frozenset(
 )
 
 
+# --- minimal valid instances ----------------------------------------------
+#
+# The goldens below compare against ``model_dump(mode="json")``, not
+# ``model_fields``: the serialized key set is what gets content-addressed, so
+# an alias, an ``exclude``, or a custom serializer must fail here.
+
+
+def _typed_ref(schema_name: str) -> TypedRef:
+    return TypedRef(schema_name=schema_name, content_hash="a" * 64)
+
+
+def _optim_run() -> OptimRun:
+    experiment = build_toy_experiment(num_seeds=1)
+    return OptimRun(
+        run_id="golden-run",
+        optimizer_config=IdentityRef(
+            record_ref=_typed_ref("whetstone.optim_control"),
+            record_hash="b" * 64,
+        ),
+        adapter_key="gepa",
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(returned_proposal_count=0),
+        template_render_contract=toy_template_render_contract(),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+
+
+def _step_request() -> OptimStepRequest:
+    experiment = build_toy_experiment(num_seeds=1)
+    return OptimStepRequest(
+        run=optimization_run_reference(_optim_run()),
+        step_id="golden-run:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        step_output_contract=OutputContract(returned_proposal_count=0),
+    )
+
+
+def _step_result() -> OptimStepResult:
+    return OptimStepResult(
+        request=step_request_reference(_step_request()),
+        status=StepStatus.COMPLETE,
+        seed_retained=True,
+    )
+
+
+def _search_evidence() -> SearchEvidence:
+    experiment = build_toy_experiment(num_seeds=1)
+    return SearchEvidence(
+        eval_request_id="golden-eval",
+        candidate=candidate_reference(experiment.initial_candidate),
+        outcome=IntentOutcome.REJECTED,
+    )
+
+
+def _optim_result() -> OptimResult:
+    return OptimResult(
+        run=optimization_run_reference(_optim_run()),
+        proposals=(),
+        step_results=(step_result_reference(_step_result()),),
+        seed_retained=True,
+    )
+
+
 def test_persisted_schema_names_are_pinned() -> None:
     assert OPTIM_RUN_SCHEMA == GOLDEN_SCHEMA_NAMES["optim_run"]
     assert STEP_REQUEST_SCHEMA == GOLDEN_SCHEMA_NAMES["step_request"]
@@ -154,32 +234,50 @@ def test_output_contract_wire_keys_are_pinned() -> None:
 
 
 def test_optim_run_wire_keys_are_pinned() -> None:
-    assert set(OptimRun.model_fields) == GOLDEN_OPTIM_RUN_KEYS
+    assert (
+        set(_optim_run().model_dump(mode="json")) == GOLDEN_OPTIM_RUN_KEYS
+    )
 
 
 def test_step_request_wire_keys_are_pinned() -> None:
-    assert set(OptimStepRequest.model_fields) == GOLDEN_STEP_REQUEST_KEYS
+    assert (
+        set(_step_request().model_dump(mode="json"))
+        == GOLDEN_STEP_REQUEST_KEYS
+    )
 
 
 def test_step_result_wire_keys_are_pinned() -> None:
-    assert set(OptimStepResult.model_fields) == GOLDEN_STEP_RESULT_KEYS
+    assert (
+        set(_step_result().model_dump(mode="json"))
+        == GOLDEN_STEP_RESULT_KEYS
+    )
 
 
 def test_search_evidence_wire_keys_are_pinned() -> None:
-    assert set(SearchEvidence.model_fields) == GOLDEN_SEARCH_EVIDENCE_KEYS
+    assert (
+        set(_search_evidence().model_dump(mode="json"))
+        == GOLDEN_SEARCH_EVIDENCE_KEYS
+    )
 
 
 def test_optim_result_wire_keys_are_pinned() -> None:
-    assert set(OptimResult.model_fields) == GOLDEN_OPTIM_RESULT_KEYS
+    assert (
+        set(_optim_result().model_dump(mode="json"))
+        == GOLDEN_OPTIM_RESULT_KEYS
+    )
 
 
-def test_seed_retained_serializes_on_the_wire() -> None:
-    """The no-improvement signal is a persisted field, not a derived view."""
+def test_terminal_proposal_count_serializes_on_the_wire() -> None:
+    """The split continuing/terminal cardinality is a persisted field."""
     dumped = OutputContract(
         returned_proposal_count=0,
         terminal_proposal_count=1,
     ).model_dump(mode="json")
     assert dumped["terminal_proposal_count"] == 1
     assert dumped["returned_proposal_count"] == 0
-    assert "seed_retained" in OptimStepResult.model_fields
-    assert "seed_retained" in OptimResult.model_fields
+
+
+def test_seed_retained_serializes_on_the_wire() -> None:
+    """The no-improvement signal is a persisted field, not a derived view."""
+    assert _step_result().model_dump(mode="json")["seed_retained"] is True
+    assert _optim_result().model_dump(mode="json")["seed_retained"] is True

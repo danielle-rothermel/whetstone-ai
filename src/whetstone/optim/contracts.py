@@ -95,10 +95,18 @@ __all__ = [
 #: Result records are content-addressed: their wire keys are their identity,
 #: so the exact key sets are pinned by golden tests rather than derived from
 #: model field names. Bump the matching version whenever a key set changes.
+#:
+#: Only ``OPTIM_RUN_SCHEMA_VERSION`` is an identity input, via
+#: ``OptimRun.identity_hash``; because that identity embeds the serialized
+#: terminal ``OutputContract``, a key-set change to ``OutputContract`` bumps
+#: it too. The Step Request, Step Result, and Optimization Result versions
+#: are documentation: their refs come from ``typed_ref_for_record``, which
+#: hashes content alone. The golden key-set tests, not these constants, are
+#: what fail on drift.
 INTENT_RESOLUTION_SCHEMA = "whetstone.optim_intent_resolution"
 INTENT_RESOLUTION_SCHEMA_VERSION = -1
 OPTIM_RUN_SCHEMA = "whetstone.optim_run"
-OPTIM_RUN_SCHEMA_VERSION = 1
+OPTIM_RUN_SCHEMA_VERSION = 2
 STEP_REQUEST_SCHEMA = "whetstone.optim_step_request"
 STEP_REQUEST_SCHEMA_VERSION = 2
 STEP_RESULT_SCHEMA = "whetstone.optim_step_result"
@@ -161,7 +169,12 @@ class OutputContract(BaseModel):
     the Step reports COMPLETE; leaving it unset binds both cases to
     ``returned_proposal_count``.
 
-    ``require_distinct_bases`` constrains proposed candidates only.
+    ``require_distinct_bases`` constrains proposed candidates only, and is
+    enforced at Step granularity. The Optimization Result needs no separate
+    check: its proposals must equal the final Step's accepted candidates,
+    accepted candidates are a sub-multiset of proposed, and a COMPLETE Step
+    must ``honors_terminal`` the run contract -- which compares this flag.
+    Duplicate-based terminal proposals are therefore already unreachable.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

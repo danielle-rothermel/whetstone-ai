@@ -344,7 +344,7 @@ def test_supplemental_reaggregation_is_order_independent(sqlite_store) -> None:
     assert second_value == pytest.approx(0.5)
 
 
-def test_gepa_build_next_zero_budget_uses_terminal_contract(tmp_path) -> None:
+def test_gepa_build_next_zero_budget_binds_the_step_contract(tmp_path) -> None:
     from tests.test_gepa_harness_adapter import _toy_gepa_control
     from whetstone.coordination.step_request_builder import StepRequestBuilder
     from dr_store.sync import open_sqlite

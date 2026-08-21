@@ -17,7 +17,9 @@ from whetstone.optim.contracts import (
     IntentOutcome,
     OptimRun,
     OutputContract,
+    SearchEvidence,
     StepMode,
+    StepStatus,
 )
 from whetstone.optim.gepa.authorities import (
     CanonicalGepaCandidateAssembler,
@@ -229,6 +231,118 @@ def test_a_gepa_step_carries_resolvable_eval_evidence(sqlite_store) -> None:
             assert sqlite_store.get(ref.reference) is not None
 
 
+def test_search_evidence_reward_refs_must_match_the_reward(
+    sqlite_store,
+) -> None:
+    """The last SearchEvidence invariant, on a reward the search produced.
+
+    reward_evidence_refs must mirror the Reward's own ordered evidence_refs;
+    a mismatch means the record cites evidence the Reward does not.
+    """
+    run_id = "gepa-evidence-reward"
+    experiment, engine, control, adapter = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=2
+    )
+    run = OptimRun(
+        run_id=run_id,
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(returned_proposal_count=1),
+        template_render_contract=toy_template_render_contract(),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    request = StepRequestBuilder(store=sqlite_store).build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness.run_step(request)
+    evidence = next(
+        item for item in result.search_evidence if item.reward_ref is not None
+    )
+
+    # Rebuilding it unchanged is valid.
+    SearchEvidence(
+        eval_request_id=evidence.eval_request_id,
+        candidate=evidence.candidate,
+        outcome=evidence.outcome,
+        eval_result_ref=evidence.eval_result_ref,
+        reward_ref=evidence.reward_ref,
+        reward_evidence_refs=evidence.reward_evidence_refs,
+    )
+
+    # Dropping one cited ref no longer mirrors the Reward.
+    assert evidence.reward_evidence_refs
+    with pytest.raises(ValueError, match="must equal the ordered"):
+        SearchEvidence(
+            eval_request_id=evidence.eval_request_id,
+            candidate=evidence.candidate,
+            outcome=evidence.outcome,
+            eval_result_ref=evidence.eval_result_ref,
+            reward_ref=evidence.reward_ref,
+            reward_evidence_refs=evidence.reward_evidence_refs[:-1],
+        )
+
+
+def test_a_terminal_gepa_step_carries_its_search_evidence(
+    sqlite_store,
+) -> None:
+    """The COMPLETE step reports evidence too, not just continuing steps.
+
+    Both terminal branches of the GEPA harness adapter -- seed-retained and
+    accepted-candidate -- attach search_evidence, and nothing else asserts it
+    on a terminal step.
+    """
+    run_id = "gepa-evidence-terminal"
+    experiment, engine, control, adapter = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=2
+    )
+    run = OptimRun(
+        run_id=run_id,
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(returned_proposal_count=1),
+        template_render_contract=toy_template_render_contract(),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+
+    result, result_ref = harness.run_step(request)
+    # Walk to termination; every step must carry its own evidence.
+    while result.status is StepStatus.CONTINUE:
+        assert result.search_evidence, "a continuing step reported no evidence"
+        request = builder.build_next(
+            prior=result,
+            prior_ref=result_ref,
+            prior_results=(result,),
+            control=control,
+            mutation_field=TOY_MUTATION_FIELD,
+        )
+        result, result_ref = harness.run_step(request)
+
+    assert result.status is StepStatus.COMPLETE
+    assert result.search_evidence, "the terminal step reported no evidence"
+    for evidence in result.search_evidence:
+        assert evidence.eval_result_ref is not None
+        for ref in evidence.evidence_refs:
+            assert sqlite_store.get(ref.reference) is not None
+
+
 def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     """A second step reports only the evaluations that step drove."""
     run_id = "gepa-evidence-two-step"
@@ -256,8 +370,9 @@ def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     )
 
     first, first_ref = harness.run_step(first_request)
-    if first.status.value != "continue":
-        pytest.skip("GEPA terminalized on its first step under this budget")
+    # A budget change that terminalizes step 1 must fail here rather than
+    # silently skip the per-step assertion this test exists for.
+    assert first.status is StepStatus.CONTINUE
     second_request = builder.build_next(
         prior=first,
         prior_ref=first_ref,
@@ -272,4 +387,6 @@ def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     assert first_ids
     assert second_ids
     # Step 2 reports its own evaluations, not step 1's replayed again.
-    assert second_ids != first_ids
+    # Disjoint, not merely unequal: re-reporting step 1's evidence alongside
+    # a new entry is exactly the cumulative failure this guards against.
+    assert not (first_ids & second_ids)

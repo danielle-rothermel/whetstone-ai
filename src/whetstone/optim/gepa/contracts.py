@@ -556,10 +556,17 @@ GepaEffectResult = GepaEvaluationEffectResult | GepaProposalEffectResult
 
 
 class GepaSkippedMutation(BaseModel):
-    """One reflection mutation dropped because its response was rejected.
+    """One rejected reflection response, retried or dropped.
 
-    Recorded so a rejected reflection is visible in step evidence rather
-    than silently narrowing the search.
+    Recorded so a rejected reflection is visible rather than silently
+    narrowing the search. One entry is appended per rejected *attempt*, so a
+    rejection that the bounded retry recovered from still appears here with
+    ``exhausted=False``. Only ``exhausted=True`` means the component was
+    left unmutated -- count those, not the entries, to count dropped
+    mutations.
+
+    These reach durable state through the terminal effect transcript, so a
+    rejection on a non-terminal step is not persisted on that Step Result.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -616,8 +623,9 @@ class GepaEffectTranscript(BaseModel):
     context: GepaEffectContext
     entries: tuple[GepaEffectTranscriptEntry, ...]
     score_mismatch_evidence: tuple[GepaScoreMismatchEvidence, ...] = ()
-    #: Reflection mutations rejected by the parser or format contract.
-    #: Present so a dropped mutation is visible, never silent.
+    #: Reflection responses rejected by the parser or format contract, one
+    #: entry per rejected attempt. Present so a rejection is visible, never
+    #: silent; ``exhausted=True`` marks the ones that dropped a mutation.
     skipped_mutations: tuple[GepaSkippedMutation, ...] = ()
 
     @model_validator(mode="after")

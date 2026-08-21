@@ -473,7 +473,12 @@ class WhetstoneGepaAdapter:
 
     @property
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
-        """Reflection mutations dropped after their bounded retry failed."""
+        """Rejected reflection attempts recorded during this step.
+
+        One entry per rejected attempt, including a rejection the bounded
+        retry then recovered from; ``exhausted=True`` marks the attempts
+        that actually dropped the component's mutation.
+        """
         return tuple(self._skipped_mutations)
 
 
