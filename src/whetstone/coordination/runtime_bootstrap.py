@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -42,7 +43,12 @@ from whetstone.testing.toy.experiment import (
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
+    from whetstone.eval.protocol import EvalEngine
+    from whetstone.experiment.candidate import TemplateRenderContract
+    from whetstone.experiment.env import Experiment
+    from whetstone.optim.adapters import OptimizerAdapter
     from whetstone.optim.copro.control import CoproControl
+    from whetstone.optim.gepa.control import GepaControl
 
 RUNTIME_BOOTSTRAP_SCHEMA = "whetstone.runtime_bootstrap"
 RUNTIME_BOOTSTRAP_SCHEMA_VERSION = 1
@@ -124,6 +130,9 @@ def register_runtime(
     sqlite_path: str | None = None,
     copro_control: CoproControl | None = None,
     ledger_engine: Engine | None = None,
+    engine: EvalEngine | None = None,
+    extra_adapters: Mapping[str, OptimizerAdapter] | None = None,
+    proposal_bodies: tuple[str, ...] | None = None,
 ) -> RegisteredRuntime:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
     from whetstone.optim.tools.facade import ToolAdmissionAuthority, ToolCallStore
@@ -134,9 +143,9 @@ def register_runtime(
         store = persistent_sqlite(sqlite_path)
     effect_authority = EffectAuthority.memory()
     runtime_config = ReferenceEvalRuntimeConfig()
-    engine = runtime_config.build_engine(store)
-    eval_service = EvalEngineService(store=store, engine=engine)
-    control = copro_control or build_toy_copro_control(engine=engine)
+    resolved_engine = engine or runtime_config.build_engine(store)
+    eval_service = EvalEngineService(store=store, engine=resolved_engine)
+    control = copro_control or build_toy_copro_control(engine=resolved_engine)
     prompt_adapter = PlainPromptAdapter()
     execution_policy = runtime_config.execution_policy
     proposal_policy_hash = compute_identity_hash(
@@ -145,7 +154,8 @@ def register_runtime(
         payload={"mode": "inline"},
     )
     transport = DummyProposerTransport(
-        scripted_bodies=(
+        scripted_bodies=proposal_bodies
+        or (
             "Reply briefly to: {prompt} with a concise greeting.",
             "Answer {prompt} in one short friendly sentence.",
         ),
@@ -161,11 +171,10 @@ def register_runtime(
             policy_identity_hash=proposal_policy_hash,
         ),
     )
-    adapter_registry = MappingAdapterRegistry(
-        {
-            COPRO_ADAPTER_KEY: copro_adapter,
-        }
-    )
+    adapters = {COPRO_ADAPTER_KEY: copro_adapter}
+    if extra_adapters:
+        adapters.update(extra_adapters)
+    adapter_registry = MappingAdapterRegistry(adapters)
     tool_store = ToolCallStore(
         store,
         ToolAdmissionAuthority.memory(),
@@ -187,7 +196,7 @@ def register_runtime(
         schema_version=RUNTIME_BOOTSTRAP_SCHEMA_VERSION,
         payload={
             "owner_id": owner_id,
-            "adapter_keys": [COPRO_ADAPTER_KEY],
+            "adapter_keys": sorted(adapters),
         },
     )
     controller = HarnessRunController(
@@ -213,11 +222,14 @@ def prepare_copro_run(
     control: CoproControl,
     initial_candidate: Candidate | None = None,
     terminal_top_k: int = 1,
+    experiment: Experiment | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
 ) -> OptimRunLaunch:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 
-    experiment = build_toy_experiment(num_seeds=1)
-    candidate = initial_candidate or experiment.initial_candidate
+    resolved = experiment or build_toy_experiment(num_seeds=1)
+    candidate = initial_candidate or resolved.initial_candidate
     run = OptimRun(
         run_id=run_id,
         optimizer_config=control.reference(),
@@ -226,9 +238,49 @@ def prepare_copro_run(
         terminal_output_contract=OutputContract(
             returned_proposal_count=terminal_top_k,
         ),
-        template_render_contract=toy_template_render_contract(),
-        mutation_field=TOY_MUTATION_FIELD,
-        reward_policy=experiment.reward_policy,
+        template_render_contract=(
+            render_contract or toy_template_render_contract()
+        ),
+        mutation_field=mutation_field or TOY_MUTATION_FIELD,
+        reward_policy=resolved.reward_policy,
+    )
+    launch = OptimRunLaunch(
+        run=run,
+        initial_candidate=candidate,
+        control=control,
+    )
+    runtime.controller.bind_launch(launch)
+    return launch
+
+
+def prepare_gepa_run(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    control: GepaControl,
+    initial_candidate: Candidate | None = None,
+    terminal_top_k: int = 1,
+    experiment: Experiment | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
+) -> OptimRunLaunch:
+    from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+
+    resolved = experiment or build_toy_experiment(num_seeds=1)
+    candidate = initial_candidate or resolved.initial_candidate
+    run = OptimRun(
+        run_id=run_id,
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(
+            returned_proposal_count=terminal_top_k,
+        ),
+        template_render_contract=(
+            render_contract or toy_template_render_contract()
+        ),
+        mutation_field=mutation_field or TOY_MUTATION_FIELD,
+        reward_policy=resolved.reward_policy,
     )
     launch = OptimRunLaunch(
         run=run,
@@ -258,5 +310,6 @@ __all__ = [
     "build_toy_copro_control",
     "copro_run_request",
     "prepare_copro_run",
+    "prepare_gepa_run",
     "register_runtime",
 ]
