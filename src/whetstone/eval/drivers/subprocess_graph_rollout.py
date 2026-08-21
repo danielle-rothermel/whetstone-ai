@@ -522,12 +522,13 @@ def _batch_wall_time(
     """Convert this operation's deadline into a batch wall-time ceiling.
 
     A negative or NaN wall is rejected by
-    :func:`validated_phase_wall_seconds` before reaching here, and positive
-    infinity arrives as ``None`` — unbounded, exactly as the in-process
-    driver reads it.
+    :func:`validated_phase_wall_seconds` before reaching here. Positive
+    infinity and any wall too long for dr-exec to express arrive as ``None``
+    — unbounded, exactly as the in-process driver reads them, so a generous
+    wall is never mistaken for an expired one.
 
-    What remains is a valid nonnegative wall. One that has already elapsed —
-    or is too small or too large for dr-exec to express as a positive limit —
+    What remains is a valid nonnegative wall dr-exec can express. One that
+    has already elapsed — or is too small to round up to a whole nanosecond —
     is declared as the smallest limit dr-exec accepts: the batch expires
     immediately and no row is dispatched.
     """

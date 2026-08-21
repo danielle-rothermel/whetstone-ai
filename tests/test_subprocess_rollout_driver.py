@@ -20,12 +20,17 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
+from dr_exec.declarations.models import FiniteDurationLimit
 
 from whetstone.eval.drivers.eval_result import InternalEvalResult
 from whetstone.eval.drivers.graph_row_request import RowDispatchStatus
 from whetstone.eval.drivers import graph_rollout as graph_rollout_module
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
-from whetstone.eval.drivers.row_common import RolloutRowOutput
+from whetstone.eval.drivers.row_common import (
+    MAX_REPRESENTABLE_WALL_SECONDS,
+    RolloutRowOutput,
+    validated_phase_wall_seconds,
+)
 from whetstone.eval.drivers.subprocess_graph_rollout import (
     RowWorkerError,
     SubprocessGraphRolloutEvalDriver,
@@ -964,3 +969,48 @@ def test_both_drivers_treat_an_infinite_batch_wall_as_unbounded(
             row.row_state is not ExecutedRowState.MISSING
             for row in result.outputs
         )
+
+
+def test_both_drivers_treat_an_overlarge_batch_wall_as_unbounded(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+) -> None:
+    """A wall too long for dr-exec is generous, not already elapsed.
+
+    dr-exec expresses a finite wall as a nanosecond count and refuses one
+    that overflows. Reading that refusal as "cannot express it, so expire
+    now" would turn the most generous deadline a caller can name into the
+    harshest possible outcome: every row persisted as never dispatched. The
+    shared validator instead reads a wall beyond dr-exec's range the same
+    way it reads infinity — as no deadline at all.
+    """
+    experiment = build_toy_experiment()
+    overlarge_wall_seconds = 1e18
+
+    assert overlarge_wall_seconds > MAX_REPRESENTABLE_WALL_SECONDS
+    with pytest.raises(ValueError):
+        FiniteDurationLimit.from_seconds(overlarge_wall_seconds)
+
+    subprocess_result = _run(
+        subprocess_driver,
+        experiment=experiment,
+        request_id="deadline:overlarge-subprocess",
+        concurrency=2,
+        max_wall_seconds=overlarge_wall_seconds,
+    )
+    in_process_result = _run(
+        _in_process_driver(),
+        experiment=experiment,
+        request_id="deadline:overlarge-in-process",
+        concurrency=2,
+        max_wall_seconds=overlarge_wall_seconds,
+    )
+
+    assert validated_phase_wall_seconds(overlarge_wall_seconds) is None
+    for result in (subprocess_result, in_process_result):
+        assert result.deadline_reached is False
+        assert {row.failure_code for row in result.outputs} == {""}
+        assert all(
+            row.row_state is not ExecutedRowState.MISSING
+            for row in result.outputs
+        )
+        assert result.request_identities
