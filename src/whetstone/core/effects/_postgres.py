@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from contextlib import AbstractContextManager
 from datetime import datetime, timedelta
-from typing import Any, Protocol, cast
+from typing import Any, cast
+
+from dr_store.relational import (
+    ConnectFactory,
+    RelationalContractMismatchError,
+    verify_postgres_table,
+)
 
 from whetstone.core.effects._storage import (
     _T,
     _decode_row,
-    _require_persisted_text,
+    _persisted_text,
+    _reraise_schema_mismatch,
     _row_insert_values,
     _row_match_values,
     _row_update_values,
@@ -59,33 +64,19 @@ CREATE TABLE {_METADATA_TABLE_NAME} (
 )
 """
 
-_POSTGRES_TABLE_COLUMNS = (
-    ("semantic_key", "text", "NO", 1, "pg_catalog", "C", "c", True, -1),
-    (
-        "request_hash",
-        "text",
-        "NO",
-        2,
-        "pg_catalog",
-        "C",
-        "c",
-        True,
-        -1,
-    ),
-    ("replay_policy", "text", "NO", 3, "pg_catalog", "C", "c", True, -1),
-    ("state", "text", "NO", 4, "pg_catalog", "C", "c", True, -1),
-    ("owner_id", "text", "NO", 5, "pg_catalog", "C", "c", True, -1),
-    ("attempt_id", "text", "NO", 6, "pg_catalog", "C", "c", True, -1),
-    ("fence", "bigint", "NO", 7, None, None, None, None, None),
-    ("expires_at", "text", "YES", 8, "pg_catalog", "C", "c", True, -1),
-    ("terminal_json", "text", "YES", 9, "pg_catalog", "C", "c", True, -1),
-)
-_POSTGRES_METADATA_COLUMNS = (
-    ("singleton", "integer", "NO", 1, None, None, None, None, None),
-    ("schema_version", "integer", "NO", 2, None, None, None, None, None),
-)
+type _PostgreSQLColumnContract = tuple[
+    str,
+    str,
+    bool,
+    int,
+    str | None,
+    str | None,
+    str | None,
+    bool | None,
+    int | None,
+]
 
-_PostgreSQLConstraint = tuple[
+type _PostgreSQLConstraint = tuple[
     str,
     str,
     tuple[str, ...],
@@ -95,6 +86,23 @@ _PostgreSQLConstraint = tuple[
     bool,
     bool,
 ]
+
+_POSTGRES_TABLE_COLUMNS: tuple[_PostgreSQLColumnContract, ...] = (
+    ("semantic_key", "text", True, 1, "pg_catalog", "C", "c", True, -1),
+    ("request_hash", "text", True, 2, "pg_catalog", "C", "c", True, -1),
+    ("replay_policy", "text", True, 3, "pg_catalog", "C", "c", True, -1),
+    ("state", "text", True, 4, "pg_catalog", "C", "c", True, -1),
+    ("owner_id", "text", True, 5, "pg_catalog", "C", "c", True, -1),
+    ("attempt_id", "text", True, 6, "pg_catalog", "C", "c", True, -1),
+    ("fence", "bigint", True, 7, None, None, None, None, None),
+    ("expires_at", "text", False, 8, "pg_catalog", "C", "c", True, -1),
+    ("terminal_json", "text", False, 9, "pg_catalog", "C", "c", True, -1),
+)
+_POSTGRES_METADATA_COLUMNS: tuple[_PostgreSQLColumnContract, ...] = (
+    ("singleton", "integer", True, 1, None, None, None, None, None),
+    ("schema_version", "integer", True, 2, None, None, None, None, None),
+)
+
 _POSTGRES_CONSTRAINTS: tuple[_PostgreSQLConstraint, ...] = (
     (
         _TABLE_NAME,
@@ -220,219 +228,39 @@ WHERE table_schema = current_schema()
 ORDER BY table_name
 """
 
-_POSTGRES_SELECT_COLUMNS = """
-SELECT column_record.table_name,
-       column_record.column_name,
-       column_record.data_type,
-       column_record.is_nullable,
-       column_record.ordinal_position,
-       collation_namespace.nspname,
-       collation_record.collname,
-       collation_record.collprovider,
-       collation_record.collisdeterministic,
-       collation_record.collencoding
-FROM information_schema.columns AS column_record
-JOIN pg_catalog.pg_namespace AS table_namespace
-  ON table_namespace.nspname = column_record.table_schema
-JOIN pg_catalog.pg_class AS table_record
-  ON table_record.relnamespace = table_namespace.oid
- AND table_record.relname = column_record.table_name
-JOIN pg_catalog.pg_attribute AS attribute_record
-  ON attribute_record.attrelid = table_record.oid
- AND attribute_record.attname = column_record.column_name
-LEFT JOIN pg_catalog.pg_collation AS collation_record
-  ON collation_record.oid = attribute_record.attcollation
-LEFT JOIN pg_catalog.pg_namespace AS collation_namespace
-  ON collation_namespace.oid = collation_record.collnamespace
-WHERE column_record.table_schema = current_schema()
-  AND column_record.table_name IN (%s, %s)
-ORDER BY column_record.table_name, column_record.ordinal_position
-"""
-
 _POSTGRES_SELECT_SERVER_ENCODING = "SHOW server_encoding"
-
-_POSTGRES_SELECT_CONSTRAINTS = """
-SELECT cls.relname, constraint_record.contype,
-       COALESCE(
-           array_agg(attribute_record.attname::text ORDER BY key.ordinality)
-               FILTER (WHERE attribute_record.attname IS NOT NULL),
-           ARRAY[]::text[]
-       ),
-       CASE
-           WHEN constraint_record.contype = 'c'
-           THEN pg_get_expr(
-               constraint_record.conbin,
-               constraint_record.conrelid,
-               true
-           )
-           ELSE NULL
-       END,
-       constraint_record.condeferrable,
-       constraint_record.condeferred,
-       constraint_record.convalidated,
-       constraint_record.connoinherit
-FROM pg_catalog.pg_constraint AS constraint_record
-JOIN pg_catalog.pg_class AS cls
-  ON cls.oid = constraint_record.conrelid
-JOIN pg_catalog.pg_namespace AS namespace_record
-  ON namespace_record.oid = cls.relnamespace
-LEFT JOIN LATERAL unnest(constraint_record.conkey)
-    WITH ORDINALITY AS key(attnum, ordinality)
-  ON true
-LEFT JOIN pg_catalog.pg_attribute AS attribute_record
-  ON attribute_record.attrelid = constraint_record.conrelid
- AND attribute_record.attnum = key.attnum
-WHERE namespace_record.nspname = current_schema()
-  AND cls.relname IN (%s, %s)
-  AND constraint_record.contype IN ('p', 'c')
-GROUP BY cls.relname,
-         constraint_record.contype,
-         constraint_record.conname,
-         constraint_record.conbin,
-         constraint_record.conrelid,
-         constraint_record.condeferrable,
-         constraint_record.condeferred,
-         constraint_record.convalidated,
-         constraint_record.connoinherit
-ORDER BY cls.relname, constraint_record.contype, constraint_record.conname
-"""
 
 _POSTGRES_INIT_LOCK = """
 SELECT pg_advisory_xact_lock(1465141076, 1)
 """
 
-
-class _Cursor(Protocol):
-    rowcount: int
-
-    def execute(
-        self, query: str, params: tuple[Any, ...] | None = None
-    ) -> Any: ...
-
-    def fetchone(self) -> tuple[Any, ...] | None: ...
-
-    def fetchall(self) -> list[tuple[Any, ...]]: ...
-
-    def __enter__(self) -> _Cursor: ...
-
-    def __exit__(self, *args: object) -> None: ...
+type _Connect = ConnectFactory
 
 
-class _Connection(Protocol):
-    def cursor(self) -> _Cursor: ...
-
-    def __enter__(self) -> _Connection: ...
-
-    def __exit__(self, *args: object) -> None: ...
-
-
-_Connect = Callable[[str], AbstractContextManager[_Connection]]
-
-
-def _postgresql_constraints(
-    rows: list[tuple[Any, ...]],
-) -> tuple[_PostgreSQLConstraint, ...]:
-    constraints: list[_PostgreSQLConstraint] = []
-    for row in rows:
-        if len(row) != 8:
-            raise EffectAuthoritySchemaMismatchError(
-                "PostgreSQL effect-authority constraint catalog returned "
-                f"an unexpected row shape: {row!r}"
-            )
-        (
-            table_name,
-            constraint_type,
-            columns,
-            expression,
-            deferrable,
-            deferred,
-            validated,
-            no_inherit,
-        ) = row
-        if not isinstance(columns, (list, tuple)) or not all(
-            isinstance(column, str) for column in columns
-        ):
-            raise EffectAuthoritySchemaMismatchError(
-                "PostgreSQL effect-authority constraint catalog returned "
-                f"invalid constrained columns: {columns!r}"
-            )
-        flags = (deferrable, deferred, validated, no_inherit)
-        if not all(isinstance(flag, bool) for flag in flags):
-            raise EffectAuthoritySchemaMismatchError(
-                "PostgreSQL effect-authority constraint catalog returned "
-                f"invalid constraint flags: {flags!r}"
-            )
-        constraints.append(
-            (
-                str(table_name),
-                str(constraint_type),
-                tuple(columns),
-                None if expression is None else str(expression),
-                deferrable,
-                deferred,
-                validated,
-                no_inherit,
-            )
+def _verify_postgresql_schema(connection: Any) -> None:
+    try:
+        verify_postgres_table(
+            connection,
+            table=_TABLE_NAME,
+            columns=_POSTGRES_TABLE_COLUMNS,
+            constraints=tuple(
+                constraint
+                for constraint in _POSTGRES_CONSTRAINTS
+                if constraint[0] == _TABLE_NAME
+            ),
         )
-    return tuple(constraints)
-
-
-def _describe_postgresql_constraint(
-    constraint: _PostgreSQLConstraint,
-) -> str:
-    (
-        table_name,
-        constraint_type,
-        columns,
-        expression,
-        deferrable,
-        deferred,
-        validated,
-        no_inherit,
-    ) = constraint
-    column_text = ", ".join(columns)
-    if constraint_type == "p":
-        definition = f"PRIMARY KEY ({column_text})"
-    else:
-        definition = f"CHECK ({expression}) on columns ({column_text})"
-    flags = (
-        f"deferrable={deferrable}, deferred={deferred}, "
-        f"validated={validated}, no_inherit={no_inherit}"
-    )
-    return f"{table_name} {definition} [{flags}]"
-
-
-def _verify_postgresql_constraints(rows: list[tuple[Any, ...]]) -> None:
-    remaining = list(_postgresql_constraints(rows))
-    missing: list[_PostgreSQLConstraint] = []
-    for expected in _POSTGRES_CONSTRAINTS:
-        if expected in remaining:
-            remaining.remove(expected)
-        else:
-            missing.append(expected)
-    if not missing and not remaining:
-        return
-    mismatch_parts = []
-    if missing:
-        mismatch_parts.append(
-            "missing "
-            + "; ".join(
-                _describe_postgresql_constraint(constraint)
-                for constraint in missing
-            )
+        verify_postgres_table(
+            connection,
+            table=_METADATA_TABLE_NAME,
+            columns=_POSTGRES_METADATA_COLUMNS,
+            constraints=tuple(
+                constraint
+                for constraint in _POSTGRES_CONSTRAINTS
+                if constraint[0] == _METADATA_TABLE_NAME
+            ),
         )
-    if remaining:
-        mismatch_parts.append(
-            "unexpected "
-            + "; ".join(
-                _describe_postgresql_constraint(constraint)
-                for constraint in remaining
-            )
-        )
-    raise EffectAuthoritySchemaMismatchError(
-        "PostgreSQL effect-authority constraint mismatch: "
-        + "; ".join(mismatch_parts)
-    )
+    except RelationalContractMismatchError as exc:
+        _reraise_schema_mismatch(exc)
 
 
 class _PostgreSQLStore:
@@ -464,8 +292,10 @@ class _PostgreSQLStore:
                 encoding = cursor.fetchone()
                 if encoding != ("UTF8",):
                     raise EffectAuthoritySchemaMismatchError(
-                        "PostgreSQL effect-authority requires exact "
-                        f"server_encoding 'UTF8', found {encoding!r}"
+                        table="<database>",
+                        aspect="server_encoding",
+                        expected="UTF8",
+                        actual=encoding,
                     )
                 cursor.execute(_POSTGRES_INIT_LOCK)
                 cursor.execute(
@@ -486,91 +316,30 @@ class _PostgreSQLStore:
                     )
                 elif tables != {_TABLE_NAME, _METADATA_TABLE_NAME}:
                     raise EffectAuthoritySchemaMismatchError(
-                        "incomplete PostgreSQL effect-authority schema: "
-                        "expected both authority tables, found "
-                        f"{sorted(tables)}"
+                        table=(
+                            _TABLE_NAME
+                            if _TABLE_NAME not in tables
+                            else _METADATA_TABLE_NAME
+                        ),
+                        aspect="owned table inventory",
+                        expected={_TABLE_NAME, _METADATA_TABLE_NAME},
+                        actual=tables,
                     )
-                cursor.execute(
-                    _POSTGRES_SELECT_COLUMNS,
-                    (_TABLE_NAME, _METADATA_TABLE_NAME),
-                )
-                columns_by_table: dict[str, list[tuple[object, ...]]] = {
-                    _TABLE_NAME: [],
-                    _METADATA_TABLE_NAME: [],
-                }
-                for (
-                    table_name,
-                    column_name,
-                    data_type,
-                    is_nullable,
-                    ordinal_position,
-                    collation_schema,
-                    collation_name,
-                    collation_provider,
-                    collation_is_deterministic,
-                    collation_encoding,
-                ) in cursor.fetchall():
-                    columns_by_table[str(table_name)].append(
-                        (
-                            str(column_name),
-                            str(data_type),
-                            str(is_nullable),
-                            int(ordinal_position),
-                            (
-                                None
-                                if collation_schema is None
-                                else str(collation_schema)
-                            ),
-                            (
-                                None
-                                if collation_name is None
-                                else str(collation_name)
-                            ),
-                            (
-                                None
-                                if collation_provider is None
-                                else str(collation_provider)
-                            ),
-                            (
-                                None
-                                if collation_is_deterministic is None
-                                else bool(collation_is_deterministic)
-                            ),
-                            (
-                                None
-                                if collation_encoding is None
-                                else int(collation_encoding)
-                            ),
-                        )
-                    )
-                if (
-                    tuple(columns_by_table[_TABLE_NAME])
-                    != _POSTGRES_TABLE_COLUMNS
-                    or tuple(columns_by_table[_METADATA_TABLE_NAME])
-                    != _POSTGRES_METADATA_COLUMNS
-                ):
-                    raise EffectAuthoritySchemaMismatchError(
-                        "incompatible PostgreSQL effect-authority columns: "
-                        f"expected {_POSTGRES_TABLE_COLUMNS!r} and "
-                        f"{_POSTGRES_METADATA_COLUMNS!r}; found "
-                        f"{tuple(columns_by_table[_TABLE_NAME])!r} and "
-                        f"{tuple(columns_by_table[_METADATA_TABLE_NAME])!r}"
-                    )
-                cursor.execute(
-                    _POSTGRES_SELECT_CONSTRAINTS,
-                    (_TABLE_NAME, _METADATA_TABLE_NAME),
-                )
-                _verify_postgresql_constraints(cursor.fetchall())
+            _verify_postgresql_schema(connection)
+            with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT singleton, schema_version
                     FROM {_METADATA_TABLE_NAME}
                     """
                 )
-                if cursor.fetchall() != [(1, _SCHEMA_VERSION)]:
+                versions = cursor.fetchall()
+                if versions != [(1, _SCHEMA_VERSION)]:
                     raise EffectAuthoritySchemaMismatchError(
-                        "incompatible PostgreSQL effect-authority "
-                        f"schema version: expected {_SCHEMA_VERSION}"
+                        table=_METADATA_TABLE_NAME,
+                        aspect="schema version",
+                        expected=[(1, _SCHEMA_VERSION)],
+                        actual=versions,
                     )
 
     def validate_lease_duration(self, duration: timedelta) -> timedelta:
@@ -630,14 +399,14 @@ class _PostgreSQLStore:
                 return result
 
     @staticmethod
-    def _database_now(cursor: _Cursor) -> datetime:
+    def _database_now(cursor: Any) -> datetime:
         cursor.execute(_POSTGRES_SELECT_NOW)
         raw = cursor.fetchone()
         if raw is None:
             raise _AuthorityCorruptionError(
                 "PostgreSQL did not return authority time"
             )
-        now_text = _require_persisted_text(
+        now_text = _persisted_text(
             raw[0], field="PostgreSQL authority time"
         )
         return _require_utc(

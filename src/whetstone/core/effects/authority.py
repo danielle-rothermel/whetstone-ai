@@ -8,11 +8,12 @@ from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Protocol
 
+from dr_store.relational import TransactionObserver
+
 from whetstone.core.effects._memory import _MemoryStore
 from whetstone.core.effects._postgres import _Connect, _PostgreSQLStore
 from whetstone.core.effects._sqlite import _SQLiteStore
 from whetstone.core.effects._storage import (
-    _SQLiteTransactionObserver,
     _Store,
     _timestamp_text,
 )
@@ -272,7 +273,7 @@ class EffectAuthority:
         cls,
         path: str | Path,
         *,
-        _transaction_observer: _SQLiteTransactionObserver | None = None,
+        _transaction_observer: TransactionObserver | None = None,
     ) -> EffectAuthority:
         return cls(
             _SQLiteStore(
