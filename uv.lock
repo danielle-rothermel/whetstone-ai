@@ -313,16 +313,16 @@ otel = [
 
 [[package]]
 name = "dr-exec"
-version = "0.1.12"
+version = "0.1.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "dr-serialize" },
     { name = "dr-store" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/39/b8/2a35e3a9e97b5f19caf2db354794da569ebea15e56feb54a397939abb60f/dr_exec-0.1.12.tar.gz", hash = "sha256:9431a4b7d4bc3122464b947416dfa1b002615772b41bf9fa05043f6f1dc00a22", size = 80739, upload-time = "2026-08-21T05:48:25.947Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/06/c7966468791d6ca0cd6024cefc55dd5b2b60727f039367a7babf8c58d5d0/dr_exec-0.1.13.tar.gz", hash = "sha256:33c283f0cf33f6a09eda972aa54eee85933a72048b1ec69bb3507c9e42bcd1e1", size = 83169, upload-time = "2026-08-21T21:55:37.317Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/92/24/45525d42f96c9cb5f01d2272ad5aa21790f9051341eb5748710fd1f5a508/dr_exec-0.1.12-py3-none-any.whl", hash = "sha256:cd76a4c1152262eb0092d7443fd02c3ef33228819ce24b21d6ad4ad4da9dfe38", size = 91193, upload-time = "2026-08-21T05:48:24.565Z" },
+    { url = "https://files.pythonhosted.org/packages/f6/a6/bfb0e0fe08b751921e290572d0c6b650d60eb9b2a28fce2ea5db05e5ee3e/dr_exec-0.1.13-py3-none-any.whl", hash = "sha256:28463481db3de8c601dc2474468b1797914fc10595d7b8be837f52ffe99efb27", size = 95373, upload-time = "2026-08-21T21:55:35.947Z" },
 ]
 
 [[package]]
@@ -1492,7 +1492,7 @@ dev = [
 requires-dist = [
     { name = "dbos", marker = "extra == 'dbos'", specifier = ">=2.25.0" },
     { name = "dbos", extras = ["otel"], marker = "extra == 'platform'", specifier = "==2.27.0" },
-    { name = "dr-exec", specifier = "==0.1.12" },
+    { name = "dr-exec", specifier = "==0.1.13" },
     { name = "dr-graph", specifier = "==0.1.3" },
     { name = "dr-platform", marker = "extra == 'platform'", specifier = "==0.2.6" },
     { name = "dr-providers", specifier = "==0.3.2" },

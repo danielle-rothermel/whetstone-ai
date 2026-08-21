@@ -10,6 +10,7 @@ this driver's row statuses rather than as silent absence.
 
 from __future__ import annotations
 
+import ast
 import gc
 import os
 import subprocess
@@ -604,10 +605,9 @@ def test_a_raising_row_is_attributed_to_the_payload(
 ) -> None:
     """One bad row surfaces as this driver's error, blamed on the payload.
 
-    The worker pool discards the row's exception, so the driver reports the
-    failing row's coordinates and dr-exec's payload attribution rather than
-    the original type or message. That upstream limitation is pinned here so
-    a dr-exec fix that starts carrying the exception is noticed.
+    The driver reports the failing row's coordinates, dr-exec's payload
+    attribution, and the exception the row's entry point actually raised, so
+    a worker-side failure is diagnosable without reproducing it in process.
     """
     experiment = _raising_experiment(task_count=3, raising_index=1)
     partial_log = PartialLog(tmp_path / "raising-partials")
@@ -631,9 +631,15 @@ def test_a_raising_row_is_attributed_to_the_payload(
     message = str(failure.value)
     assert "owner=payload" in message
     assert "(1, 0)" in message
-    # The upstream limitation: dr-exec keeps the exception to itself, so the
-    # driver cannot name it. Reproduce a raising row in-process to see it.
-    assert RAISING_ROW_MESSAGE not in message
+    # dr-exec renders the payload exception into the frame's attribution
+    # detail, and the driver quotes that detail whole. Compare against the
+    # decoded detail rather than the repr-escaped message so an escaped
+    # apostrophe cannot make a substring check pass vacuously.
+    detail = ast.literal_eval(
+        message.partition("detail=")[2].rstrip(")")
+    )
+    assert "RuntimeError" in detail
+    assert RAISING_ROW_MESSAGE in detail
 
     completed_rows = {record.key() for record in partial_log.load()}
     assert len(completed_rows) == 2
@@ -662,10 +668,11 @@ class _RaisingRenderContract:
 
 
 def test_a_raising_row_is_reproducible_in_process() -> None:
-    """The in-process driver still names the row's own exception.
+    """The in-process driver propagates the row's own exception.
 
-    This is the documented workaround for the worker pool discarding it: the
-    same failing row, run in process, carries its type and message.
+    The subprocess driver reports the same failure as bounded detail on a
+    ``RowWorkerError``; in process the original exception propagates
+    directly, which is what keeps the two drivers' diagnostics comparable.
     """
     experiment = _raising_experiment(task_count=3, raising_index=1)
     driver = GraphRolloutEvalDriver(
