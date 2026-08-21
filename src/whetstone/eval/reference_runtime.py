@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
+from dr_providers import ProviderKind
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr
 
@@ -48,11 +49,13 @@ class ReferenceEvalRuntimeConfig(BaseModel):
     env_name: StrictStr = "whetstone.toy"
     split_role: StrictStr = "internal_eval"
     transport_api_key_env: StrictStr = "WHETSTONE_TOY_API_KEY"
+    provider_kind: ProviderKind = ProviderKind.OPENAI
 
     @property
     def execution_policy(self) -> ProviderExecutionPolicy:
         transport = default_transport_policy(
             api_key_env=self.transport_api_key_env,
+            provider_kind=self.provider_kind,
         )
         return ProviderExecutionPolicy(transport_policy=transport)
 
