@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from whetstone.optim.adapters import OptimizerAdapter
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
+    from whetstone.optim.proposal.proposer import ProposerTransport
 
 RUNTIME_BOOTSTRAP_SCHEMA = "whetstone.runtime_bootstrap"
 RUNTIME_BOOTSTRAP_SCHEMA_VERSION = 1
@@ -133,6 +134,7 @@ def register_runtime(
     engine: EvalEngine | None = None,
     extra_adapters: Mapping[str, OptimizerAdapter] | None = None,
     proposal_bodies: tuple[str, ...] | None = None,
+    proposer_transport: ProposerTransport | None = None,
 ) -> RegisteredRuntime:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
     from whetstone.optim.tools.facade import ToolAdmissionAuthority, ToolCallStore
@@ -153,7 +155,7 @@ def register_runtime(
         schema_version=1,
         payload={"mode": "inline"},
     )
-    transport = DummyProposerTransport(
+    transport = proposer_transport or DummyProposerTransport(
         scripted_bodies=proposal_bodies
         or (
             "Reply briefly to: {prompt} with a concise greeting.",

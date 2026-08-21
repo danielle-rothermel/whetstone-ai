@@ -59,3 +59,28 @@ def test_prepare_copro_run_uses_caller_experiment(sqlite_store) -> None:
     )
     assert launch.run.reward_policy == experiment.reward_policy
     assert launch.initial_candidate == experiment.initial_candidate
+
+
+def test_register_runtime_accepts_caller_proposer_transport(sqlite_store) -> None:
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.testing.fakes.proposer import DummyProposerTransport
+    from whetstone.testing.toy.experiment import build_toy_experiment
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    runtime_config = ReferenceEvalRuntimeConfig()
+    prompt_hash = "c" * 64
+    transport = DummyProposerTransport(
+        scripted_bodies=("body",),
+        execution_policy_hash=runtime_config.execution_policy.identity_hash,
+        prompt_adapter_identity_hash=prompt_hash,
+    )
+    runtime = register_runtime(
+        store=sqlite_store,
+        engine=engine,
+        proposer_transport=transport,
+    )
+    assert runtime.adapter_registry.resolve("copro") is not None
