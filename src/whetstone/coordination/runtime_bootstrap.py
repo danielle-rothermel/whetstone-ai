@@ -144,6 +144,11 @@ def register_runtime(
             "register_runtime(engine=...) requires store= the engine "
             "was built against"
         )
+    if engine is not None and copro_control is None:
+        raise ValueError(
+            "register_runtime(engine=...) requires copro_control= "
+            "built against that engine"
+        )
     if store is None:
         if sqlite_path is None:
             sqlite_path = f"/tmp/whetstone-runtime-{uuid4().hex}.sqlite"
