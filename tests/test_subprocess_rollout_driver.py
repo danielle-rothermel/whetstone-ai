@@ -10,6 +10,9 @@ this driver's row statuses rather than as silent absence.
 
 from __future__ import annotations
 
+import gc
+import os
+import subprocess
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -21,6 +24,7 @@ from whetstone.eval.drivers.graph_row_request import RowDispatchStatus
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.drivers.subprocess_graph_rollout import (
+    RowWorkerError,
     SubprocessGraphRolloutEvalDriver,
 )
 from whetstone.eval.protocol import EvalRequest
@@ -299,6 +303,111 @@ def test_batch_expiry_reports_remaining_rows_as_not_dispatched(
     assert all(
         row.row_state is ExecutedRowState.MISSING for row in result.outputs
     )
+
+
+def test_already_elapsed_deadline_dispatches_no_rows(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+) -> None:
+    """A zero wall means the operation is already over before any row runs."""
+    experiment = build_toy_experiment()
+
+    result = _run(
+        subprocess_driver,
+        experiment=experiment,
+        request_id="deadline:already-elapsed",
+        concurrency=1,
+        max_wall_seconds=0.0,
+    )
+
+    assert result.deadline_reached is True
+    assert {row.failure_code for row in result.outputs} == {
+        RowDispatchStatus.NOT_DISPATCHED.value
+    }
+    assert not result.request_identities
+
+
+def test_in_process_driver_also_dispatches_nothing_at_a_zero_deadline() -> None:
+    """The drivers agree that a zero wall yields no completed rows."""
+    experiment = build_toy_experiment()
+
+    result = _run(
+        _in_process_driver(),
+        experiment=experiment,
+        request_id="deadline:already-elapsed-in-process",
+        concurrency=1,
+        max_wall_seconds=0.0,
+    )
+
+    assert result.deadline_reached is True
+    assert all(
+        row.row_state is ExecutedRowState.MISSING for row in result.outputs
+    )
+    assert not result.request_identities
+
+
+def test_pool_width_is_fixed_by_the_first_run(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+) -> None:
+    """A pool serves one width for its lifetime, so widening must be loud."""
+    experiment = build_toy_experiment()
+    _run(
+        subprocess_driver,
+        experiment=experiment,
+        request_id="width:first",
+        concurrency=1,
+    )
+
+    with pytest.raises(RowWorkerError, match="cannot widen"):
+        _run(
+            subprocess_driver,
+            experiment=experiment,
+            request_id="width:wider",
+            concurrency=4,
+        )
+
+
+def _child_pids() -> frozenset[str]:
+    listing = subprocess.run(
+        ["pgrep", "-P", str(os.getpid())],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return frozenset(listing.stdout.split())
+
+
+def test_closing_the_driver_stops_its_workers() -> None:
+    """Workers are owned, not leaked: closing releases exactly them."""
+    experiment = build_toy_experiment()
+    before = _child_pids()
+    driver_context = _subprocess_driver()
+    driver = next(driver_context)
+    _run(driver, experiment=experiment, request_id="close:run", concurrency=2)
+    assert _child_pids() - before
+
+    driver.close()
+
+    assert _child_pids() - before == frozenset()
+
+
+def test_dropping_the_driver_stops_its_workers() -> None:
+    """A caller that never closes still releases workers on collection."""
+    experiment = build_toy_experiment()
+    before = _child_pids()
+    driver = SubprocessGraphRolloutEvalDriver(
+        unit_deadline_seconds=GENEROUS_BUDGET_SECONDS,
+        eval_runner=FakeEvalProcedureRunner(),
+        mutation_field=TOY_MUTATION_FIELD,
+        render_contract=toy_template_render_contract(),
+        transport_factory=fake_llm_transport_factory,
+    )
+    _run(driver, experiment=experiment, request_id="drop:run", concurrency=2)
+    assert _child_pids() - before
+
+    del driver
+    gc.collect()
+
+    assert _child_pids() - before == frozenset()
 
 
 def test_row_dispatch_status_values_are_pinned() -> None:
