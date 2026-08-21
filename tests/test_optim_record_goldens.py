@@ -24,6 +24,7 @@ from whetstone.optim.contracts import (
     OptimStepRequest,
     OptimStepResult,
     OutputContract,
+    SearchEvidence,
 )
 
 GOLDEN_SCHEMA_NAMES = {
@@ -66,12 +67,24 @@ GOLDEN_STEP_REQUEST_KEYS = frozenset(
     }
 )
 
+GOLDEN_SEARCH_EVIDENCE_KEYS = frozenset(
+    {
+        "eval_request_id",
+        "candidate",
+        "outcome",
+        "eval_result_ref",
+        "reward_ref",
+        "reward_evidence_refs",
+    }
+)
+
 GOLDEN_STEP_RESULT_KEYS = frozenset(
     {
         "request",
         "proposed_candidates",
         "accepted_candidates",
         "resolved_intents",
+        "search_evidence",
         "tool_evidence",
         "state_ref",
         "history_ref",
@@ -150,6 +163,10 @@ def test_step_request_wire_keys_are_pinned() -> None:
 
 def test_step_result_wire_keys_are_pinned() -> None:
     assert set(OptimStepResult.model_fields) == GOLDEN_STEP_RESULT_KEYS
+
+
+def test_search_evidence_wire_keys_are_pinned() -> None:
+    assert set(SearchEvidence.model_fields) == GOLDEN_SEARCH_EVIDENCE_KEYS
 
 
 def test_optim_result_wire_keys_are_pinned() -> None:

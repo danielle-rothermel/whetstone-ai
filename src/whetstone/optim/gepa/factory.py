@@ -14,6 +14,7 @@ from whetstone.optim.gepa.contracts import (
     GepaEffectContext,
     GepaEffectRecorder,
 )
+from whetstone.optim.contracts import SearchEvidence
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaDetailedResult
 from whetstone.optim.gepa.prompts import GepaPromptServices
@@ -97,6 +98,17 @@ class CanonicalGepaAdapterFactory:
                     self._prompt_services.binding.identity_hash()
                 ),
             },
+        )
+
+    def begin_step(self) -> None:
+        """Drop evidence from earlier Steps before this Step evaluates."""
+        self._evaluation_authority.reset_resolved_intents()
+
+    def search_evidence(self) -> tuple[SearchEvidence, ...]:
+        """Evidence for every evaluation this Step's search drove."""
+        return tuple(
+            SearchEvidence.from_resolution(resolution)
+            for resolution in self._evaluation_authority.resolved_intents
         )
 
     def create(

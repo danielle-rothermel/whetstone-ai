@@ -80,6 +80,7 @@ __all__ = [
     "OutputContract",
     "ResolutionClass",
     "ResolutionDetail",
+    "SearchEvidence",
     "StepKind",
     "StepMode",
     "StepStatus",
@@ -615,6 +616,95 @@ class IntentResolution(BaseModel):
         return self
 
 
+class SearchEvidence(BaseModel):
+    """Evidence for one evaluation an optimizer drove inside its own search.
+
+    COPRO asks the harness to evaluate its proposals, so its evidence lands
+    in ``resolved_intents``. An optimizer whose upstream search evaluates
+    intermediate candidates the run never proposes cannot use that field:
+    those candidates are search state, not Step outputs. It records the same
+    eval/reward evidence refs here instead, so every paid evaluation a Step
+    caused is still reachable from the Step Result.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    eval_request_id: NonEmptyId
+    candidate: _candidate.CandidateRef
+    outcome: IntentOutcome
+    eval_result_ref: TypedRef | None = None
+    reward_ref: _reward.RewardRef | None = None
+    reward_evidence_refs: tuple[TypedRef, ...] = ()
+
+    @field_validator("reward_evidence_refs", mode="before")
+    @classmethod
+    def _validate_reward_evidence_refs(
+        cls, value: Any, info: ValidationInfo
+    ) -> Any:
+        return _require_ordered_sequence(value, info)
+
+    @model_validator(mode="after")
+    def _validate(self) -> SearchEvidence:
+        if (
+            self.outcome is not IntentOutcome.REJECTED
+            and self.eval_result_ref is None
+        ):
+            raise ValueError(
+                "completed/failed search evidence requires an Evaluation "
+                "Result ref"
+            )
+        if (
+            self.outcome is IntentOutcome.REJECTED
+            and self.eval_result_ref is not None
+        ):
+            raise ValueError(
+                "rejected search evidence carries no Evaluation Result ref"
+            )
+        if self.reward_ref is None and self.reward_evidence_refs:
+            raise ValueError(
+                "rewardless search evidence carries no Reward evidence refs"
+            )
+        if (
+            self.reward_ref is not None
+            and self.reward_ref.record.evidence_refs
+            != self.reward_evidence_refs
+        ):
+            raise ValueError(
+                "search evidence reward_evidence_refs must equal the ordered "
+                "Reward evidence refs"
+            )
+        return self
+
+    @classmethod
+    def from_resolution(cls, resolution: IntentResolution) -> SearchEvidence:
+        """Project one harness Intent Resolution onto search evidence."""
+        return cls(
+            eval_request_id=(
+                resolution.optim_eval_request.eval_request.request_id
+            ),
+            candidate=_candidate.candidate_reference(
+                resolution.optim_eval_request.eval_request.candidate
+            ),
+            outcome=resolution.outcome,
+            eval_result_ref=resolution.eval_result_ref,
+            reward_ref=resolution.reward_ref,
+            reward_evidence_refs=resolution.reward_evidence_refs,
+        )
+
+    @property
+    def evidence_refs(self) -> tuple[TypedRef, ...]:
+        """Every stored ref this evidence cites, in a stable order."""
+        return (
+            *(() if self.eval_result_ref is None else (self.eval_result_ref,)),
+            *(
+                ()
+                if self.reward_ref is None
+                else (self.reward_ref.record_ref,)
+            ),
+            *self.reward_evidence_refs,
+        )
+
+
 class ToolEvidence(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -696,6 +786,9 @@ class OptimStepResult(BaseModel):
     proposed_candidates: tuple[_candidate.CandidateRef, ...] = ()
     accepted_candidates: tuple[_candidate.CandidateRef, ...] = ()
     resolved_intents: tuple[IntentResolution, ...] = ()
+    #: Evaluations the optimizer drove inside its own search, on candidates
+    #: the Step never proposed. Carries the same eval/reward evidence refs.
+    search_evidence: tuple[SearchEvidence, ...] = ()
     tool_evidence: tuple[ToolEvidence, ...] = ()
     state_ref: TypedRef | None = None
     history_ref: TypedRef | None = None
@@ -714,6 +807,7 @@ class OptimStepResult(BaseModel):
         "proposed_candidates",
         "accepted_candidates",
         "resolved_intents",
+        "search_evidence",
         "tool_evidence",
         mode="before",
     )
@@ -745,12 +839,16 @@ class OptimStepResult(BaseModel):
                         f"every {field_name} candidate must satisfy the exact "
                         f"run template contract: {error}"
                     ) from error
-        if self.resolved_intents and self.tool_evidence:
+        if (
+            self.resolved_intents or self.search_evidence
+        ) and self.tool_evidence:
             raise ValueError(
                 "a Step Result carries intent or tool evidence, never both"
             )
         if request.mode is StepMode.PURE and (
-            self.resolved_intents or self.tool_evidence
+            self.resolved_intents
+            or self.search_evidence
+            or self.tool_evidence
         ):
             raise ValueError(
                 "a pure Step Result carries no execution evidence"
@@ -759,9 +857,19 @@ class OptimStepResult(BaseModel):
             raise ValueError(
                 "a proposal-only Step Result carries only Intent Resolutions"
             )
-        if request.mode is StepMode.TOOL_USING and self.resolved_intents:
+        if request.mode is StepMode.TOOL_USING and (
+            self.resolved_intents or self.search_evidence
+        ):
             raise ValueError(
                 "a tool-using Step Result carries only Tool Evidence"
+            )
+        search_ids = tuple(
+            evidence.eval_request_id for evidence in self.search_evidence
+        )
+        if len(set(search_ids)) != len(search_ids):
+            raise ValueError(
+                "a Step Result must not carry duplicate search evidence "
+                "Eval Request IDs"
             )
         request_candidate_multiset = Counter(
             candidate.record_ref for candidate in request_candidate_refs

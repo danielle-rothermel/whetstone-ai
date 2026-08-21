@@ -37,6 +37,7 @@ from whetstone.experiment.candidate import (
 from whetstone.optim.contracts import (
     OptimEvalRequest,
     IntentOutcome,
+    IntentResolution,
 )
 from whetstone.optim.gepa.contracts import (
     GepaCandidateComponent,
@@ -435,6 +436,7 @@ class CanonicalGepaEvalAuthority:
         self._control = control
         self._candidate_assembler = candidate_assembler
         self._data_registry = data_registry
+        self._resolutions: list[IntentResolution] = []
         self._submission_projector = submission_projector or (
             DefaultGepaSubmissionProjector(
                 submission_result_field=control.submission_result_field,
@@ -544,9 +546,25 @@ class CanonicalGepaEvalAuthority:
             optim_eval_request,
             context=EvalExecutionContext(),
         )
+        self._resolutions.append(resolution)
         if resolution.outcome is not IntentOutcome.COMPLETED:
             return self._failed_result(request, resolution)
         return self._completed_result(request, candidate, resolution)
+
+    @property
+    def resolved_intents(self) -> tuple[IntentResolution, ...]:
+        """Eval resolutions this authority produced since the last reset.
+
+        The harness cannot observe GEPA's evaluations through Adapter Output
+        eval requests, because upstream ``optimize`` drives them inside the
+        authority. Exposing them here lets a GEPA step carry the same
+        eval/reward evidence refs a COPRO step does.
+        """
+        return tuple(self._resolutions)
+
+    def reset_resolved_intents(self) -> None:
+        """Drop resolutions so the next Step collects only its own."""
+        self._resolutions.clear()
 
     def _require_request_binding(
         self,

@@ -18,6 +18,7 @@ from whetstone.experiment.candidate import Candidate
 from whetstone.optim.contracts import (
     BudgetDelta,
     OptimEvalRequest,
+    SearchEvidence,
     OptimStepRequest,
     StepKind,
     StepMode,
@@ -59,6 +60,9 @@ class AdapterOutput(BaseModel):
     proposed_candidates: tuple[Candidate, ...] = ()
     accepted_candidates: tuple[Candidate, ...] = ()
     optim_eval_requests: tuple[OptimEvalRequest, ...] = ()
+    #: Evidence for evaluations the adapter drove inside its own search.
+    #: The harness carries these onto the Step Result unchanged.
+    search_evidence: tuple[SearchEvidence, ...] = ()
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
     proposed_status: StepStatus = StepStatus.CONTINUE
     terminal_failure: TerminalFailure | None = None
@@ -98,6 +102,14 @@ class AdapterOutput(BaseModel):
                 raise ValueError(
                     "a seed-retaining Adapter Output accepts no candidates"
                 )
+        search_ids = [
+            evidence.eval_request_id for evidence in self.search_evidence
+        ]
+        if len(set(search_ids)) != len(search_ids):
+            raise ValueError(
+                "Adapter Output search evidence Eval Request IDs must be "
+                "unique"
+            )
         return self
 
     def record_content(self) -> dict[str, Any]:

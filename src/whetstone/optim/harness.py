@@ -324,6 +324,7 @@ class OptimHarness(OptimRunStore):
             proposed_candidates=proposed_refs,
             accepted_candidates=accepted_refs,
             resolved_intents=resolutions,
+            search_evidence=output.search_evidence,
             tool_evidence=tool_evidence,
             state_ref=self._persist_snapshot(
                 STATE_SNAPSHOT_SCHEMA, output.state_delta

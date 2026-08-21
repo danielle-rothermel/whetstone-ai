@@ -6,7 +6,12 @@ from whetstone.core.effects.authority import ReplayPolicy
 from whetstone.core.identity import ImmutableJsonObject
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
-from whetstone.optim.contracts import OptimStepRequest, StepMode, StepStatus
+from whetstone.optim.contracts import (
+    OptimStepRequest,
+    SearchEvidence,
+    StepMode,
+    StepStatus,
+)
 from whetstone.optim.gepa.adapter import project_gepa_terminal
 from whetstone.optim.gepa.authorities import (
     CanonicalGepaCandidateAssembler,
@@ -71,6 +76,14 @@ class GepaHarnessAdapterFactory:
 
     def create(self, *, control: GepaControl) -> GepaEngineAdapter:
         return self._factory.create(control=control)
+
+    def begin_step(self) -> None:
+        """Drop evidence from earlier Steps before this Step evaluates."""
+        self._factory.begin_step()
+
+    def search_evidence(self) -> tuple[SearchEvidence, ...]:
+        """Evidence for every evaluation this Step's search drove."""
+        return tuple(self._factory.search_evidence())
 
     def persist_result(
         self,
@@ -143,6 +156,7 @@ class GepaHarnessAdapter:
         if iteration != request.step_index:
             raise ValueError("GEPA round_index must equal step_index")
         checkpoint = load_gepa_checkpoint(request)
+        self._adapter_factory.begin_step()
         engine_adapter = self._adapter_factory.create(control=self._control)
         detailed, checkpoint = run_one_gepa_iteration(
             control=self._control,
@@ -155,6 +169,7 @@ class GepaHarnessAdapter:
         state_delta = ImmutableJsonObject(
             {GEPA_STATE_KEY: checkpoint.model_dump(mode="json")}
         )
+        search_evidence = self._adapter_factory.search_evidence()
         if checkpoint.terminal:
             artifact_ref = self._adapter_factory.persist_result(
                 control=self._control,
@@ -193,6 +208,7 @@ class GepaHarnessAdapter:
                 return AdapterOutput(
                     proposed_status=StepStatus.COMPLETE,
                     seed_retained=True,
+                    search_evidence=search_evidence,
                     state_delta=state_delta,
                     history_delta=history_delta,
                     budget_delta=checkpoint.budget_delta,
@@ -212,12 +228,14 @@ class GepaHarnessAdapter:
                 accepted_candidates=(candidate,),
                 proposed_candidates=(candidate,),
                 proposed_status=StepStatus.COMPLETE,
+                search_evidence=search_evidence,
                 state_delta=state_delta,
                 history_delta=history_delta,
                 budget_delta=checkpoint.budget_delta,
             )
         return AdapterOutput(
             proposed_status=StepStatus.CONTINUE,
+            search_evidence=search_evidence,
             state_delta=state_delta,
             budget_delta=checkpoint.budget_delta,
         )
