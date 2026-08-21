@@ -19,7 +19,7 @@ from whetstone.platform.contracts import (
     load_work_input,
     persist_work_input,
 )
-from whetstone.platform.pipeline import build_optim_pipeline
+from whetstone.platform.pipeline import build_optim_pipeline, register_optim_pipeline
 from whetstone.platform.stages.eval_fanin import eval_fanin_args_for
 from whetstone.platform.stages.eval_row import eval_row_args_for
 from whetstone.platform.stages.optim_step import optim_step_args_for
@@ -36,6 +36,16 @@ def test_pipeline_stage_keys(toy_runtime) -> None:
     assert stage_keys == (STAGE_OPTIM_STEP, STAGE_EVAL_ROW, STAGE_EVAL_FANIN)
     assert pipeline.run_completion is not None
     assert pipeline.run_completion.key.value == STAGE_RUN_COMPLETION
+
+
+def test_register_optim_pipeline_requires_ledger_engine(toy_runtime) -> None:
+    runtime, _control = toy_runtime
+    try:
+        register_optim_pipeline(MagicMock(), runtime, max_recovery_attempts=1)
+    except ValueError as error:
+        assert "ledger engine" in str(error)
+    else:
+        raise AssertionError("expected missing ledger engine")
 
 
 def test_work_input_ref_roundtrip(sqlite_store) -> None:

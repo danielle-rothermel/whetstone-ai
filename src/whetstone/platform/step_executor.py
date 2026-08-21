@@ -465,6 +465,7 @@ def _emit_deferred_successors(
             work_state_ref=work_state_ref,
             deferral_optim_step_stage_index=current_stage_index,
             primary_optim_eval_request=deferred_intents[0],
+            row_input_refs=tuple(row_refs),
         ),
     )
     successors: list[StageSuccessor] = []

@@ -28,6 +28,7 @@ from whetstone.optim.contracts import (
     ResolutionDetail,
 )
 from whetstone.platform.contracts import (
+    DeferralJoinInput,
     load_deferral_join_input,
     load_eval_row_input,
 )
@@ -302,7 +303,7 @@ def _verify_episode_eval_row_predecessors(
     expected_row_count: int,
 ) -> tuple[dict[str, object], ...]:
     if runtime.ledger_engine is None:
-        return ()
+        raise ValueError("eval fan-in predecessor verification requires a ledger engine")
     predecessors = list_episode_eval_row_predecessors(
         work_item_id,
         deferral_origin=deferral_origin,
@@ -546,30 +547,12 @@ def _complete_fanin_handoff(
     )
 
 
-def _collect_episode_row_records(
+def _load_row_records_from_input_refs(
     runtime: RegisteredRuntime,
-    *,
-    work_state: OptimWorkState,
-    work_state_ref: str,
-    work_item_id: int | None,
-    stage_index: int | None,
-    deferral_origin: int,
+    row_input_refs: tuple[str, ...],
 ) -> tuple[dict[str, object], ...]:
-    if work_item_id is not None and stage_index is not None and runtime.ledger_engine is not None:
-        return _verify_episode_eval_row_predecessors(
-            runtime,
-            work_item_id=work_item_id,
-            stage_index=stage_index,
-            deferral_origin=deferral_origin,
-            expected_row_count=_expected_episode_row_count(work_state, runtime),
-        )
     records: list[dict[str, object]] = []
-    for row_input_ref in _row_input_refs_for_episode(
-        runtime,
-        work_state=work_state,
-        deferral_origin=deferral_origin,
-        work_state_ref=work_state_ref,
-    ):
+    for row_input_ref in row_input_refs:
         binding = runtime.store.resolve(row_input_ref)
         if binding is None:
             raise ValueError("eval row input is not bound to a completion record")
@@ -580,25 +563,33 @@ def _collect_episode_row_records(
     return tuple(records)
 
 
-def _row_input_refs_for_episode(
+def _collect_episode_row_records(
     runtime: RegisteredRuntime,
     *,
     work_state: OptimWorkState,
-    deferral_origin: int,
-    work_state_ref: str,
-) -> tuple[str, ...]:
-    from whetstone.platform.contracts import persist_eval_row_input
-    from whetstone.platform.step_executor import _expand_eval_rows
-
-    row_inputs = _expand_eval_rows(
-        runtime,
-        work_state.pending_deferred_intents,
-        deferral_origin_stage_index=deferral_origin,
-        work_state_ref=work_state_ref,
-    )
-    return tuple(
-        persist_eval_row_input(runtime.store, row_input) for row_input in row_inputs
-    )
+    join_input: DeferralJoinInput,
+    work_item_id: int | None,
+    stage_index: int | None,
+) -> tuple[dict[str, object], ...]:
+    expected_row_count = _expected_episode_row_count(work_state, runtime)
+    if work_item_id is not None:
+        if stage_index is None:
+            raise ValueError("eval fan-in with work_item_id requires stage_index")
+        if runtime.ledger_engine is None:
+            raise ValueError("eval fan-in with work_item_id requires a ledger engine")
+        return _verify_episode_eval_row_predecessors(
+            runtime,
+            work_item_id=work_item_id,
+            stage_index=stage_index,
+            deferral_origin=join_input.deferral_optim_step_stage_index,
+            expected_row_count=expected_row_count,
+        )
+    if len(join_input.row_input_refs) != expected_row_count:
+        raise ValueError(
+            "eval fan-in persisted row refs do not match episode row count: "
+            f"expected {expected_row_count}, got {len(join_input.row_input_refs)}"
+        )
+    return _load_row_records_from_input_refs(runtime, join_input.row_input_refs)
 
 
 def execute_eval_fanin_sync(
@@ -621,16 +612,14 @@ def execute_eval_fanin_sync(
             expected=work_state.work_input.platform_stage_index,
             stage_key="eval_fanin",
         )
-    deferral_origin = join_input.deferral_optim_step_stage_index
     if work_state.pending_step_result_ref is None:
         raise ValueError("deferral fan-in requires a pending step result")
     row_records = _collect_episode_row_records(
         runtime,
         work_state=work_state,
-        work_state_ref=work_state_ref,
+        join_input=join_input,
         work_item_id=work_item_id,
         stage_index=stage_index,
-        deferral_origin=deferral_origin,
     )
     episode_intents = _unique_intents_from_row_records(row_records)
     if not episode_intents:

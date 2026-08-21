@@ -12,6 +12,7 @@ from whetstone.platform.contracts import (
     OptimWorkInput,
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
+    load_deferral_join_input,
     persist_work_input,
 )
 from whetstone.platform.eval_fanin import (
@@ -21,6 +22,46 @@ from whetstone.platform.eval_fanin import (
     serialize_platform_eval_intent,
 )
 from whetstone.platform.step_executor import execute_optim_step_sync
+
+
+def _emit_platform_deferral(copro_launch):
+    runtime, launch = copro_launch
+    control = launch.control
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+    step_completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+    row_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    fanin_successor = next(
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    )
+    return runtime, row_successors, fanin_successor
+
+
+def _complete_eval_rows(runtime, row_successors) -> None:
+    platform_executor = build_platform_row_executor(runtime)
+    for row_successor in row_successors:
+        execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+            row_executor=platform_executor,
+        )
 
 
 def test_platform_intent_serialization(toy_runtime) -> None:
@@ -179,6 +220,85 @@ def test_eval_fanin_ignores_other_episode_predecessors(copro_launch) -> None:
             work_item_id=1,
         )
     _ = stale_output
+
+
+def test_eval_fanin_requires_ledger_when_work_item_id_present(copro_launch) -> None:
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(copro_launch)
+    _complete_eval_rows(runtime, row_successors)
+    try:
+        execute_eval_fanin_sync(
+            runtime,
+            input_reference=fanin_successor.input_reference,
+            stage_index=fanin_successor.stage_index,
+            work_item_id=1,
+        )
+    except ValueError as error:
+        assert "requires a ledger engine" in str(error)
+    else:
+        raise AssertionError("expected missing ledger engine")
+
+
+def test_eval_fanin_uses_persisted_row_refs_without_reexpansion(copro_launch) -> None:
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(copro_launch)
+    _complete_eval_rows(runtime, row_successors)
+    with patch(
+        "whetstone.platform.step_executor._expand_eval_rows",
+        side_effect=AssertionError("fan-in must not re-expand eval rows"),
+    ):
+        completion = execute_eval_fanin_sync(
+            runtime,
+            input_reference=fanin_successor.input_reference,
+            stage_index=fanin_successor.stage_index,
+        )
+    assert completion.output_reference
+    assert completion.successors
+
+
+def test_eval_fanin_store_path_raises_when_row_unbound(copro_launch) -> None:
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(copro_launch)
+    _complete_eval_rows(runtime, row_successors[:-1])
+    try:
+        execute_eval_fanin_sync(
+            runtime,
+            input_reference=fanin_successor.input_reference,
+            stage_index=fanin_successor.stage_index,
+        )
+    except ValueError as error:
+        assert "not bound to a completion record" in str(error)
+    else:
+        raise AssertionError("expected unbound eval row input")
+
+
+def test_eval_fanin_store_path_raises_when_row_count_mismatches(
+    copro_launch,
+) -> None:
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(copro_launch)
+    _complete_eval_rows(runtime, row_successors)
+    with patch(
+        "whetstone.platform.eval_fanin._expected_episode_row_count",
+        return_value=len(row_successors) + 1,
+    ):
+        try:
+            execute_eval_fanin_sync(
+                runtime,
+                input_reference=fanin_successor.input_reference,
+                stage_index=fanin_successor.stage_index,
+            )
+        except ValueError as error:
+            assert "persisted row refs do not match episode row count" in str(error)
+        else:
+            raise AssertionError("expected persisted row count mismatch")
+
+
+def test_deferral_join_input_includes_emitted_row_refs(copro_launch) -> None:
+    runtime, row_successors, fanin_successor = _emit_platform_deferral(copro_launch)
+    join_input = load_deferral_join_input(
+        runtime.store,
+        fanin_successor.input_reference,
+    )
+    assert join_input.row_input_refs == tuple(
+        successor.input_reference for successor in row_successors
+    )
 
 
 def test_eval_fanin_ledger_predecessor_mismatch_raises(copro_launch) -> None:

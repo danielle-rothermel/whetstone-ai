@@ -24,7 +24,7 @@ OPTIM_WORK_INPUT_SCHEMA_VERSION = 1
 PLATFORM_EVAL_ROW_INPUT_SCHEMA = "whetstone.platform_eval_row_input"
 PLATFORM_EVAL_ROW_INPUT_SCHEMA_VERSION = 2
 PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA = "whetstone.platform_deferral_join_input"
-PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION = 1
+PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION = 2
 PLATFORM_RUN_MANIFEST_SCHEMA = "whetstone.platform_run_manifest"
 PLATFORM_RUN_MANIFEST_SCHEMA_VERSION = 1
 
@@ -107,6 +107,7 @@ class DeferralJoinInput(BaseModel):
     work_state_ref: StrictStr
     deferral_optim_step_stage_index: StrictInt
     primary_optim_eval_request: OptimEvalRequest
+    row_input_refs: tuple[StrictStr, ...]
 
     @model_validator(mode="after")
     def _validate(self) -> DeferralJoinInput:
@@ -114,6 +115,10 @@ class DeferralJoinInput(BaseModel):
             raise ValueError("work_state_ref must be non-empty")
         if self.deferral_optim_step_stage_index < 0:
             raise ValueError("deferral_optim_step_stage_index must be non-negative")
+        if not self.row_input_refs:
+            raise ValueError("row_input_refs must be non-empty")
+        if any(not row_input_ref for row_input_ref in self.row_input_refs):
+            raise ValueError("row_input_refs entries must be non-empty")
         if self.schema_version != PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION:
             raise ValueError("schema_version is fixed")
         return self
