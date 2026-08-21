@@ -5,7 +5,47 @@ All notable changes to `whetstone-ai` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## 0.1.2 - 2026-08-21
+
+### Added
+
+- `InlineProposalExecutor` is the public constructor for an in-process
+  proposal executor, alongside `DbosProposalExecutor`.
+- `SearchEvidence` records the eval and reward refs for evaluations an
+  optimizer drives inside its own search. GEPA steps carry these on
+  `OptimStepResult.search_evidence`.
+- A terminal step may report `seed_retained=True` with no accepted
+  candidates, so "the search kept the seed" is representable without a
+  substitute candidate. `OptimResult` mirrors the final step.
+- `OutputContract.terminal_proposal_count` lets one contract state both the
+  continuing and terminal accepted-candidate cardinality, for optimizers
+  whose step may terminalize on its own schedule.
+- Each optimizer owns a step-contract provider, resolved by adapter key,
+  that declares its first-step and continuation contracts and parses its own
+  launch control. `StepRequestBuilder` and `HarnessRunController` dispatch
+  through that registry.
+
+### Changed
+
+- `CanonicalGepaEvalAuthority` calls the `EvalEngine` identity-hash methods,
+  so a `RuntimeEvalEngine` binds directly.
+- The GEPA data registry keys entries by the engine-resolvable `task_id` and
+  carries `task_hash` alongside; the evaluation seam needs no translation.
+  Registry schema and loader projection are version 2.
+- The GEPA completed-result check verifies the candidate against the outputs
+  record's candidate ref instead of an absent top-level `candidate_id`.
+- Every GEPA step binds one contract that permits either continuing with no
+  proposals or terminalizing with the run terminal cardinality. A COMPLETE
+  step must honor the run terminal cardinality rather than be the identical
+  contract object.
+- `OutputContract.require_distinct_bases` constrains proposed candidates.
+- A rejected GEPA reflection response is retried once with the rejection fed
+  back into the prompt; a second rejection skips that component's mutation
+  and records a `GepaSkippedMutation` on the effect transcript instead of
+  ending the run. Provider and transport failures still surface immediately.
+- Step Request, Step Result, and Optimization Result records are schema
+  version 2; the GEPA reflection prompt and upstream adapter identity are
+  version 2.
 
 ### Fixed
 

@@ -14,7 +14,7 @@ stepping through runs to inspect behavior. Optimizers are not co-equal:
 | Optimizer | Harness adapter | Platform pipeline | Sandbox |
 |-----------|-----------------|-------------------|---------|
 | **COPRO** | Live; the only adapter `register_runtime` wires | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
-| **GEPA** | Live harness adapter + step engine; not in the default runtime | Not registered | `whetstone-sandbox gepa` |
+| **GEPA** | Live harness adapter + step engine; pass via `register_runtime(extra_adapters=...)` | Not registered | `whetstone-sandbox gepa` |
 | **MIPROv2** | Adapter/control exist | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
 
 **Out of scope here:** particular benchmarks or envs (those live in separate
@@ -64,6 +64,8 @@ Optimization  →  Sandbox / interpretation
 - **Experiment** — generation graph, initial/ceiling candidates, eval configs, reward policy
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
 - **OptimizerAdapter** — COPRO plugs into the shared harness on the default runtime; GEPA and MIPROv2 adapters exist but are not platform-wired
+- **StepContractProvider** — each optimizer declares its first-step and continuation contracts and parses its own launch control, registered by adapter key; `StepRequestBuilder` and `HarnessRunController` dispatch through it
+- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents`, and evaluations its own search drove in `search_evidence`; a terminal step that accepted no improvement sets `seed_retained`
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
 
 ## Platform pipeline
