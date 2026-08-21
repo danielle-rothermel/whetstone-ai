@@ -139,6 +139,11 @@ def register_runtime(
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
     from whetstone.optim.tools.facade import ToolAdmissionAuthority, ToolCallStore
 
+    if engine is not None and store is None:
+        raise ValueError(
+            "register_runtime(engine=...) requires store= the engine "
+            "was built against"
+        )
     if store is None:
         if sqlite_path is None:
             sqlite_path = f"/tmp/whetstone-runtime-{uuid4().hex}.sqlite"
@@ -269,13 +274,19 @@ def prepare_gepa_run(
     run_id: str,
     control: GepaControl,
     initial_candidate: Candidate | None = None,
-    terminal_top_k: int = 1,
     experiment: Experiment | None = None,
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
 ) -> OptimRunLaunch:
     from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 
+    try:
+        runtime.adapter_registry.resolve(GEPA_ADAPTER_KEY)
+    except KeyError as exc:
+        raise ValueError(
+            "prepare_gepa_run requires a GEPA adapter; pass it via "
+            "register_runtime(..., extra_adapters={...})"
+        ) from exc
     resolved = experiment or build_toy_experiment(num_seeds=1)
     candidate = initial_candidate or resolved.initial_candidate
     run = OptimRun(
@@ -284,7 +295,7 @@ def prepare_gepa_run(
         adapter_key=GEPA_ADAPTER_KEY,
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(
-            returned_proposal_count=terminal_top_k,
+            returned_proposal_count=1,
         ),
         template_render_contract=(
             render_contract or toy_template_render_contract()
