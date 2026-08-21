@@ -24,9 +24,12 @@ packages or repos), one-off experiment scripts, and product-facing runners.
 
 1. **Evaluation** — batched, efficient sweeps over candidates and tasks;
    configurable splits, graph rollouts, concurrency, and durable evidence.
-   Bundled reference driver: `GraphRolloutEvalDriver`
-   (`eval/drivers/graph_rollout.py`) — parallel in-process graph rollouts
-   with injected `EvalProcedureRunner`.
+   Bundled reference drivers: `GraphRolloutEvalDriver`
+   (`eval/drivers/graph_rollout.py`) — the default, parallel in-process graph
+   rollouts with injected `EvalProcedureRunner` — and
+   `SubprocessGraphRolloutEvalDriver`
+   (`eval/drivers/subprocess_graph_rollout.py`), which runs the same rows on a
+   dr-exec worker pool with per-row and per-batch wall-time budgets.
 2. **Evaluation analysis** — bootstrap confidence intervals, power analysis, and
    anchor calibration over persisted evaluation evidence (`eval/analysis/`).
 3. **Optimization** — shared harness and adapters that propose candidates and
@@ -53,7 +56,7 @@ Optimization  →  Sandbox / interpretation
 | **dr-providers** | Provider call configs, transport, and invocation evidence |
 | **dr-store** | Content-addressed persistence for candidates, evidence, and step records |
 | **dr-serialize** | Strict JSON and canonical identity hashing |
-| **dr-exec** | Budgeted subprocess execution (e.g. Codex optimizer steps) |
+| **dr-exec** | Budgeted subprocess execution: Codex optimizer steps, and the subprocess rollout driver's worker pool |
 | **dr-platform** | Durable pipeline stages, deferral/fan-in, and run submission (`platform` extra) |
 
 ## Stable seams

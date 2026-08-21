@@ -53,7 +53,6 @@ from whetstone.eval.schema_names import (
 )
 from whetstone.optim.contracts import ResolutionClass, ResolutionDetail
 from whetstone.eval.traces import ExecutedComponentStep, ExecutedComponentTracePayload, ExecutedRowState
-from whetstone.execution.fanout import DEFAULT_CONCURRENCY
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.binding import (
@@ -75,7 +74,7 @@ from whetstone.provider.policy import (
     ProviderExecutionPolicy,
 )
 
-__all__ = ["RuntimeEvalEngine", "SamplingTaskView"]
+__all__ = ["DEFAULT_CONCURRENCY", "RuntimeEvalEngine", "SamplingTaskView"]
 
 
 @runtime_checkable
@@ -100,6 +99,10 @@ class _EngineSamplingView:
     num_seeds: int
     split_role: str
     tasks: tuple[_EngineTaskView, ...]
+
+
+#: Default number of rollout rows this engine drives at once.
+DEFAULT_CONCURRENCY = 5
 
 
 class RuntimeEvalEngine:
@@ -436,9 +439,7 @@ class RuntimeEvalEngine:
         supplemental_rows_by_name: dict[str, dict[str, dict[int, RowValue]]] = {}
         supplemental_refs: list[TypedRef] = []
         cache = CacheEvidence()
-        concurrency_halved = False
         deadline_reached = False
-        guard_timeouts = 0
         for row_slice in row_slices:
             task_hash = task_hash_by_id.get(row_slice.task_id)
             if task_hash is None:
@@ -508,9 +509,7 @@ class RuntimeEvalEngine:
                 source_call_ids=cache.source_call_ids
                 + row_slice.evidence.cache.source_call_ids,
             )
-            concurrency_halved = concurrency_halved or row_slice.evidence.concurrency_halved
             deadline_reached = deadline_reached or row_slice.evidence.deadline_reached
-            guard_timeouts += row_slice.evidence.guard_timeouts
 
         task_rows = tuple(
             TaskRows(
@@ -568,9 +567,7 @@ class RuntimeEvalEngine:
             ),
             outputs=(),
             supplemental_aggregates=supplemental_aggregates,
-            concurrency_halved=concurrency_halved,
             deadline_reached=deadline_reached,
-            guard_timeouts=guard_timeouts,
         )
         ordered_outputs = sorted(
             output_rows,
@@ -680,9 +677,7 @@ class RuntimeEvalEngine:
             aggregate_status=aggregate.aggregation_output.status.value,
             reward_ref=reward_ref,
             cache=cache,
-            concurrency_halved=concurrency_halved,
             deadline_reached=deadline_reached,
-            guard_timeouts=guard_timeouts,
         )
         evidence_ref = self._put(
             EVAL_EVIDENCE_SCHEMA,
@@ -1106,9 +1101,7 @@ class RuntimeEvalEngine:
             aggregate_status=aggregate.aggregation_output.status.value,
             reward_ref=reward_ref,
             cache=cache,
-            concurrency_halved=result.concurrency_halved,
             deadline_reached=result.deadline_reached,
-            guard_timeouts=result.guard_timeouts,
         )
         evidence_ref = self._put(
             EVAL_EVIDENCE_SCHEMA, evidence.record_content()

@@ -18,9 +18,7 @@ class InternalEvalResult:
     outputs: tuple[RolloutRowOutput, ...]
     supplemental_aggregates: tuple[Aggregate, ...] = ()
     request_identities: frozenset[str] = frozenset()
-    concurrency_halved: bool = False
     deadline_reached: bool = False
-    guard_timeouts: int = 0
 
 
 def per_task_score(task: TaskRows, num_seeds: int) -> float:

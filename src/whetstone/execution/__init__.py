@@ -7,17 +7,6 @@ from whetstone.execution.call_support import (
     is_rate_limit_failure,
     is_transient_transport_failure,
 )
-from whetstone.execution.fanout import (
-    DEFAULT_CONCURRENCY,
-    CallSpec,
-    FanoutResult,
-    FanoutStatus,
-    PoolOutcome,
-    ProcessCancellationError,
-    ProcessJob,
-    ProcessWorkerError,
-    run_call_pool,
-)
 from whetstone.execution.partials import (
     PARTIAL_SCHEMA,
     PartialCallRecord,
@@ -38,24 +27,16 @@ from whetstone.execution.prompt_cache import (
 )
 
 __all__ = [
-    "DEFAULT_CONCURRENCY",
     "GUARD_MARGIN_SECONDS",
     "PARTIAL_SCHEMA",
     "PROMPT_CACHE_ENTRY_SCHEMA",
     "PROMPT_CACHE_KEY_SCHEMA",
     "CacheProvenance",
     "CallExecution",
-    "CallSpec",
     "CallTelemetry",
-    "FanoutResult",
-    "FanoutStatus",
     "PartialCacheMarks",
     "PartialCallRecord",
     "PartialLog",
-    "PoolOutcome",
-    "ProcessCancellationError",
-    "ProcessJob",
-    "ProcessWorkerError",
     "PromptCacheError",
     "PromptResultCache",
     "call_telemetry",
@@ -67,5 +48,4 @@ __all__ = [
     "partial_cache_marks",
     "partial_key",
     "prompt_cache_key",
-    "run_call_pool",
 ]

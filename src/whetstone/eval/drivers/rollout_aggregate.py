@@ -23,9 +23,7 @@ def aggregate_rollout_outputs(
     aggregate_name: str,
     request_identities: frozenset[str] = frozenset(),
     reward: Reward | None = None,
-    concurrency_halved: bool = False,
     deadline_reached: bool = False,
-    guard_timeouts: int = 0,
 ) -> InternalEvalResult:
     task_rows: list[TaskRows] = []
     for task_index, task_hash in enumerate(task_hashes):
@@ -57,7 +55,5 @@ def aggregate_rollout_outputs(
         ),
         outputs=outputs,
         request_identities=request_identities,
-        concurrency_halved=concurrency_halved,
         deadline_reached=deadline_reached,
-        guard_timeouts=guard_timeouts,
     )

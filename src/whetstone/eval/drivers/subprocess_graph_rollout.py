@@ -1,12 +1,29 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from uuid import uuid4
 
+from dr_exec import (
+    BudgetAxis,
+    BudgetExceededOutcome,
+    Budgets,
+    CancelledOutcome,
+    CompletedExecution,
+    ExitedOutcome,
+    FiniteDurationLimit,
+    ImportableEntryPoint,
+    ImportableJsonResultError,
+    JobId,
+    WorkerPoolImportableJsonExecutor,
+    build_in_process_importable_json_job,
+    parse_importable_json_result,
+)
 from pydantic import JsonValue
 
 from whetstone.eval.drivers.graph_row_request import (
     GraphRowRequest,
+    RowDispatchStatus,
     decode_graph_row_output,
     import_path_for_callable,
     import_path_for_type,
@@ -21,11 +38,9 @@ from whetstone.eval.drivers.rollout_aggregate import aggregate_rollout_outputs
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.drivers.eval_result import InternalEvalResult
 from whetstone.eval.protocol import EvalRequest, EvalTaskView
-from whetstone.eval.schema import SubmissionResultRecord
-from whetstone.experiment.candidate import Candidate, TemplateRenderContract
+from whetstone.experiment.candidate import TemplateRenderContract
 from whetstone.experiment.env import Experiment
 from whetstone.experiment.sampling import EvalSplit
-from whetstone.execution.fanout import CallSpec, FanoutStatus, ProcessJob, run_call_pool
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.provider.driver import TransportCall
@@ -36,7 +51,11 @@ from whetstone.provider.language_model import (
 from whetstone.provider.llm_call import resolve_eval_rng_seed
 from whetstone.provider.policy import ProviderExecutionPolicy
 
-__all__ = ["SubprocessGraphRolloutEvalDriver"]
+__all__ = ["RowWorkerError", "SubprocessGraphRolloutEvalDriver"]
+
+
+class RowWorkerError(RuntimeError):
+    """A row worker failed for a reason that is not a row-level outcome."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +65,17 @@ class _ScheduledRow:
     task: EvalTaskView
     task_id: str
     task_hash: str
+
+
+def _entry_point(row_job_entrypoint: str) -> ImportableEntryPoint:
+    module_name, separator, attribute_name = row_job_entrypoint.partition(":")
+    if not separator:
+        raise ValueError(
+            "row_job_entrypoint must be 'importable.module:top_level_callable'"
+        )
+    return ImportableEntryPoint(
+        module_name=module_name, attribute_name=attribute_name
+    )
 
 
 def _build_graph_row_request(
@@ -116,7 +146,13 @@ def _build_graph_row_request(
 
 
 class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
-    """Process-pool graph rollout driver using ``run_call_pool``."""
+    """Graph rollout driver running rows on a dr-exec worker pool.
+
+    The driver owns one worker pool for its lifetime. Workers import the row
+    entry point once at startup, so the whetstone import is paid per worker
+    rather than per row. Close the driver (or use it as a context manager) to
+    stop its workers.
+    """
 
     def __init__(
         self,
@@ -144,6 +180,7 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
             prompt_adapter=prompt_adapter,
         )
         self._row_job_entrypoint = row_job_entrypoint
+        self._entry_point = _entry_point(row_job_entrypoint)
         self._transport_api_key_env = transport_api_key_env
         self._unit_deadline_seconds = unit_deadline_seconds
         self._transport_factory_path = import_path_for_callable(transport_factory)
@@ -154,6 +191,28 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         self._prompt_adapter_payload = self._prompt_adapter.model_dump(
             mode="json"
         )
+        self._executor: WorkerPoolImportableJsonExecutor | None = None
+
+    def _pool(self, concurrency: int) -> WorkerPoolImportableJsonExecutor:
+        if self._executor is None:
+            self._executor = WorkerPoolImportableJsonExecutor(
+                entry_point=self._entry_point,
+                worker_count=max(1, concurrency),
+            )
+        return self._executor
+
+    def close(self) -> None:
+        """Stop every worker process this driver owns."""
+        executor = self._executor
+        self._executor = None
+        if executor is not None:
+            executor.close_blocking()
+
+    def __enter__(self) -> SubprocessGraphRolloutEvalDriver:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
     def run(
         self,
@@ -205,51 +264,62 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
             )
             for row in scheduled_rows
         }
-        collected_identities: set[str] = set()
-
-        def _decode_row_output(
-            payload: dict[str, object],
-            *,
-            row_request: GraphRowRequest,
-        ) -> RolloutRowOutput:
-            collected_identities.update(worker_request_identities(payload))
-            return decode_graph_row_output(payload, request=row_request)
-
-        specs = [
-            CallSpec(
-                key=(row.task_index, row.seed_index),
-                job=ProcessJob(
-                    entrypoint=self._row_job_entrypoint,
-                    payload=row_requests[
-                        (row.task_index, row.seed_index)
-                    ].model_dump(mode="json"),
-                ),
-                decode=lambda payload, req=row_requests[
-                    (row.task_index, row.seed_index)
-                ]: _decode_row_output(payload, row_request=req),
-                deadline_seconds=self._unit_deadline_seconds,
+        row_budgets = Budgets(
+            wall_time=FiniteDurationLimit.from_seconds(
+                self._unit_deadline_seconds
             )
-            for row in scheduled_rows
-        ]
-        pool_outcome = run_call_pool(
-            specs,
-            concurrency=max(1, concurrency),
-            is_rate_limited=lambda _output: False,
-            max_wall_seconds=max_wall_seconds,
         )
+        keys_by_job: dict[JobId, tuple[int, int]] = {}
+        jobs = []
+        for row in scheduled_rows:
+            key = (row.task_index, row.seed_index)
+            job_id = JobId(uuid4())
+            keys_by_job[job_id] = key
+            jobs.append(
+                build_in_process_importable_json_job(
+                    job_id,
+                    self._entry_point,
+                    row_requests[key].model_dump(mode="json"),
+                    budgets=row_budgets,
+                )
+            )
+
+        collected_identities: set[str] = set()
         outputs_by_key: dict[tuple[int, int], RolloutRowOutput] = {}
-        for fanout_result in pool_outcome.results:
-            key = fanout_result.key
+        deadline_reached = False
+        pool = self._pool(concurrency)
+        for completion in self._stream(pool, jobs, max_wall_seconds):
+            key = keys_by_job[completion.result.execution_id.job_id]
             row_request = row_requests[key]
-            if fanout_result.completed and fanout_result.value is not None:
-                outputs_by_key[key] = fanout_result.value
+            payload, status = _interpret_completion(completion, key=key)
+            if status is RowDispatchStatus.NOT_DISPATCHED or (
+                status is RowDispatchStatus.OPERATION_DEADLINE
+            ):
+                deadline_reached = True
+            if status is RowDispatchStatus.COMPLETED:
+                collected_identities.update(worker_request_identities(payload))
+                outputs_by_key[key] = decode_graph_row_output(
+                    payload, request=row_request
+                )
             else:
                 outputs_by_key[key] = decode_graph_row_output(
-                    {},
-                    request=row_request,
-                    fanout_status=fanout_result.status,
+                    {}, request=row_request, dispatch_status=status
                 )
-        outputs = tuple(outputs_by_key[(row.task_index, row.seed_index)] for row in scheduled_rows)
+
+        missing_keys = [
+            (row.task_index, row.seed_index)
+            for row in scheduled_rows
+            if (row.task_index, row.seed_index) not in outputs_by_key
+        ]
+        if missing_keys:
+            raise RowWorkerError(
+                "the row worker pool returned no outcome for rows "
+                f"{sorted(missing_keys)!r}"
+            )
+        outputs = tuple(
+            outputs_by_key[(row.task_index, row.seed_index)]
+            for row in scheduled_rows
+        )
         return aggregate_rollout_outputs(
             outputs=outputs,
             task_hashes=task_hashes,
@@ -258,12 +328,64 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
             matrix_plan=sampling.evaluation_matrix_plan,
             aggregate_name=self._aggregate_name,
             request_identities=frozenset(collected_identities),
-            concurrency_halved=pool_outcome.concurrency_halved,
-            deadline_reached=pool_outcome.deadline_reached,
-            guard_timeouts=pool_outcome.guard_timeouts,
+            deadline_reached=deadline_reached,
         )
 
-    def submission_result_record(
-        self, submission_result: object | None
-    ) -> SubmissionResultRecord | None:
-        return None
+    @staticmethod
+    def _stream(
+        pool: WorkerPoolImportableJsonExecutor,
+        jobs: list[object],
+        max_wall_seconds: float | None,
+    ) -> Iterator[CompletedExecution]:
+        batch_wall = (
+            None
+            if max_wall_seconds is None or max_wall_seconds <= 0
+            else FiniteDurationLimit.from_seconds(max_wall_seconds)
+        )
+        return pool.run_many(jobs, wall_time=batch_wall)  # type: ignore[arg-type]
+
+
+def _interpret_completion(
+    completion: CompletedExecution,
+    /,
+    *,
+    key: tuple[int, int],
+) -> tuple[dict[str, object], RowDispatchStatus]:
+    """Map one dr-exec completion into this driver's row vocabulary."""
+
+    result = completion.result
+    outcome = result.outcome
+    if isinstance(outcome, CancelledOutcome):
+        return {}, RowDispatchStatus.NOT_DISPATCHED
+    if isinstance(outcome, BudgetExceededOutcome):
+        if outcome.axis is BudgetAxis.WALL_TIME:
+            return {}, RowDispatchStatus.UNIT_TIMEOUT
+        raise RowWorkerError(
+            f"row {key!r} exceeded the unexpected {outcome.axis.value} budget"
+        )
+    if isinstance(outcome, ExitedOutcome) and outcome.exit_code == 0:
+        return _completed_payload(completion, key=key), RowDispatchStatus.COMPLETED
+    raise RowWorkerError(
+        f"row {key!r} failed in its worker: {outcome.kind.value} "
+        f"(owner={result.attribution.owner.value}, "
+        f"detail={result.attribution.detail!r})"
+    )
+
+
+def _completed_payload(
+    completion: CompletedExecution,
+    /,
+    *,
+    key: tuple[int, int],
+) -> dict[str, object]:
+    try:
+        payload = parse_importable_json_result(completion)
+    except ImportableJsonResultError as error:
+        raise RowWorkerError(
+            f"row {key!r} did not return one worker result: {error}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise RowWorkerError(
+            f"row {key!r} returned a worker result that is not a JSON object"
+        )
+    return dict(payload)

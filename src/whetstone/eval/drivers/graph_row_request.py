@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from collections.abc import Mapping
+from enum import UNIQUE, StrEnum, verify
 from typing import Any
 
 from dr_graph import GraphConfig
@@ -17,10 +18,10 @@ from pydantic import (
 
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.traces import ExecutedComponentStep, ExecutedRowState
-from whetstone.execution.fanout import FanoutStatus
 
 __all__ = [
     "GraphRowRequest",
+    "RowDispatchStatus",
     "decode_graph_row_output",
     "import_path_for_callable",
     "import_path_for_type",
@@ -28,6 +29,20 @@ __all__ = [
     "rollout_row_output_from_worker_payload",
     "worker_request_identities",
 ]
+
+
+@verify(UNIQUE)
+class RowDispatchStatus(StrEnum):
+    """How one dispatched rollout row ended, from the driver's view.
+
+    The values are this driver's row failure-code vocabulary and are
+    persisted in row outputs, so they are pinned by a golden test.
+    """
+
+    COMPLETED = "completed"
+    UNIT_TIMEOUT = "unit-timeout"
+    OPERATION_DEADLINE = "deadline"
+    NOT_DISPATCHED = "not-dispatched"
 
 
 def _split_import_path(path: str) -> tuple[str, str]:
@@ -236,9 +251,9 @@ def decode_graph_row_output(
     payload: Mapping[str, object],
     *,
     request: GraphRowRequest,
-    fanout_status: FanoutStatus | None = None,
+    dispatch_status: RowDispatchStatus | None = None,
 ) -> RolloutRowOutput:
-    if fanout_status is FanoutStatus.NOT_DISPATCHED:
+    if dispatch_status is RowDispatchStatus.NOT_DISPATCHED:
         return RolloutRowOutput(
             candidate_id=request.candidate_id,
             task_id=request.task_id,
@@ -248,9 +263,9 @@ def decode_graph_row_output(
             trace_steps=(),
             output_text=None,
             score=None,
-            failure_code="not-dispatched",
+            failure_code=RowDispatchStatus.NOT_DISPATCHED.value,
         )
-    if fanout_status is FanoutStatus.UNIT_TIMEOUT:
+    if dispatch_status is RowDispatchStatus.UNIT_TIMEOUT:
         return RolloutRowOutput(
             candidate_id=request.candidate_id,
             task_id=request.task_id,
@@ -260,9 +275,9 @@ def decode_graph_row_output(
             trace_steps=(),
             output_text=None,
             score=None,
-            failure_code="unit-timeout",
+            failure_code=RowDispatchStatus.UNIT_TIMEOUT.value,
         )
-    if fanout_status is FanoutStatus.OPERATION_DEADLINE:
+    if dispatch_status is RowDispatchStatus.OPERATION_DEADLINE:
         return RolloutRowOutput(
             candidate_id=request.candidate_id,
             task_id=request.task_id,
@@ -272,6 +287,6 @@ def decode_graph_row_output(
             trace_steps=(),
             output_text=None,
             score=None,
-            failure_code="deadline",
+            failure_code=RowDispatchStatus.OPERATION_DEADLINE.value,
         )
     return rollout_row_output_from_worker_payload(payload)
