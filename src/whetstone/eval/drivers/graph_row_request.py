@@ -126,6 +126,14 @@ class GraphRowRequest(BaseModel):
     transport_api_key_env: StrictStr = "WHETSTONE_TOY_API_KEY"
     transport_factory: StrictStr
     eval_runner: StrictStr
+    """Top-level ``module:Name`` of a zero-arg, stateless ``EvalProcedureRunner``.
+
+    Workers reconstruct via ``runner_type()`` and transfer no constructor
+    state. Required-arg constructors fail with TypeError; defaulted instance
+    state silently rebuilds with defaults. If a stateful runner is ever
+    needed, adopt the prompt-adapter ``model_dump`` / ``model_validate``
+    payload pattern.
+    """
     prompt_adapter_type: StrictStr
     prompt_adapter: JsonValue
     partial_log_path: StrictStr | None = None
