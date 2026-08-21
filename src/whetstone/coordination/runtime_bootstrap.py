@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -31,7 +32,6 @@ from whetstone.optim.proposal.proposer import (
     prompt_adapter_identity_hash,
 )
 from whetstone.provider.language_model import PlainPromptAdapter
-from whetstone.provider.policy import ProviderExecutionPolicy, default_transport_policy
 from whetstone.testing.fakes.proposer import DummyProposerTransport
 from whetstone.testing.toy.experiment import (
     TOY_MUTATION_FIELD,
@@ -42,7 +42,13 @@ from whetstone.testing.toy.experiment import (
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
+    from whetstone.eval.protocol import EvalEngine
+    from whetstone.experiment.candidate import TemplateRenderContract
+    from whetstone.experiment.env import Experiment
+    from whetstone.optim.adapters import OptimizerAdapter
     from whetstone.optim.copro.control import CoproControl
+    from whetstone.optim.gepa.control import GepaControl
+    from whetstone.optim.proposal.proposer import ProposerTransport
 
 RUNTIME_BOOTSTRAP_SCHEMA = "whetstone.runtime_bootstrap"
 RUNTIME_BOOTSTRAP_SCHEMA_VERSION = 1
@@ -86,14 +92,8 @@ def build_toy_copro_control(
     from whetstone.optim.copro.control import CoproInjectedDefaults, configure_copro
     from whetstone.sandbox.copro_step import toy_copro_proposal_contract
 
-    experiment = build_toy_experiment(num_seeds=1)
     if engine is None:
         raise ValueError("engine is required to bind COPRO evaluation authority")
-    execution_policy = ProviderExecutionPolicy(
-        transport_policy=default_transport_policy(
-            api_key_env="WHETSTONE_TOY_API_KEY",
-        )
-    )
     prompt_adapter = PlainPromptAdapter()
     defaults = CoproInjectedDefaults(
         prompt_model=ProposerConfig(
@@ -106,8 +106,8 @@ def build_toy_copro_control(
         eval_config_ref=engine.eval_config_ref,
         eval_role=EvalRole.INTERNAL,
         provider_execution_policy_ref=engine.provider_execution_policy_ref,
-        expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
-        provider_execution_policy_hash=execution_policy.identity_hash,
+        expected_reward_policy_hash=engine.reward_policy_identity_hash(),
+        provider_execution_policy_hash=engine.execution_policy_identity_hash(),
         prompt_adapter=prompt_adapter,
     )
     return configure_copro(
@@ -124,32 +124,76 @@ def register_runtime(
     sqlite_path: str | None = None,
     copro_control: CoproControl | None = None,
     ledger_engine: Engine | None = None,
+    engine: EvalEngine | None = None,
+    extra_adapters: Mapping[str, OptimizerAdapter] | None = None,
+    proposal_bodies: tuple[str, ...] | None = None,
+    proposer_transport: ProposerTransport | None = None,
 ) -> RegisteredRuntime:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
     from whetstone.optim.tools.facade import ToolAdmissionAuthority, ToolCallStore
 
+    if engine is not None and store is None:
+        raise ValueError(
+            "register_runtime(engine=...) requires store= the engine "
+            "was built against"
+        )
+    if engine is not None and copro_control is None:
+        raise ValueError(
+            "register_runtime(engine=...) requires copro_control= "
+            "built against that engine"
+        )
     if store is None:
         if sqlite_path is None:
             sqlite_path = f"/tmp/whetstone-runtime-{uuid4().hex}.sqlite"
         store = persistent_sqlite(sqlite_path)
     effect_authority = EffectAuthority.memory()
     runtime_config = ReferenceEvalRuntimeConfig()
-    engine = runtime_config.build_engine(store)
-    eval_service = EvalEngineService(store=store, engine=engine)
-    control = copro_control or build_toy_copro_control(engine=engine)
+    resolved_engine = engine or runtime_config.build_engine(store)
+    eval_service = EvalEngineService(store=store, engine=resolved_engine)
+    control = copro_control or build_toy_copro_control(engine=resolved_engine)
+    if (
+        control.expected_reward_policy_hash
+        != resolved_engine.reward_policy_identity_hash()
+    ):
+        raise ValueError(
+            "register_runtime copro_control reward policy must match "
+            "the engine reward_policy_identity_hash"
+        )
+    if (
+        control.provider_execution_policy_hash
+        != resolved_engine.execution_policy_identity_hash()
+    ):
+        raise ValueError(
+            "register_runtime copro_control provider execution policy "
+            "must match the engine execution_policy_identity_hash"
+        )
+    if control.eval_config_ref != resolved_engine.eval_config_ref:
+        raise ValueError(
+            "register_runtime copro_control eval_config_ref must match "
+            "the engine eval_config_ref"
+        )
     prompt_adapter = PlainPromptAdapter()
     execution_policy = runtime_config.execution_policy
+    engine_policy_hash = getattr(
+        resolved_engine, "execution_policy_identity_hash", None
+    )
+    dummy_policy_hash = (
+        engine_policy_hash()
+        if callable(engine_policy_hash)
+        else execution_policy.identity_hash
+    )
     proposal_policy_hash = compute_identity_hash(
         schema="whetstone.testing.inline_proposal_executor",
         schema_version=1,
         payload={"mode": "inline"},
     )
-    transport = DummyProposerTransport(
-        scripted_bodies=(
+    transport = proposer_transport or DummyProposerTransport(
+        scripted_bodies=proposal_bodies
+        or (
             "Reply briefly to: {prompt} with a concise greeting.",
             "Answer {prompt} in one short friendly sentence.",
         ),
-        execution_policy_hash=execution_policy.identity_hash,
+        execution_policy_hash=dummy_policy_hash,
         prompt_adapter_identity_hash=prompt_adapter_identity_hash(prompt_adapter),
         proposal_mode="seed_proposal",
         request_ordinal=0,
@@ -161,11 +205,10 @@ def register_runtime(
             policy_identity_hash=proposal_policy_hash,
         ),
     )
-    adapter_registry = MappingAdapterRegistry(
-        {
-            COPRO_ADAPTER_KEY: copro_adapter,
-        }
-    )
+    adapters = {COPRO_ADAPTER_KEY: copro_adapter}
+    if extra_adapters:
+        adapters.update(extra_adapters)
+    adapter_registry = MappingAdapterRegistry(adapters)
     tool_store = ToolCallStore(
         store,
         ToolAdmissionAuthority.memory(),
@@ -187,7 +230,7 @@ def register_runtime(
         schema_version=RUNTIME_BOOTSTRAP_SCHEMA_VERSION,
         payload={
             "owner_id": owner_id,
-            "adapter_keys": [COPRO_ADAPTER_KEY],
+            "adapter_keys": sorted(adapters),
         },
     )
     controller = HarnessRunController(
@@ -213,11 +256,36 @@ def prepare_copro_run(
     control: CoproControl,
     initial_candidate: Candidate | None = None,
     terminal_top_k: int = 1,
+    experiment: Experiment | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
 ) -> OptimRunLaunch:
     from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 
-    experiment = build_toy_experiment(num_seeds=1)
-    candidate = initial_candidate or experiment.initial_candidate
+    try:
+        adapter = runtime.adapter_registry.resolve(COPRO_ADAPTER_KEY)
+    except KeyError as exc:
+        raise ValueError(
+            "prepare_copro_run requires a COPRO adapter"
+        ) from exc
+    bound_control = getattr(adapter, "control", None)
+    if (
+        bound_control is not None
+        and bound_control.reference() != control.reference()
+    ):
+        raise ValueError(
+            "prepare_copro_run control must match the registered COPRO adapter"
+        )
+    resolved = experiment or build_toy_experiment(num_seeds=1)
+    if (
+        resolved.reward_policy.identity_hash()
+        != control.expected_reward_policy_hash
+    ):
+        raise ValueError(
+            "prepare_copro_run experiment reward policy must match "
+            "the control expected_reward_policy_hash"
+        )
+    candidate = initial_candidate or resolved.initial_candidate
     run = OptimRun(
         run_id=run_id,
         optimizer_config=control.reference(),
@@ -226,9 +294,89 @@ def prepare_copro_run(
         terminal_output_contract=OutputContract(
             returned_proposal_count=terminal_top_k,
         ),
-        template_render_contract=toy_template_render_contract(),
-        mutation_field=TOY_MUTATION_FIELD,
-        reward_policy=experiment.reward_policy,
+        template_render_contract=(
+            render_contract or toy_template_render_contract()
+        ),
+        mutation_field=mutation_field or TOY_MUTATION_FIELD,
+        reward_policy=resolved.reward_policy,
+    )
+    launch = OptimRunLaunch(
+        run=run,
+        initial_candidate=candidate,
+        control=control,
+    )
+    runtime.controller.bind_launch(launch)
+    return launch
+
+
+def prepare_gepa_run(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    control: GepaControl,
+    initial_candidate: Candidate | None = None,
+    experiment: Experiment | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
+) -> OptimRunLaunch:
+    from whetstone.optim.gepa.harness_adapter import (
+        GEPA_ADAPTER_KEY,
+        seed_components_from_candidate,
+    )
+
+    try:
+        adapter = runtime.adapter_registry.resolve(GEPA_ADAPTER_KEY)
+    except KeyError as exc:
+        raise ValueError(
+            "prepare_gepa_run requires a GEPA adapter; pass it via "
+            "register_runtime(..., extra_adapters={...})"
+        ) from exc
+    resolved = experiment or build_toy_experiment(num_seeds=1)
+    if resolved.reward_policy.identity_hash() != control.reward_policy_hash:
+        raise ValueError(
+            "prepare_gepa_run experiment reward policy must match "
+            "the control reward_policy_hash"
+        )
+    candidate = initial_candidate or resolved.initial_candidate
+    field = mutation_field or TOY_MUTATION_FIELD
+    bound_control = getattr(adapter, "control", None)
+    if (
+        bound_control is not None
+        and bound_control.reference() != control.reference()
+    ):
+        raise ValueError(
+            "prepare_gepa_run control must match the registered GEPA adapter"
+        )
+    bound_seed = getattr(adapter, "seed_candidate", None)
+    if bound_seed is not None:
+        component_names = (
+            bound_control.component_names
+            if bound_control is not None
+            else tuple(bound_seed)
+        )
+        mapped = seed_components_from_candidate(
+            candidate,
+            component_names=component_names,
+            mutation_field=field,
+        )
+        if mapped != dict(bound_seed):
+            raise ValueError(
+                "prepare_gepa_run initial candidate must match "
+                "the adapter seed candidate"
+            )
+    run = OptimRun(
+        run_id=run_id,
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(
+            returned_proposal_count=1,
+        ),
+        template_render_contract=(
+            render_contract or toy_template_render_contract()
+        ),
+        mutation_field=field,
+        reward_policy=resolved.reward_policy,
     )
     launch = OptimRunLaunch(
         run=run,
@@ -258,5 +406,6 @@ __all__ = [
     "build_toy_copro_control",
     "copro_run_request",
     "prepare_copro_run",
+    "prepare_gepa_run",
     "register_runtime",
 ]

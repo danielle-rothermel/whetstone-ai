@@ -35,9 +35,13 @@ def _inline_platform_driver_smoke() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         store_path = f"{tmp}/platform-smoke.sqlite"
         with open_sqlite(store_path) as store:
-            runtime = register_runtime(store=store)
             engine = ReferenceEvalRuntimeConfig().build_engine(store)
             control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+            runtime = register_runtime(
+                store=store,
+                engine=engine,
+                copro_control=control,
+            )
             run_id = "platform-smoke-run"
             launch = prepare_copro_run(
                 runtime,

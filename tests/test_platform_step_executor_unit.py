@@ -75,7 +75,11 @@ def _depth2_copro_launch(sqlite_store):
     runtime_config = ReferenceEvalRuntimeConfig()
     engine = runtime_config.build_engine(sqlite_store)
     control = build_toy_copro_control(breadth=2, depth=2, engine=engine)
-    runtime = register_runtime(store=sqlite_store, copro_control=control)
+    runtime = register_runtime(
+        store=sqlite_store,
+        engine=engine,
+        copro_control=control,
+    )
     launch = prepare_copro_run(
         runtime,
         run_id=f"test-run-{uuid4().hex[:8]}",

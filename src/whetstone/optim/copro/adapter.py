@@ -691,6 +691,20 @@ class CoproAdapter:
             algorithm="COPRO",
             purpose="paid proposal call",
         )
+        if (
+            transport.execution_policy_hash
+            != control.provider_execution_policy_hash
+        ):
+            raise ValueError(
+                "COPRO provider execution policy conflicts with control"
+            )
+        if (
+            transport.prompt_adapter_identity_hash
+            != control.prompt_adapter_identity_hash
+        ):
+            raise ValueError(
+                "COPRO prompt adapter identity conflicts with control"
+            )
         self._control = control
         self._transport = transport
         self._proposal_executor = proposal_executor
