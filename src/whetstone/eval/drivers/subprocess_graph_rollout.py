@@ -353,8 +353,10 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         collected_identities: set[str] = set()
         outputs_by_key: dict[tuple[int, int], RolloutRowOutput] = {}
         deadline_reached = False
-        pool = self._pool(concurrency)
+        # Validate the wall before touching the pool so an invalid value
+        # cannot start workers that then outlive the raised error.
         batch_wall = _batch_wall_time(max_wall_seconds)
+        pool = self._pool(concurrency)
 
         def _pending_jobs() -> Iterator[ExecutionJob]:
             for pending_id in job_ids:

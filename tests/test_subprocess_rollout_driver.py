@@ -939,6 +939,9 @@ def test_both_drivers_reject_an_invalid_batch_wall(
                 concurrency=1,
                 max_wall_seconds=max_wall_seconds,
             )
+    # The wall is validated before the pool exists, so an invalid value
+    # never starts workers that would outlive the raised error.
+    assert subprocess_driver._executor is None  # noqa: SLF001
 
 
 def test_both_drivers_treat_an_infinite_batch_wall_as_unbounded(
