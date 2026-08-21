@@ -28,7 +28,7 @@ GEPA_PROMPT_FORMAT_SCHEMA_VERSION = 1
 GEPA_PROMPT_BINDING_SCHEMA = "whetstone.gepa.prompt_binding"
 GEPA_PROMPT_BINDING_SCHEMA_VERSION = 1
 GEPA_REFLECTION_PROMPT_SCHEMA = "whetstone.gepa.reflection_prompt"
-GEPA_REFLECTION_PROMPT_SCHEMA_VERSION = 1
+GEPA_REFLECTION_PROMPT_SCHEMA_VERSION = 2
 GEPA_REFLECTION_RESPONSE_PARSER_SCHEMA = (
     "whetstone.gepa.reflection_response_parser"
 )
@@ -42,6 +42,9 @@ GEPA_REFLECTION_EXAMPLES_ROLE = (
     "The following are examples of different task inputs provided to the "
     "assistant along with the assistant's response for each of them, and "
     "some feedback on how the assistant's response could be better:"
+)
+GEPA_REFLECTION_RETRY_ROLE = (
+    "Your previous attempt at this instruction was rejected:"
 )
 GEPA_REFLECTION_TASK = """Your task is to write a new instruction for the assistant.
 
@@ -185,6 +188,21 @@ class GepaPromptFormatDescriptor(BaseModel):
         )
 
 
+class GepaRejectedAttempt(BaseModel):
+    """One reflection response the parser or format validator rejected."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    raw_response: StrictStr
+    rejection_detail: StrictStr
+
+    @model_validator(mode="after")
+    def _validate(self) -> GepaRejectedAttempt:
+        if not self.rejection_detail:
+            raise ValueError("rejection_detail must be non-empty")
+        return self
+
+
 class GepaReflectionRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -192,6 +210,9 @@ class GepaReflectionRequest(BaseModel):
     reflective_dataset: dict[StrictStr, tuple[dict[str, Any], ...]]
     components_to_update: tuple[StrictStr, ...]
     component_name: StrictStr
+    #: A prior attempt whose replacement failed to parse or validate, fed
+    #: back so the retry can correct the specific problem.
+    prior_attempt: GepaRejectedAttempt | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> GepaReflectionRequest:
@@ -331,6 +352,7 @@ class NativeGepaReflectionPromptBuilder:
                 "native_format_constraints": True,
                 "dspy_signature_field_formatting": False,
                 "multimodal_projection": "ordered_structured_content_parts/v2",
+                "rejected_attempt_feedback": "single_bounded_retry/v1",
             },
         )
 
@@ -383,13 +405,24 @@ class NativeGepaReflectionPromptBuilder:
             "formatting."
         )
         constraints_text = "\n".join(constraints)
+        correction = ""
+        if request.prior_attempt is not None:
+            correction = (
+                f"\n{GEPA_REFLECTION_RETRY_ROLE}\n"
+                f"```\n{request.prior_attempt.raw_response}\n```\n"
+                "It was rejected because: "
+                f"{request.prior_attempt.rejection_detail}\n"
+                "Correct exactly that problem and satisfy every constraint "
+                "above.\n"
+            )
         text = (
             f"{GEPA_REFLECTION_PROMPT_ROLE}\n"
             f"```\n{request.candidate[request.component_name]}\n```\n\n"
             f"{GEPA_REFLECTION_EXAMPLES_ROLE}\n"
             f"```\n{examples}\n```\n\n"
             f"{GEPA_REFLECTION_TASK}\n\n"
-            f"{constraints_text}\n\n"
+            f"{constraints_text}\n"
+            f"{correction}\n"
             "Provide the new instructions within ``` blocks."
         )
         messages = None
@@ -522,11 +555,13 @@ __all__ = [
     "GEPA_REFLECTION_PROMPT_SCHEMA_VERSION",
     "GEPA_REFLECTION_RESPONSE_PARSER_SCHEMA",
     "GEPA_REFLECTION_RESPONSE_PARSER_SCHEMA_VERSION",
+    "GEPA_REFLECTION_RETRY_ROLE",
     "GEPA_REFLECTION_TASK",
     "GepaComponentFormat",
     "GepaPromptBinding",
     "GepaPromptFormatDescriptor",
     "GepaPromptServices",
+    "GepaRejectedAttempt",
     "GepaReflectionPromptBuilder",
     "GepaReflectionRequest",
     "GepaReflectionResponseParser",

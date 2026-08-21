@@ -173,6 +173,7 @@ class CanonicalGepaAdapterFactory:
             context=expected_context,
             effect_count=adapter.effect_count,
             score_mismatch_evidence=adapter.score_mismatch_evidence,
+            skipped_mutations=adapter.skipped_mutations,
         )
         transcript_ref = recorder.persist_transcript(transcript)
         return GepaResultArtifactStore(self._store).persist(

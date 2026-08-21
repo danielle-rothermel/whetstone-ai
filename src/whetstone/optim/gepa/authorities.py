@@ -1052,6 +1052,8 @@ class CanonicalGepaProposalAuthority:
                 raw,
             )
         except (KeyError, TypeError, ValueError) as exc:
+            # The provider answered; its content did not satisfy the parser
+            # or the component format. That is retryable.
             return GepaProposalEffectResult(
                 request_hash=request.identity_hash(),
                 raw_response=raw,
@@ -1061,6 +1063,7 @@ class CanonicalGepaProposalAuthority:
                 usage=usage,
                 cost=draft.cost,
                 failed=True,
+                rejected_by_parser=True,
                 failure_detail=str(exc) or type(exc).__name__,
             )
         return GepaProposalEffectResult(

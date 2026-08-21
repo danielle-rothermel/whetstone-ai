@@ -464,6 +464,10 @@ class GepaProposalEffectResult(BaseModel):
     cost: float | None = None
     failed: StrictBool = False
     failure_detail: StrictStr | None = None
+    #: The provider answered, but the reflection parser or the component
+    #: format contract rejected its response. Retryable, unlike a transport
+    #: or provider failure.
+    rejected_by_parser: StrictBool = False
 
     @model_validator(mode="after")
     def _validate(self) -> GepaProposalEffectResult:
@@ -486,6 +490,10 @@ class GepaProposalEffectResult(BaseModel):
                     "failed GEPA proposal requires detail and no parsed "
                     "components"
                 )
+        elif self.rejected_by_parser:
+            raise ValueError(
+                "only a failed GEPA proposal may be rejected by the parser"
+            )
         elif (
             not self.raw_response
             or not self.parsed_components
@@ -547,6 +555,35 @@ GepaEffectRequest = GepaEvaluationEffectRequest | GepaProposalEffectRequest
 GepaEffectResult = GepaEvaluationEffectResult | GepaProposalEffectResult
 
 
+class GepaSkippedMutation(BaseModel):
+    """One reflection mutation dropped because its response was rejected.
+
+    Recorded so a rejected reflection is visible in step evidence rather
+    than silently narrowing the search.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    component_name: StrictStr
+    attempt_ordinal: StrictInt
+    rejection_detail: StrictStr
+    raw_response: StrictStr = ""
+    provider_attempt_refs: tuple[TypedRef, ...] = ()
+    #: True when this rejection consumed the last permitted attempt, so the
+    #: component was left unchanged.
+    exhausted: StrictBool = False
+
+    @model_validator(mode="after")
+    def _validate(self) -> GepaSkippedMutation:
+        if not self.component_name:
+            raise ValueError("skipped mutation component_name is required")
+        if not self.rejection_detail:
+            raise ValueError("skipped mutation rejection_detail is required")
+        if self.attempt_ordinal < 0:
+            raise ValueError("skipped mutation attempt_ordinal cannot be negative")
+        return self
+
+
 class GepaEffectTranscriptEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -579,6 +616,9 @@ class GepaEffectTranscript(BaseModel):
     context: GepaEffectContext
     entries: tuple[GepaEffectTranscriptEntry, ...]
     score_mismatch_evidence: tuple[GepaScoreMismatchEvidence, ...] = ()
+    #: Reflection mutations rejected by the parser or format contract.
+    #: Present so a dropped mutation is visible, never silent.
+    skipped_mutations: tuple[GepaSkippedMutation, ...] = ()
 
     @model_validator(mode="after")
     def _validate(self) -> GepaEffectTranscript:
@@ -749,6 +789,7 @@ class GepaEffectRecorder:
             GepaScoreMismatchEvidence,
             ...,
         ] = (),
+        skipped_mutations: tuple[GepaSkippedMutation, ...] = (),
     ) -> GepaEffectTranscript:
         if effect_count < 0:
             raise ValueError("GEPA effect_count cannot be negative")
@@ -823,6 +864,7 @@ class GepaEffectRecorder:
             context=context,
             entries=tuple(entries),
             score_mismatch_evidence=score_mismatch_evidence,
+            skipped_mutations=skipped_mutations,
         )
 
     @staticmethod
@@ -894,6 +936,7 @@ __all__ = [
     "GepaCandidateComponent",
     "GepaComponentTraceProjection",
     "GepaDataInstance",
+    "GepaSkippedMutation",
     "GepaEffectBroker",
     "GepaEffectConflictError",
     "GepaEffectContext",
