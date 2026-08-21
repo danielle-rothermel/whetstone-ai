@@ -11,7 +11,6 @@ from typing import Any
 
 from whetstone.core.identity import IdentityRef, TypedRef
 from whetstone.core.roles import EvalRole
-from whetstone.eval.drivers.row_jobs import row_job_from_entrypoint
 from whetstone.eval.metadata import metadata_with_purpose
 from whetstone.eval.protocol import (
     EvalRequest,
@@ -30,9 +29,6 @@ from whetstone.optim.tools.evaluator import EngineToolEvaluator
 OPTIONAL_EXTRA_MODULES = frozenset(
     {
         "whetstone.coordination.proposal_provider",
-        "whetstone.coordination.run_workflow",
-        "whetstone.optim.gepa.effect_runtime",
-        "whetstone.optim.gepa.runner",
     }
 )
 
@@ -93,19 +89,6 @@ def _import_sweep() -> list[tuple[str, Exception]]:
         except Exception as exc:
             errors.append((module.name, exc))
     return errors
-
-
-def _protocol_smoke() -> None:
-    from pydantic import BaseModel
-
-    factory = row_job_from_entrypoint("example.module:worker")
-
-    class RowRequest(BaseModel):
-        task_id: str
-
-    process_job = factory(RowRequest(task_id="t1"))
-    assert process_job.entrypoint == "example.module:worker"
-    assert process_job.payload == {"task_id": "t1"}
 
 
 def _p0_graph_smoke() -> None:
@@ -311,9 +294,6 @@ def main() -> None:
             print(f"IMPORT FAIL {name}: {type(exc).__name__}: {exc}")
         raise SystemExit(1)
     print(f"import sweep ok ({len(list(pkgutil.walk_packages(['src/whetstone'], 'whetstone.')))} modules)")
-
-    _protocol_smoke()
-    print("row job factory ok")
 
     from whetstone.experiment.env import Experiment, RolloutGraphLike
     from whetstone.experiment.sampling import EvalConfigs

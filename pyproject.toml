@@ -36,9 +36,8 @@ dev = [
 testpaths = ["tests"]
 markers = [
     "integration: requires postgres + dbos + dr-platform",
-    "slow: long-running",
 ]
-addopts = "-m 'not integration and not slow'"
+addopts = "-m 'not integration'"
 [project.scripts]
 whetstone-mcp-eval = "whetstone.optim.codex.mcp_server:main"
 whetstone-sandbox = "whetstone.sandbox.cli:main"

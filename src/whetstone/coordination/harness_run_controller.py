@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_store import ObjectStore
+from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
 
-from whetstone.coordination.run_workflow import RunRequest
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from whetstone.core.identity import TypedRef, require_full_hash
+from whetstone.core.identity import TypedRef, compute_identity_hash, require_full_hash
 from whetstone.experiment.candidate import Candidate
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
@@ -29,6 +29,39 @@ if TYPE_CHECKING:
 RUN_LAUNCH_SCHEMA = "whetstone.optim_run_launch"
 RUN_LAUNCH_SCHEMA_VERSION = 1
 RUN_LAUNCH_BINDING_PREFIX = "whetstone.optim_run_launch:"
+RUN_WORKFLOW_SCHEMA = "whetstone.coordination.parent_run"
+RUN_WORKFLOW_SCHEMA_VERSION = 1
+
+
+class RunRequest(BaseModel):
+    """Complete serializable input identifying one optimization run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    controller_identity_hash: StrictStr
+    run_id: StrictStr
+    control_identity_hash: StrictStr
+
+    @model_validator(mode="after")
+    def _validate(self) -> RunRequest:
+        require_full_hash(
+            self.controller_identity_hash,
+            field="controller_identity_hash",
+        )
+        require_full_hash(
+            self.control_identity_hash,
+            field="control_identity_hash",
+        )
+        if not self.run_id:
+            raise ValueError("run request run_id must be non-empty")
+        return self
+
+    def identity_hash(self) -> str:
+        return compute_identity_hash(
+            schema=RUN_WORKFLOW_SCHEMA,
+            schema_version=RUN_WORKFLOW_SCHEMA_VERSION,
+            payload=self.model_dump(mode="json"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,9 +140,11 @@ class HarnessRunController:
         candidate = Candidate.model_validate(record["initial_candidate"])
         control = None
         if record.get("control") is not None:
+            from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+
             control_payload = record["control"]
             adapter_key = run.adapter_key
-            if adapter_key == "gepa":
+            if adapter_key == GEPA_ADAPTER_KEY:
                 from whetstone.optim.gepa.control import GepaControl
 
                 control = GepaControl.model_validate(control_payload)
@@ -141,7 +176,9 @@ class HarnessRunController:
         bound = self._harness.bind_run(launch.run)
         adapter_key = bound.record.adapter_key
         control = launch.control
-        if control is None and adapter_key == "copro":
+        from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
+
+        if control is None and adapter_key == COPRO_ADAPTER_KEY:
             raise ValueError("COPRO run launch requires the exact control")
         step_results: list[OptimStepResultRef] = []
         prior_results: list[OptimStepResult] = []
@@ -185,4 +222,7 @@ __all__ = [
     "RUN_LAUNCH_BINDING_PREFIX",
     "RUN_LAUNCH_SCHEMA",
     "RUN_LAUNCH_SCHEMA_VERSION",
+    "RUN_WORKFLOW_SCHEMA",
+    "RUN_WORKFLOW_SCHEMA_VERSION",
+    "RunRequest",
 ]

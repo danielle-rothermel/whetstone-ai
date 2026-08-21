@@ -64,6 +64,7 @@ from whetstone.optim.proposal.proposer import (
     DurableProposalExecutor,
     ProposalRequest,
     ProposerTransport,
+    require_canonical_proposal_executor,
 )
 
 COPRO_ADAPTER_KEY = "copro"
@@ -685,11 +686,11 @@ class CoproAdapter:
         transport: ProposerTransport,
         proposal_executor: DurableProposalExecutor,
     ) -> None:
-        if type(proposal_executor) is not DurableProposalExecutor:
-            raise TypeError(
-                "COPRO requires the canonical DurableProposalExecutor "
-                "capability for its paid proposal call"
-            )
+        require_canonical_proposal_executor(
+            proposal_executor,
+            algorithm="COPRO",
+            purpose="paid proposal call",
+        )
         self._control = control
         self._transport = transport
         self._proposal_executor = proposal_executor

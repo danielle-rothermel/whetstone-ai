@@ -222,28 +222,6 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             raise RuntimeError("evaluation claim resolved without a result")
         return self._assemble_with_heartbeat_outcomes(intent, row_outcomes, owned)
 
-    def _resolve_claimed_with_row_slices(
-        self,
-        intent: OptimEvalRequest,
-        row_slices: tuple[RowEvalSlice, ...],
-    ) -> IntentResolution:
-        existing = self._store.resolve(self._key(intent))
-        if existing is not None:
-            return self._load(existing, expected_optim_eval_request=intent)
-        attested = self._attested_resolution(intent)
-        if attested is not None:
-            return self._bind(intent, attested)
-        owned = self._claim(intent)
-        existing = self._store.resolve(self._key(intent))
-        if existing is not None:
-            return self._load(existing, expected_optim_eval_request=intent)
-        attested = self._attested_resolution(intent)
-        if attested is not None:
-            return self._bind(intent, attested)
-        if owned is None:
-            raise RuntimeError("evaluation claim resolved without a result")
-        return self._assemble_with_heartbeat(intent, row_slices, owned)
-
     def _assemble_with_heartbeat_outcomes(
         self,
         intent: OptimEvalRequest,
@@ -360,45 +338,6 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             owned,
             clear_platform_intent=True,
         )
-
-    def _assemble_with_heartbeat(
-        self,
-        intent: OptimEvalRequest,
-        row_slices: tuple[RowEvalSlice, ...],
-        owned: _OwnedClaim,
-    ) -> IntentResolution:
-        stop = threading.Event()
-        heartbeat_errors: list[Exception] = []
-
-        def heartbeat() -> None:
-            interval = self._claim_lease_seconds / 3
-            while True:
-                try:
-                    if self._renewal_wait(interval, stop):
-                        return
-                    self._renew_claim(intent, owned)
-                except Exception as exc:
-                    heartbeat_errors.append(exc)
-                    return
-
-        self._renew_claim(intent, owned)
-        thread = threading.Thread(
-            target=heartbeat,
-            name=f"evaluation-heartbeat-{owned.generation}",
-            daemon=True,
-        )
-        thread.start()
-        try:
-            self._assert_generation_current(intent, owned)
-            resolution = self._assemble_and_bind(intent, row_slices, owned)
-        finally:
-            stop.set()
-            thread.join()
-        if heartbeat_errors and self._store.resolve(self._key(intent)) is None:
-            raise RuntimeError("evaluation lease heartbeat failed") from (
-                heartbeat_errors[0]
-            )
-        return resolution
 
     def _assemble_and_bind(
         self,

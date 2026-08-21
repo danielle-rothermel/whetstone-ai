@@ -57,6 +57,7 @@ __all__ = [
     "PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION",
     "DurableProposalExecutor",
     "FakeProposerTransport",
+    "require_canonical_proposal_executor",
     "ProposalDraft",
     "ProposalExecutorDurabilityContract",
     "ProposalRequest",
@@ -345,6 +346,20 @@ class DurableProposalExecutor:
             transport=transport,
             count=count,
         )
+
+
+def require_canonical_proposal_executor(
+    executor: object,
+    *,
+    algorithm: str,
+    purpose: str,
+) -> DurableProposalExecutor:
+    if type(executor) is not DurableProposalExecutor:
+        raise TypeError(
+            f"{algorithm} requires the canonical DurableProposalExecutor "
+            f"capability for its {purpose}"
+        )
+    return executor
 
 
 def _durable_proposal_executor(

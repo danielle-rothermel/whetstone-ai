@@ -29,7 +29,6 @@ from whetstone.platform.step_executor import (
 
 def _bootstrap_import_smoke() -> None:
     importlib.import_module("whetstone.coordination.runtime_bootstrap")
-    importlib.import_module("whetstone.coordination.run_controller_registry")
 
 
 def _inline_platform_driver_smoke() -> None:

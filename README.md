@@ -3,12 +3,19 @@
 Generic toolkit for **evaluating and optimizing** LLM prompts and programs.
 
 Whetstone sits above the **dr-*** libraries (graphs, providers, store, serialize,
-exec) and below domain-specific environments. It owns the reusable experiment
-contract, batched evaluation engine, optimizer harness, and evidence/analysis
-plumbing — not task datasets, domain scoring rules, or application UI.
+exec, platform) and below domain-specific environments. It owns the reusable
+experiment contract, batched evaluation engine, optimizer harness, and
+evidence/analysis plumbing — not task datasets, domain scoring rules, or
+application UI.
 
-**In scope here:** evaluation at scale, optimization (COPRO / MIPROv2 / GEPA),
-and stepping through runs to inspect behavior.
+**In scope here:** evaluation at scale, a shared optimization harness, and
+stepping through runs to inspect behavior. Optimizers are not co-equal:
+
+| Optimizer | Harness adapter | Platform pipeline | Sandbox |
+|-----------|-----------------|-------------------|---------|
+| **COPRO** | Live; the only adapter `register_runtime` wires | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
+| **GEPA** | Live harness adapter + step engine; not in the default runtime | Not registered | `whetstone-sandbox gepa` |
+| **MIPROv2** | Adapter/control exist | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
 
 **Out of scope here:** particular benchmarks or envs (those live in separate
 packages or repos), one-off experiment scripts, and product-facing runners.
@@ -23,10 +30,14 @@ packages or repos), one-off experiment scripts, and product-facing runners.
 2. **Evaluation analysis** — bootstrap confidence intervals, power analysis, and
    anchor calibration over persisted evaluation evidence (`eval/analysis/`).
 3. **Optimization** — shared harness and adapters that propose candidates and
-   drive evaluation intents in a loop.
+   drive evaluation intents in a loop. COPRO is the platform-wired optimizer;
+   GEPA and MIPROv2 exist as adapters (GEPA also has a step engine) but are
+   not registered in the default runtime.
 4. **Sandbox & interpretation** — dry-run previews and toy-graph helpers to step
    through optimizer behavior before spending full eval budget
    (`whetstone-sandbox`).
+5. **Codex MCP eval** — `whetstone-mcp-eval` serves the Codex evaluate-candidate
+   tool over stdio.
 
 ```text
 Evaluation  →  Evaluation analysis
@@ -43,13 +54,25 @@ Optimization  →  Sandbox / interpretation
 | **dr-store** | Content-addressed persistence for candidates, evidence, and step records |
 | **dr-serialize** | Strict JSON and canonical identity hashing |
 | **dr-exec** | Budgeted subprocess execution (e.g. Codex optimizer steps) |
+| **dr-platform** | Durable pipeline stages, deferral/fan-in, and run submission (`platform` extra) |
 
 ## Stable seams
 
 - **Experiment** — generation graph, initial/ceiling candidates, eval configs, reward policy
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
-- **OptimizerAdapter** — COPRO / MIPROv2 / GEPA plug into a shared optimization harness
+- **OptimizerAdapter** — COPRO plugs into the shared harness on the default runtime; GEPA and MIPROv2 adapters exist but are not platform-wired
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
+
+## Platform pipeline
+
+The optim pipeline (`whetstone.optim.v1`) has stages `optim_step` → `eval_row`
+→ `eval_fanin`, plus `run_completion`. `EvalDispatchMode.INLINE` evaluates
+inside the step. `EvalDispatchMode.PLATFORM` persists eval intents, fans out
+row jobs, fans results back in, then resumes the step. Submit a run with
+`submit_optim_run`.
+
+`whetstone-optim run` is a stub until step 5; it echoes the control ref and
+exits 2.
 
 ## Sandbox
 
