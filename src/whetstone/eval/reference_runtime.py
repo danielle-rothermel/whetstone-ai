@@ -4,7 +4,6 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
-from dr_providers import ProviderTransportPolicy
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr
 
@@ -66,7 +65,7 @@ class ReferenceEvalRuntimeConfig(BaseModel):
         mutation_field: str | None = None,
         render_contract: TemplateRenderContract | None = None,
         transport_factory: (
-            Callable[[ProviderTransportPolicy], TransportCall] | None
+            Callable[[ProviderExecutionPolicy], TransportCall] | None
         ) = None,
     ) -> EvalEngine:
         _ = self.env_name
