@@ -16,9 +16,15 @@ from whetstone.coordination.harness_run_controller import (
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
+from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import MappingAdapterRegistry
-from whetstone.optim.contracts import OptimRun, OutputContract, StepMode
+from whetstone.optim.contracts import (
+    OptimRun,
+    OutputContract,
+    StepMode,
+    optimization_run_reference,
+)
 from whetstone.optim.harness import OptimHarness
 
 if TYPE_CHECKING:
@@ -29,6 +35,8 @@ if TYPE_CHECKING:
     from whetstone.experiment.env import Experiment
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
+    from whetstone.optim.miprov2.control import Miprov2Control
+    from whetstone.optim.miprov2.runtime import Miprov2State
 
 RUNTIME_BOOTSTRAP_SCHEMA = "whetstone.runtime_bootstrap"
 RUNTIME_BOOTSTRAP_SCHEMA_VERSION = 1
@@ -264,6 +272,81 @@ def prepare_gepa_run(
     return launch
 
 
+def prepare_miprov2_run(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    control: Miprov2Control,
+    experiment: Experiment,
+    initial_state: Miprov2State,
+    initial_candidate: Candidate | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
+) -> OptimRunLaunch:
+    """Bind one MIPROv2 run and its opening durable state.
+
+    Unlike COPRO and GEPA, MIPROv2 cannot start from the control alone: its
+    search reads a labeled trainset, rendered proposal examples, and a
+    durable RNG checkpoint, all of which are part of the opening state. That
+    state is carried on the launch's extra pools rather than rebuilt per
+    Step, so a resumed run reads exactly what was bound, not a rebuild of it.
+    """
+
+    from whetstone.optim.miprov2.adapter import (
+        MIPROV2_ADAPTER_KEY,
+        MIPROV2_STATE_KEY,
+    )
+
+    try:
+        runtime.adapter_registry.resolve(MIPROV2_ADAPTER_KEY)
+    except KeyError as exc:
+        raise ValueError(
+            "prepare_miprov2_run requires a MIPROv2 adapter; pass it in the "
+            "adapter registry given to build_runtime"
+        ) from exc
+    if experiment.reward_policy.identity_hash() != control.reward_policy_hash:
+        raise ValueError(
+            "prepare_miprov2_run experiment reward policy must match "
+            "the control reward_policy_hash"
+        )
+    if control.eval_role is not EvalRole.INTERNAL:
+        raise ValueError("MIPROv2 runs evaluate under the internal role")
+    candidate = initial_candidate or control.base_candidate.record
+    if candidate_reference(candidate) != control.base_candidate:
+        raise ValueError(
+            "prepare_miprov2_run initial candidate must be the control "
+            "base candidate"
+        )
+    run = OptimRun(
+        run_id=run_id,
+        optimizer_config=control.reference(),
+        adapter_key=MIPROV2_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(
+            returned_proposal_count=1,
+        ),
+        template_render_contract=(
+            render_contract or control.template_render_contract
+        ),
+        initial_candidate_ref=candidate_reference(candidate),
+        mutation_field=mutation_field or control.mutation_field,
+        reward_policy=experiment.reward_policy,
+    )
+    run_ref = optimization_run_reference(run)
+    if initial_state.run != run_ref:
+        raise ValueError(
+            "prepare_miprov2_run initial state does not bind the exact run"
+        )
+    launch = OptimRunLaunch(
+        run=run,
+        initial_candidate=candidate,
+        control=control,
+        extra_pools={MIPROV2_STATE_KEY: initial_state.model_dump(mode="json")},
+    )
+    runtime.controller.bind_launch(launch)
+    return launch
+
+
 def copro_run_request(
     launch: OptimRunLaunch,
     *,
@@ -284,4 +367,5 @@ __all__ = [
     "copro_run_request",
     "prepare_copro_run",
     "prepare_gepa_run",
+    "prepare_miprov2_run",
 ]

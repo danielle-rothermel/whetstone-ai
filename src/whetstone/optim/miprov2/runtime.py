@@ -2611,15 +2611,22 @@ class Miprov2Driver:
                 state.demo_candidates,
                 demo_mode=state.control.demo_mode,
             )
-            bridged = proposal_candidates_from_demo_sets(
-                context,
-                components=state.proposal_components,
-                component_field_order={
-                    component_id: cast("tuple[str, ...]", fields)
-                    for component_id, fields in (
-                        state.component_field_order.items()
-                    )
-                },
+            # A zero-shot run bootstraps nothing, so it has no demos to
+            # ground proposals in. That is the absence of a demo dimension,
+            # not a dimension holding zero demo sets.
+            bridged = (
+                proposal_candidates_from_demo_sets(
+                    context,
+                    components=state.proposal_components,
+                    component_field_order={
+                        component_id: cast("tuple[str, ...]", fields)
+                        for component_id, fields in (
+                            state.component_field_order.items()
+                        )
+                    },
+                )
+                if context
+                else None
             )
             proposal_state = start_miprov2_proposal(
                 bindings=state.bindings,

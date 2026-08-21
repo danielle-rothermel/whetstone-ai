@@ -230,6 +230,18 @@ class Miprov2Adapter:
     def proposer_config(self) -> ProposerConfig:
         return self._proposer_config
 
+    @property
+    def proposal_transport_durability_identity_hash(self) -> str:
+        """The transport durability identity the opening state must bind."""
+
+        return self._proposal_transport_durability_identity_hash
+
+    @property
+    def proposal_executor_policy_identity_hash(self) -> str:
+        """The executor policy identity the opening state must bind."""
+
+        return self._proposal_executor_policy_identity_hash
+
     def build_step_request(
         self,
         *,
@@ -400,13 +412,28 @@ class Miprov2Adapter:
             return self._proposal_output(plan)
         if plan.kind == MIPROV2_COMPLETE:
             assert plan.accepted_candidate is not None
+            state_delta = {
+                MIPROV2_STATE_KEY: plan.state.model_dump(mode="json")
+            }
+            seed_ref = request.run.record.initial_candidate_ref
+            winner_ref = candidate_reference(plan.accepted_candidate)
+            if seed_ref is not None and winner_ref == seed_ref:
+                # The baseline is one of the fully evaluated candidates, so
+                # MIPROv2's study can legitimately conclude that nothing it
+                # searched beat the seed. That is a clean completion, not a
+                # failure, and it proposes no candidate the run carries
+                # forward.
+                return AdapterOutput(
+                    proposed_status=StepStatus.COMPLETE,
+                    seed_retained=True,
+                    retained_candidate=plan.accepted_candidate,
+                    state_delta=state_delta,
+                )
             return AdapterOutput(
                 proposed_candidates=(plan.accepted_candidate,),
                 accepted_candidates=(plan.accepted_candidate,),
                 proposed_status=StepStatus.COMPLETE,
-                state_delta={
-                    MIPROV2_STATE_KEY: plan.state.model_dump(mode="json")
-                },
+                state_delta=state_delta,
             )
         if plan.kind == MIPROV2_BOOTSTRAP:
             assert plan.bootstrap_generation is not None
@@ -445,6 +472,9 @@ class Miprov2Adapter:
             optim_eval_request = OptimEvalRequest(
                 optim_run_id=request.run_id,
                 optim_step_index=request.step_index,
+                # A bootstrap generation runs one task, and the Eval Config
+                # this Step records is derived from exactly that task.
+                task_hashes=(attempt.task_hash,),
                 eval_request=EvalRequest(
                     request_id=intent_id,
                     candidate=teacher_candidate.record,
@@ -507,6 +537,10 @@ class Miprov2Adapter:
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.run_id,
             optim_step_index=request.step_index,
+            # Baseline and promotion evaluate the full validation set while a
+            # sampled trial evaluates a minibatch; either way the Step records
+            # the Eval Config derived from this exact ordered subset.
+            task_hashes=effect.task_batch_hashes,
             eval_request=EvalRequest(
                 request_id=intent_id,
                 candidate=effect.candidate,

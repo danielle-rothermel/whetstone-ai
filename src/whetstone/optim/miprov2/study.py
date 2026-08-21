@@ -766,7 +766,7 @@ class Promotion(_IdentityRecord):
         return self
 
 
-class EvalObservation(_IdentityRecord):
+class SampleObservation(_IdentityRecord):
     _identity_schema = "whetstone.miprov2_sample_observation"
 
     trial_number: StrictInt
@@ -803,7 +803,7 @@ class EvalObservation(_IdentityRecord):
         }
 
     @model_validator(mode="after")
-    def _validate_sample(self) -> EvalObservation:
+    def _validate_sample(self) -> SampleObservation:
         if self.trial_number < 1:
             raise ValueError("sample trial_number must be positive")
         require_full_hash(
@@ -869,7 +869,7 @@ class StudyTranscript(_IdentityRecord):
     distribution_identity_hash: StrictStr
     schedule: Miprov2StudySchedule
     baseline: BaselineObservation
-    samples: tuple[EvalObservation, ...] = ()
+    samples: tuple[SampleObservation, ...] = ()
 
     def identity_payload(self) -> dict[str, Any]:
         return {
@@ -1138,7 +1138,7 @@ class StudyTranscript(_IdentityRecord):
 
     def _validate_evaluation_binding(
         self,
-        binding: EvalObservation,
+        binding: SampleObservation,
         *,
         expected_purpose: EvalPurpose,
         expected_tasks: tuple[str, ...],
@@ -1390,11 +1390,11 @@ class FullEvaluation(_IdentityRecord):
 
 
 def select_promotion(
-    samples: Sequence[EvalObservation],
+    samples: Sequence[SampleObservation],
 ) -> PromotionCandidate:
 
     scores: OrderedDict[str, list[float]] = OrderedDict()
-    first_observation: dict[str, EvalObservation] = {}
+    first_observation: dict[str, SampleObservation] = {}
     promoted: set[str] = set()
     for sample in samples:
         key = sample.candidate_combination_identity_hash
@@ -1731,7 +1731,7 @@ class Miprov2Study:
         score: float,
         evaluation: EvalObservation,
         candidate_assembly: Miprov2CandidateAssemblyBinding,
-    ) -> EvalObservation:
+    ) -> SampleObservation:
         _require_candidate_assembly(
             candidate_assembly,
             space=self.space,
@@ -1768,7 +1768,7 @@ class Miprov2Study:
             expected_purpose="miprov2_sample",
             expected_tasks=expected_tasks,
         )
-        return EvalObservation(
+        return SampleObservation(
             trial_number=suggestion.trial_number,
             params=suggestion.params,
             candidate_combination_identity_hash=(
@@ -1787,7 +1787,7 @@ class Miprov2Study:
 
     def _validate_evaluation_binding(
         self,
-        binding: EvalObservation,
+        binding: SampleObservation,
         *,
         expected_purpose: EvalPurpose,
         expected_tasks: tuple[str, ...],
@@ -1872,7 +1872,7 @@ class Miprov2Study:
                 "transcript does not match the bound MIPROv2 study contract"
             )
         expected_trial_number = 1
-        replayed: list[EvalObservation] = []
+        replayed: list[SampleObservation] = []
         for sample in transcript.samples:
             if sample.trial_number != expected_trial_number:
                 raise StudyTranscriptMismatch(
@@ -1931,7 +1931,7 @@ class Miprov2Study:
                 "Optuna did not assign the baseline to trial zero"
             )
 
-        replayed: list[EvalObservation] = []
+        replayed: list[SampleObservation] = []
         for recorded in transcript.samples:
             trial = study.ask()
             params = self._suggest(trial)
@@ -2097,7 +2097,7 @@ __all__ = [
     "Miprov2StudySchedule",
     "Promotion",
     "PromotionCandidate",
-    "EvalObservation",
+    "SampleObservation",
     "StudySuggestion",
     "StudyTranscript",
     "StudyTranscriptMismatch",

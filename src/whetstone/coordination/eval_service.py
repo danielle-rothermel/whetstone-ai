@@ -99,6 +99,27 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     def replay_policy(self) -> ReplayPolicy:
         return ReplayPolicy.DURABLE_WORKFLOW
 
+
+    def _engine_for(self, optim_eval_request: OptimEvalRequest) -> EvalEngine:
+        """The engine that evaluates this intent's declared task subset.
+
+        Most optimizers evaluate the full task set and leave the subset
+        unset, so this returns the bound engine unchanged. MIPROv2 declares
+        a subset per intent, and the evidence it records names the Eval
+        Config derived from that subset -- so the evaluation must run under
+        the same narrowing, or the recorded config would describe sampling
+        that never happened.
+        """
+
+        task_hashes = optim_eval_request.task_hashes
+        if task_hashes is None:
+            return self._engine
+        from whetstone.optim.miprov2.engine_binding import (
+            engine_for_task_hashes,
+        )
+
+        return engine_for_task_hashes(self._engine, task_hashes)
+
     def _effective_context(
         self,
         context: EvalExecutionContext | None,
@@ -273,7 +294,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
         self._assert_generation_current(optim_eval_request, owned)
-        resolved_eval_config = self._engine.eval_config_ref
+        resolved_eval_config = self._engine_for(
+            optim_eval_request
+        ).eval_config_ref
         for outcome in row_outcomes:
             if outcome.rejected_detail is not None:
                 resolution = self._bind_if_owned(
@@ -349,13 +372,14 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
         self._assert_generation_current(optim_eval_request, owned)
-        resolved_eval_config = self._engine.eval_config_ref
+        engine = self._engine_for(optim_eval_request)
+        resolved_eval_config = engine.eval_config_ref
         request = EvalRequest(
             request_id=optim_eval_request.eval_request.request_id,
             candidate=optim_eval_request.eval_request.candidate,
             metadata=optim_eval_request.eval_request.metadata,
         )
-        result = self._engine.assemble_from_row_slices(
+        result = engine.assemble_from_row_slices(
             request,
             row_slices=row_slices,
         )
@@ -525,14 +549,15 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             raise EvalPlatformDeferred(
                 "evaluation intent deferred to platform eval stages"
             )
-        resolved_eval_config = self._engine.eval_config_ref
+        engine = self._engine_for(optim_eval_request)
+        resolved_eval_config = engine.eval_config_ref
         request = EvalRequest(
             request_id=optim_eval_request.eval_request.request_id,
             candidate=optim_eval_request.eval_request.candidate,
             metadata=optim_eval_request.eval_request.metadata,
         )
         self._assert_generation_current(optim_eval_request, owned)
-        result = self._engine.evaluate(request)
+        result = engine.evaluate(request)
         match result:
             case EvalRejected(detail=detail):
                 return self._bind_if_owned(
