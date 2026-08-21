@@ -33,9 +33,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `aspect`, `expected`, and `actual` fields, matching
   `ToolAdmissionSchemaMismatchError`. It remains an
   `EffectAuthorityError` subclass.
+- `SubprocessGraphRolloutEvalDriver` runs rollout rows on a dr-exec
+  `WorkerPoolImportableJsonExecutor` instead of the bespoke fanout scheduler.
+  Workers import the row entry point once at startup rather than once per row,
+  wall budgets apply per row and per batch, and the driver owns its pool: close
+  it (or use it as a context manager) to stop its workers promptly.
+- `EvalEvidence` is at `schema_version` 4. The worker pool cannot produce
+  `concurrency_halved` or `guard_timeouts`, so both fields are gone;
+  `deadline_reached` is unchanged. Evidence written at version 3 is not read.
 
 ### Removed
 
+- `whetstone.execution.fanout`, `whetstone.execution.process_worker`, and
+  `whetstone.execution.process_guardian`, with their re-exports from
+  `whetstone.execution`: `CallSpec`, `FanoutResult`, `FanoutStatus`,
+  `PoolOutcome`, `ProcessJob`, `ProcessWorkerError`,
+  `ProcessCancellationError`, `run_call_pool`, and `DEFAULT_CONCURRENCY`.
+  `DEFAULT_CONCURRENCY` now belongs to `whetstone.eval.runtime_engine`, and
+  `RowDispatchStatus` (in `whetstone.eval.drivers`) replaces `FanoutStatus`.
 - Unused `whetstone.coordination.official` certification package (official
   evaluation records, evaluation authority, aggregation, mapping, selection,
   and store); nothing consumed it.
