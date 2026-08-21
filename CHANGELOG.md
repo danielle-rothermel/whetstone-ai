@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   launch control. `StepRequestBuilder` and `HarnessRunController` dispatch
   through that registry.
 
+- Closed-form tests for `eval/analysis`: bootstrap mean and paired-delta
+  intervals, power decomposition and minimum detectable difference, and
+  anchor calibration.
+
 ### Changed
 
 - `CanonicalGepaEvalAuthority` calls the `EvalEngine` identity-hash methods,
@@ -73,22 +77,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upstream adapter identity are version 2. `OutputContract`'s
   `terminal_proposal_count` key and `OptimRun`'s new key both change the
   content and identity hashes of every previously stored `OptimRun` record.
-
-### Fixed
-
-- `run_anchor_calibration` subsets the engine by the caller's task IDs and
-  checks anchor evidence against the subset's task hashes; it previously
-  passed task hashes to an ID-keyed lookup and could not run against any
-  engine whose task IDs differ from their hashes. `run_baseline_preview` no
-  longer pre-converts IDs to hashes before calling it.
-
-### Added
-
-- Closed-form tests for `eval/analysis`: bootstrap mean and paired-delta
-  intervals, power decomposition and minimum detectable difference, and
-  anchor calibration.
-
-### Changed
 
 - The effect-authority and tool-admission SQL backends now verify their
   owned SQLite and PostgreSQL tables through the shared
@@ -150,6 +138,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `EvalEvidence` is at `schema_version` 4. The worker pool cannot produce
   `concurrency_halved` or `guard_timeouts`, so both fields are gone;
   `deadline_reached` is unchanged. Evidence written at version 3 is not read.
+
+### Fixed
+
+- `run_anchor_calibration` subsets the engine by the caller's task IDs and
+  checks anchor evidence against the subset's task hashes; it previously
+  passed task hashes to an ID-keyed lookup and could not run against any
+  engine whose task IDs differ from their hashes. `run_baseline_preview` no
+  longer pre-converts IDs to hashes before calling it.
 
 ### Removed
 
