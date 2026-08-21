@@ -24,13 +24,13 @@ from whetstone.optim.gepa.prompts import GepaRenderedPrompt
 from whetstone.optim.proposal.proposer import ProposerConfig
 
 GEPA_EFFECT_CONTEXT_SCHEMA = "whetstone.gepa.effect_context"
-GEPA_EFFECT_CONTEXT_SCHEMA_VERSION = 1
+GEPA_EFFECT_CONTEXT_SCHEMA_VERSION = 2
 GEPA_EVALUATION_EFFECT_SCHEMA = "whetstone.gepa.evaluation_effect"
 GEPA_EVALUATION_EFFECT_SCHEMA_VERSION = 1
 GEPA_PROPOSAL_EFFECT_SCHEMA = "whetstone.gepa.proposal_effect"
 GEPA_PROPOSAL_EFFECT_SCHEMA_VERSION = 1
 GEPA_EFFECT_SLOT_SCHEMA = "whetstone.gepa.effect_slot"
-GEPA_EFFECT_SLOT_SCHEMA_VERSION = 1
+GEPA_EFFECT_SLOT_SCHEMA_VERSION = 2
 GEPA_EVALUATION_REQUEST_RECORD_SCHEMA = (
     "whetstone.gepa.evaluation_effect_request"
 )
@@ -48,9 +48,20 @@ class GepaEffectConflictError(RuntimeError):
 
 
 class GepaEffectContext(BaseModel):
+    """Identifies the harness Step whose search drives these effects.
+
+    ``optim_step_index`` is the harness step index, not the effect ordinal.
+    Upstream ``optimize`` restarts its effect ordinals at zero on every step,
+    so without the step index two steps that replay the same candidate on the
+    same batch would mint byte-identical effect slots, effect requests, and
+    ``OptimEvalRequest`` values -- and therefore collide on the intent and
+    claim keys ``EvalEngineService`` derives from the request.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: StrictStr
+    optim_step_index: StrictInt
     control_identity_hash: StrictStr
     source_manifest_identity_hash: StrictStr
     adapter_identity_hash: StrictStr
@@ -59,6 +70,10 @@ class GepaEffectContext(BaseModel):
     def _validate(self) -> GepaEffectContext:
         if not self.run_id:
             raise ValueError("GEPA effect run_id must be non-empty")
+        if self.optim_step_index < 0:
+            raise ValueError(
+                "GEPA effect optim_step_index cannot be negative"
+            )
         for field_name in (
             "control_identity_hash",
             "source_manifest_identity_hash",
@@ -565,8 +580,10 @@ class GepaSkippedMutation(BaseModel):
     left unmutated -- count those, not the entries, to count dropped
     mutations.
 
-    These reach durable state through the terminal effect transcript, so a
-    rejection on a non-terminal step is not persisted on that Step Result.
+    Each Step persists the ones its own search produced under
+    ``GEPA_SKIPPED_MUTATIONS_KEY`` in that Step's state, so a rejection on a
+    continuing Step is durable immediately; the terminal effect transcript
+    aggregates them for the run.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

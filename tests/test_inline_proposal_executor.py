@@ -10,7 +10,7 @@ from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.proposal.proposer import (
     DurableProposalExecutor,
     FakeProposerTransport,
-    InlineProposalExecutor,
+    build_inline_proposal_executor,
     ProposalRequest,
     ProposerConfig,
     require_canonical_proposal_executor,
@@ -55,7 +55,7 @@ def _request() -> ProposalRequest:
 
 
 def test_inline_executor_is_the_canonical_durable_capability() -> None:
-    executor = InlineProposalExecutor(policy_identity_hash=POLICY_HASH)
+    executor = build_inline_proposal_executor(policy_identity_hash=POLICY_HASH)
 
     assert type(executor) is DurableProposalExecutor
     assert executor.policy_identity_hash == POLICY_HASH
@@ -70,7 +70,7 @@ def test_inline_executor_is_the_canonical_durable_capability() -> None:
 
 
 def test_inline_executor_drafts_through_the_transport() -> None:
-    executor = InlineProposalExecutor(policy_identity_hash=POLICY_HASH)
+    executor = build_inline_proposal_executor(policy_identity_hash=POLICY_HASH)
     transport = FakeProposerTransport(
         {("gepa_reflection", 0): ("Answer {prompt} plainly.",)},
         execution_policy_hash="b" * 64,
@@ -93,4 +93,4 @@ def test_inline_executor_drafts_through_the_transport() -> None:
 
 def test_inline_executor_requires_a_full_policy_hash() -> None:
     with pytest.raises(ValueError, match="policy_identity_hash"):
-        InlineProposalExecutor(policy_identity_hash="short")
+        build_inline_proposal_executor(policy_identity_hash="short")

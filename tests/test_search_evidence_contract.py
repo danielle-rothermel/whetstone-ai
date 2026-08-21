@@ -32,6 +32,8 @@ def test_completed_evidence_requires_an_eval_result_ref() -> None:
     with pytest.raises(ValueError, match="requires an Evaluation Result ref"):
         SearchEvidence(
             eval_request_id="e1",
+            optim_run_id="run-1",
+            optim_step_index=0,
             candidate=_candidate_ref(),
             outcome=IntentOutcome.COMPLETED,
         )
@@ -41,6 +43,8 @@ def test_failed_evidence_requires_an_eval_result_ref() -> None:
     with pytest.raises(ValueError, match="requires an Evaluation Result ref"):
         SearchEvidence(
             eval_request_id="e1",
+            optim_run_id="run-1",
+            optim_step_index=0,
             candidate=_candidate_ref(),
             outcome=IntentOutcome.FAILED,
         )
@@ -50,6 +54,8 @@ def test_rejected_evidence_carries_no_eval_result_ref() -> None:
     with pytest.raises(ValueError, match="carries no Evaluation Result ref"):
         SearchEvidence(
             eval_request_id="e1",
+            optim_run_id="run-1",
+            optim_step_index=0,
             candidate=_candidate_ref(),
             outcome=IntentOutcome.REJECTED,
             eval_result_ref=_eval_result_ref(),
@@ -59,6 +65,8 @@ def test_rejected_evidence_carries_no_eval_result_ref() -> None:
 def test_rejected_evidence_is_valid_without_an_eval_result_ref() -> None:
     evidence = SearchEvidence(
         eval_request_id="e1",
+        optim_run_id="run-1",
+        optim_step_index=0,
         candidate=_candidate_ref(),
         outcome=IntentOutcome.REJECTED,
     )
@@ -71,6 +79,8 @@ def test_rewardless_evidence_carries_no_reward_evidence_refs() -> None:
     with pytest.raises(ValueError, match="no Reward evidence refs"):
         SearchEvidence(
             eval_request_id="e1",
+            optim_run_id="run-1",
+            optim_step_index=0,
             candidate=_candidate_ref(),
             outcome=IntentOutcome.COMPLETED,
             eval_result_ref=_eval_result_ref(),

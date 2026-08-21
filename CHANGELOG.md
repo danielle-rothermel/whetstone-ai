@@ -9,14 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `InlineProposalExecutor` is the public constructor for an in-process
-  proposal executor, alongside `DbosProposalExecutor`.
+- `build_inline_proposal_executor` builds an in-process proposal executor,
+  alongside `DbosProposalExecutor`.
 - `SearchEvidence` records the eval and reward refs for evaluations an
-  optimizer drives inside its own search. GEPA steps carry these on
-  `OptimStepResult.search_evidence`.
+  optimizer drives inside its own search, bound to the run and step that
+  drove them through `optim_run_id` and `optim_step_index`. The harness
+  verifies both against the Step Request before persisting the entry on
+  `OptimStepResult.search_evidence`, so the binding is harness-verified
+  rather than adapter-attested.
 - A terminal step may report `seed_retained=True` with no accepted
   candidates, so "the search kept the seed" is representable without a
-  substitute candidate. `OptimResult` mirrors the final step.
+  substitute candidate. `OptimResult` mirrors the final step. Only a step
+  whose output contract sets `terminal_proposal_count` may claim it, and
+  only for the run's own seed: the adapter names the retained candidate and
+  the harness checks it against the new `OptimRun.initial_candidate_ref`,
+  which `OptimStepResult.retained_candidate_ref` then records.
+- GEPA persists the reflection responses its search rejected on every step's
+  own state under `skipped_mutations`, not only on the terminal effect
+  transcript, so a skip on a continuing step survives a process death.
 - `OutputContract.terminal_proposal_count` lets one contract state both the
   continuing and terminal accepted-candidate cardinality, for optimizers
   whose step may terminalize on its own schedule.
@@ -45,14 +55,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A rejected GEPA reflection response is retried once with the rejection fed
   back into the prompt; a second rejection skips that component's mutation
   instead of ending the run. Each rejected attempt records a
-  `GepaSkippedMutation` on the terminal effect transcript, with
-  `exhausted=True` marking the attempts that actually dropped a mutation.
-  Provider and transport failures still surface immediately.
-- Step Request, Step Result, and Optimization Result records are schema
-  version 2; the GEPA reflection prompt and upstream adapter identity are
-  version 2. `OutputContract`'s new `terminal_proposal_count` key changes the
-  content and identity hashes of every previously stored `OptimRun` record,
-  so `OptimRun` is schema version 2 as well.
+  `GepaSkippedMutation` on its own step's state and on the terminal effect
+  transcript, with `exhausted=True` marking the attempts that actually
+  dropped a mutation. Provider and transport failures still surface
+  immediately.
+- A GEPA evaluation's `OptimEvalRequest` carries the harness step index as
+  `optim_step_index`, matching every other adapter. It previously carried the
+  per-step effect ordinal, which `run_one_gepa_iteration` resets each step, so
+  two steps replaying the same candidate on the same batch could mint
+  byte-identical requests and therefore identical intent and claim keys in
+  `EvalEngineService`. `GepaEffectContext` now carries `optim_step_index` and
+  is schema version 2, as is `GepaEffectSlot`; `invocation_ordinal` remains
+  effect-replay ordering only.
+- Optimization Run, Step Request, Step Result, and Optimization Result records
+  are schema version 3: `OptimRun` gains `initial_candidate_ref`, and Step
+  Result gains `retained_candidate_ref`. The GEPA reflection prompt and
+  upstream adapter identity are version 2. `OutputContract`'s
+  `terminal_proposal_count` key and `OptimRun`'s new key both change the
+  content and identity hashes of every previously stored `OptimRun` record.
 
 ### Fixed
 

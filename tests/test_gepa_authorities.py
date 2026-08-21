@@ -160,6 +160,7 @@ def test_eval_authority_evaluates_against_a_real_engine(sqlite_store) -> None:
         slot=GepaEffectSlot(
             context=GepaEffectContext(
                 run_id="gepa-authority-eval",
+                optim_step_index=0,
                 control_identity_hash=control.identity_hash(),
                 source_manifest_identity_hash=(
                     control.gepa_source_manifest_hash

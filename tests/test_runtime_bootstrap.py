@@ -451,7 +451,7 @@ def test_copro_adapter_rejects_mismatched_transport(sqlite_store) -> None:
     from whetstone.core.identity import compute_identity_hash
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
     from whetstone.optim.copro.adapter import CoproAdapter
-    from whetstone.optim.proposal.proposer import InlineProposalExecutor
+    from whetstone.optim.proposal.proposer import build_inline_proposal_executor
     from whetstone.testing.fakes.proposer import DummyProposerTransport
     from whetstone.testing.toy.experiment import build_toy_experiment
 
@@ -470,7 +470,7 @@ def test_copro_adapter_rejects_mismatched_transport(sqlite_store) -> None:
         CoproAdapter(
             control=control,
             transport=transport,
-            proposal_executor=InlineProposalExecutor(
+            proposal_executor=build_inline_proposal_executor(
                 policy_identity_hash=compute_identity_hash(
                     schema="whetstone.testing.inline_proposal_executor",
                     schema_version=1,

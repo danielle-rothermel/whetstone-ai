@@ -337,6 +337,11 @@ class OptimHarness(OptimRunStore):
             status=output.proposed_status,
             terminal_failure=output.terminal_failure,
             seed_retained=output.seed_retained,
+            retained_candidate_ref=(
+                None
+                if output.retained_candidate is None
+                else self._persist_candidate(output.retained_candidate)
+            ),
         )
         result_ref = self._put_result(result)
         if result_ref != step_result_reference(result).record_ref:
@@ -643,6 +648,26 @@ class OptimHarness(OptimRunStore):
                 "Optim Eval Request IDs must be unique within a Step"
             )
         contract = request.step_output_contract
+        if output.seed_retained:
+            if contract.terminal_proposal_count is None:
+                raise ValueError(
+                    "only a Step whose output contract sets "
+                    "terminal_proposal_count -- a search-dependent terminal "
+                    "cardinality -- may retain the seed; this contract binds "
+                    "terminal cardinality unconditionally"
+                )
+            seed_ref = request.run.record.initial_candidate_ref
+            if seed_ref is None:
+                raise ValueError(
+                    "a seed-retaining Step requires the run to name its "
+                    "initial_candidate_ref"
+                )
+            retained = output.retained_candidate
+            if retained is None or candidate_reference(retained) != seed_ref:
+                raise ValueError(
+                    "a seed-retaining Step must retain the exact run initial "
+                    "candidate"
+                )
         expected_count = (
             0
             if output.seed_retained
@@ -746,6 +771,15 @@ class OptimHarness(OptimRunStore):
             )
         }
         reward_policy = request.run.record.reward_policy
+        for evidence in output.search_evidence:
+            if evidence.optim_run_id != request.run_id:
+                raise ValueError(
+                    "search evidence belongs to another optimization run"
+                )
+            if evidence.optim_step_index != request.step_index:
+                raise ValueError(
+                    "search evidence belongs to another optimization step"
+                )
         for optim_eval_request in output.optim_eval_requests:
             if optim_eval_request.optim_run_id != request.run_id:
                 raise ValueError(

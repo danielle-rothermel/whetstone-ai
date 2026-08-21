@@ -65,7 +65,7 @@ Optimization  →  Sandbox / interpretation
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
 - **OptimizerAdapter** — COPRO plugs into the shared harness on the default runtime; GEPA and MIPROv2 adapters exist but are not platform-wired
 - **StepContractProvider** — each optimizer declares its first-step and continuation contracts and parses its own launch control, registered by adapter key; `StepRequestBuilder` and `HarnessRunController` dispatch through it
-- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents`, and evaluations its own search drove in `search_evidence`; a terminal step that accepted no improvement sets `seed_retained`
+- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents`, and evaluations its own search drove in `search_evidence`, each bound to its run and step index and verified by the harness; a terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
 
 ## Platform pipeline

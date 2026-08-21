@@ -13,6 +13,7 @@ from whetstone.optim.gepa.authorities import (
 from whetstone.optim.gepa.contracts import (
     GepaEffectContext,
     GepaEffectRecorder,
+    GepaSkippedMutation,
 )
 from whetstone.optim.contracts import SearchEvidence
 from whetstone.optim.gepa.control import GepaControl
@@ -75,6 +76,8 @@ class CanonicalGepaAdapterFactory:
         self._evaluation_authority = evaluation_authority
         self._proposal_authority = proposal_authority
         self._prompt_services = prompt_services
+        self._step_index: int | None = None
+        self._adapters: list[WhetstoneGepaAdapter] = []
 
     @property
     def runtime_hash(self) -> str:
@@ -100,15 +103,53 @@ class CanonicalGepaAdapterFactory:
             },
         )
 
-    def begin_step(self) -> None:
-        """Drop evidence from earlier Steps before this Step evaluates."""
-        self._evaluation_authority.reset_resolved_intents()
+    def begin_step(self, *, step_index: int) -> None:
+        """Bind this Step and drop evidence from earlier Steps.
 
-    def search_evidence(self) -> tuple[SearchEvidence, ...]:
+        ``step_index`` is the harness step index. It enters every effect
+        context this Step mints, so effect slots, effect requests, and the
+        derived ``OptimEvalRequest`` values stay distinct across Steps that
+        replay the same candidate on the same batch.
+        """
+        if step_index < 0:
+            raise ValueError("GEPA factory step_index cannot be negative")
+        self._step_index = step_index
+        self._evaluation_authority.reset_resolved_intents()
+        self._adapters.clear()
+
+    def _require_step(self) -> int:
+        if self._step_index is None:
+            raise ValueError(
+                "GEPA factory requires begin_step before it serves a Step"
+            )
+        return self._step_index
+
+    def search_evidence(
+        self,
+        *,
+        run_id: str,
+        step_index: int,
+    ) -> tuple[SearchEvidence, ...]:
         """Evidence for every evaluation this Step's search drove."""
         return tuple(
-            SearchEvidence.from_resolution(resolution)
+            SearchEvidence.from_resolution(
+                resolution,
+                optim_run_id=run_id,
+                optim_step_index=step_index,
+            )
             for resolution in self._evaluation_authority.resolved_intents
+        )
+
+    def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
+        """Reflection responses this Step's search rejected, in order.
+
+        Read off the live adapters rather than the terminal transcript, so a
+        rejection on a continuing Step is durable on that Step's own result.
+        """
+        return tuple(
+            skipped
+            for adapter in self._adapters
+            for skipped in adapter.skipped_mutations
         )
 
     def create(
@@ -124,9 +165,10 @@ class CanonicalGepaAdapterFactory:
             evaluation_authority=self._evaluation_authority,
             proposal_authority=self._proposal_authority,
         )
-        return WhetstoneGepaAdapter(
+        adapter = WhetstoneGepaAdapter(
             context=GepaEffectContext(
                 run_id=self._run_id,
+                optim_step_index=self._require_step(),
                 control_identity_hash=control.identity_hash(),
                 source_manifest_identity_hash=(
                     control.gepa_source_manifest_hash
@@ -138,6 +180,8 @@ class CanonicalGepaAdapterFactory:
             proposal_authority=self._proposal_authority.binding,
             prompt_services=self._prompt_services,
         )
+        self._adapters.append(adapter)
+        return adapter
 
     def persist_result(
         self,
@@ -153,6 +197,7 @@ class CanonicalGepaAdapterFactory:
             )
         expected_context = GepaEffectContext(
             run_id=self._run_id,
+            optim_step_index=self._require_step(),
             control_identity_hash=control.identity_hash(),
             source_manifest_identity_hash=control.gepa_source_manifest_hash,
             adapter_identity_hash=GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH,

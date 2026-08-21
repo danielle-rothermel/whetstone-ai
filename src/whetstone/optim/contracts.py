@@ -106,13 +106,13 @@ __all__ = [
 INTENT_RESOLUTION_SCHEMA = "whetstone.optim_intent_resolution"
 INTENT_RESOLUTION_SCHEMA_VERSION = -1
 OPTIM_RUN_SCHEMA = "whetstone.optim_run"
-OPTIM_RUN_SCHEMA_VERSION = 2
+OPTIM_RUN_SCHEMA_VERSION = 3
 STEP_REQUEST_SCHEMA = "whetstone.optim_step_request"
-STEP_REQUEST_SCHEMA_VERSION = 2
+STEP_REQUEST_SCHEMA_VERSION = 3
 STEP_RESULT_SCHEMA = "whetstone.optim_step_result"
-STEP_RESULT_SCHEMA_VERSION = 2
+STEP_RESULT_SCHEMA_VERSION = 3
 OPTIM_RESULT_SCHEMA = "whetstone.optim_result"
-OPTIM_RESULT_SCHEMA_VERSION = 2
+OPTIM_RESULT_SCHEMA_VERSION = 3
 
 
 def _require_ordered_sequence(value: Any, info: ValidationInfo) -> Any:
@@ -168,6 +168,13 @@ class OutputContract(BaseModel):
     ``terminal_proposal_count`` to the cardinality that applies instead when
     the Step reports COMPLETE; leaving it unset binds both cases to
     ``returned_proposal_count``.
+
+    Terminal cardinality is unconditional except in exactly one case: a
+    contract that sets ``terminal_proposal_count`` -- i.e. one whose Step may
+    terminalize on the search's own schedule -- may instead report
+    ``seed_retained`` and accept nothing, and only when the retained
+    candidate is the run's own ``initial_candidate_ref``. A contract that
+    leaves ``terminal_proposal_count`` unset admits no such exemption.
 
     ``require_distinct_bases`` constrains proposed candidates only, and is
     enforced at Step granularity. The Optimization Result needs no separate
@@ -308,6 +315,10 @@ class OptimRun(BaseModel):
     mode: StepMode
     terminal_output_contract: OutputContract
     template_render_contract: _candidate.TemplateRenderContract
+    #: The candidate this run started from. The harness needs run-level seed
+    #: identity to check a Step's ``seed_retained`` claim, which it cannot
+    #: derive from a later Step Request's candidates.
+    initial_candidate_ref: _candidate.CandidateRef | None = None
     mutation_field: NonEmptyId = "user_prompt_template"
     reward_policy: _reward.RewardPolicy | None = None
     tool_configs: tuple[ToolConfigRef, ...] = ()
@@ -349,6 +360,11 @@ class OptimRun(BaseModel):
             ),
             "template_render_contract": (
                 self.template_render_contract.model_dump(mode="json")
+            ),
+            "initial_candidate_ref": (
+                None
+                if self.initial_candidate_ref is None
+                else self.initial_candidate_ref.model_dump(mode="json")
             ),
             "mutation_field": str(self.mutation_field),
             "reward_policy": (
@@ -638,11 +654,18 @@ class SearchEvidence(BaseModel):
     those candidates are search state, not Step outputs. It records the same
     eval/reward evidence refs here instead, so every paid evaluation a Step
     caused is still reachable from the Step Result.
+
+    ``optim_run_id`` and ``optim_step_index`` bind the entry to the Step that
+    caused it. The harness verifies both against the Step Request before it
+    persists the entry, so the binding is harness-verified rather than
+    adapter-attested.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     eval_request_id: NonEmptyId
+    optim_run_id: NonEmptyId
+    optim_step_index: NonNegativeInt
     candidate: _candidate.CandidateRef
     outcome: IntentOutcome
     eval_result_ref: TypedRef | None = None
@@ -689,12 +712,34 @@ class SearchEvidence(BaseModel):
         return self
 
     @classmethod
-    def from_resolution(cls, resolution: IntentResolution) -> SearchEvidence:
-        """Project one harness Intent Resolution onto search evidence."""
+    def from_resolution(
+        cls,
+        resolution: IntentResolution,
+        *,
+        optim_run_id: str,
+        optim_step_index: int,
+    ) -> SearchEvidence:
+        """Project one harness Intent Resolution onto search evidence.
+
+        ``optim_run_id`` and ``optim_step_index`` name the Step that drove
+        the evaluation and must equal the resolution's own eval request
+        binding; the harness re-checks them against the Step Request.
+        """
+        eval_request = resolution.optim_eval_request
+        if (
+            str(eval_request.optim_run_id) != str(optim_run_id)
+            or int(eval_request.optim_step_index) != int(optim_step_index)
+        ):
+            raise ValueError(
+                "search evidence run/step must equal the resolved Optim "
+                "Eval Request binding"
+            )
         return cls(
             eval_request_id=(
                 resolution.optim_eval_request.eval_request.request_id
             ),
+            optim_run_id=optim_run_id,
+            optim_step_index=optim_step_index,
             candidate=_candidate.candidate_reference(
                 resolution.optim_eval_request.eval_request.candidate
             ),
@@ -811,8 +856,12 @@ class OptimStepResult(BaseModel):
     terminal_failure: TerminalFailure | None = None
     #: A COMPLETE Step that terminalized on the seed with no accepted
     #: improvement. Distinct from a failure: the run completed and simply
-    #: found nothing better than the candidate it started from.
+    #: found nothing better than the candidate it started from. Only a step
+    #: whose contract sets ``terminal_proposal_count`` may claim it.
     seed_retained: StrictBool = False
+    #: The run initial candidate a ``seed_retained`` Step kept, present
+    #: exactly when ``seed_retained`` is set.
+    retained_candidate_ref: _candidate.CandidateRef | None = None
     provenance_note: NonEmptyId | None = None
     provenance_ordinal: NonNegativeInt | None = None
 
@@ -1052,6 +1101,26 @@ class OptimStepResult(BaseModel):
                 raise ValueError(
                     "a seed-retaining Step Result accepts no candidates"
                 )
+            if request.step_output_contract.terminal_proposal_count is None:
+                raise ValueError(
+                    "only a Step whose output contract sets "
+                    "terminal_proposal_count may retain the seed"
+                )
+            seed_ref = request.run.record.initial_candidate_ref
+            if seed_ref is None:
+                raise ValueError(
+                    "a seed-retaining Step Result requires the run to name "
+                    "its initial_candidate_ref"
+                )
+            if self.retained_candidate_ref != seed_ref:
+                raise ValueError(
+                    "a seed-retaining Step Result must retain the exact run "
+                    "initial candidate"
+                )
+        elif self.retained_candidate_ref is not None:
+            raise ValueError(
+                "only a seed-retaining Step Result names a retained candidate"
+            )
         if self.status is not StepStatus.FAILED:
             contract = request.step_output_contract
             expected_accepted = (

@@ -45,7 +45,7 @@ from whetstone.optim.gepa.prompts import (
 from whetstone.optim.harness import OptimHarness
 from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
-    InlineProposalExecutor,
+    build_inline_proposal_executor,
     ProposerConfig,
     prompt_adapter_identity_hash,
 )
@@ -151,7 +151,7 @@ def _build_gepa_adapter(store, *, run_id: str, max_metric_calls: int):
                 prompt_adapter
             ),
         ),
-        proposal_executor=InlineProposalExecutor(
+        proposal_executor=build_inline_proposal_executor(
             policy_identity_hash=INLINE_POLICY_HASH,
         ),
     )
@@ -171,7 +171,7 @@ def _build_gepa_adapter(store, *, run_id: str, max_metric_calls: int):
         valset=None,
         adapter_factory=GepaHarnessAdapterFactory(factory=factory),
     )
-    return experiment, engine, control, adapter
+    return experiment, engine, control, adapter, eval_authority
 
 
 def _harness(store, engine, adapter):
@@ -195,7 +195,7 @@ def _harness(store, engine, adapter):
 def test_a_gepa_step_carries_resolvable_eval_evidence(sqlite_store) -> None:
     """The step exposes eval/reward refs, and every ref resolves in store."""
     run_id = "gepa-evidence-run"
-    experiment, engine, control, adapter = _build_gepa_adapter(
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
         sqlite_store, run_id=run_id, max_metric_calls=4
     )
     run = OptimRun(
@@ -205,6 +205,9 @@ def test_a_gepa_step_carries_resolvable_eval_evidence(sqlite_store) -> None:
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(returned_proposal_count=1),
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -240,7 +243,7 @@ def test_search_evidence_reward_refs_must_match_the_reward(
     a mismatch means the record cites evidence the Reward does not.
     """
     run_id = "gepa-evidence-reward"
-    experiment, engine, control, adapter = _build_gepa_adapter(
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
         sqlite_store, run_id=run_id, max_metric_calls=2
     )
     run = OptimRun(
@@ -250,6 +253,9 @@ def test_search_evidence_reward_refs_must_match_the_reward(
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(returned_proposal_count=1),
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -269,6 +275,8 @@ def test_search_evidence_reward_refs_must_match_the_reward(
     # Rebuilding it unchanged is valid.
     SearchEvidence(
         eval_request_id=evidence.eval_request_id,
+        optim_run_id=evidence.optim_run_id,
+        optim_step_index=evidence.optim_step_index,
         candidate=evidence.candidate,
         outcome=evidence.outcome,
         eval_result_ref=evidence.eval_result_ref,
@@ -281,6 +289,8 @@ def test_search_evidence_reward_refs_must_match_the_reward(
     with pytest.raises(ValueError, match="must equal the ordered"):
         SearchEvidence(
             eval_request_id=evidence.eval_request_id,
+            optim_run_id=evidence.optim_run_id,
+            optim_step_index=evidence.optim_step_index,
             candidate=evidence.candidate,
             outcome=evidence.outcome,
             eval_result_ref=evidence.eval_result_ref,
@@ -299,7 +309,7 @@ def test_a_terminal_gepa_step_carries_its_search_evidence(
     on a terminal step.
     """
     run_id = "gepa-evidence-terminal"
-    experiment, engine, control, adapter = _build_gepa_adapter(
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
         sqlite_store, run_id=run_id, max_metric_calls=2
     )
     run = OptimRun(
@@ -309,6 +319,9 @@ def test_a_terminal_gepa_step_carries_its_search_evidence(
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(returned_proposal_count=1),
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -346,7 +359,7 @@ def test_a_terminal_gepa_step_carries_its_search_evidence(
 def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     """A second step reports only the evaluations that step drove."""
     run_id = "gepa-evidence-two-step"
-    experiment, engine, control, adapter = _build_gepa_adapter(
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
         sqlite_store, run_id=run_id, max_metric_calls=8
     )
     run = OptimRun(
@@ -356,6 +369,9 @@ def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(returned_proposal_count=1),
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -390,3 +406,121 @@ def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     # Disjoint, not merely unequal: re-reporting step 1's evidence alongside
     # a new entry is exactly the cumulative failure this guards against.
     assert not (first_ids & second_ids)
+
+
+def _gepa_run(experiment, control, *, run_id: str) -> OptimRun:
+    return OptimRun(
+        run_id=run_id,
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(returned_proposal_count=1),
+        template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+
+
+def test_gepa_eval_requests_carry_the_harness_step_index(
+    sqlite_store,
+) -> None:
+    """Two GEPA steps must not mint identical eval intents.
+
+    ``run_one_gepa_iteration`` resets the effect ordinal every step, so an
+    ``optim_step_index`` taken from the effect ordinal would let two steps
+    that replay the same candidate on the same batch produce byte-identical
+    ``OptimEvalRequest`` values -- and therefore identical intent and claim
+    keys inside ``EvalEngineService``.
+    """
+    from whetstone.coordination.eval_service import EvalEngineService as _Svc
+
+    run_id = "gepa-step-index"
+    experiment, engine, control, adapter, authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+
+    first_request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    first, first_ref = harness.run_step(first_request)
+    assert first.status is StepStatus.CONTINUE
+    first_requests = tuple(
+        resolution.optim_eval_request
+        for resolution in authority.resolved_intents
+    )
+
+    second_request = builder.build_next(
+        prior=first,
+        prior_ref=first_ref,
+        prior_results=(first,),
+        control=control,
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+    second, _second_ref = harness.run_step(second_request)
+    second_requests = tuple(
+        resolution.optim_eval_request
+        for resolution in authority.resolved_intents
+    )
+
+    assert first_requests and second_requests
+    # The index is the harness step index, not a per-step effect ordinal.
+    assert {r.optim_step_index for r in first_requests} == {0}
+    assert {r.optim_step_index for r in second_requests} == {1}
+    # And that difference reaches the keys EvalEngineService derives.
+    first_keys = {_Svc._intent_ref(r).content_hash for r in first_requests}
+    second_keys = {_Svc._intent_ref(r).content_hash for r in second_requests}
+    assert not (first_keys & second_keys)
+    # The step evidence agrees with the requests it projects.
+    assert {e.optim_step_index for e in first.search_evidence} == {0}
+    assert {e.optim_step_index for e in second.search_evidence} == {1}
+    assert {e.optim_run_id for e in second.search_evidence} == {run_id}
+
+
+def test_search_evidence_bound_to_another_step_is_rejected(
+    sqlite_store,
+) -> None:
+    """The harness verifies the binding rather than trusting the adapter."""
+    from whetstone.optim.adapters import AdapterOutput
+
+    run_id = "gepa-evidence-misbound"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness.run_step(request)
+    truthful = result.search_evidence[0]
+
+    wrong_step = truthful.model_copy(
+        update={"optim_step_index": truthful.optim_step_index + 1}
+    )
+    with pytest.raises(ValueError, match="another optimization step"):
+        harness._validate_output_intents(
+            request,
+            AdapterOutput(search_evidence=(wrong_step,)),
+        )
+
+    wrong_run = truthful.model_copy(update={"optim_run_id": "other-run"})
+    with pytest.raises(ValueError, match="another optimization run"):
+        harness._validate_output_intents(
+            request,
+            AdapterOutput(search_evidence=(wrong_run,)),
+        )

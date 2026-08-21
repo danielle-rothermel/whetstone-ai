@@ -528,7 +528,10 @@ class CanonicalGepaEvalAuthority:
         subset_engine = self._engine.for_task_ids(task_ids)
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.slot.context.run_id,
-            optim_step_index=request.slot.invocation_ordinal,
+            # The harness step index, not the effect ordinal: upstream
+            # ``optimize`` restarts effect ordinals every step, so the
+            # ordinal alone would let two steps mint identical intent keys.
+            optim_step_index=request.slot.context.optim_step_index,
             eval_request=EvalRequest(
                 request_id=(
                     f"{request.slot.context.run_id}:gepa:"

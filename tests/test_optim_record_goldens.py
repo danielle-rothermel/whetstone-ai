@@ -49,10 +49,10 @@ GOLDEN_SCHEMA_NAMES = {
 }
 
 GOLDEN_SCHEMA_VERSIONS = {
-    "optim_run": 2,
-    "step_request": 2,
-    "step_result": 2,
-    "optim_result": 2,
+    "optim_run": 3,
+    "step_request": 3,
+    "step_result": 3,
+    "optim_result": 3,
 }
 
 GOLDEN_OUTPUT_CONTRACT_KEYS = frozenset(
@@ -84,6 +84,8 @@ GOLDEN_STEP_REQUEST_KEYS = frozenset(
 GOLDEN_SEARCH_EVIDENCE_KEYS = frozenset(
     {
         "eval_request_id",
+        "optim_run_id",
+        "optim_step_index",
         "candidate",
         "outcome",
         "eval_result_ref",
@@ -107,6 +109,7 @@ GOLDEN_STEP_RESULT_KEYS = frozenset(
         "status",
         "terminal_failure",
         "seed_retained",
+        "retained_candidate_ref",
         "provenance_note",
         "provenance_ordinal",
     }
@@ -133,6 +136,7 @@ GOLDEN_OPTIM_RUN_KEYS = frozenset(
         "mode",
         "terminal_output_contract",
         "template_render_contract",
+        "initial_candidate_ref",
         "mutation_field",
         "reward_policy",
         "tool_configs",
@@ -163,6 +167,9 @@ def _optim_run() -> OptimRun:
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(returned_proposal_count=0),
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -176,15 +183,22 @@ def _step_request() -> OptimStepRequest:
         kind=StepKind.PROPOSAL,
         step_index=0,
         candidates=(experiment.initial_candidate,),
-        step_output_contract=OutputContract(returned_proposal_count=0),
+        step_output_contract=OutputContract(
+            returned_proposal_count=0,
+            terminal_proposal_count=0,
+        ),
     )
 
 
 def _step_result() -> OptimStepResult:
+    experiment = build_toy_experiment(num_seeds=1)
     return OptimStepResult(
         request=step_request_reference(_step_request()),
         status=StepStatus.COMPLETE,
         seed_retained=True,
+        retained_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
     )
 
 
@@ -192,6 +206,8 @@ def _search_evidence() -> SearchEvidence:
     experiment = build_toy_experiment(num_seeds=1)
     return SearchEvidence(
         eval_request_id="golden-eval",
+        optim_run_id="golden-run",
+        optim_step_index=0,
         candidate=candidate_reference(experiment.initial_candidate),
         outcome=IntentOutcome.REJECTED,
     )

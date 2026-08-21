@@ -61,13 +61,21 @@ class AdapterOutput(BaseModel):
     accepted_candidates: tuple[Candidate, ...] = ()
     optim_eval_requests: tuple[OptimEvalRequest, ...] = ()
     #: Evidence for evaluations the adapter drove inside its own search.
-    #: The harness carries these onto the Step Result unchanged.
+    #: The harness verifies each entry's run and step against the Step
+    #: Request, then carries it onto the Step Result unchanged.
     search_evidence: tuple[SearchEvidence, ...] = ()
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
     proposed_status: StepStatus = StepStatus.CONTINUE
     terminal_failure: TerminalFailure | None = None
     #: A COMPLETE Step that accepted no improvement over the seed candidate.
+    #: Only a contract with search-dependent terminal cardinality may claim
+    #: it, and only for the run's own initial candidate; the harness checks
+    #: both against the Step Request.
     seed_retained: StrictBool = False
+    #: The candidate a ``seed_retained`` Step kept. Present exactly when
+    #: ``seed_retained`` is set, so the harness can verify the claim names
+    #: the run's seed rather than any candidate the search happened to like.
+    retained_candidate: Candidate | None = None
     state_delta: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )
@@ -102,6 +110,16 @@ class AdapterOutput(BaseModel):
                 raise ValueError(
                     "a seed-retaining Adapter Output accepts no candidates"
                 )
+            if self.retained_candidate is None:
+                raise ValueError(
+                    "a seed-retaining Adapter Output must name the retained "
+                    "candidate"
+                )
+        elif self.retained_candidate is not None:
+            raise ValueError(
+                "only a seed-retaining Adapter Output names a retained "
+                "candidate"
+            )
         search_ids = [
             evidence.eval_request_id for evidence in self.search_evidence
         ]

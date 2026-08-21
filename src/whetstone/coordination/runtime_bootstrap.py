@@ -21,12 +21,12 @@ from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
 from whetstone.core.roles import EvalRole
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.contracts import OptimRun, OutputContract, StepMode
 from whetstone.optim.harness import OptimHarness
 from whetstone.optim.proposal.proposer import (
-    InlineProposalExecutor,
+    build_inline_proposal_executor,
     ProposerConfig,
     prompt_adapter_identity_hash,
 )
@@ -181,7 +181,7 @@ def register_runtime(
     copro_adapter = CoproAdapter(
         control=control,
         transport=transport,
-        proposal_executor=InlineProposalExecutor(
+        proposal_executor=build_inline_proposal_executor(
             policy_identity_hash=proposal_policy_hash,
         ),
     )
@@ -277,6 +277,7 @@ def prepare_copro_run(
         template_render_contract=(
             render_contract or toy_template_render_contract()
         ),
+        initial_candidate_ref=candidate_reference(candidate),
         mutation_field=mutation_field or TOY_MUTATION_FIELD,
         reward_policy=resolved.reward_policy,
     )
@@ -355,6 +356,7 @@ def prepare_gepa_run(
         template_render_contract=(
             render_contract or toy_template_render_contract()
         ),
+        initial_candidate_ref=candidate_reference(candidate),
         mutation_field=field,
         reward_policy=resolved.reward_policy,
     )

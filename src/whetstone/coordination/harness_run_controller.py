@@ -11,7 +11,7 @@ from whetstone.coordination.step_contracts import (
 )
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef, compute_identity_hash, require_full_hash
-from whetstone.experiment.candidate import Candidate
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OPTIM_RUN_SCHEMA,
@@ -96,6 +96,14 @@ class HarnessRunController:
         return self._runtime_hash
 
     def bind_launch(self, launch: OptimRunLaunch) -> OptimRunRef:
+        seed_ref = launch.run.initial_candidate_ref
+        if seed_ref is not None and seed_ref != candidate_reference(
+            launch.initial_candidate
+        ):
+            raise ValueError(
+                "run initial_candidate_ref must address the exact launch "
+                "initial candidate"
+            )
         run_ref = optimization_run_reference(launch.run)
         self._store.put(OPTIM_RUN_SCHEMA, run_ref.record.record_content())
         payload_ref, _ = self._store.put(

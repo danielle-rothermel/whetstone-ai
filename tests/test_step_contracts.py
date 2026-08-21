@@ -60,6 +60,9 @@ def _gepa_run(control, *, run_id: str = "gepa-seed-retained") -> OptimRun:
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=OutputContract(returned_proposal_count=1),
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -248,6 +251,8 @@ def _seed_retained_step(tmp_path, *, best_candidate: dict[str, str]):
     experiment = build_toy_experiment(num_seeds=1)
     factory = MagicMock()
     factory.create.return_value = MagicMock()
+    factory.search_evidence.return_value = ()
+    factory.skipped_mutations.return_value = ()
     factory.persist_result.return_value = TypedRef(
         schema_name="whetstone.gepa.result",
         content_hash="a" * 64,
@@ -397,6 +402,9 @@ def _distinct_base_run(run_id: str, contract: OutputContract) -> OptimRun:
         mode=StepMode.PROPOSAL_ONLY,
         terminal_output_contract=contract,
         template_render_contract=toy_template_render_contract(),
+        initial_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
         mutation_field=TOY_MUTATION_FIELD,
         reward_policy=experiment.reward_policy,
     )
@@ -563,12 +571,19 @@ def test_optim_result_seed_retained_must_mirror_the_final_step() -> None:
         kind=StepKind.PROPOSAL,
         step_index=0,
         candidates=(experiment.initial_candidate,),
-        step_output_contract=contract,
+        # Search-dependent terminal cardinality: the only contract shape
+        # that may report seed_retained at all.
+        step_output_contract=contract.model_copy(
+            update={"terminal_proposal_count": 1}
+        ),
     )
     step_result = OptimStepResult(
         request=step_request_reference(request),
         status=StepStatus.COMPLETE,
         seed_retained=True,
+        retained_candidate_ref=candidate_reference(
+            experiment.initial_candidate
+        ),
     )
 
     with pytest.raises(ValueError, match="seed_retained must match"):
@@ -606,6 +621,8 @@ def test_a_seed_retaining_run_terminalizes_through_the_harness(
     engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
     factory = MagicMock()
     factory.create.return_value = MagicMock()
+    factory.search_evidence.return_value = ()
+    factory.skipped_mutations.return_value = ()
     factory.persist_result.return_value = TypedRef(
         schema_name="whetstone.gepa.result",
         content_hash="a" * 64,
@@ -686,3 +703,153 @@ def test_a_seed_retaining_run_terminalizes_through_the_harness(
     assert terminal.proposals == ()
     assert terminal.terminal_failure is None
     assert terminal.status is StepStatus.COMPLETE
+
+
+# --- seed retention is a narrow, contract-gated exemption ------------------
+
+
+def _seed_retaining_output(experiment) -> AdapterOutput:
+    return AdapterOutput(
+        proposed_status=StepStatus.COMPLETE,
+        seed_retained=True,
+        retained_candidate=experiment.initial_candidate,
+    )
+
+
+def _step_request_for(run, *, contract: OutputContract, experiment):
+    return OptimStepRequest(
+        run=optimization_run_reference(run),
+        step_id=f"{run.run_id}:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        step_output_contract=contract,
+    )
+
+
+def test_a_copro_style_contract_cannot_retain_the_seed() -> None:
+    """Unconditional terminal cardinality admits no seed-retained exemption.
+
+    Without this gate any adapter could zero out its own terminal proposal
+    cardinality just by setting ``seed_retained``.
+    """
+    experiment = build_toy_experiment(num_seeds=1)
+    contract = OutputContract(returned_proposal_count=1)
+    run = _distinct_base_run("copro-style-seed", contract)
+    request = _step_request_for(
+        run, contract=contract, experiment=experiment
+    )
+
+    with pytest.raises(ValueError, match="terminal_proposal_count"):
+        OptimHarness._validate_output(
+            request, _seed_retaining_output(experiment)
+        )
+
+
+def test_a_gepa_style_contract_may_retain_the_true_seed() -> None:
+    experiment = build_toy_experiment(num_seeds=1)
+    contract = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+    )
+    run = _distinct_base_run("gepa-style-seed", contract)
+    request = _step_request_for(
+        run, contract=contract, experiment=experiment
+    )
+
+    OptimHarness._validate_output(
+        request, _seed_retaining_output(experiment)
+    )
+
+
+def test_a_gepa_style_contract_cannot_retain_a_nonseed_candidate() -> None:
+    """``seed_retained`` names the run's seed, not whatever search liked."""
+    experiment = build_toy_experiment(num_seeds=1)
+    contract = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+    )
+    run = _distinct_base_run("gepa-style-nonseed", contract)
+    request = _step_request_for(
+        run, contract=contract, experiment=experiment
+    )
+    impostor = _derived(experiment.initial_candidate, candidate_id="impostor")
+
+    with pytest.raises(ValueError, match="exact run initial candidate"):
+        OptimHarness._validate_output(
+            request,
+            AdapterOutput(
+                proposed_status=StepStatus.COMPLETE,
+                seed_retained=True,
+                retained_candidate=impostor,
+            ),
+        )
+
+
+# --- skipped reflection mutations are durable per step --------------------
+
+
+def test_a_nonterminal_step_persists_its_skipped_mutations(tmp_path) -> None:
+    """A skip on a continuing step must not wait for the terminal transcript.
+
+    ``GepaSkippedMutation`` used to reach durable state only through the
+    terminal effect transcript, so a process death after a non-terminal skip
+    lost it entirely.
+    """
+    from whetstone.optim.gepa.contracts import GepaSkippedMutation
+    from whetstone.optim.gepa.harness_adapter import (
+        GEPA_SKIPPED_MUTATIONS_KEY,
+    )
+
+    control = _toy_gepa_control(
+        max_metric_calls=4,
+        sqlite_path=str(tmp_path / "gepa-skip.sqlite"),
+    )
+    run = _gepa_run(control, run_id="gepa-skip-durable")
+    run_ref = optimization_run_reference(run)
+    experiment = build_toy_experiment(num_seeds=1)
+    skipped = GepaSkippedMutation(
+        component_name="generate",
+        attempt_ordinal=1,
+        rejection_detail="omitted required placeholders",
+        raw_response="no placeholder here",
+        exhausted=True,
+    )
+    factory = MagicMock()
+    factory.create.return_value = MagicMock()
+    factory.search_evidence.return_value = ()
+    factory.skipped_mutations.return_value = (skipped,)
+    adapter = GepaHarnessAdapter(
+        control=control,
+        seed_candidate=dict(SEED_COMPONENTS),
+        trainset=(),
+        valset=None,
+        adapter_factory=GepaHarnessAdapterFactory(factory=factory),
+    )
+    request = OptimStepRequest(
+        run=run_ref,
+        step_id=f"{run.run_id}:gepa:0",
+        kind=StepKind.PROPOSAL,
+        kind_label="gepa_iteration",
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        hyperparameters=ImmutableJsonObject(
+            control.step_hyperparameters(iteration=0)
+        ),
+        budget=request_budget(control),
+        step_output_contract=gepa_step_output_contract(run_ref),
+    )
+    with patch(
+        "whetstone.optim.gepa.harness_adapter.run_one_gepa_iteration",
+        return_value=(
+            MagicMock(),
+            GepaStepCheckpoint(metric_calls_consumed=1, terminal=False),
+        ),
+    ):
+        output = adapter.invoke(request, ())
+
+    # A continuing step, so nothing has written a terminal transcript yet.
+    assert output.proposed_status is StepStatus.CONTINUE
+    persisted = output.state_delta[GEPA_SKIPPED_MUTATIONS_KEY]
+    assert list(persisted) == [skipped.model_dump(mode="json")]
+    assert persisted[0]["exhausted"] is True

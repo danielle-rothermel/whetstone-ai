@@ -17,7 +17,11 @@ from whetstone.optim.gepa.authorities import (
     CanonicalGepaCandidateAssembler,
     GepaCandidateFieldBinding,
 )
-from whetstone.optim.gepa.contracts import GepaCandidateComponent, GepaDataInstance
+from whetstone.optim.gepa.contracts import (
+    GepaCandidateComponent,
+    GepaDataInstance,
+    GepaSkippedMutation,
+)
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaEngineAdapter
 from whetstone.optim.gepa.step_engine import (
@@ -28,6 +32,10 @@ from whetstone.optim.gepa.step_engine import (
 
 GEPA_ADAPTER_KEY = "gepa"
 GEPA_TERMINAL_ARTIFACT_KEY = "terminal_artifact_ref"
+#: State-delta key holding the reflection responses this Step's search
+#: rejected. Present on every Step, terminal or not, so a skip is durable on
+#: the Step it happened rather than only in the terminal transcript.
+GEPA_SKIPPED_MUTATIONS_KEY = "skipped_mutations"
 
 
 def gepa_candidate_field_name(
@@ -77,13 +85,27 @@ class GepaHarnessAdapterFactory:
     def create(self, *, control: GepaControl) -> GepaEngineAdapter:
         return self._factory.create(control=control)
 
-    def begin_step(self) -> None:
-        """Drop evidence from earlier Steps before this Step evaluates."""
-        self._factory.begin_step()
+    def begin_step(self, *, step_index: int) -> None:
+        """Bind this Step and drop evidence from earlier Steps."""
+        self._factory.begin_step(step_index=step_index)
 
-    def search_evidence(self) -> tuple[SearchEvidence, ...]:
+    def search_evidence(
+        self,
+        *,
+        run_id: str,
+        step_index: int,
+    ) -> tuple[SearchEvidence, ...]:
         """Evidence for every evaluation this Step's search drove."""
-        return tuple(self._factory.search_evidence())
+        return tuple(
+            self._factory.search_evidence(
+                run_id=run_id,
+                step_index=step_index,
+            )
+        )
+
+    def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
+        """Reflection responses this Step's search rejected, in order."""
+        return tuple(self._factory.skipped_mutations())
 
     def persist_result(
         self,
@@ -156,7 +178,7 @@ class GepaHarnessAdapter:
         if iteration != request.step_index:
             raise ValueError("GEPA round_index must equal step_index")
         checkpoint = load_gepa_checkpoint(request)
-        self._adapter_factory.begin_step()
+        self._adapter_factory.begin_step(step_index=int(request.step_index))
         engine_adapter = self._adapter_factory.create(control=self._control)
         detailed, checkpoint = run_one_gepa_iteration(
             control=self._control,
@@ -167,9 +189,20 @@ class GepaHarnessAdapter:
             checkpoint=checkpoint,
         )
         state_delta = ImmutableJsonObject(
-            {GEPA_STATE_KEY: checkpoint.model_dump(mode="json")}
+            {
+                GEPA_STATE_KEY: checkpoint.model_dump(mode="json"),
+                # Durable on this Step, not only on the terminal transcript:
+                # a process death after a non-terminal skip must not lose it.
+                GEPA_SKIPPED_MUTATIONS_KEY: [
+                    skipped.model_dump(mode="json")
+                    for skipped in self._adapter_factory.skipped_mutations()
+                ],
+            }
         )
-        search_evidence = self._adapter_factory.search_evidence()
+        search_evidence = self._adapter_factory.search_evidence(
+            run_id=str(request.run_id),
+            step_index=int(request.step_index),
+        )
         if checkpoint.terminal:
             artifact_ref = self._adapter_factory.persist_result(
                 control=self._control,
@@ -208,6 +241,7 @@ class GepaHarnessAdapter:
                 return AdapterOutput(
                     proposed_status=StepStatus.COMPLETE,
                     seed_retained=True,
+                    retained_candidate=request.candidates[0],
                     search_evidence=search_evidence,
                     state_delta=state_delta,
                     history_delta=history_delta,
@@ -243,6 +277,7 @@ class GepaHarnessAdapter:
 
 __all__ = [
     "GEPA_ADAPTER_KEY",
+    "GEPA_SKIPPED_MUTATIONS_KEY",
     "GEPA_TERMINAL_ARTIFACT_KEY",
     "GepaHarnessAdapter",
     "GepaHarnessAdapterFactory",

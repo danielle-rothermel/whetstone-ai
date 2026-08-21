@@ -57,7 +57,7 @@ __all__ = [
     "PROVIDER_PROPOSER_TRANSPORT_DURABILITY_SCHEMA_VERSION",
     "DurableProposalExecutor",
     "FakeProposerTransport",
-    "InlineProposalExecutor",
+    "build_inline_proposal_executor",
     "require_canonical_proposal_executor",
     "ProposalDraft",
     "ProposalExecutorDurabilityContract",
@@ -386,7 +386,7 @@ def _inline_proposal_execution(
     return transport.draft(config, request, count)
 
 
-def InlineProposalExecutor(
+def build_inline_proposal_executor(
     *,
     policy_identity_hash: str,
 ) -> DurableProposalExecutor:
