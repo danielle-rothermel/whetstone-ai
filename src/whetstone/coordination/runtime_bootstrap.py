@@ -13,8 +13,8 @@ from whetstone.coordination.eval_service import EvalEngineService
 from whetstone.coordination.harness_run_controller import (
     HarnessRunController,
     OptimRunLaunch,
+    RunRequest,
 )
-from whetstone.coordination.run_controller_registry import register_run_controller
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
 from whetstone.core.identity import compute_identity_hash
@@ -196,7 +196,6 @@ def register_runtime(
         runtime_hash=runtime_hash,
         step_builder=StepRequestBuilder(store=store),
     )
-    register_run_controller(controller)
     return RegisteredRuntime(
         store=store,
         harness=harness,
@@ -244,9 +243,7 @@ def copro_run_request(
     launch: OptimRunLaunch,
     *,
     controller_identity_hash: str,
-) -> "RunRequest":
-    from whetstone.coordination.run_workflow import RunRequest
-
+) -> RunRequest:
     if launch.control is None:
         raise ValueError("COPRO launch requires control")
     return RunRequest(

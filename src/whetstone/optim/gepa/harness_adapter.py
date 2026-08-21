@@ -30,7 +30,7 @@ class GepaHarnessAdapterFactory:
         self._factory = factory
 
     def create(self, *, control: GepaControl) -> GepaEngineAdapter:
-        return self._factory.create(control=control, effect_broker="harness")
+        return self._factory.create(control=control)
 
     def persist_result(
         self,
@@ -164,7 +164,6 @@ class GepaHarnessAdapter:
 
 __all__ = [
     "GEPA_ADAPTER_KEY",
-    "GEPA_STATE_KEY",
     "GEPA_TERMINAL_ARTIFACT_KEY",
     "GepaHarnessAdapter",
     "GepaHarnessAdapterFactory",

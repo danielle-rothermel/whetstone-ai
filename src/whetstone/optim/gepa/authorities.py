@@ -61,6 +61,7 @@ from whetstone.optim.proposal.proposer import (
     DurableProposalExecutor,
     ProposalRequest,
     ProposerTransport,
+    require_canonical_proposal_executor,
 )
 
 GEPA_REFLECTION_BASE_SCHEMA = "whetstone.gepa.reflection_base"
@@ -818,11 +819,11 @@ class CanonicalGepaProposalAuthority:
         transport: ProposerTransport,
         proposal_executor: DurableProposalExecutor,
     ) -> None:
-        if type(proposal_executor) is not DurableProposalExecutor:
-            raise TypeError(
-                "GEPA requires the canonical DurableProposalExecutor "
-                "capability for its paid reflection call"
-            )
+        require_canonical_proposal_executor(
+            proposal_executor,
+            algorithm="GEPA",
+            purpose="paid reflection call",
+        )
         if (
             prompt_services.binding.identity_hash()
             != control.prompt_binding_identity_hash

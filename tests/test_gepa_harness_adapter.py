@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from dr_store.sync import open_sqlite
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.experiment.candidate import Candidate
@@ -27,7 +25,6 @@ from whetstone.optim.gepa.harness_adapter import (
     GepaHarnessAdapter,
     GepaHarnessAdapterFactory,
 )
-from whetstone.optim.gepa.runner import DbosGepaRunner, GepaParentRunRequest
 from whetstone.optim.gepa.step_engine import GepaStepCheckpoint
 from whetstone.optim.proposal.proposer import ProposerConfig, prompt_adapter_identity_hash
 from whetstone.provider.language_model import PlainPromptAdapter
@@ -77,39 +74,6 @@ def test_gepa_control_reference_and_step_hyperparameters(tmp_path) -> None:
     hyper = control.step_hyperparameters(iteration=1)
     assert hyper["round_index"] == 1
     assert hyper["max_metric_calls"] == 2
-
-
-def test_dbos_gepa_runner_emits_deprecation_warning(tmp_path) -> None:
-    control = _toy_gepa_control(
-        max_metric_calls=1,
-        sqlite_path=str(tmp_path / "gepa-runner.sqlite"),
-    )
-    request = MagicMock(spec=GepaParentRunRequest)
-    request.identity_hash.return_value = "f" * 64
-    request.control = control
-    with patch("whetstone.optim.gepa.runner._gepa_parent_workflow") as workflow:
-        from whetstone.optim.gepa.adapter import GepaPersistedRun
-
-        workflow.return_value = GepaPersistedRun(
-            detailed_result=GepaDetailedResult(
-                candidates=({"generate": "hello"},),
-                parents=((None,),),
-                val_aggregate_scores=(1.0,),
-                val_subscores=({"task": 1.0},),
-                per_val_instance_best_candidates={"task": (0,)},
-                discovery_eval_counts=(1,),
-                seed=0,
-                best_idx=0,
-                control_identity_hash=control.identity_hash(),
-            ),
-            artifact_ref=TypedRef(
-                schema_name="whetstone.gepa.result",
-                content_hash="b" * 64,
-            ),
-        )
-        with patch("whetstone.optim.gepa.runner.SetWorkflowID"):
-            with pytest.warns(DeprecationWarning, match="DbosGepaRunner is deprecated"):
-                DbosGepaRunner().run(request)
 
 
 def test_gepa_harness_adapter_two_iterations(tmp_path) -> None:

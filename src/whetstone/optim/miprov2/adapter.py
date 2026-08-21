@@ -55,6 +55,7 @@ from whetstone.optim.proposal.proposer import (
     ProposalRequest,
     ProposerConfig,
     ProposerTransport,
+    require_canonical_proposal_executor,
 )
 
 MIPROV2_ADAPTER_KEY = "miprov2"
@@ -117,11 +118,11 @@ class Miprov2Adapter:
         proposal_executor: DurableProposalExecutor,
         driver: Miprov2Driver | None = None,
     ) -> None:
-        if type(proposal_executor) is not DurableProposalExecutor:
-            raise TypeError(
-                "MIPROv2 requires the canonical DurableProposalExecutor "
-                "capability for its paid proposal call"
-            )
+        require_canonical_proposal_executor(
+            proposal_executor,
+            algorithm="MIPROv2",
+            purpose="paid proposal call",
+        )
         self._proposer_config = proposer_config
         self._transport = transport
         self._store = store

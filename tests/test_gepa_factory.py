@@ -3,8 +3,6 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from whetstone.optim.gepa.factory import CanonicalGepaAdapterFactory
 
 
@@ -43,17 +41,10 @@ def _factory() -> tuple[CanonicalGepaAdapterFactory, MagicMock]:
     return factory, control
 
 
-def test_harness_create_does_not_import_effect_runtime() -> None:
+def test_create_does_not_import_effect_runtime() -> None:
     factory, control = _factory()
     with patch.dict(sys.modules, {"whetstone.optim.gepa.effect_runtime": None}):
         with patch("whetstone.optim.gepa.factory.WhetstoneGepaAdapter") as adapter_cls:
-            adapter = factory.create(control=control, effect_broker="harness")
+            adapter = factory.create(control=control)
     adapter_cls.assert_called_once()
     assert adapter is adapter_cls.return_value
-
-
-def test_dbos_create_imports_effect_runtime() -> None:
-    factory, control = _factory()
-    with patch.dict(sys.modules, {"whetstone.optim.gepa.effect_runtime": None}):
-        with pytest.raises(ImportError):
-            factory.create(control=control, effect_broker="dbos")
