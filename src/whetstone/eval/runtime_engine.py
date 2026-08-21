@@ -14,7 +14,7 @@ from whetstone.eval.aggregate import (
     TaskRows,
     unweighted_task_mean,
 )
-from whetstone.eval.driver import EvalDriver
+from whetstone.eval.driver import ClosableEvalDriver, EvalDriver
 from whetstone.eval.drivers.eval_result import (
     InternalEvalResult,
     per_task_count,
@@ -106,7 +106,20 @@ DEFAULT_CONCURRENCY = 5
 
 
 class RuntimeEvalEngine:
-    """Generic evaluation engine with env-specific flow injected via driver."""
+    """Generic evaluation engine with env-specific flow injected via driver.
+
+    An engine constructed with a driver owns that driver's lifetime: closing
+    the engine (or leaving its ``with`` block) closes the driver when the
+    driver has anything to close. A subprocess driver's worker processes
+    otherwise live until interpreter exit, because the driver's own ``close``
+    is not reachable from ``ReferenceEvalRuntimeConfig.build_engine``.
+
+    Engines derived through :meth:`for_task_ids` or :meth:`for_task_seed`
+    share the root engine's driver and deliberately do **not** own it: their
+    ``close`` is a no-op, so closing a derived engine cannot pull the worker
+    pool out from under the root engine or its sibling derivations. Only the
+    engine that was handed the driver closes it.
+    """
 
     def __init__(
         self,
@@ -120,6 +133,7 @@ class RuntimeEvalEngine:
         max_wall_seconds: float | None = None,
         partial_log: PartialLog | None = None,
         prompt_cache: PromptResultCache | None = None,
+        owns_driver: bool = True,
     ) -> None:
         self._store = store
         self._experiment = experiment
@@ -130,7 +144,31 @@ class RuntimeEvalEngine:
         self._max_wall_seconds = max_wall_seconds
         self._partial_log = partial_log
         self._prompt_cache = prompt_cache
+        self._owns_driver = owns_driver
+        self._closed = False
         self._validate_sampling_contract()
+
+    def close(self) -> None:
+        """Release the driver this engine owns, once.
+
+        Idempotent, and a no-op for a driver with nothing to release (the
+        in-process driver) or for a derived engine, which borrows the root
+        engine's driver rather than owning it.
+        """
+        if self._closed:
+            return
+        self._closed = True
+        if not self._owns_driver:
+            return
+        driver = self._driver
+        if isinstance(driver, ClosableEvalDriver):
+            driver.close()
+
+    def __enter__(self) -> RuntimeEvalEngine:
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
 
     @property
     def experiment(self) -> Experiment:
@@ -263,6 +301,7 @@ class RuntimeEvalEngine:
             max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
+            owns_driver=False,
         )
 
     def for_task_seed(self, task_id: str, seed_index: int) -> RuntimeEvalEngine:
@@ -288,6 +327,7 @@ class RuntimeEvalEngine:
             max_wall_seconds=self._max_wall_seconds,
             partial_log=self._partial_log,
             prompt_cache=self._prompt_cache,
+            owns_driver=False,
         )
 
     @staticmethod

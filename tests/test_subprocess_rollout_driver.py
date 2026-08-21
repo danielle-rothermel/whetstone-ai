@@ -14,8 +14,8 @@ import gc
 import os
 import subprocess
 import threading
-from collections.abc import Iterator
-from dataclasses import replace
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pytest
@@ -28,18 +28,25 @@ from whetstone.eval.drivers.subprocess_graph_rollout import (
     RowWorkerError,
     SubprocessGraphRolloutEvalDriver,
 )
-from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.protocol import EvalRequest, EvalTaskView, eval_is_success
 from whetstone.eval.metadata import metadata_with_purpose
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.eval.runtime_engine import RuntimeEvalEngine
 from whetstone.eval.traces import ExecutedRowState
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
+from whetstone.experiment.candidate import TemplateRenderContract
 from whetstone.experiment.env import Experiment
 from whetstone.provider.policy import (
     ProviderExecutionPolicy,
     default_transport_policy,
 )
 from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
-from whetstone.testing.fakes.row_worker import GATED_ROW_RELEASE_ENV
+from whetstone.testing.fakes.row_worker import (
+    GATED_ROW_RELEASE_ENV,
+    RAISING_ROW_MARKER,
+    RAISING_ROW_MESSAGE,
+)
 from whetstone.testing.fakes.transport import fake_llm_transport_factory
 from whetstone.testing.toy.experiment import (
     TOY_MUTATION_FIELD,
@@ -49,6 +56,9 @@ from whetstone.testing.toy.experiment import (
 )
 
 GATED_ENTRYPOINT = "whetstone.testing.fakes.row_worker:gated_run_row"
+RAISING_ENTRYPOINT = (
+    "whetstone.testing.fakes.row_worker:selectively_raising_run_row"
+)
 
 #: dr-exec names the scheduler's own worker threads with this prefix.
 #: Refusing to start one is how this test forces a scheduler break.
@@ -181,11 +191,11 @@ def test_both_drivers_agree_on_the_rows_an_elapsed_deadline_produces(
 ) -> None:
     """Switching drivers must not change the deadline's shape of evidence.
 
-    The failure codes are deliberately not compared here. The in-process
-    driver has no notion of dispatch, so it calls every deadline-stopped row
-    ``deadline``; the subprocess driver can tell a row that never reached a
-    worker from one that ran and was killed, and says so. Giving the
-    in-process driver the same distinction is a separate change.
+    Both drivers share one dispatch vocabulary: a row the deadline stopped
+    before it was submitted never attempted provider work and is
+    ``not-dispatched``, and a row that was running when the deadline fired is
+    the operation ``deadline``. An already-elapsed deadline submits nothing,
+    so both must say ``not-dispatched`` for every row.
     """
     experiment = build_toy_experiment()
 
@@ -208,6 +218,12 @@ def test_both_drivers_agree_on_the_rows_an_elapsed_deadline_produces(
     assert [row.row_state for row in subprocess_result.outputs] == [
         row.row_state for row in in_process.outputs
     ]
+    assert [row.failure_code for row in subprocess_result.outputs] == [
+        row.failure_code for row in in_process.outputs
+    ]
+    assert {row.failure_code for row in in_process.outputs} == {
+        RowDispatchStatus.NOT_DISPATCHED.value
+    }
     assert subprocess_result.request_identities == (
         in_process.request_identities
     )
@@ -421,6 +437,9 @@ def test_in_process_driver_also_dispatches_nothing_at_a_zero_deadline() -> None:
     assert all(
         row.row_state is ExecutedRowState.MISSING for row in result.outputs
     )
+    assert {row.failure_code for row in result.outputs} == {
+        RowDispatchStatus.NOT_DISPATCHED.value
+    }
     assert not result.request_identities
 
 
@@ -557,6 +576,109 @@ def test_a_closed_driver_refuses_to_run_rather_than_respawning() -> None:
     assert _child_pids() - before == frozenset()
 
 
+def _raising_experiment(*, task_count: int, raising_index: int) -> Experiment:
+    tasks = tuple(
+        ToyTask(
+            task_id=f"raising-{index}",
+            prompt_inputs=(
+                {"prompt": f"hello {index}", RAISING_ROW_MARKER: "1"}
+                if index == raising_index
+                else {"prompt": f"hello {index}"}
+            ),
+            gold=str(index),
+        )
+        for index in range(task_count)
+    )
+    return build_toy_experiment(internal_tasks=tasks)
+
+
+def test_a_raising_row_is_attributed_to_the_payload(
+    tmp_path: Path,
+) -> None:
+    """One bad row surfaces as this driver's error, blamed on the payload.
+
+    The worker pool discards the row's exception, so the driver reports the
+    failing row's coordinates and dr-exec's payload attribution rather than
+    the original type or message. That upstream limitation is pinned here so
+    a dr-exec fix that starts carrying the exception is noticed.
+    """
+    experiment = _raising_experiment(task_count=3, raising_index=1)
+    partial_log = PartialLog(tmp_path / "raising-partials")
+
+    driver_context = _subprocess_driver(
+        row_job_entrypoint=RAISING_ENTRYPOINT,
+    )
+    driver = next(driver_context)
+    try:
+        with pytest.raises(RowWorkerError) as failure:
+            _run(
+                driver,
+                experiment=experiment,
+                request_id="raising:payload",
+                concurrency=3,
+                partial_log=partial_log,
+            )
+    finally:
+        driver_context.close()
+
+    message = str(failure.value)
+    assert "owner=payload" in message
+    assert "(1, 0)" in message
+    # The upstream limitation: dr-exec keeps the exception to itself, so the
+    # driver cannot name it. Reproduce a raising row in-process to see it.
+    assert RAISING_ROW_MESSAGE not in message
+
+    completed_rows = {record.key() for record in partial_log.load()}
+    assert len(completed_rows) == 2
+
+
+@dataclass(frozen=True, slots=True)
+class _RaisingRenderContract:
+    """Render every row except the marked one, which raises instead.
+
+    Rendering happens before the rollout graph runs, so this raises out of
+    the row the way the worker's entry point raises out of its row — rather
+    than being captured as a graph node error.
+    """
+
+    delegate: TemplateRenderContract
+
+    def validate_template(self, template: object) -> None:
+        self.delegate.validate_template(template)
+
+    def render(
+        self, template: str, prompt_inputs: Mapping[str, str]
+    ) -> str:
+        if RAISING_ROW_MARKER in prompt_inputs:
+            raise RuntimeError(RAISING_ROW_MESSAGE)
+        return self.delegate.render(template, prompt_inputs)
+
+
+def test_a_raising_row_is_reproducible_in_process() -> None:
+    """The in-process driver still names the row's own exception.
+
+    This is the documented workaround for the worker pool discarding it: the
+    same failing row, run in process, carries its type and message.
+    """
+    experiment = _raising_experiment(task_count=3, raising_index=1)
+    driver = GraphRolloutEvalDriver(
+        eval_runner=FakeEvalProcedureRunner(),
+        mutation_field=TOY_MUTATION_FIELD,
+        render_contract=_RaisingRenderContract(
+            toy_template_render_contract()
+        ),  # type: ignore[arg-type]
+        transport_factory=fake_llm_transport_factory,
+    )
+
+    with pytest.raises(RuntimeError, match=RAISING_ROW_MESSAGE):
+        _run(
+            driver,
+            experiment=experiment,
+            request_id="raising:in-process",
+            concurrency=3,
+        )
+
+
 def _child_pids() -> frozenset[str]:
     listing = subprocess.run(
         ["pgrep", "-P", str(os.getpid())],
@@ -623,6 +745,93 @@ def test_a_broken_scheduler_surfaces_as_this_driver_s_error(
             request_id="broken:scheduler",
             concurrency=1,
         )
+
+
+def _subprocess_engine(store: object) -> RuntimeEvalEngine:
+    runtime = ReferenceEvalRuntimeConfig.model_validate(
+        {"driver_mode": "subprocess"}
+    )
+    engine = runtime.build_engine(store)  # type: ignore[arg-type]
+    assert isinstance(engine, RuntimeEvalEngine)
+    return engine
+
+
+def _evaluate(engine: RuntimeEvalEngine, request_id: str) -> None:
+    evaluated = engine.evaluate(
+        EvalRequest(
+            request_id=request_id,
+            candidate=engine.experiment.initial_candidate,
+            metadata=metadata_with_purpose("test"),
+        )
+    )
+    assert eval_is_success(evaluated)
+
+
+def test_closing_the_engine_stops_the_subprocess_driver_s_workers(
+    sqlite_store: object,
+) -> None:
+    """The only production construction path can end its driver's lifetime.
+
+    ``build_engine`` owns the driver it constructs, so a caller that never
+    touches the driver directly can still release its worker processes.
+    """
+    before = _child_pids()
+    engine = _subprocess_engine(sqlite_store)
+    _evaluate(engine, "engine-close:run")
+    assert _child_pids() - before
+
+    engine.close()
+
+    assert _child_pids() - before == frozenset()
+    # Closing twice must not fail or reach a driver that is already closed.
+    engine.close()
+
+
+def test_the_engine_context_manager_stops_its_workers(
+    sqlite_store: object,
+) -> None:
+    """Leaving the ``with`` block releases the driver's workers."""
+    before = _child_pids()
+    with _subprocess_engine(sqlite_store) as engine:
+        _evaluate(engine, "engine-context:run")
+        assert _child_pids() - before
+
+    assert _child_pids() - before == frozenset()
+
+
+def test_a_derived_engine_does_not_close_the_root_engine_s_driver(
+    sqlite_store: object,
+) -> None:
+    """Derived engines borrow the shared driver; only the root owns it."""
+    before = _child_pids()
+    engine = _subprocess_engine(sqlite_store)
+    try:
+        _evaluate(engine, "engine-derived:run")
+        workers = _child_pids() - before
+        assert workers
+
+        task_id = engine.sampling.tasks[0].task_id
+        engine.for_task_ids((task_id,)).close()
+        engine.for_task_seed(task_id, 0).close()
+
+        assert _child_pids() - before == workers
+    finally:
+        engine.close()
+
+    assert _child_pids() - before == frozenset()
+
+
+def test_closing_an_in_process_engine_is_a_no_op(
+    sqlite_store: object,
+) -> None:
+    """A driver with nothing to release needs no close of its own."""
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store  # type: ignore[arg-type]
+    )
+    assert isinstance(engine, RuntimeEvalEngine)
+    with engine:
+        _evaluate(engine, "engine-in-process:run")
+    engine.close()
 
 
 def test_row_dispatch_status_values_are_pinned() -> None:

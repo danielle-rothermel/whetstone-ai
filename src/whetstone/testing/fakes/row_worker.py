@@ -9,9 +9,18 @@ from whetstone.eval.drivers.graph_worker import run_row
 
 __all__ = [
     "GATED_ROW_RELEASE_ENV",
+    "RAISING_ROW_MARKER",
+    "RAISING_ROW_MESSAGE",
     "WATCHDOG_SECONDS",
     "gated_run_row",
+    "selectively_raising_run_row",
 ]
+
+#: Request key whose presence makes a row's entry point raise.
+RAISING_ROW_MARKER = "whetstone_raising_row"
+
+#: The message the raising row's exception carries.
+RAISING_ROW_MESSAGE = "this row's entry point raised on purpose"
 
 #: Request key naming the file whose existence releases a gated row.
 GATED_ROW_RELEASE_ENV = "whetstone_gated_row_release_path"
@@ -45,6 +54,19 @@ def gated_run_row(payload: JsonValue) -> JsonValue:
                 )
             time.sleep(_POLL_SECONDS)
     return run_row(_without_gate(payload))
+
+
+def selectively_raising_run_row(payload: JsonValue) -> JsonValue:
+    """Raise for the marked row and run every other row normally.
+
+    Rows carrying :data:`RAISING_ROW_MARKER` in ``prompt_inputs`` raise; the
+    rest complete. That mix is what distinguishes a driver that attributes
+    one bad row from one that loses the whole batch.
+    """
+    prompt_inputs = _prompt_inputs(payload)
+    if RAISING_ROW_MARKER in prompt_inputs:
+        raise RuntimeError(RAISING_ROW_MESSAGE)
+    return run_row(payload)
 
 
 def _release_path(payload: JsonValue) -> Path | None:

@@ -267,6 +267,7 @@ def _subprocess_driver_smoke() -> None:
     from dr_store.sync import open_sqlite
     from whetstone.eval.protocol import EvalRequest
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.eval.runtime_engine import RuntimeEvalEngine
 
     with tempfile.NamedTemporaryFile(suffix=".sqlite") as handle, open_sqlite(
         handle.name
@@ -275,16 +276,20 @@ def _subprocess_driver_smoke() -> None:
             {"driver_mode": "subprocess"}
         )
         engine = runtime.build_engine(store)
-        request = EvalRequest(
-            request_id="smoke:subprocess-driver",
-            candidate=engine.experiment.initial_candidate,
-            metadata=metadata_with_purpose("smoke"),
-        )
-        evaluated = engine.evaluate(request)
-        assert eval_is_success(evaluated)
-        sampling = engine.experiment.eval_configs.internal
-        expected_rows = len(sampling.tasks) * sampling.seed_plan.num_seeds
-        assert evaluated.evidence.row_accounting.present == expected_rows
+        # The engine owns the driver's worker pool, so the smoke run releases
+        # its workers rather than leaving them to interpreter exit.
+        assert isinstance(engine, RuntimeEvalEngine)
+        with engine:
+            request = EvalRequest(
+                request_id="smoke:subprocess-driver",
+                candidate=engine.experiment.initial_candidate,
+                metadata=metadata_with_purpose("smoke"),
+            )
+            evaluated = engine.evaluate(request)
+            assert eval_is_success(evaluated)
+            sampling = engine.experiment.eval_configs.internal
+            expected_rows = len(sampling.tasks) * sampling.seed_plan.num_seeds
+            assert evaluated.evidence.row_accounting.present == expected_rows
 
 
 def main() -> None:

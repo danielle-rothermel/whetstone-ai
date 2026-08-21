@@ -169,6 +169,15 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
     ``run`` is safe to call from several threads; the pool is created once
     under a lock. The pool's width is still fixed by whichever run reaches
     it first.
+
+    Known limitation: when a row's entry point raises, dr-exec's worker
+    discards the payload exception and reports the fixed detail "the
+    importable JSON entry point raised". This driver therefore surfaces such
+    a row as a ``RowWorkerError`` attributed to the payload, but without the
+    exception's type, message, or traceback. A dr-exec fix will carry that
+    detail on the frame; until it lands, reproduce a raising row on the
+    in-process :class:`GraphRolloutEvalDriver`, which propagates the original
+    exception.
     """
 
     def __init__(

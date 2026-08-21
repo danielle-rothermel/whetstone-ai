@@ -136,7 +136,15 @@ def _deadline_missing_row(
     task_id: str,
     task_index: int,
     seed_index: int,
+    status: RowDispatchStatus,
 ) -> RolloutRowOutput:
+    """Record one row the operation deadline stopped.
+
+    ``status`` carries the distinction both drivers make: a row the deadline
+    stopped before it was ever submitted never attempted provider work and is
+    ``not-dispatched``; a row already running in the pool when the deadline
+    fired is the operation ``deadline``.
+    """
     return RolloutRowOutput(
         candidate_id=candidate_id,
         task_id=task_id,
@@ -146,7 +154,7 @@ def _deadline_missing_row(
         trace_steps=(),
         output_text=None,
         score=None,
-        failure_code=RowDispatchStatus.OPERATION_DEADLINE.value,
+        failure_code=status.value,
     )
 
 
@@ -292,6 +300,7 @@ class GraphRolloutEvalDriver:
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             pending: dict[object, _ScheduledRow] = {}
+            submitted_keys: set[tuple[int, int]] = set()
             for row in scheduled_rows:
                 remaining = remaining_phase_wall_seconds(deadline)
                 if remaining is not None and remaining <= 0:
@@ -302,9 +311,11 @@ class GraphRolloutEvalDriver:
                             task_id=row.task_id,
                             task_index=row.task_index,
                             seed_index=row.seed_index,
+                            status=RowDispatchStatus.NOT_DISPATCHED,
                         )
                     )
                     continue
+                submitted_keys.add((row.task_index, row.seed_index))
                 pending[executor.submit(_execute_row, row)] = row
 
             unfinished = set(pending.keys())
@@ -314,6 +325,11 @@ class GraphRolloutEvalDriver:
                     deadline_reached = True
                     for future in unfinished:
                         scheduled = pending[future]
+                        # A future that cancels cleanly had not begun running,
+                        # so this row never reached a worker thread; one that
+                        # refuses to cancel was already executing and is the
+                        # operation deadline cutting a row that ran.
+                        never_started = future.cancel()
                         outputs_by_key[
                             (scheduled.task_index, scheduled.seed_index)
                         ] = _deadline_missing_row(
@@ -321,8 +337,12 @@ class GraphRolloutEvalDriver:
                             task_id=scheduled.task_id,
                             task_index=scheduled.task_index,
                             seed_index=scheduled.seed_index,
+                            status=(
+                                RowDispatchStatus.NOT_DISPATCHED
+                                if never_started
+                                else RowDispatchStatus.OPERATION_DEADLINE
+                            ),
                         )
-                        future.cancel()
                     break
                 wait_timeout = remaining
                 done, not_done = wait(
@@ -350,6 +370,11 @@ class GraphRolloutEvalDriver:
                         task_id=row.task_id,
                         task_index=row.task_index,
                         seed_index=row.seed_index,
+                        status=(
+                            RowDispatchStatus.OPERATION_DEADLINE
+                            if key in submitted_keys
+                            else RowDispatchStatus.NOT_DISPATCHED
+                        ),
                     )
 
         outputs = tuple(

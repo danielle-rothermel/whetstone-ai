@@ -41,10 +41,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal — a closed driver refuses further runs instead of respawning workers.
   The per-row budget is configurable through
   `ReferenceEvalRuntimeConfig.unit_deadline_seconds`.
-- A row killed by the operation deadline is reported as `deadline`, matching the
-  in-process driver; `not-dispatched` is reserved for rows that never reached a
-  worker. A broken worker-pool scheduler surfaces as `RowWorkerError` rather
-  than a dr-exec exception.
+- A row killed by the operation deadline is reported as `deadline`;
+  `not-dispatched` is reserved for rows that never reached a worker. Both
+  drivers now use that vocabulary: `GraphRolloutEvalDriver` reports a row the
+  deadline stopped before submission as `not-dispatched` instead of `deadline`.
+  A broken worker-pool scheduler surfaces as `RowWorkerError` rather than a
+  dr-exec exception.
+- `RuntimeEvalEngine` owns its driver's lifetime: it has `close()` and works as
+  a context manager, forwarding to drivers that implement the new
+  `ClosableEvalDriver` capability (the in-process driver has nothing to close).
+  This makes the worker pool built by `ReferenceEvalRuntimeConfig.build_engine`
+  releasable, which it previously was not. Engines derived through
+  `for_task_ids` or `for_task_seed` share the root engine's driver and do not
+  close it — only the root engine does.
+
+### Known issues
+
+- When a rollout row's entry point raises, dr-exec's worker discards the
+  exception and reports the fixed detail "the importable JSON entry point
+  raised". `SubprocessGraphRolloutEvalDriver` therefore surfaces the failing
+  row's coordinates and a payload attribution, but not the exception's type,
+  message, or traceback. A dr-exec fix will carry that detail; until it lands,
+  reproduce the failing row on the in-process `GraphRolloutEvalDriver`, which
+  propagates the original exception.
 - `EvalEvidence` is at `schema_version` 4. The worker pool cannot produce
   `concurrency_halved` or `guard_timeouts`, so both fields are gone;
   `deadline_reached` is unchanged. Evidence written at version 3 is not read.
