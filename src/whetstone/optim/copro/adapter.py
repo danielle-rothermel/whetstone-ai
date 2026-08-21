@@ -826,6 +826,11 @@ class CoproAdapter:
         if state.completed_rounds >= config.depth:
             finalization = driver.finalize(state)
             contract = request.run.record.terminal_output_contract
+            # The COMPLETE cardinality, not the continuing count: a run whose
+            # terminal contract sets the two differently binds this
+            # finalizing step to its terminal count, and the harness checks
+            # the accepted candidates against exactly that.
+            required = contract.accepted_count_for(StepStatus.COMPLETE)
             ranked = finalization.ranked_attempts
             if not ranked:
                 return AdapterOutput(
@@ -835,7 +840,7 @@ class CoproAdapter:
                         message="COPRO cannot finalize without measured history",
                     ),
                 )
-            if len(ranked) < contract.returned_proposal_count:
+            if len(ranked) < required:
                 return AdapterOutput(
                     proposed_status=StepStatus.FAILED,
                     terminal_failure=TerminalFailure(
@@ -843,11 +848,11 @@ class CoproAdapter:
                         message=(
                             "COPRO finalization produced "
                             f"{len(ranked)} ranked candidates but terminal "
-                            f"contract requires {contract.returned_proposal_count}"
+                            f"contract requires {required}"
                         ),
                     ),
                 )
-            selected = ranked[: contract.returned_proposal_count]
+            selected = ranked[:required]
             accepted = tuple(entry.candidate.record for entry in selected)
             return AdapterOutput(
                 proposed_candidates=accepted,

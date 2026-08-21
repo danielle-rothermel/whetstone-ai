@@ -778,14 +778,17 @@ class OptimHarness(OptimRunStore):
                 f"{evidence.outcome.value} search evidence eval_result_ref "
                 f"must use schema {expected!r}"
             )
-        refs: tuple[TypedRef, ...] = (ref,)
-        if evidence.reward_ref is not None:
-            if evidence.reward_ref.record_ref.schema_name != REWARD_SCHEMA:
-                raise ValueError(
-                    "search evidence reward_ref must use the Reward schema"
-                )
-            refs = (*refs, evidence.reward_ref.record_ref)
-        for item in refs:
+        if (
+            evidence.reward_ref is not None
+            and evidence.reward_ref.record_ref.schema_name != REWARD_SCHEMA
+        ):
+            raise ValueError(
+                "search evidence reward_ref must use the Reward schema"
+            )
+        # Every ref the entry cites -- including the nested reward evidence
+        # refs -- is exactly the set the harness persists, so each one must
+        # resolve before the entry is accepted.
+        for item in evidence.evidence_refs:
             try:
                 self._store.get(item.reference)
             except Exception as error:

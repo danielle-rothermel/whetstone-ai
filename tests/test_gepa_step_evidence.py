@@ -749,3 +749,76 @@ def test_search_evidence_with_a_dangling_ref_is_rejected(
             request,
             AdapterOutput(search_evidence=(dangling,)),
         )
+
+
+def test_search_evidence_with_a_dangling_reward_evidence_ref_is_rejected(
+    sqlite_store,
+) -> None:
+    """Nested reward-evidence refs are store-checked too.
+
+    ``SearchEvidence.evidence_refs`` yields the eval result, the reward, and
+    the reward's own ordered evidence refs -- the exact set the harness
+    persists. Checking only the first two would let an entry whose nested
+    reward evidence dangles be stored as harness-verified search evidence.
+    """
+    from whetstone.core.identity import TypedRef
+    from whetstone.experiment.reward import reward_reference
+    from whetstone.optim.adapters import AdapterOutput
+
+    run_id = "gepa-evidence-dangling-nested"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness.run_step(request)
+    truthful = next(
+        e
+        for e in result.search_evidence
+        if e.outcome is IntentOutcome.COMPLETED and e.reward_evidence_refs
+    )
+
+    # A coherent Reward that cites a ref the store never resolves. The
+    # SearchEvidence still mirrors its Reward's ordered evidence refs, so
+    # every model invariant holds and only the store check can catch it.
+    unstored = TypedRef(
+        schema_name=truthful.reward_evidence_refs[0].schema_name,
+        content_hash="c" * 64,
+    )
+    dangling_reward = truthful.reward_ref.record.model_copy(
+        update={"evidence_refs": (unstored,)}
+    )
+    dangling_reward_ref = reward_reference(dangling_reward)
+    # Store the rewritten Reward so it resolves like any real one: the
+    # nested evidence ref is then the only ref the store cannot resolve.
+    sqlite_store.put(
+        dangling_reward_ref.record_ref.schema_name,
+        dangling_reward.record_content(),
+    )
+    dangling = truthful.model_copy(
+        update={
+            "reward_ref": dangling_reward_ref,
+            "reward_evidence_refs": (unstored,),
+        }
+    )
+    # Both top-level refs resolve; only the nested reward-evidence ref does
+    # not, so nothing but the nested check can reject this entry.
+    assert sqlite_store.get(dangling.eval_result_ref.reference) is not None
+    assert (
+        sqlite_store.get(dangling.reward_ref.record_ref.reference) is not None
+    )
+    assert dangling.reward_evidence_refs == (unstored,)
+
+    with pytest.raises(ValueError, match="records the store resolves"):
+        harness._validate_output_intents(
+            request,
+            AdapterOutput(search_evidence=(dangling,)),
+        )
