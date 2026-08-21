@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import math
+import threading
+import time
 import weakref
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass
 from uuid import uuid4
@@ -13,11 +16,14 @@ from dr_exec import (
     CancelledOutcome,
     CompletedExecution,
     ExecutionJob,
+    ExecutionPoolConfig,
     ExitedOutcome,
     FiniteDurationLimit,
+    FixedPoolCapacity,
     ImportableEntryPoint,
     ImportableJsonResultError,
     JobId,
+    SchedulerBroken,
     WorkerPoolImportableJsonExecutor,
     build_in_process_importable_json_job,
     parse_importable_json_result,
@@ -155,6 +161,14 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
     entry point once at startup, so the whetstone import is paid per worker
     rather than per row. Close the driver (or use it as a context manager) to
     stop its workers.
+
+    Closing is terminal: a closed driver refuses further runs rather than
+    resurrecting workers, so the pool's fixed width holds for the whole
+    driver rather than only until the next close.
+
+    ``run`` is safe to call from several threads; the pool is created once
+    under a lock. The pool's width is still fixed by whichever run reaches
+    it first.
     """
 
     def __init__(
@@ -185,7 +199,9 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         self._row_job_entrypoint = row_job_entrypoint
         self._entry_point = _entry_point(row_job_entrypoint)
         self._transport_api_key_env = transport_api_key_env
-        self._unit_deadline_seconds = unit_deadline_seconds
+        self._unit_deadline_seconds = _validated_unit_deadline(
+            unit_deadline_seconds
+        )
         self._transport_factory_path = import_path_for_callable(transport_factory)
         self._eval_runner_path = import_path_for_type(type(self._eval_runner))
         self._prompt_adapter_type_path = import_path_for_type(
@@ -196,6 +212,8 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         )
         self._executor: WorkerPoolImportableJsonExecutor | None = None
         self._finalizer: weakref.finalize | None = None
+        self._pool_lock = threading.Lock()
+        self._closed = False
 
     def _pool(self, concurrency: int) -> WorkerPoolImportableJsonExecutor:
         """Return this driver's pool, fixing its width on first use.
@@ -204,31 +222,45 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         so the first run decides how wide this driver ever runs. A later run
         asking for more parallelism than the pool has is a caller mistake
         worth surfacing rather than quietly under-running.
+
+        The lock covers the whole create-and-register step so concurrent
+        first runs cannot each build a pool and leave one of them orphaned
+        with no finalizer to reap its workers.
         """
         width = max(1, concurrency)
-        if self._executor is None:
-            self._executor = WorkerPoolImportableJsonExecutor(
-                entry_point=self._entry_point,
-                worker_count=width,
-            )
-            # A caller that never closes the driver still releases its
-            # workers when the driver becomes unreachable. close() remains
-            # the explicit, prompt path.
-            self._finalizer = weakref.finalize(
-                self, self._executor.close_blocking
-            )
-        elif width > self._executor.width:
-            raise RowWorkerError(
-                f"this driver's worker pool is {self._executor.width} wide "
-                f"and cannot widen to {width}; build a driver per width"
-            )
-        return self._executor
+        with self._pool_lock:
+            if self._closed:
+                raise RowWorkerError(
+                    "this driver is closed and cannot run rows; build a new "
+                    "driver rather than reusing a closed one"
+                )
+            if self._executor is None:
+                executor = WorkerPoolImportableJsonExecutor(
+                    entry_point=self._entry_point,
+                    worker_count=width,
+                )
+                # A caller that never closes the driver still releases its
+                # workers when the driver becomes unreachable. close()
+                # remains the explicit, prompt path.
+                self._finalizer = weakref.finalize(
+                    self, executor.close_blocking
+                )
+                self._executor = executor
+            elif width > self._executor.width:
+                raise RowWorkerError(
+                    f"this driver's worker pool is {self._executor.width} "
+                    f"wide and cannot widen to {width}; build a driver per "
+                    "width"
+                )
+            return self._executor
 
     def close(self) -> None:
-        """Stop every worker process this driver owns."""
-        finalizer = self._finalizer
-        self._finalizer = None
-        self._executor = None
+        """Stop every worker process this driver owns, for good."""
+        with self._pool_lock:
+            self._closed = True
+            finalizer = self._finalizer
+            self._finalizer = None
+            self._executor = None
         if finalizer is not None:
             finalizer()
 
@@ -294,33 +326,64 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
             )
         )
         keys_by_job: dict[JobId, tuple[int, int]] = {}
-        jobs: list[ExecutionJob] = []
+        job_ids: list[JobId] = []
         for row in scheduled_rows:
             key = (row.task_index, row.seed_index)
             job_id = JobId(uuid4())
             keys_by_job[job_id] = key
-            jobs.append(
-                build_in_process_importable_json_job(
-                    job_id,
-                    self._entry_point,
-                    row_requests[key].model_dump(mode="json"),
-                    budgets=row_budgets,
-                )
-            )
+            job_ids.append(job_id)
 
         collected_identities: set[str] = set()
         outputs_by_key: dict[tuple[int, int], RolloutRowOutput] = {}
         deadline_reached = False
         pool = self._pool(concurrency)
         batch_wall = _batch_wall_time(max_wall_seconds)
+        # dr-exec pulls each job only when it has room to admit it, so the
+        # pull is the moment the row is handed to a worker. Recording the
+        # jobs pulled before the batch deadline is what separates a row that
+        # ran and was killed from one that never started.
+        dispatched: set[JobId] = set()
+        # Started here rather than inside the generator so this clock cannot
+        # begin later than the batch watcher dr-exec arms in run_many, which
+        # would let an already-cancelled job look dispatched.
+        deadline_ns = (
+            None
+            if batch_wall is None
+            else time.monotonic_ns() + batch_wall.limit
+        )
+
+        def _pending_jobs() -> Iterator[ExecutionJob]:
+            for pending_id in job_ids:
+                if deadline_ns is None or time.monotonic_ns() < deadline_ns:
+                    dispatched.add(pending_id)
+                yield build_in_process_importable_json_job(
+                    pending_id,
+                    self._entry_point,
+                    row_requests[keys_by_job[pending_id]].model_dump(
+                        mode="json"
+                    ),
+                    budgets=row_budgets,
+                )
+
         # Closing the stream is what drains the scheduler, so a row that
         # raises still leaves the pool quiescent instead of abandoned.
-        with closing(pool.run_many(jobs, wall_time=batch_wall)) as completions:
-            for completion in completions:
-                key = keys_by_job[completion.result.execution_id.job_id]
+        stream = _scheduled_completions(
+            pool,
+            _pending_jobs(),
+            width=max(1, concurrency),
+            batch_wall=batch_wall,
+        )
+        with closing(stream) as completions:
+            for completion in _translating_scheduler_breaks(completions):
+                job_id = completion.result.execution_id.job_id
+                key = keys_by_job[job_id]
                 row_request = row_requests[key]
-                payload, status = _interpret_completion(completion, key=key)
-                if status is RowDispatchStatus.NOT_DISPATCHED:
+                payload, status = _interpret_completion(
+                    completion,
+                    key=key,
+                    dispatched=job_id in dispatched,
+                )
+                if status in _DEADLINE_STATUSES:
                     deadline_reached = True
                 if status is RowDispatchStatus.COMPLETED:
                     collected_identities.update(
@@ -360,20 +423,106 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         )
 
 
+#: Statuses that mean the operation deadline stopped this row.
+_DEADLINE_STATUSES = frozenset(
+    {
+        RowDispatchStatus.NOT_DISPATCHED,
+        RowDispatchStatus.OPERATION_DEADLINE,
+    }
+)
+
+#: dr-exec rejects a wall-time limit that does not convert to at least one
+#: nanosecond, so anything below this is treated as already elapsed.
+_MIN_REPRESENTABLE_WALL_SECONDS = 1e-9
+
+
+def _validated_unit_deadline(unit_deadline_seconds: float, /) -> float:
+    """Reject a per-row budget dr-exec could not turn into a limit.
+
+    The value only reaches ``FiniteDurationLimit`` when a run starts, so an
+    unusable one would otherwise surface as a bare ``ValueError`` from deep
+    inside a rollout rather than at the caller's construction site.
+    """
+    if (
+        not math.isfinite(unit_deadline_seconds)
+        or unit_deadline_seconds < _MIN_REPRESENTABLE_WALL_SECONDS
+    ):
+        raise ValueError(
+            "unit_deadline_seconds must be a finite positive number of "
+            f"seconds, not {unit_deadline_seconds!r}"
+        )
+    try:
+        FiniteDurationLimit.from_seconds(unit_deadline_seconds)
+    except ValueError as error:
+        raise ValueError(
+            f"unit_deadline_seconds={unit_deadline_seconds!r} is not a "
+            f"usable per-row wall budget: {error}"
+        ) from error
+    return unit_deadline_seconds
+
+
+def _scheduled_completions(
+    pool: WorkerPoolImportableJsonExecutor,
+    jobs: Iterator[ExecutionJob],
+    /,
+    *,
+    width: int,
+    batch_wall: FiniteDurationLimit | None,
+) -> Iterator[CompletedExecution]:
+    """Stream the batch at this run's requested parallelism.
+
+    The pool's width is a ceiling on workers, not on this run: passing the
+    run's own capacity is what lets a later, narrower run actually narrow
+    instead of silently scheduling at the pool's original width.
+    """
+    return pool.run_many(
+        jobs,
+        config=ExecutionPoolConfig(
+            capacity=FixedPoolCapacity(
+                max_active_jobs=min(width, pool.width)
+            )
+        ),
+        wall_time=batch_wall,
+    )
+
+
+def _translating_scheduler_breaks(
+    completions: Iterator[CompletedExecution], /
+) -> Iterator[CompletedExecution]:
+    """Present a broken scheduler as this driver's own failure type.
+
+    ``RowWorkerError`` is the driver's single failure surface, so a caller
+    does not need to import dr-exec to catch a pool that broke mid-batch.
+    """
+    try:
+        yield from completions
+    except SchedulerBroken as error:
+        raise RowWorkerError(
+            f"the row worker pool's scheduler broke mid-batch: {error}"
+        ) from error
+
+
 def _batch_wall_time(
     max_wall_seconds: float | None, /
 ) -> FiniteDurationLimit | None:
     """Convert this operation's deadline into a batch wall-time ceiling.
 
-    A deadline that has already elapsed cannot be declared as a positive
-    limit, so it is expressed as the smallest one dr-exec accepts: the batch
-    expires immediately and every row reports as not dispatched.
+    A deadline that has already elapsed — or one too small or too large for
+    dr-exec to express — cannot be declared as a positive limit, so it is
+    expressed as the smallest one dr-exec accepts: the batch expires
+    immediately and no row is dispatched.
     """
     if max_wall_seconds is None:
         return None
-    if max_wall_seconds <= 0:
+    if (
+        not math.isfinite(max_wall_seconds)
+        or max_wall_seconds < _MIN_REPRESENTABLE_WALL_SECONDS
+    ):
         return FiniteDurationLimit(max_ns=1)
-    return FiniteDurationLimit.from_seconds(max_wall_seconds)
+    try:
+        return FiniteDurationLimit.from_seconds(max_wall_seconds)
+    except ValueError:
+        return FiniteDurationLimit(max_ns=1)
 
 
 def _interpret_completion(
@@ -381,12 +530,21 @@ def _interpret_completion(
     /,
     *,
     key: tuple[int, int],
+    dispatched: bool,
 ) -> tuple[dict[str, object], RowDispatchStatus]:
-    """Map one dr-exec completion into this driver's row vocabulary."""
+    """Map one dr-exec completion into this driver's row vocabulary.
+
+    The batch deadline cancels rows already running in a worker alongside
+    rows that never started, and both arrive as ``CancelledOutcome``. Only
+    a row that was never handed to a worker is honestly "not dispatched";
+    one that ran and was killed is the operation deadline.
+    """
 
     result = completion.result
     outcome = result.outcome
     if isinstance(outcome, CancelledOutcome):
+        if dispatched:
+            return {}, RowDispatchStatus.OPERATION_DEADLINE
         return {}, RowDispatchStatus.NOT_DISPATCHED
     if isinstance(outcome, BudgetExceededOutcome):
         if outcome.axis is BudgetAxis.WALL_TIME:

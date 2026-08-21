@@ -37,7 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WorkerPoolImportableJsonExecutor` instead of the bespoke fanout scheduler.
   Workers import the row entry point once at startup rather than once per row,
   wall budgets apply per row and per batch, and the driver owns its pool: close
-  it (or use it as a context manager) to stop its workers promptly.
+  it (or use it as a context manager) to stop its workers promptly. Closing is
+  terminal — a closed driver refuses further runs instead of respawning workers.
+  The per-row budget is configurable through
+  `ReferenceEvalRuntimeConfig.unit_deadline_seconds`.
+- A row killed by the operation deadline is reported as `deadline`, matching the
+  in-process driver; `not-dispatched` is reserved for rows that never reached a
+  worker. A broken worker-pool scheduler surfaces as `RowWorkerError` rather
+  than a dr-exec exception.
 - `EvalEvidence` is at `schema_version` 4. The worker pool cannot produce
   `concurrency_halved` or `guard_timeouts`, so both fields are gone;
   `deadline_reached` is unchanged. Evidence written at version 3 is not read.

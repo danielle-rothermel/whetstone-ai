@@ -13,6 +13,7 @@ from __future__ import annotations
 import gc
 import os
 import subprocess
+import threading
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -48,6 +49,10 @@ from whetstone.testing.toy.experiment import (
 )
 
 GATED_ENTRYPOINT = "whetstone.testing.fakes.row_worker:gated_run_row"
+
+#: dr-exec names the scheduler's own worker threads with this prefix.
+#: Refusing to start one is how this test forces a scheduler break.
+SCHEDULER_WORKER_THREAD_PREFIX = "dr-exec-pool-worker"
 
 #: Per-row and per-batch budgets short enough to fire promptly on a gated
 #: row. The tests assert on the resulting status, never on elapsed time.
@@ -171,6 +176,43 @@ def test_both_drivers_produce_identical_rows_and_identities(
     assert subprocess.deadline_reached is in_process.deadline_reached
 
 
+def test_both_drivers_agree_on_the_rows_an_elapsed_deadline_produces(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+) -> None:
+    """Switching drivers must not change the deadline's shape of evidence.
+
+    The failure codes are deliberately not compared here. The in-process
+    driver has no notion of dispatch, so it calls every deadline-stopped row
+    ``deadline``; the subprocess driver can tell a row that never reached a
+    worker from one that ran and was killed, and says so. Giving the
+    in-process driver the same distinction is a separate change.
+    """
+    experiment = build_toy_experiment()
+
+    in_process = _run(
+        _in_process_driver(),
+        experiment=experiment,
+        request_id="align-deadline:in-process",
+        concurrency=1,
+        max_wall_seconds=0.0,
+    )
+    subprocess_result = _run(
+        subprocess_driver,
+        experiment=experiment,
+        request_id="align-deadline:subprocess",
+        concurrency=1,
+        max_wall_seconds=0.0,
+    )
+
+    assert in_process.deadline_reached is subprocess_result.deadline_reached
+    assert [row.row_state for row in subprocess_result.outputs] == [
+        row.row_state for row in in_process.outputs
+    ]
+    assert subprocess_result.request_identities == (
+        in_process.request_identities
+    )
+
+
 def test_both_drivers_write_the_same_partial_log_entries(
     tmp_path: Path,
     subprocess_driver: SubprocessGraphRolloutEvalDriver,
@@ -273,9 +315,16 @@ def test_row_exceeding_its_wall_budget_reports_the_per_row_deadline(
     assert result.deadline_reached is False
 
 
-def test_batch_expiry_reports_remaining_rows_as_not_dispatched(
+def test_batch_expiry_separates_running_rows_from_never_started_rows(
     tmp_path: Path,
 ) -> None:
+    """A row killed at the deadline ran; only unstarted rows are undispatched.
+
+    One worker takes the first row and blocks on it, so when the batch wall
+    fires exactly one row is inside a worker and the other two never left the
+    queue. Persisting all three as "not dispatched" would claim no provider
+    work was attempted for a row that in fact ran.
+    """
     never_released = tmp_path / "never-released"
     experiment = _gated_experiment(never_released, task_count=3)
 
@@ -297,12 +346,42 @@ def test_batch_expiry_reports_remaining_rows_as_not_dispatched(
 
     assert not never_released.exists()
     assert result.deadline_reached is True
-    assert {row.failure_code for row in result.outputs} == {
-        RowDispatchStatus.NOT_DISPATCHED.value
-    }
+    codes = [row.failure_code for row in result.outputs]
+    assert codes.count(RowDispatchStatus.OPERATION_DEADLINE.value) == 1
+    assert codes.count(RowDispatchStatus.NOT_DISPATCHED.value) == 2
     assert all(
         row.row_state is ExecutedRowState.MISSING for row in result.outputs
     )
+
+
+def test_every_running_row_is_reported_as_the_operation_deadline(
+    tmp_path: Path,
+) -> None:
+    """With a worker per row, no row is undispatched when the wall fires."""
+    never_released = tmp_path / "never-released"
+    experiment = _gated_experiment(never_released, task_count=2)
+
+    driver_context = _subprocess_driver(
+        row_job_entrypoint=GATED_ENTRYPOINT,
+        unit_deadline_seconds=GENEROUS_BUDGET_SECONDS,
+    )
+    driver = next(driver_context)
+    try:
+        result = _run(
+            driver,
+            experiment=experiment,
+            request_id="deadline:batch-all-running",
+            concurrency=2,
+            max_wall_seconds=SHORT_BATCH_BUDGET_SECONDS,
+        )
+    finally:
+        driver_context.close()
+
+    assert not never_released.exists()
+    assert result.deadline_reached is True
+    assert {row.failure_code for row in result.outputs} == {
+        RowDispatchStatus.OPERATION_DEADLINE.value
+    }
 
 
 def test_already_elapsed_deadline_dispatches_no_rows(
@@ -345,6 +424,53 @@ def test_in_process_driver_also_dispatches_nothing_at_a_zero_deadline() -> None:
     assert not result.request_identities
 
 
+@pytest.mark.parametrize(
+    "max_wall_seconds", [pytest.param(1e-12, id="sub-nanosecond")]
+)
+def test_an_unrepresentable_deadline_expires_instead_of_raising(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+    max_wall_seconds: float,
+) -> None:
+    """A deadline too small for dr-exec is already elapsed, not an error."""
+    experiment = build_toy_experiment()
+
+    result = _run(
+        subprocess_driver,
+        experiment=experiment,
+        request_id="deadline:unrepresentable",
+        concurrency=1,
+        max_wall_seconds=max_wall_seconds,
+    )
+
+    assert result.deadline_reached is True
+    assert {row.failure_code for row in result.outputs} == {
+        RowDispatchStatus.NOT_DISPATCHED.value
+    }
+
+
+@pytest.mark.parametrize(
+    "unit_deadline_seconds",
+    [
+        pytest.param(0.0, id="zero"),
+        pytest.param(-1.0, id="negative"),
+        pytest.param(float("inf"), id="infinite"),
+        pytest.param(float("nan"), id="nan"),
+    ],
+)
+def test_an_unusable_row_budget_is_rejected_at_construction(
+    unit_deadline_seconds: float,
+) -> None:
+    """The caller learns at its own call site, not mid-rollout."""
+    with pytest.raises(ValueError, match="unit_deadline_seconds"):
+        SubprocessGraphRolloutEvalDriver(
+            unit_deadline_seconds=unit_deadline_seconds,
+            eval_runner=FakeEvalProcedureRunner(),
+            mutation_field=TOY_MUTATION_FIELD,
+            render_contract=toy_template_render_contract(),
+            transport_factory=fake_llm_transport_factory,
+        )
+
+
 def test_pool_width_is_fixed_by_the_first_run(
     subprocess_driver: SubprocessGraphRolloutEvalDriver,
 ) -> None:
@@ -364,6 +490,71 @@ def test_pool_width_is_fixed_by_the_first_run(
             request_id="width:wider",
             concurrency=4,
         )
+
+
+def test_a_narrower_later_run_is_honoured(
+    tmp_path: Path,
+) -> None:
+    """Narrowing schedules fewer rows at once instead of being ignored.
+
+    Two gated rows at concurrency 1 mean only one can be inside a worker when
+    the batch wall fires, even though the pool is two workers wide. If the
+    narrower request were ignored both would run and both would report the
+    operation deadline.
+    """
+    never_released = tmp_path / "never-released"
+    experiment = _gated_experiment(never_released, task_count=2)
+
+    driver_context = _subprocess_driver(
+        row_job_entrypoint=GATED_ENTRYPOINT,
+        unit_deadline_seconds=GENEROUS_BUDGET_SECONDS,
+    )
+    driver = next(driver_context)
+    try:
+        _run(
+            driver,
+            experiment=build_toy_experiment(),
+            request_id="narrow:wide-first",
+            concurrency=2,
+        )
+        result = _run(
+            driver,
+            experiment=experiment,
+            request_id="narrow:narrow-second",
+            concurrency=1,
+            max_wall_seconds=SHORT_BATCH_BUDGET_SECONDS,
+        )
+    finally:
+        driver_context.close()
+
+    codes = [row.failure_code for row in result.outputs]
+    assert codes.count(RowDispatchStatus.OPERATION_DEADLINE.value) == 1
+    assert codes.count(RowDispatchStatus.NOT_DISPATCHED.value) == 1
+
+
+def test_a_closed_driver_refuses_to_run_rather_than_respawning() -> None:
+    """Closing is terminal, so it cannot silently reset the pool's width."""
+    experiment = build_toy_experiment()
+    before = _child_pids()
+    driver = SubprocessGraphRolloutEvalDriver(
+        unit_deadline_seconds=GENEROUS_BUDGET_SECONDS,
+        eval_runner=FakeEvalProcedureRunner(),
+        mutation_field=TOY_MUTATION_FIELD,
+        render_contract=toy_template_render_contract(),
+        transport_factory=fake_llm_transport_factory,
+    )
+    _run(driver, experiment=experiment, request_id="closed:run", concurrency=1)
+    driver.close()
+
+    with pytest.raises(RowWorkerError, match="closed"):
+        _run(
+            driver,
+            experiment=experiment,
+            request_id="closed:rerun",
+            concurrency=4,
+        )
+
+    assert _child_pids() - before == frozenset()
 
 
 def _child_pids() -> frozenset[str]:
@@ -408,6 +599,30 @@ def test_dropping_the_driver_stops_its_workers() -> None:
     gc.collect()
 
     assert _child_pids() - before == frozenset()
+
+
+def test_a_broken_scheduler_surfaces_as_this_driver_s_error(
+    monkeypatch: pytest.MonkeyPatch,
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+) -> None:
+    """A caller catches RowWorkerError without importing dr-exec."""
+    experiment = build_toy_experiment()
+    real_start = threading.Thread.start
+
+    def refuse_pool_worker(self: threading.Thread) -> None:
+        if self.name.startswith(SCHEDULER_WORKER_THREAD_PREFIX):
+            raise RuntimeError("cannot start a scheduling thread")
+        real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", refuse_pool_worker)
+
+    with pytest.raises(RowWorkerError, match="scheduler broke"):
+        _run(
+            subprocess_driver,
+            experiment=experiment,
+            request_id="broken:scheduler",
+            concurrency=1,
+        )
 
 
 def test_row_dispatch_status_values_are_pinned() -> None:

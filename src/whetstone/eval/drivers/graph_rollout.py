@@ -12,6 +12,7 @@ from whetstone.eval.drivers.graph_row import (
     execute_rollout_graph,
     graph_result_to_row_fields,
 )
+from whetstone.eval.drivers.graph_row_request import RowDispatchStatus
 from whetstone.eval.drivers.rollout_aggregate import aggregate_rollout_outputs
 from whetstone.eval.drivers.row_common import (
     RolloutRowOutput,
@@ -145,7 +146,7 @@ def _deadline_missing_row(
         trace_steps=(),
         output_text=None,
         score=None,
-        failure_code="deadline",
+        failure_code=RowDispatchStatus.OPERATION_DEADLINE.value,
     )
 
 
