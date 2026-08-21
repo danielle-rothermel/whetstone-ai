@@ -25,6 +25,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
+from whetstone.optim.miprov2.demo_mode import Miprov2DemoMode
 from whetstone.optim.miprov2.demo import (
     BootstrapAcceptance,
     ComponentDemo,
@@ -46,10 +47,6 @@ MIPROV2_BOOTSTRAP_SCHEMA_VERSION = 1
 MIPROV2_TRACE_SELECTION_PROJECTION_VERSION = (
     "dspy_example_pickle_protocol4_cpython/v1"
 )
-ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL = 3
-ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL = 0
-
-
 class FewshotSeedKind(StrEnum):
     RESET = "reset"
     LABELS_ONLY = "labels_only"
@@ -255,7 +252,12 @@ class FewshotCandidatePlanningInputs(BaseModel):
     explicit_teacher: StrictBool
     teacher_compiled: StrictBool
     include_non_bootstrapped: StrictBool
-    zeroshot_opt: StrictBool
+    demo_mode: Miprov2DemoMode
+
+    @property
+    def zeroshot_opt(self) -> bool:
+        """Whether this is DSPy's 0-shot mode, derived from ``demo_mode``."""
+        return self.demo_mode is Miprov2DemoMode.ZEROSHOT
 
 
 class FewshotCandidatePlanningResult(BaseModel):
@@ -265,25 +267,37 @@ class FewshotCandidatePlanningResult(BaseModel):
     initial_rng_checkpoint: Miprov2RngCheckpoint
     plans: tuple[FewshotCandidatePlan, ...]
     rng_checkpoint: Miprov2RngCheckpoint
-    zeroshot_opt: StrictBool
+    demo_mode: Miprov2DemoMode
     proposal_max_bootstrapped_demos: StrictInt
     proposal_max_labeled_demos: StrictInt
     study_uses_demo_candidates: StrictBool
 
+    @property
+    def zeroshot_opt(self) -> bool:
+        """Whether this is DSPy's 0-shot mode, derived from ``demo_mode``."""
+        return self.demo_mode is Miprov2DemoMode.ZEROSHOT
+
     @model_validator(mode="after")
     def _validate_result(self) -> FewshotCandidatePlanningResult:
-        if self.study_uses_demo_candidates == self.zeroshot_opt:
-            raise ValueError("zero-shot demo projection is inconsistent")
-        if self.zeroshot_opt and (
-            self.proposal_max_bootstrapped_demos
-            != ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL
-            or self.proposal_max_labeled_demos
-            != ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL
-        ):
-            raise ValueError("zero-shot proposal grounding caps are fixed")
-        if self.zeroshot_opt != self.inputs.zeroshot_opt:
+        if self.study_uses_demo_candidates != self.demo_mode.searches_demos:
             raise ValueError(
-                "planning result zero-shot mode conflicts with inputs"
+                "demo projection conflicts with the resolved demo mode"
+            )
+        if self.demo_mode is Miprov2DemoMode.ZEROSHOT:
+            # A 0-shot run bootstraps nothing at all: it plans no fewshot
+            # candidates, so it also has no proposal grounding caps to set.
+            if self.plans:
+                raise ValueError(
+                    "zero-shot MIPROv2 plans no fewshot candidates"
+                )
+            if (
+                self.proposal_max_bootstrapped_demos != 0
+                or self.proposal_max_labeled_demos != 0
+            ):
+                raise ValueError("zero-shot MIPROv2 grounds no proposals")
+        if self.demo_mode != self.inputs.demo_mode:
+            raise ValueError(
+                "planning result demo mode conflicts with inputs"
             )
         (
             expected_plans,
@@ -330,7 +344,7 @@ def create_fewshot_candidate_plans(
     teacher_compiled: bool = False,
     include_non_bootstrapped: bool = True,
     rng_checkpoint: Miprov2RngCheckpoint,
-    zeroshot_opt: bool = False,
+    demo_mode: Miprov2DemoMode = Miprov2DemoMode.FEWSHOT,
 ) -> FewshotCandidatePlanningResult:
 
     inputs = FewshotCandidatePlanningInputs(
@@ -348,7 +362,7 @@ def create_fewshot_candidate_plans(
         explicit_teacher=explicit_teacher,
         teacher_compiled=teacher_compiled,
         include_non_bootstrapped=include_non_bootstrapped,
-        zeroshot_opt=zeroshot_opt,
+        demo_mode=demo_mode,
     )
     plans, checkpoint, proposal_bootstrapped, proposal_labeled = (
         _build_fewshot_candidate_plans(
@@ -361,10 +375,10 @@ def create_fewshot_candidate_plans(
         initial_rng_checkpoint=rng_checkpoint,
         plans=plans,
         rng_checkpoint=checkpoint,
-        zeroshot_opt=zeroshot_opt,
+        demo_mode=demo_mode,
         proposal_max_bootstrapped_demos=proposal_bootstrapped,
         proposal_max_labeled_demos=proposal_labeled,
-        study_uses_demo_candidates=not zeroshot_opt,
+        study_uses_demo_candidates=demo_mode.searches_demos,
     )
 
 
@@ -408,13 +422,14 @@ def _build_fewshot_candidate_plans(
 
     max_bootstrapped_demos = inputs.max_bootstrapped_demos
     max_labeled_demos = inputs.max_labeled_demos
-    if inputs.zeroshot_opt:
+    if inputs.demo_mode is Miprov2DemoMode.ZEROSHOT:
         if max_bootstrapped_demos != 0 or max_labeled_demos != 0:
             raise ValueError(
-                "zeroshot_opt requires zero study demonstration caps"
+                "zero-shot MIPROv2 requires zero demonstration caps"
             )
-        max_bootstrapped_demos = ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL
-        max_labeled_demos = ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL
+        # A 0-shot run plans no fewshot candidates and therefore draws no
+        # RNG: it neither bootstraps nor grounds proposals in demos.
+        return ((), initial_rng_checkpoint, 0, 0)
 
     upper_bound = inputs.num_candidate_sets - 3
     candidate_seeds = range(-3, upper_bound)
@@ -1321,8 +1336,6 @@ __all__ = [
     "MIPROV2_BOOTSTRAP_ATTEMPT_SCHEMA",
     "MIPROV2_BOOTSTRAP_PLAN_SCHEMA",
     "MIPROV2_TRACE_SELECTION_PROJECTION_VERSION",
-    "ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL",
-    "ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL",
     "BootstrapAttemptPlan",
     "BootstrapCompilerState",
     "BootstrapErrorLimitReached",

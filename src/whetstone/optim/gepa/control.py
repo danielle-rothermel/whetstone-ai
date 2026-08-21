@@ -37,7 +37,7 @@ from whetstone.optim.proposal.proposer import ProposerConfig
 GEPA_ALGORITHM_VERSION = "gepa_upstream_0_1_1/v1"
 GEPA_DSPY_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 GEPA_CONTROL_SCHEMA = "whetstone.gepa_optimizer_config"
-GEPA_CONTROL_SCHEMA_VERSION = 1
+GEPA_CONTROL_SCHEMA_VERSION = 2
 GEPA_ADAPTER_SCHEMA_VERSION = "whetstone.gepa_upstream_adapter/v1"
 GEPA_RESULT_SCHEMA_VERSION = "whetstone.gepa_detailed_result/v1"
 GEPA_AUTO_CANDIDATES: dict[str, int] = {
@@ -134,7 +134,6 @@ class GepaControl(BaseModel):
     use_merge: StrictBool = True
     max_merge_invocations: StrictInt = 5
     merge_val_overlap_floor: StrictInt = 5
-    num_threads: StrictInt | None = None
     failure_score: float = 0.0
     perfect_score: float = 1.0
     track_stats: StrictBool = False
@@ -277,10 +276,6 @@ class GepaControl(BaseModel):
             raise ValueError("max_merge_invocations must be non-negative")
         if self.merge_val_overlap_floor < 1:
             raise ValueError("merge_val_overlap_floor must be positive")
-        if self.num_threads is not None:
-            raise ValueError(
-                "num_threads is not yet supported by canonical GEPA"
-            )
         if not math.isfinite(self.failure_score):
             raise ValueError("failure_score must be finite")
         if not math.isfinite(self.perfect_score):
@@ -436,7 +431,6 @@ def configure_gepa(
     use_merge: bool = True,
     max_merge_invocations: int = 5,
     merge_val_overlap_floor: int = 5,
-    num_threads: int | None = None,
     failure_score: float = 0.0,
     perfect_score: float = 1.0,
     track_stats: bool = False,
@@ -512,7 +506,6 @@ def configure_gepa(
         use_merge=use_merge,
         max_merge_invocations=max_merge_invocations,
         merge_val_overlap_floor=merge_val_overlap_floor,
-        num_threads=num_threads,
         failure_score=failure_score,
         perfect_score=perfect_score,
         track_stats=track_stats,

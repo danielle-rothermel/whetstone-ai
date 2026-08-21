@@ -44,6 +44,7 @@ from whetstone.optim.miprov2.control import (
     Miprov2ProgramLayout,
 )
 from whetstone.optim.miprov2.demo import ComponentDemoSet
+from whetstone.optim.miprov2.demo_mode import Miprov2DemoMode
 from whetstone.optim.miprov2.eval_config import (
     EvalBinding,
 )
@@ -51,7 +52,7 @@ from whetstone.optim.miprov2.render import candidate_from_components
 from whetstone.optim.proposal.mutation import diff_check
 
 MIPROV2_STUDY_SCHEMA = "whetstone.miprov2_study_transcript"
-MIPROV2_STUDY_SCHEMA_VERSION = 5
+MIPROV2_STUDY_SCHEMA_VERSION = 6
 OPTUNA_VERSION = MIPROV2_OPTUNA_VERSION
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA = "whetstone.miprov2_candidate_assembly"
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 4
@@ -842,12 +843,16 @@ class StudyTranscript(_IdentityRecord):
     schema_name: Literal["whetstone.miprov2_study_transcript"] = (
         MIPROV2_STUDY_SCHEMA
     )
-    schema_version: Literal[5] = MIPROV2_STUDY_SCHEMA_VERSION
+    schema_version: Literal[6] = MIPROV2_STUDY_SCHEMA_VERSION
     algorithm_version: Literal["dspy_miprov2/v2"] = MIPROV2_ALGORITHM_VERSION
     reference_commit: Literal["6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"] = (
         MIPROV2_REFERENCE_COMMIT
     )
     optuna_version: Literal["4.8.0"] = OPTUNA_VERSION
+    #: The demo regime this study ran under. ``GROUND_ONLY`` is a Whetstone
+    #: extension rather than frozen DSPy behavior, so it is recorded here and
+    #: marked by ``whetstone_deviation`` below.
+    demo_mode: Miprov2DemoMode
     seed: StrictInt
     run_id: StrictStr
     validation_task_hashes: tuple[StrictStr, ...]
@@ -871,6 +876,8 @@ class StudyTranscript(_IdentityRecord):
             "schema_name": self.schema_name,
             "schema_version": self.schema_version,
             "algorithm_version": self.algorithm_version,
+            "whetstone_deviation": self.whetstone_deviation,
+            "demo_mode": self.demo_mode.value,
             "reference_commit": self.reference_commit,
             "optuna_version": self.optuna_version,
             "seed": self.seed,
@@ -908,11 +915,32 @@ class StudyTranscript(_IdentityRecord):
             ],
         }
 
+    @property
+    def whetstone_deviation(self) -> str | None:
+        """Name the Whetstone extension this study used, if any.
+
+        ``algorithm_version`` stays at the frozen DSPy version for the two
+        faithful modes. ``GROUND_ONLY`` is not DSPy behavior, so the
+        transcript carries an explicit marker instead of silently claiming
+        faithfulness under the same version string.
+        """
+
+        if self.demo_mode.is_faithful_dspy:
+            return None
+        return f"demo_mode:{self.demo_mode.value}"
+
     @model_validator(mode="after")
     def _validate_contract(self) -> StudyTranscript:
         space = self.parameter_space
         if not self.run_id:
             raise ValueError("run_id must be non-empty")
+        if self.demo_mode.searches_demos != (
+            self.demo_pool_identity_hashes is not None
+        ):
+            raise ValueError(
+                f"demo_mode {self.demo_mode.value!r} conflicts with the "
+                "presence of a searched demo dimension"
+            )
         if self.run.record.run_id != self.run_id:
             raise ValueError("study run_id conflicts with the exact run")
         if not self.validation_task_hashes:
@@ -1403,6 +1431,7 @@ class Miprov2Study:
         self,
         *,
         seed: int,
+        demo_mode: Miprov2DemoMode,
         space: Miprov2ParameterSpace,
         schedule: Miprov2StudySchedule,
         run_id: str,
@@ -1416,6 +1445,7 @@ class Miprov2Study:
         run: OptimRunRef,
     ) -> None:
         self.seed = seed
+        self.demo_mode = demo_mode
         self.space = space
         self.schedule = schedule
         self.run_id = run_id
@@ -1429,6 +1459,13 @@ class Miprov2Study:
         self.run = run
         if self.run.record.run_id != self.run_id:
             raise ValueError("study run_id conflicts with the exact run")
+        if self.demo_mode.searches_demos != (
+            self.space.demo_pool_identity_hashes is not None
+        ):
+            raise ValueError(
+                f"demo_mode {self.demo_mode.value!r} conflicts with the "
+                "parameter space demo dimension"
+            )
         _require_run_authorities(
             self.run,
             optimizer_config=self.optimizer_config,
@@ -1453,6 +1490,7 @@ class Miprov2Study:
             evaluation=baseline_evaluation,
         )
         return StudyTranscript(
+            demo_mode=self.demo_mode,
             seed=self.seed,
             run_id=self.run_id,
             validation_task_hashes=self.validation_task_hashes,

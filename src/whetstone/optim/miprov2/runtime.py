@@ -827,7 +827,7 @@ class Miprov2State(BaseModel):
             ),
             teacher_compiled=_teacher_compiled(self.control),
             rng_checkpoint=_initial_bootstrap_rng(self.control),
-            zeroshot_opt=self.control.zeroshot_opt,
+            demo_mode=self.control.demo_mode,
         )
         if self.bootstrap_plans != expected_planning.plans:
             raise ValueError(
@@ -1295,7 +1295,6 @@ def _execution_policy(
         else {}
     )
     return Miprov2EvaluationExecutionPolicy(
-        num_threads=control.num_threads,
         max_errors=control.max_errors,
         provide_traceback=control.provide_traceback,
         task_model_identity_hash=control.task_model_identity_hash,
@@ -1903,7 +1902,7 @@ def replay_miprov2_state(
     study_demos = (
         study_demo_context(
             state.demo_candidates,
-            zeroshot_opt=state.control.zeroshot_opt,
+            demo_mode=state.control.demo_mode,
         )
         if instruction_pools
         else None
@@ -2194,7 +2193,7 @@ class Miprov2Driver:
             ),
             teacher_compiled=_teacher_compiled(control),
             rng_checkpoint=rng,
-            zeroshot_opt=control.zeroshot_opt,
+            demo_mode=control.demo_mode,
         )
         return Miprov2State(
             run_id=run.record.run_id,
@@ -2605,7 +2604,7 @@ class Miprov2Driver:
         if proposal_state is None:
             context = proposal_demo_context(
                 state.demo_candidates,
-                zeroshot_opt=state.control.zeroshot_opt,
+                demo_mode=state.control.demo_mode,
             )
             bridged = proposal_candidates_from_demo_sets(
                 context,
@@ -2648,7 +2647,7 @@ class Miprov2Driver:
             )
         demos = study_demo_context(
             state.demo_candidates,
-            zeroshot_opt=state.control.zeroshot_opt,
+            demo_mode=state.control.demo_mode,
         )
         advanced = state.model_copy(
             update={
@@ -2895,6 +2894,7 @@ class Miprov2Driver:
         )
         return Miprov2Study(
             seed=state.control.seed,
+            demo_mode=state.control.demo_mode,
             space=space,
             schedule=schedule,
             run_id=state.run_id,

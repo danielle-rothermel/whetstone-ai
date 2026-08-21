@@ -49,7 +49,6 @@ MIPROV2_EVAL_BINDING_SCHEMA_VERSION = 1
 class Miprov2EvaluationExecutionPolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    num_threads: StrictInt | None
     max_errors: StrictInt
     provide_traceback: StrictBool | None
     task_model_identity_hash: StrictStr
@@ -62,8 +61,6 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
 
     @model_validator(mode="after")
     def _validate_policy(self) -> Miprov2EvaluationExecutionPolicy:
-        if self.num_threads is not None and self.num_threads <= 0:
-            raise ValueError("num_threads must be positive when present")
         if self.max_errors <= 0:
             raise ValueError("max_errors must be positive")
         if self.generation_id is not None and self.generation_id < 0:
@@ -99,7 +96,6 @@ class Miprov2EvaluationExecutionPolicy(BaseModel):
 
     def identity_payload(self) -> dict[str, Any]:
         return {
-            "num_threads": self.num_threads,
             "max_errors": self.max_errors,
             "provide_traceback": self.provide_traceback,
             "task_model_identity_hash": self.task_model_identity_hash,
