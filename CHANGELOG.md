@@ -47,6 +47,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deadline stopped before submission as `not-dispatched` instead of `deadline`.
   A broken worker-pool scheduler surfaces as `RowWorkerError` rather than a
   dr-exec exception.
+- `SubprocessGraphRolloutEvalDriver` labels a cancelled row from dr-exec's own
+  measured execution span rather than from a locally computed dispatch clock.
+  The previous heuristic compared the driver's clock against a deadline armed
+  later inside dr-exec's `run_batch`, so near expiry the two clocks disagreed
+  and a row could be labelled either way; the span dr-exec publishes on the
+  completion is a single-clock measurement that cannot disagree with itself.
+- `GraphRolloutEvalDriver` collects the result of a row that finished before
+  the operation deadline fired instead of overwriting it with a deadline miss.
+  `Future.cancel()` reports False both for a running future and for a finished
+  one, so the driver now asks `done()` first and keeps the real row.
+- Both drivers reject a negative or NaN `max_wall_seconds` with `ValueError`
+  at the call boundary instead of expiring the batch and persisting every row
+  as a deadline miss. Positive infinity means no batch deadline, exactly as
+  `None` does; `0.0` remains a valid already-elapsed wall. The rule lives in
+  `whetstone.eval.drivers.row_common.validated_phase_wall_seconds`, which both
+  drivers use, so they cannot drift on which walls are legal.
 - `RuntimeEvalEngine` owns its driver's lifetime: it has `close()` and works as
   a context manager, forwarding to drivers that implement the new
   `ClosableEvalDriver` capability (the in-process driver has nothing to close).

@@ -16,6 +16,7 @@ from whetstone.eval.drivers.row_common import (
     process_request_hash,
     remaining_phase_wall_seconds,
     start_phase_deadline,
+    validated_phase_wall_seconds,
 )
 from whetstone.eval.drivers.subprocess_graph_rollout import (
     RowWorkerError,
@@ -39,4 +40,5 @@ __all__ = [
     "process_request_hash",
     "remaining_phase_wall_seconds",
     "start_phase_deadline",
+    "validated_phase_wall_seconds",
 ]

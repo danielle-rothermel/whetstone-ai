@@ -325,14 +325,24 @@ class GraphRolloutEvalDriver:
                     deadline_reached = True
                     for future in unfinished:
                         scheduled = pending[future]
+                        key = (scheduled.task_index, scheduled.seed_index)
+                        # A row that finished before the deadline fired has a
+                        # real result waiting to be collected. cancel() reports
+                        # False for such a future exactly as it does for a
+                        # running one, so asking done() first is what keeps a
+                        # finished row's evidence instead of overwriting it
+                        # with a deadline miss.
+                        if future.done():
+                            output, row_identities = future.result()
+                            request_identities.update(row_identities)
+                            outputs_by_key[key] = output
+                            continue
                         # A future that cancels cleanly had not begun running,
                         # so this row never reached a worker thread; one that
-                        # refuses to cancel was already executing and is the
-                        # operation deadline cutting a row that ran.
+                        # refuses to cancel and is not done was executing, and
+                        # is the operation deadline cutting a row that ran.
                         never_started = future.cancel()
-                        outputs_by_key[
-                            (scheduled.task_index, scheduled.seed_index)
-                        ] = _deadline_missing_row(
+                        outputs_by_key[key] = _deadline_missing_row(
                             candidate_id=request.candidate.candidate_id,
                             task_id=scheduled.task_id,
                             task_index=scheduled.task_index,

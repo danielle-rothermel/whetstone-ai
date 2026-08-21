@@ -71,25 +71,50 @@ def process_request_hash(model: BaseModel) -> str:
     return _process_payload_hash(model.model_dump(mode="json"))
 
 
-def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
-    """Validate one phase wall and convert it to an absolute deadline."""
+def validated_phase_wall_seconds(
+    max_wall_seconds: float | None, /
+) -> float | None:
+    """Reject an unusable phase wall and normalise an unbounded one.
+
+    This is the drivers' single owner of what a caller may pass as an
+    operation deadline, so the in-process and subprocess drivers cannot
+    drift on which walls are legal.
+
+    A negative or NaN wall is a caller mistake: it names no interval, so it
+    is raised at the call boundary rather than quietly expiring the batch and
+    persisting rows as deadline misses. Positive infinity names "no
+    deadline", which is exactly ``None``. Zero is a legal, already-elapsed
+    wall: the operation is over before any row runs.
+    """
     if max_wall_seconds is None:
         return None
     if type(max_wall_seconds) not in (int, float):
         raise ValueError(
-            "max_wall_seconds must be a finite nonnegative real number"
+            "max_wall_seconds must be a nonnegative real number of seconds, "
+            f"not {max_wall_seconds!r}"
         )
     try:
         seconds = float(max_wall_seconds)
     except OverflowError:
         raise ValueError(
-            "max_wall_seconds must be a finite nonnegative real number "
+            "max_wall_seconds must be a nonnegative real number "
             "representable as seconds"
         ) from None
-    if not math.isfinite(seconds) or seconds < 0:
+    if math.isnan(seconds) or seconds < 0:
         raise ValueError(
-            "max_wall_seconds must be a finite nonnegative real number"
+            "max_wall_seconds must be a nonnegative real number of seconds, "
+            f"not {max_wall_seconds!r}"
         )
+    if math.isinf(seconds):
+        return None
+    return seconds
+
+
+def start_phase_deadline(max_wall_seconds: float | None) -> float | None:
+    """Validate one phase wall and convert it to an absolute deadline."""
+    seconds = validated_phase_wall_seconds(max_wall_seconds)
+    if seconds is None:
+        return None
     return time.monotonic() + seconds
 
 
@@ -107,4 +132,5 @@ __all__ = [
     "process_request_hash",
     "remaining_phase_wall_seconds",
     "start_phase_deadline",
+    "validated_phase_wall_seconds",
 ]

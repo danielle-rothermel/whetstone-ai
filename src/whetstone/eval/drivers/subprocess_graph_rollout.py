@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import threading
-import time
 import weakref
 from collections.abc import Callable, Iterator
 from contextlib import closing
@@ -44,7 +43,10 @@ from whetstone.eval.drivers.graph_rollout import (
     _task_prompt_inputs,
 )
 from whetstone.eval.drivers.rollout_aggregate import aggregate_rollout_outputs
-from whetstone.eval.drivers.row_common import RolloutRowOutput
+from whetstone.eval.drivers.row_common import (
+    RolloutRowOutput,
+    validated_phase_wall_seconds,
+)
 from whetstone.eval.drivers.eval_result import InternalEvalResult
 from whetstone.eval.protocol import EvalRequest, EvalTaskView
 from whetstone.experiment.candidate import TemplateRenderContract
@@ -165,6 +167,12 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
     Closing is terminal: a closed driver refuses further runs rather than
     resurrecting workers, so the pool's fixed width holds for the whole
     driver rather than only until the next close.
+
+    A driver handed to a :class:`~whetstone.eval.runtime_engine.RuntimeEvalEngine`
+    belongs to that engine: closing the engine (or using it as a context
+    manager) is what stops these workers, and is the supported path for
+    every driver built by ``ReferenceEvalRuntimeConfig.build_engine``. Close
+    the driver directly only when nothing else owns it.
 
     ``run`` is safe to call from several threads; the pool is created once
     under a lock. The pool's width is still fixed by whichever run reaches
@@ -347,24 +355,9 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         deadline_reached = False
         pool = self._pool(concurrency)
         batch_wall = _batch_wall_time(max_wall_seconds)
-        # dr-exec pulls each job only when it has room to admit it, so the
-        # pull is the moment the row is handed to a worker. Recording the
-        # jobs pulled before the batch deadline is what separates a row that
-        # ran and was killed from one that never started.
-        dispatched: set[JobId] = set()
-        # Started here rather than inside the generator so this clock cannot
-        # begin later than the batch watcher dr-exec arms in run_many, which
-        # would let an already-cancelled job look dispatched.
-        deadline_ns = (
-            None
-            if batch_wall is None
-            else time.monotonic_ns() + batch_wall.limit
-        )
 
         def _pending_jobs() -> Iterator[ExecutionJob]:
             for pending_id in job_ids:
-                if deadline_ns is None or time.monotonic_ns() < deadline_ns:
-                    dispatched.add(pending_id)
                 yield build_in_process_importable_json_job(
                     pending_id,
                     self._entry_point,
@@ -387,11 +380,7 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
                 job_id = completion.result.execution_id.job_id
                 key = keys_by_job[job_id]
                 row_request = row_requests[key]
-                payload, status = _interpret_completion(
-                    completion,
-                    key=key,
-                    dispatched=job_id in dispatched,
-                )
+                payload, status = _interpret_completion(completion, key=key)
                 if status in _DEADLINE_STATUSES:
                     deadline_reached = True
                 if status is RowDispatchStatus.COMPLETED:
@@ -443,6 +432,22 @@ _DEADLINE_STATUSES = frozenset(
 #: dr-exec rejects a wall-time limit that does not convert to at least one
 #: nanosecond, so anything below this is treated as already elapsed.
 _MIN_REPRESENTABLE_WALL_SECONDS = 1e-9
+
+#: Span above which a cancelled row is read as having occupied a worker.
+#:
+#: dr-exec publishes no started flag on ``CancelledOutcome``, so the measured
+#: span is the evidence it does publish. A row the expired scheduler births
+#: already cancelled never leases a worker: it returns from the pre-lease
+#: cancel check having done nothing but stamp two clocks, which is tens of
+#: microseconds. A row that reached a worker survives until the batch watcher
+#: expires the scheduler, so it measures a large fraction of the batch wall.
+#:
+#: One millisecond sits two orders of magnitude above the bookkeeping span
+#: and two orders below the smallest batch wall a real rollout declares, so
+#: no observed span falls near it. Spawning a worker alone costs far more
+#: than this floor, so a row that got as far as leasing is never read as
+#: undispatched.
+_STARTED_ROW_FLOOR_NS = 1_000_000
 
 
 def _validated_unit_deadline(unit_deadline_seconds: float, /) -> float:
@@ -516,22 +521,51 @@ def _batch_wall_time(
 ) -> FiniteDurationLimit | None:
     """Convert this operation's deadline into a batch wall-time ceiling.
 
-    A deadline that has already elapsed — or one too small or too large for
-    dr-exec to express — cannot be declared as a positive limit, so it is
-    expressed as the smallest one dr-exec accepts: the batch expires
+    A negative or NaN wall is rejected by
+    :func:`validated_phase_wall_seconds` before reaching here, and positive
+    infinity arrives as ``None`` — unbounded, exactly as the in-process
+    driver reads it.
+
+    What remains is a valid nonnegative wall. One that has already elapsed —
+    or is too small or too large for dr-exec to express as a positive limit —
+    is declared as the smallest limit dr-exec accepts: the batch expires
     immediately and no row is dispatched.
     """
-    if max_wall_seconds is None:
+    seconds = validated_phase_wall_seconds(max_wall_seconds)
+    if seconds is None:
         return None
-    if (
-        not math.isfinite(max_wall_seconds)
-        or max_wall_seconds < _MIN_REPRESENTABLE_WALL_SECONDS
-    ):
+    if seconds < _MIN_REPRESENTABLE_WALL_SECONDS:
         return FiniteDurationLimit(max_ns=1)
     try:
-        return FiniteDurationLimit.from_seconds(max_wall_seconds)
+        return FiniteDurationLimit.from_seconds(seconds)
     except ValueError:
         return FiniteDurationLimit(max_ns=1)
+
+
+def _cancelled_row_started(completion: CompletedExecution, /) -> bool:
+    """Read dr-exec's own evidence of whether a cancelled row ran.
+
+    ``CancelledOutcome`` carries no started flag, and dr-exec's attribution
+    is identical for both cancel paths, so the execution's measured span is
+    the authoritative signal it does publish.
+
+    dr-exec stamps ``started_at``/``duration_ns`` inside the executor's
+    ``run_blocking``. A job the expired scheduler births already cancelled
+    returns from the pre-lease cancel check without touching a worker, so it
+    measures a bookkeeping span of microseconds. A job that reached a worker
+    is only cancelled when the batch watcher expires the scheduler, so its
+    span runs to the batch wall — orders of magnitude longer. Comparing
+    against a floor far above bookkeeping cost and far below any usable
+    batch wall is what separates the two without a second clock.
+
+    This driver caps the scheduler's capacity at the pool's width, so an
+    admitted job never waits for a worker slot: measured time means worker
+    time.
+    """
+    return (
+        completion.result.measurements.duration_ns
+        >= _STARTED_ROW_FLOOR_NS
+    )
 
 
 def _interpret_completion(
@@ -539,7 +573,6 @@ def _interpret_completion(
     /,
     *,
     key: tuple[int, int],
-    dispatched: bool,
 ) -> tuple[dict[str, object], RowDispatchStatus]:
     """Map one dr-exec completion into this driver's row vocabulary.
 
@@ -552,7 +585,7 @@ def _interpret_completion(
     result = completion.result
     outcome = result.outcome
     if isinstance(outcome, CancelledOutcome):
-        if dispatched:
+        if _cancelled_row_started(completion):
             return {}, RowDispatchStatus.OPERATION_DEADLINE
         return {}, RowDispatchStatus.NOT_DISPATCHED
     if isinstance(outcome, BudgetExceededOutcome):

@@ -15,6 +15,7 @@ import os
 import subprocess
 import threading
 from collections.abc import Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -22,6 +23,7 @@ import pytest
 
 from whetstone.eval.drivers.eval_result import InternalEvalResult
 from whetstone.eval.drivers.graph_row_request import RowDispatchStatus
+from whetstone.eval.drivers import graph_rollout as graph_rollout_module
 from whetstone.eval.drivers.graph_rollout import GraphRolloutEvalDriver
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.drivers.subprocess_graph_rollout import (
@@ -844,3 +846,121 @@ def test_row_dispatch_status_values_are_pinned() -> None:
         "OPERATION_DEADLINE": "deadline",
         "NOT_DISPATCHED": "not-dispatched",
     }
+
+
+def test_a_row_finished_before_the_deadline_keeps_its_real_result(
+    tmp_path: Path,
+) -> None:
+    """A finished-but-uncollected row is evidence, not a deadline miss.
+
+    ``Future.cancel()`` reports False both for a running future and for one
+    that already finished, so a driver that reads False as "was executing"
+    overwrites a completed row with a deadline miss and drops its result.
+
+    The race is forced on state, not timing: the in-process driver's own
+    clock is replaced by a gate that reports "time remains" until the row's
+    future is observed done, then reports "expired" forever. That is exactly
+    the window in which the row has a result nobody has collected yet.
+    """
+    experiment = build_toy_experiment(
+        internal_tasks=(
+            ToyTask(task_id="finished-0", prompt_inputs={"prompt": "hi"}, gold="0"),
+        )
+    )
+    driver = _in_process_driver()
+
+    submitted: list[object] = []
+    real_submit = ThreadPoolExecutor.submit
+
+    def _recording_submit(self, fn, /, *args, **kwargs):  # type: ignore[no-untyped-def]
+        future = real_submit(self, fn, *args, **kwargs)
+        submitted.append(future)
+        return future
+
+    def _gated_remaining(_deadline: float | None) -> float | None:
+        """Report the wall as elapsed only once the row has truly finished."""
+        if submitted and all(future.done() for future in submitted):
+            return 0.0
+        return GENEROUS_BUDGET_SECONDS
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(ThreadPoolExecutor, "submit", _recording_submit)
+        patch.setattr(
+            graph_rollout_module,
+            "remaining_phase_wall_seconds",
+            _gated_remaining,
+        )
+        result = _run(
+            driver,
+            experiment=experiment,
+            request_id="deadline:done-but-uncollected",
+            concurrency=1,
+            max_wall_seconds=GENEROUS_BUDGET_SECONDS,
+        )
+
+    assert submitted, "the row must have been submitted for the race to exist"
+    row = result.outputs[0]
+    assert row.failure_code == ""
+    assert row.row_state is not ExecutedRowState.MISSING
+    assert row.output_text is not None
+    assert result.request_identities
+
+
+@pytest.mark.parametrize(
+    "max_wall_seconds",
+    [
+        pytest.param(-1.0, id="negative"),
+        pytest.param(float("nan"), id="nan"),
+    ],
+)
+def test_both_drivers_reject_an_invalid_batch_wall(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+    max_wall_seconds: float,
+) -> None:
+    """A wall naming no interval is a caller error, not an expired batch.
+
+    Silently expiring would turn a configuration mistake into a full set of
+    rows persisted as deadline misses — evidence that reads as "the
+    operation ran out of time" when in fact nothing was ever asked to run.
+    """
+    experiment = build_toy_experiment()
+
+    for driver in (subprocess_driver, _in_process_driver()):
+        with pytest.raises(ValueError, match="max_wall_seconds"):
+            _run(
+                driver,
+                experiment=experiment,
+                request_id="deadline:invalid",
+                concurrency=1,
+                max_wall_seconds=max_wall_seconds,
+            )
+
+
+def test_both_drivers_treat_an_infinite_batch_wall_as_unbounded(
+    subprocess_driver: SubprocessGraphRolloutEvalDriver,
+) -> None:
+    """Positive infinity names no deadline, exactly as None does."""
+    experiment = build_toy_experiment()
+
+    subprocess_result = _run(
+        subprocess_driver,
+        experiment=experiment,
+        request_id="deadline:infinite-subprocess",
+        concurrency=2,
+        max_wall_seconds=float("inf"),
+    )
+    in_process_result = _run(
+        _in_process_driver(),
+        experiment=experiment,
+        request_id="deadline:infinite-in-process",
+        concurrency=2,
+        max_wall_seconds=float("inf"),
+    )
+
+    for result in (subprocess_result, in_process_result):
+        assert result.deadline_reached is False
+        assert {row.failure_code for row in result.outputs} == {""}
+        assert all(
+            row.row_state is not ExecutedRowState.MISSING
+            for row in result.outputs
+        )
