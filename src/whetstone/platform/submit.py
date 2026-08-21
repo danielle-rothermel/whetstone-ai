@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dr_platform._core.identities import CampaignKey, RunKey, WorkKey
@@ -28,6 +29,13 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
     from whetstone.coordination.eval_service import EvalDispatchMode
+
+
+@dataclass(frozen=True, slots=True)
+class OptimRunMemberSpec:
+    work_key: str
+    launch: OptimRunLaunch
+    priority: int = 0
 
 
 def build_work_input(
@@ -63,49 +71,52 @@ def submit_optim_run(
     engine: Engine,
     campaign_key: str,
     run_key: str,
-    work_key: str,
-    launch: OptimRunLaunch,
+    members: tuple[OptimRunMemberSpec, ...],
     controller_identity_hash: str,
     execution_config_reference: str,
     dispatch_mode: EvalDispatchMode | None = None,
-    priority: int = 0,
 ) -> SubmissionReceipt:
     if controller_identity_hash != runtime.controller.runtime_hash:
-        raise ValueError(
-            "controller identity hash does not match bound runtime"
+        raise ValueError("controller identity hash does not match bound runtime")
+    if not members:
+        raise ValueError("members must be non-empty")
+    run_members: list[RunMemberInput] = []
+    manifest_members: list[OptimRunMemberEntry] = []
+    for ordinal, spec in enumerate(members):
+        runtime.controller.bind_launch(spec.launch)
+        work_input = build_work_input(
+            launch=spec.launch,
+            controller_identity_hash=controller_identity_hash,
+            platform_run_key=run_key,
+            work_key=spec.work_key,
+            dispatch_mode=dispatch_mode,
         )
-    runtime.controller.bind_launch(launch)
-    work_input = build_work_input(
-        launch=launch,
-        controller_identity_hash=controller_identity_hash,
-        platform_run_key=run_key,
-        work_key=work_key,
-        dispatch_mode=dispatch_mode,
-    )
-    input_reference = persist_work_input(runtime.store, work_input)
-    member = RunMemberInput(
-        ordinal=0,
-        work=WorkInput(
-            work_key=WorkKey(work_key),
-            input_reference=input_reference,
-            labels={"run_id": launch.run.run_id},
-            priority=priority,
-        ),
-    )
-    members = (member,)
+        input_reference = persist_work_input(runtime.store, work_input)
+        run_members.append(
+            RunMemberInput(
+                ordinal=ordinal,
+                work=WorkInput(
+                    work_key=WorkKey(spec.work_key),
+                    input_reference=input_reference,
+                    labels={"run_id": spec.launch.run.run_id},
+                    priority=spec.priority,
+                ),
+            )
+        )
+        manifest_members.append(
+            OptimRunMemberEntry(
+                work_key=spec.work_key,
+                run_id=spec.launch.run.run_id,
+            )
+        )
     membership_digest = compute_run_membership_digest(
-        members,
-        expected_member_count=len(members),
+        run_members,
+        expected_member_count=len(run_members),
     )
     manifest = OptimRunManifest(
         platform_run_key=run_key,
         membership_digest=membership_digest,
-        members=(
-            OptimRunMemberEntry(
-                work_key=work_key,
-                run_id=launch.run.run_id,
-            ),
-        ),
+        members=tuple(manifest_members),
     )
     manifest_reference = persist_run_manifest(runtime.store, manifest)
     return submit(
@@ -114,17 +125,18 @@ def submit_optim_run(
         pipeline=OPTIM_PIPELINE_IDENTITY,
         execution_config_reference=execution_config_reference,
         declaration=RunRegistrationDeclaration(
-            expected_member_count=len(members),
+            expected_member_count=len(run_members),
             manifest_reference=manifest_reference,
             membership_digest=membership_digest,
         ),
-        members=members,
+        members=run_members,
         registry=registry,
         engine=engine,
     )
 
 
 __all__ = [
+    "OptimRunMemberSpec",
     "build_work_input",
     "submit_optim_run",
 ]

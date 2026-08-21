@@ -24,9 +24,11 @@ OPTIM_WORK_INPUT_SCHEMA_VERSION = 1
 PLATFORM_EVAL_ROW_INPUT_SCHEMA = "whetstone.platform_eval_row_input"
 PLATFORM_EVAL_ROW_INPUT_SCHEMA_VERSION = 2
 PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA = "whetstone.platform_deferral_join_input"
-PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION = 1
+PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION = 2
 PLATFORM_RUN_MANIFEST_SCHEMA = "whetstone.platform_run_manifest"
 PLATFORM_RUN_MANIFEST_SCHEMA_VERSION = 1
+PLATFORM_RUN_RESULT_SCHEMA = "whetstone.platform_run_result"
+PLATFORM_RUN_RESULT_SCHEMA_VERSION = 1
 
 
 class OptimWorkInput(BaseModel):
@@ -107,6 +109,7 @@ class DeferralJoinInput(BaseModel):
     work_state_ref: StrictStr
     deferral_optim_step_stage_index: StrictInt
     primary_optim_eval_request: OptimEvalRequest
+    row_input_refs: tuple[StrictStr, ...]
 
     @model_validator(mode="after")
     def _validate(self) -> DeferralJoinInput:
@@ -114,6 +117,10 @@ class DeferralJoinInput(BaseModel):
             raise ValueError("work_state_ref must be non-empty")
         if self.deferral_optim_step_stage_index < 0:
             raise ValueError("deferral_optim_step_stage_index must be non-negative")
+        if not self.row_input_refs:
+            raise ValueError("row_input_refs must be non-empty")
+        if any(not row_input_ref for row_input_ref in self.row_input_refs):
+            raise ValueError("row_input_refs entries must be non-empty")
         if self.schema_version != PLATFORM_DEFERRAL_JOIN_INPUT_SCHEMA_VERSION:
             raise ValueError("schema_version is fixed")
         return self
@@ -211,6 +218,12 @@ class OptimRunManifest(BaseModel):
             raise ValueError("membership_digest must be non-empty")
         if not self.members:
             raise ValueError("members must be non-empty")
+        work_keys = tuple(member.work_key for member in self.members)
+        run_ids = tuple(member.run_id for member in self.members)
+        if len(set(work_keys)) != len(work_keys):
+            raise ValueError("member work_key values must be unique")
+        if len(set(run_ids)) != len(run_ids):
+            raise ValueError("member run_id values must be unique")
         if self.schema_version != PLATFORM_RUN_MANIFEST_SCHEMA_VERSION:
             raise ValueError("schema_version is fixed")
         return self
@@ -235,6 +248,80 @@ def load_run_manifest(store: ObjectStore, manifest_reference: str) -> OptimRunMa
     return OptimRunManifest.model_validate(record)
 
 
+class OptimRunMemberResult(BaseModel):
+    """One member's terminal OptimResult reference in a platform run result."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    work_key: StrictStr
+    run_id: StrictStr
+    result_reference: StrictStr
+
+    @model_validator(mode="after")
+    def _validate(self) -> OptimRunMemberResult:
+        if not self.work_key:
+            raise ValueError("work_key must be non-empty")
+        if not self.run_id:
+            raise ValueError("run_id must be non-empty")
+        if not self.result_reference:
+            raise ValueError("result_reference must be non-empty")
+        return self
+
+
+class OptimPlatformRunResult(BaseModel):
+    """Run-level completion artifact referenced by dr-platform run output."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    schema_version: StrictInt = PLATFORM_RUN_RESULT_SCHEMA_VERSION
+    platform_run_key: StrictStr
+    membership_digest: StrictStr
+    member_results: tuple[OptimRunMemberResult, ...]
+
+    @model_validator(mode="after")
+    def _validate(self) -> OptimPlatformRunResult:
+        if not self.platform_run_key:
+            raise ValueError("platform_run_key must be non-empty")
+        if not self.membership_digest:
+            raise ValueError("membership_digest must be non-empty")
+        if not self.member_results:
+            raise ValueError("member_results must be non-empty")
+        work_keys = tuple(item.work_key for item in self.member_results)
+        run_ids = tuple(item.run_id for item in self.member_results)
+        if len(set(work_keys)) != len(work_keys):
+            raise ValueError("member work_key values must be unique")
+        if len(set(run_ids)) != len(run_ids):
+            raise ValueError("member run_id values must be unique")
+        if self.schema_version != PLATFORM_RUN_RESULT_SCHEMA_VERSION:
+            raise ValueError("schema_version is fixed")
+        return self
+
+    def record_content(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+
+def persist_run_result(
+    store: ObjectStore,
+    run_result: OptimPlatformRunResult,
+) -> str:
+    reference, _ = store.put(
+        PLATFORM_RUN_RESULT_SCHEMA,
+        run_result.record_content(),
+    )
+    return format_object_reference(reference)
+
+
+def load_run_result(
+    store: ObjectStore,
+    result_reference: str,
+) -> OptimPlatformRunResult:
+    parsed = parse_object_reference(result_reference)
+    if parsed.schema != PLATFORM_RUN_RESULT_SCHEMA:
+        raise ValueError("run result reference has the wrong schema")
+    record = store.get(parsed)
+    return OptimPlatformRunResult.model_validate(record)
+
+
 __all__ = [
     "DeferralJoinInput",
     "EvalRowInput",
@@ -248,16 +335,21 @@ __all__ = [
     "STAGE_EVAL_ROW",
     "STAGE_OPTIM_STEP",
     "STAGE_RUN_COMPLETION",
+    "OptimPlatformRunResult",
     "OptimRunManifest",
     "OptimRunMemberEntry",
+    "OptimRunMemberResult",
     "OptimWorkInput",
     "PLATFORM_RUN_MANIFEST_SCHEMA",
+    "PLATFORM_RUN_RESULT_SCHEMA",
     "load_deferral_join_input",
     "load_eval_row_input",
     "load_run_manifest",
+    "load_run_result",
     "load_work_input",
     "persist_deferral_join_input",
     "persist_eval_row_input",
     "persist_run_manifest",
+    "persist_run_result",
     "persist_work_input",
 ]

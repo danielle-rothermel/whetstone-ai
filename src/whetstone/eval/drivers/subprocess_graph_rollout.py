@@ -3,9 +3,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from pydantic import JsonValue
+
 from whetstone.eval.drivers.graph_row_request import (
     GraphRowRequest,
     decode_graph_row_output,
+    import_path_for_callable,
+    import_path_for_type,
     worker_request_identities,
 )
 from whetstone.eval.drivers.graph_rollout import (
@@ -55,6 +59,10 @@ def _build_graph_row_request(
     mutation_field: str,
     graph_external_input_field: str,
     transport_api_key_env: str,
+    transport_factory: str,
+    eval_runner: str,
+    prompt_adapter_type: str,
+    prompt_adapter: JsonValue,
     partial_log: PartialLog | None,
     prompt_cache: PromptResultCache | None,
 ) -> GraphRowRequest:
@@ -94,6 +102,10 @@ def _build_graph_row_request(
         },
         gold=gold if isinstance(gold, str) else "",
         transport_api_key_env=transport_api_key_env,
+        transport_factory=transport_factory,
+        eval_runner=eval_runner,
+        prompt_adapter_type=prompt_adapter_type,
+        prompt_adapter=prompt_adapter,
         partial_log_path=(
             str(partial_log.path.resolve()) if partial_log is not None else None
         ),
@@ -134,6 +146,14 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
         self._row_job_entrypoint = row_job_entrypoint
         self._transport_api_key_env = transport_api_key_env
         self._unit_deadline_seconds = unit_deadline_seconds
+        self._transport_factory_path = import_path_for_callable(transport_factory)
+        self._eval_runner_path = import_path_for_type(type(self._eval_runner))
+        self._prompt_adapter_type_path = import_path_for_type(
+            type(self._prompt_adapter)
+        )
+        self._prompt_adapter_payload = self._prompt_adapter.model_dump(
+            mode="json"
+        )
 
     def run(
         self,
@@ -176,6 +196,10 @@ class SubprocessGraphRolloutEvalDriver(GraphRolloutEvalDriver):
                 mutation_field=self._mutation_field,
                 graph_external_input_field=self._graph_external_input_field,
                 transport_api_key_env=self._transport_api_key_env,
+                transport_factory=self._transport_factory_path,
+                eval_runner=self._eval_runner_path,
+                prompt_adapter_type=self._prompt_adapter_type_path,
+                prompt_adapter=self._prompt_adapter_payload,
                 partial_log=partial_log,
                 prompt_cache=prompt_cache,
             )

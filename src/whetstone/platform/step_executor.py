@@ -5,7 +5,11 @@ from typing import Any
 from dr_platform._core.identities import StageKey
 from dr_platform.completion.execution import RunCompletionPayload
 from dr_platform.execution.stage_completion import StageCompletion, StageSuccessor
-from dr_store.content_addressing import ObjectReference, format_object_reference, parse_object_reference
+from dr_store.content_addressing import (
+    ObjectReference,
+    format_object_reference,
+    parse_object_reference,
+)
 
 from whetstone.coordination.eval_service import EvalDispatchMode, EvalExecutionContext
 from whetstone.coordination.harness_run_controller import (
@@ -39,12 +43,14 @@ from whetstone.platform.contracts import (
     STAGE_OPTIM_STEP,
     DeferralJoinInput,
     EvalRowInput,
-    OPTIM_WORK_INPUT_SCHEMA,
+    OptimPlatformRunResult,
+    OptimRunMemberResult,
     OptimWorkInput,
     load_run_manifest,
     load_work_input,
     persist_deferral_join_input,
     persist_eval_row_input,
+    persist_run_result,
 )
 
 OPTIM_WORK_STATE_SCHEMA = "whetstone.optim_work_state"
@@ -107,9 +113,7 @@ def _require_controller_identity(
     work_input: OptimWorkInput,
 ) -> None:
     if work_input.controller_identity_hash != runtime.controller.runtime_hash:
-        raise ValueError(
-            "work input controller identity does not match bound runtime"
-        )
+        raise ValueError("work input controller identity does not match bound runtime")
 
 
 def _serialize_deferred_intents(
@@ -129,8 +133,7 @@ def _deserialize_deferred_intents(
 def _work_state_from_payload(payload: dict[str, Any]) -> OptimWorkState:
     work_input = OptimWorkInput.model_validate(payload["work_input"])
     step_result_refs = tuple(
-        OptimStepResultRef.model_validate(ref)
-        for ref in payload["step_result_refs"]
+        OptimStepResultRef.model_validate(ref) for ref in payload["step_result_refs"]
     )
     pending_step = payload.get("pending_step_result_ref")
     deferral_origin = payload.get("deferral_optim_step_stage_index")
@@ -139,9 +142,7 @@ def _work_state_from_payload(payload: dict[str, Any]) -> OptimWorkState:
         step_index=int(payload["step_index"]),
         step_result_refs=step_result_refs,
         terminal=bool(payload["terminal"]),
-        pending_step_result_ref=(
-            None if pending_step is None else str(pending_step)
-        ),
+        pending_step_result_ref=(None if pending_step is None else str(pending_step)),
         deferral_optim_step_stage_index=(
             None if deferral_origin is None else int(deferral_origin)
         ),
@@ -184,9 +185,7 @@ def _load_work_state(
         f"{RUN_LAUNCH_BINDING_PREFIX}{work_input.run_id}"
     )
     if run_binding is None:
-        raise ValueError(
-            f"optimization run launch is not bound: {work_input.run_id!r}"
-        )
+        raise ValueError(f"optimization run launch is not bound: {work_input.run_id!r}")
     head_ref = resolve_work_state_head(
         runtime.store,
         run_id=work_input.run_id,
@@ -241,8 +240,7 @@ def _persist_work_state(
             state.pending_deferred_intents
         ),
         "step_result_refs": [
-            ref.model_dump(mode="json")
-            for ref in state.step_result_refs
+            ref.model_dump(mode="json") for ref in state.step_result_refs
         ],
         "work_input": state.work_input.record_content(),
     }
@@ -456,8 +454,7 @@ def _emit_deferred_successors(
         work_state_ref=work_state_ref,
     )
     row_refs = [
-        persist_eval_row_input(runtime.store, row_input)
-        for row_input in row_inputs
+        persist_eval_row_input(runtime.store, row_input) for row_input in row_inputs
     ]
     join_ref = persist_deferral_join_input(
         runtime.store,
@@ -465,6 +462,7 @@ def _emit_deferred_successors(
             work_state_ref=work_state_ref,
             deferral_optim_step_stage_index=current_stage_index,
             primary_optim_eval_request=deferred_intents[0],
+            row_input_refs=tuple(row_refs),
         ),
     )
     successors: list[StageSuccessor] = []
@@ -494,7 +492,9 @@ def _deferred_row_count(
     deferred_intents: tuple[OptimEvalRequest, ...],
 ) -> int:
     engine = runtime.eval_service._engine  # noqa: SLF001
-    return len(deferred_intents) * len(engine.sampling.tasks) * engine.sampling.num_seeds
+    return (
+        len(deferred_intents) * len(engine.sampling.tasks) * engine.sampling.num_seeds
+    )
 
 
 def _platform_deferred_successors(
@@ -621,10 +621,7 @@ def execute_optim_step_sync(
     if launch.control is not None:
         if launch.control.identity_hash() != work_input.control_identity_hash:
             raise ValueError("work input control hash does not match launch")
-    elif (
-        launch.run.optimizer_config.record_hash
-        != work_input.control_identity_hash
-    ):
+    elif launch.run.optimizer_config.record_hash != work_input.control_identity_hash:
         raise ValueError("work input control hash does not match run config")
 
     eval_context = EvalExecutionContext(dispatch_mode=work_input.dispatch_mode)
@@ -642,13 +639,9 @@ def execute_optim_step_sync(
         )
     else:
         prior_ref = state.step_result_refs[-1].record_ref
-        prior = OptimStepResult.model_validate(
-            runtime.store.get(prior_ref.reference)
-        )
+        prior = OptimStepResult.model_validate(runtime.store.get(prior_ref.reference))
         prior_results = tuple(
-            OptimStepResult.model_validate(
-                runtime.store.get(ref.record_ref.reference)
-            )
+            OptimStepResult.model_validate(runtime.store.get(ref.record_ref.reference))
             for ref in state.step_result_refs
         )
         if control is None:
@@ -825,12 +818,23 @@ def execute_run_completion_for_run_sync(
             )
         )
 
-    if len(result_refs) != 1:
-        raise ValueError(
-            "v1 run completion supports exactly one member; "
-            f"got {len(result_refs)}"
-        )
-    return result_refs[0]
+    run_result = OptimPlatformRunResult(
+        platform_run_key=manifest.platform_run_key,
+        membership_digest=manifest.membership_digest,
+        member_results=tuple(
+            OptimRunMemberResult(
+                work_key=member.work_key,
+                run_id=member.run_id,
+                result_reference=result_ref,
+            )
+            for member, result_ref in zip(
+                manifest.members,
+                result_refs,
+                strict=True,
+            )
+        ),
+    )
+    return persist_run_result(runtime.store, run_result)
 
 
 __all__ = [

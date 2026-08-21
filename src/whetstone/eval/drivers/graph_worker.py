@@ -4,10 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 
 from whetstone.eval.drivers.graph_row import execute_rollout_graph, graph_result_to_row_fields
-from whetstone.eval.drivers.graph_row_request import GraphRowRequest
+from whetstone.eval.drivers.graph_row_request import (
+    GraphRowRequest,
+    resolve_import_path,
+)
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.eval_procedure import EvalProcedureRunner
 from whetstone.eval.protocol import EvalTaskView
@@ -20,11 +23,13 @@ from whetstone.experiment.graph.llm_call_run_node import (
     ProviderCallConfigResolver,
 )
 from whetstone.experiment.graph.run_node_registry import build_run_node
-from whetstone.provider.language_model import PlainPromptAdapter
+from whetstone.provider.driver import TransportCall
+from whetstone.provider.language_model import (
+    PlainPromptAdapter,
+    StructuredPromptAdapter,
+)
 from whetstone.provider.llm_call import LlmCallContext
 from whetstone.provider.policy import ProviderExecutionPolicy
-from whetstone.testing.fakes.eval_procedure import FakeEvalProcedureRunner
-from whetstone.testing.fakes.transport import FakeLlmTransport
 
 __all__ = ["run_row"]
 
@@ -68,6 +73,8 @@ def _rollout_row_output_for_request(
     *,
     eval_runner: EvalProcedureRunner,
     execution_policy: ProviderExecutionPolicy,
+    transport: TransportCall,
+    prompt_adapter: PlainPromptAdapter | StructuredPromptAdapter,
 ) -> tuple[RolloutRowOutput, tuple[str, ...]]:
     task = _WorkerTask(
         task_id=request.task_id,
@@ -79,10 +86,8 @@ def _rollout_row_output_for_request(
     row_identities: list[str] = []
     llm_context = LlmCallContext(
         execution_policy=execution_policy,
-        transport=FakeLlmTransport(
-            transport_policy=execution_policy.transport_policy
-        ),
-        prompt_adapter=PlainPromptAdapter(),
+        transport=transport,
+        prompt_adapter=prompt_adapter,
         prompt_cache=prompt_cache,
         partial_log=partial_log,
     )
@@ -117,6 +122,44 @@ def _rollout_row_output_for_request(
     return output, tuple(row_identities)
 
 
+def _reconstruct_transport(
+    path: str, execution_policy: ProviderExecutionPolicy
+) -> TransportCall:
+    factory = resolve_import_path(path)
+    if not callable(factory):
+        raise TypeError(f"{path!r} does not resolve to a callable")
+    transport = factory(execution_policy)
+    if not callable(transport):
+        raise TypeError(f"{path!r} did not return a transport callable")
+    return transport
+
+
+def _reconstruct_eval_runner(path: str) -> EvalProcedureRunner:
+    runner_type = resolve_import_path(path)
+    if not callable(runner_type):
+        raise TypeError(f"{path!r} does not resolve to a callable")
+    runner = runner_type()
+    if not isinstance(runner, EvalProcedureRunner):
+        raise TypeError(f"{path!r} did not construct an EvalProcedureRunner")
+    return runner
+
+
+def _reconstruct_prompt_adapter(
+    path: str, payload: object
+) -> PlainPromptAdapter | StructuredPromptAdapter:
+    adapter_type = resolve_import_path(path)
+    if not isinstance(adapter_type, type) or not issubclass(
+        adapter_type, BaseModel
+    ):
+        raise TypeError(f"{path!r} does not resolve to a model type")
+    adapter = adapter_type.model_validate(payload)
+    if not isinstance(adapter, (PlainPromptAdapter, StructuredPromptAdapter)):
+        raise TypeError(
+            f"{path!r} did not reconstruct a supported prompt adapter"
+        )
+    return adapter
+
+
 def run_row(payload: JsonValue) -> JsonValue:
     """Subprocess entrypoint for one graph rollout row."""
     request = GraphRowRequest.model_validate(payload)
@@ -127,8 +170,14 @@ def run_row(payload: JsonValue) -> JsonValue:
         raise ValueError("execution_policy_hash does not match worker policy")
     output, row_identities = _rollout_row_output_for_request(
         request,
-        eval_runner=FakeEvalProcedureRunner(),
+        eval_runner=_reconstruct_eval_runner(request.eval_runner),
         execution_policy=execution_policy,
+        transport=_reconstruct_transport(
+            request.transport_factory, execution_policy
+        ),
+        prompt_adapter=_reconstruct_prompt_adapter(
+            request.prompt_adapter_type, request.prompt_adapter
+        ),
     )
     return _rollout_row_output_to_json(output, row_identities)
 

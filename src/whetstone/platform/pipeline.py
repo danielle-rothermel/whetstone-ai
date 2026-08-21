@@ -84,6 +84,8 @@ def register_optim_pipeline(
     *,
     max_recovery_attempts: int,
 ) -> PipelineDefinition:
+    if runtime.ledger_engine is None:
+        raise ValueError("register_optim_pipeline requires a ledger engine")
     pipeline = build_optim_pipeline(runtime)
     wrapped = wrap_pipeline_workflows(
         pipeline,

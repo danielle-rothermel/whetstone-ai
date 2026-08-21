@@ -28,6 +28,7 @@ from whetstone.optim.contracts import (
     ResolutionDetail,
 )
 from whetstone.platform.contracts import (
+    DeferralJoinInput,
     load_deferral_join_input,
     load_eval_row_input,
 )
@@ -173,8 +174,7 @@ def _load_completed_row_record_from_output(
     parsed = parse_object_reference(output_reference)
     if parsed.schema != PLATFORM_EVAL_ROW_SCHEMA:
         raise ValueError(
-            "eval row predecessor output has the wrong schema: "
-            f"{parsed.schema!r}"
+            f"eval row predecessor output has the wrong schema: {parsed.schema!r}"
         )
     record = runtime.store.get(parsed)
     if not isinstance(record, dict) or not record.get("completed"):
@@ -204,14 +204,15 @@ def _row_evidence_ref(record: dict[str, object]) -> TypedRef | None:
     return TypedRef.model_validate(raw)
 
 
-def _load_row_evidence(store, evidence_ref: TypedRef) -> EvalEvidence | EvalFailureEvidence:
+def _load_row_evidence(
+    store, evidence_ref: TypedRef
+) -> EvalEvidence | EvalFailureEvidence:
     if evidence_ref.schema_name == EVAL_EVIDENCE_SCHEMA:
         return EvalEvidence.model_validate(store.get(evidence_ref.reference))
     if evidence_ref.schema_name == EVAL_FAILURE_SCHEMA:
         return EvalFailureEvidence.model_validate(store.get(evidence_ref.reference))
     raise ValueError(
-        "platform row evidence has the wrong schema: "
-        f"{evidence_ref.schema_name!r}"
+        f"platform row evidence has the wrong schema: {evidence_ref.schema_name!r}"
     )
 
 
@@ -284,7 +285,9 @@ def _records_have_row_outcomes(records: tuple[dict[str, object], ...]) -> bool:
     return False
 
 
-def _expected_episode_row_count(state: OptimWorkState, runtime: RegisteredRuntime) -> int:
+def _expected_episode_row_count(
+    state: OptimWorkState, runtime: RegisteredRuntime
+) -> int:
     if not state.pending_deferred_intents:
         raise ValueError("deferral episode is missing pending deferred intents")
     engine = runtime.eval_service._engine  # noqa: SLF001
@@ -302,7 +305,9 @@ def _verify_episode_eval_row_predecessors(
     expected_row_count: int,
 ) -> tuple[dict[str, object], ...]:
     if runtime.ledger_engine is None:
-        return ()
+        raise ValueError(
+            "eval fan-in predecessor verification requires a ledger engine"
+        )
     predecessors = list_episode_eval_row_predecessors(
         work_item_id,
         deferral_origin=deferral_origin,
@@ -360,9 +365,7 @@ def _load_fanin_resolutions_from_binding(
         return None
     raw_resolutions = record.get("resolutions")
     if isinstance(raw_resolutions, list) and raw_resolutions:
-        return tuple(
-            IntentResolution.model_validate(item) for item in raw_resolutions
-        )
+        return tuple(IntentResolution.model_validate(item) for item in raw_resolutions)
     raw_resolution = record.get("resolution")
     if raw_resolution is not None:
         return (IntentResolution.model_validate(raw_resolution),)
@@ -379,10 +382,9 @@ def _load_fanin_resolutions_for_input(
     return _load_fanin_resolutions_from_binding(runtime.store, binding)
 
 
-def _fanin_entry_allowed(
+def _try_load_cached_fanin_resolutions(
     service: EvalEngineService,
     *,
-    primary_intent: OptimEvalRequest,
     episode_intents: tuple[OptimEvalRequest, ...],
     input_reference: str,
     runtime: RegisteredRuntime,
@@ -395,10 +397,6 @@ def _fanin_entry_allowed(
     )
     if all(resolution is not None for resolution in bound_resolutions):
         return bound_resolutions  # type: ignore[return-value]
-    if service.load_platform_intent(primary_intent) is not None:
-        return None
-    if any(resolution is not None for resolution in bound_resolutions):
-        return None
     return None
 
 
@@ -433,9 +431,9 @@ def _finalize_deferred_step(
         runtime.store.get(parse_object_reference(pending_step_result_ref))
     )
     if pending.resolved_intents:
-        if _resolution_identity_hashes(pending.resolved_intents) != _resolution_identity_hashes(
-            resolutions
-        ):
+        if _resolution_identity_hashes(
+            pending.resolved_intents
+        ) != _resolution_identity_hashes(resolutions):
             raise ValueError("fan-in retry conflicts with merged step resolutions")
         loaded = _load_work_state(runtime, work_state_ref)
         if loaded.step_index > step_index:
@@ -546,30 +544,12 @@ def _complete_fanin_handoff(
     )
 
 
-def _collect_episode_row_records(
+def _load_row_records_from_input_refs(
     runtime: RegisteredRuntime,
-    *,
-    work_state: OptimWorkState,
-    work_state_ref: str,
-    work_item_id: int | None,
-    stage_index: int | None,
-    deferral_origin: int,
+    row_input_refs: tuple[str, ...],
 ) -> tuple[dict[str, object], ...]:
-    if work_item_id is not None and stage_index is not None and runtime.ledger_engine is not None:
-        return _verify_episode_eval_row_predecessors(
-            runtime,
-            work_item_id=work_item_id,
-            stage_index=stage_index,
-            deferral_origin=deferral_origin,
-            expected_row_count=_expected_episode_row_count(work_state, runtime),
-        )
     records: list[dict[str, object]] = []
-    for row_input_ref in _row_input_refs_for_episode(
-        runtime,
-        work_state=work_state,
-        deferral_origin=deferral_origin,
-        work_state_ref=work_state_ref,
-    ):
+    for row_input_ref in row_input_refs:
         binding = runtime.store.resolve(row_input_ref)
         if binding is None:
             raise ValueError("eval row input is not bound to a completion record")
@@ -580,25 +560,33 @@ def _collect_episode_row_records(
     return tuple(records)
 
 
-def _row_input_refs_for_episode(
+def _collect_episode_row_records(
     runtime: RegisteredRuntime,
     *,
     work_state: OptimWorkState,
-    deferral_origin: int,
-    work_state_ref: str,
-) -> tuple[str, ...]:
-    from whetstone.platform.contracts import persist_eval_row_input
-    from whetstone.platform.step_executor import _expand_eval_rows
-
-    row_inputs = _expand_eval_rows(
-        runtime,
-        work_state.pending_deferred_intents,
-        deferral_origin_stage_index=deferral_origin,
-        work_state_ref=work_state_ref,
-    )
-    return tuple(
-        persist_eval_row_input(runtime.store, row_input) for row_input in row_inputs
-    )
+    join_input: DeferralJoinInput,
+    work_item_id: int | None,
+    stage_index: int | None,
+) -> tuple[dict[str, object], ...]:
+    expected_row_count = _expected_episode_row_count(work_state, runtime)
+    if work_item_id is not None:
+        if stage_index is None:
+            raise ValueError("eval fan-in with work_item_id requires stage_index")
+        if runtime.ledger_engine is None:
+            raise ValueError("eval fan-in with work_item_id requires a ledger engine")
+        return _verify_episode_eval_row_predecessors(
+            runtime,
+            work_item_id=work_item_id,
+            stage_index=stage_index,
+            deferral_origin=join_input.deferral_optim_step_stage_index,
+            expected_row_count=expected_row_count,
+        )
+    if len(join_input.row_input_refs) != expected_row_count:
+        raise ValueError(
+            "eval fan-in persisted row refs do not match episode row count: "
+            f"expected {expected_row_count}, got {len(join_input.row_input_refs)}"
+        )
+    return _load_row_records_from_input_refs(runtime, join_input.row_input_refs)
 
 
 def execute_eval_fanin_sync(
@@ -621,23 +609,20 @@ def execute_eval_fanin_sync(
             expected=work_state.work_input.platform_stage_index,
             stage_key="eval_fanin",
         )
-    deferral_origin = join_input.deferral_optim_step_stage_index
     if work_state.pending_step_result_ref is None:
         raise ValueError("deferral fan-in requires a pending step result")
     row_records = _collect_episode_row_records(
         runtime,
         work_state=work_state,
-        work_state_ref=work_state_ref,
+        join_input=join_input,
         work_item_id=work_item_id,
         stage_index=stage_index,
-        deferral_origin=deferral_origin,
     )
     episode_intents = _unique_intents_from_row_records(row_records)
     if not episode_intents:
         raise ValueError("deferral episode has no deferred intents")
-    cached_resolutions = _fanin_entry_allowed(
+    cached_resolutions = _try_load_cached_fanin_resolutions(
         service,
-        primary_intent=join_input.primary_optim_eval_request,
         episode_intents=episode_intents,
         input_reference=input_reference,
         runtime=runtime,

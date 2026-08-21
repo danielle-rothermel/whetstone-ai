@@ -24,7 +24,7 @@ from whetstone.platform.step_executor import (
     _load_work_state,
     execute_optim_step_sync,
 )
-from whetstone.platform.submit import submit_optim_run
+from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
 from whetstone.provider.llm_call import derive_rng_seed
 
 
@@ -147,8 +147,7 @@ def test_submit_optim_run_rejects_mismatched_controller_identity(
             engine=MagicMock(),
             campaign_key="campaign-1",
             run_key="run-1",
-            work_key="work-1",
-            launch=launch,
+            members=(OptimRunMemberSpec(work_key="work-1", launch=launch),),
             controller_identity_hash="0" * 64,
             execution_config_reference="exec-config-ref",
         )
