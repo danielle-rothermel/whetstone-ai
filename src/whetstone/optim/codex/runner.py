@@ -1091,12 +1091,42 @@ def _parse_output_artifact_bytes(
         )
         artifact = CodexOutputArtifact.model_validate_json(raw)
     except (StrictJsonDecodeError, ValidationError) as exc:
-        raise OpaqueStepError(
-            "Codex final output artifact failed schema validation"
+        # The process really ran under the sandbox and really spent its
+        # output budget, so the failure carries the same isolation record
+        # every other post-execution failure does. Raising the bare base
+        # error here dropped it, and the terminalized Step then recorded
+        # an empty ``codex_isolation``: no profile, no budgets, no
+        # truncation flags to explain a stitched transcript.
+        raise CodexStructuredExecutionFailure(
+            "Codex final output artifact failed schema validation",
+            stdout=stdout,
+            stderr=stderr.encode("utf-8", "surrogateescape"),
+            artifact_bytes=raw,
+            isolation=isolation,
         ) from exc
     if artifact.run_id != run_id:
-        raise OpaqueStepError("Codex final output artifact has the wrong run")
-    parsed = _parse_jsonl_events(stdout, truncated=stdout_truncated)
+        raise CodexStructuredExecutionFailure(
+            "Codex final output artifact has the wrong run",
+            stdout=stdout,
+            stderr=stderr.encode("utf-8", "surrogateescape"),
+            artifact_bytes=raw,
+            isolation=isolation,
+        )
+    try:
+        parsed = _parse_jsonl_events(stdout, truncated=stdout_truncated)
+    except OpaqueStepError as exc:
+        # Same reason as the schema failure above: a malformed event
+        # stream is exactly the failure whose isolation record -- the
+        # truncation flags and dropped-byte counts in particular -- is
+        # what tells a reader whether the budget caused it. The helper
+        # stays a pure parser and the evidence is attached here.
+        raise CodexStructuredExecutionFailure(
+            str(exc),
+            stdout=stdout,
+            stderr=stderr.encode("utf-8", "surrogateescape"),
+            artifact_bytes=raw,
+            isolation=isolation,
+        ) from exc
     process_evidence = {
         "agent": artifact.conversation_evidence,
         "jsonl_events": list(parsed.events),

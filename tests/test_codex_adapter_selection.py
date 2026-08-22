@@ -1269,3 +1269,80 @@ def test_an_mcp_host_that_never_starts_terminalizes_the_step(
     finally:
         squatter.close()
 
+
+class _SchemaInvalidArtifactRunner:
+    """Pays for one evaluation, then returns an unparseable artifact.
+
+    This drives the runner's real parse path: ``_parse_output_artifact_bytes``
+    with a genuine isolation record, exactly as ``run`` calls it after a
+    zero-exit CLI. The failure is the parser's own, not a synthesized one.
+    """
+
+    #: Stands in for the record ``_execute_structured`` builds. Only the
+    #: fields the evidence has to survive with are asserted on.
+    ISOLATION = {
+        "strategy": "macos_sandbox_exec",
+        "output_truncation": {
+            "stdout_truncated": True,
+            "stdout_dropped_bytes": 4096,
+            "stderr_truncated": False,
+            "stderr_dropped_bytes": 0,
+        },
+    }
+
+    def __init__(self, world, *, calls) -> None:
+        self._world = world
+        self._calls = calls
+
+    def run(self, request, handle, *, lease_token):
+        del handle, lease_token
+        from whetstone.optim.codex.runner import (
+            _parse_output_artifact_bytes,
+        )
+
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        # A zero-exit run whose final message is not a valid artifact.
+        return _parse_output_artifact_bytes(
+            b'{"not": "an artifact"}',
+            stdout=b"",
+            stderr="",
+            run_id=request.run_id,
+            isolation=self.ISOLATION,
+            stdout_truncated=True,
+        )
+
+
+def test_a_parse_failure_keeps_its_isolation_evidence(
+    selection_world,
+) -> None:
+    """A failed parse is still a run that happened under the sandbox.
+
+    The schema failure was raised as a bare ``OpaqueStepError``, so the
+    adapter's ``getattr(exc, "isolation", {})`` stored an empty
+    ``codex_isolation``: the terminalized Step recorded no profile, no
+    budgets, and -- the evidence that actually explains this failure --
+    no truncation flags, leaving a reader unable to tell a malformed
+    artifact from one the output budget cut in half.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _SchemaInvalidArtifactRunner(world, calls=[("c1", _TEMPLATE_A)])
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_EXECUTION_FAILED_CODE
+
+    stored = world.store.get(result.state_ref.reference)
+    isolation = stored["codex_isolation"]
+    assert isolation["strategy"] == "macos_sandbox_exec"
+    # The truncation record is what tells a stitched transcript from a
+    # contiguous one, so it must survive the failure that references it.
+    assert isolation["output_truncation"] == {
+        "stdout_truncated": True,
+        "stdout_dropped_bytes": 4096,
+        "stderr_truncated": False,
+        "stderr_dropped_bytes": 0,
+    }
