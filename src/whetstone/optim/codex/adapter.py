@@ -7,16 +7,21 @@ it sees a score.
 
 A ``TOOL_USING`` Step Result carries Tool Evidence, never intent or
 search evidence -- the two are mutually exclusive by contract. The
-Issued Tool Call ledger produces one Tool Evidence entry per admitted
-call, so every paid Codex evaluation is reachable from the Step Result
-without the adapter attesting anything.
+Issued Tool Call ledger produces one Tool Evidence entry per reported
+call, and the adapter reconciles that count against the durable number
+of calls this run actually admitted: a shortfall is a terminal failure,
+so a Step never completes with paid evaluations invisible to the ledger
+and undebited from the ``tool_calls`` budget.
 
 The final candidate is resolved *from the ledger*, not from the artifact.
 The artifact names a ``selected_call_id``; the adapter reconstructs the
 candidate from that call's recorded, content-addressed ``args``. A
 candidate that was never evaluated through the Tool therefore cannot be
 returned: there is no path from the artifact to a candidate body except
-through a recorded, admitted Tool Call.
+through a recorded, admitted Tool Call. The selected call must also
+carry a real score -- a refusal or a terminally failed evaluation is
+rejected, because the agent would be claiming a candidate it never
+successfully measured.
 """
 
 from __future__ import annotations
@@ -52,6 +57,11 @@ CODEX_OUTPUT_ARTIFACT_SCHEMA = "whetstone.codex_output_artifact"
 CODEX_SELECTION_UNEVALUATED_CODE = "codex_selection_unevaluated"
 CODEX_LEASE_TOKEN_MISMATCH_CODE = "codex_lease_token_mismatch"
 CODEX_SELECTION_CONTRACT_CODE = "codex_selection_contract"
+#: The agent admitted more paid evaluations than it reported, so the
+#: Issued Tool Call ledger would not be total over admitted calls.
+CODEX_UNREPORTED_EVALUATION_CODE = "codex_unreported_evaluation"
+#: The selected call reached a terminal state carrying no score.
+CODEX_SELECTION_UNSCORED_CODE = "codex_selection_unscored"
 
 
 class OpaqueStepError(RuntimeError):
@@ -174,14 +184,18 @@ class CodexAdapter:
                 "Codex output artifact belongs to another run"
             )
         typed_artifact_ref = self._persist_artifact(artifact)
+        # The durable, per-run count of calls this exact Tool Config and
+        # capacity binding admitted. It is ground truth about what was
+        # paid for, independent of what the agent chose to report.
+        accepted_count = self._bound_tool_store.accepted_count(
+            config, handle.binding
+        )
         state_delta = {
             "codex_output_artifact_ref": typed_artifact_ref.model_dump(
                 mode="json"
             ),
             "tool_namespace": str(config.store_namespace_key),
-            "harness_store_accepted_call_count": (
-                self._bound_tool_store.accepted_count(config, handle.binding)
-            ),
+            "harness_store_accepted_call_count": accepted_count,
         }
 
         if artifact.lease_token_hash != codex_lease_token_hash(lease_token):
@@ -201,6 +215,31 @@ class CodexAdapter:
             admitted = self._admitted_calls(request, artifact, handle)
         except _UnevaluatedSelectionError as exc:
             return self._failed(state_delta, exc.failure)
+
+        # Ledger totality. Every admitted call was a paid evaluation; the
+        # ledger only sees the ones the agent reported, so a shortfall
+        # means paid work is unreachable from the Step Result and the
+        # tool_calls budget is under-debited. Completing here would leave
+        # invisible spend, so the Step fails loudly instead.
+        if len(admitted) < accepted_count:
+            return self._failed(
+                state_delta,
+                TerminalFailure(
+                    code=CODEX_UNREPORTED_EVALUATION_CODE,
+                    message=(
+                        "Codex admitted more paid evaluations than it "
+                        "reported, so the Issued Tool Call ledger is not "
+                        "total over this Step's admitted calls"
+                    ),
+                    details={
+                        "admitted_call_count": accepted_count,
+                        "reported_call_count": len(admitted),
+                        "evaluated_call_ids": list(
+                            artifact.evaluated_call_ids
+                        ),
+                    },
+                ),
+            )
 
         if artifact.selected_call_id is None:
             return AdapterOutput(
@@ -234,6 +273,33 @@ class CodexAdapter:
                         "evaluated_call_ids": list(
                             artifact.evaluated_call_ids
                         ),
+                    },
+                ),
+            )
+
+        # ``COMPLETED`` is also the terminal state of an evaluation that
+        # started and then failed: the executor persists a Tool Result
+        # carrying ``terminal_failure``, with no ``output`` and no
+        # ``reward``. Returning that candidate is the same violation as
+        # returning an unevaluated one -- the agent would be claiming a
+        # winner it never successfully measured -- so the Step fails.
+        if selected.result.output is None or selected.result.reward is None:
+            return self._failed(
+                state_delta,
+                # A Step Result carries one shared terminal failure: when
+                # any Tool Evidence entry failed, the Step must fail under
+                # that exact failure. A failed evaluation always supplies
+                # one; the adapter's own code names the residual case
+                # where a scoreless result carried none.
+                selected.result.terminal_failure
+                or TerminalFailure(
+                    code=CODEX_SELECTION_UNSCORED_CODE,
+                    message=(
+                        "Codex selected a Tool Call whose durable result "
+                        "carries no score"
+                    ),
+                    details={
+                        "selected_call_id": artifact.selected_call_id,
                     },
                 ),
             )
@@ -441,6 +507,8 @@ __all__ = [
     "CODEX_OUTPUT_ARTIFACT_SCHEMA",
     "CODEX_SELECTION_CONTRACT_CODE",
     "CODEX_SELECTION_UNEVALUATED_CODE",
+    "CODEX_SELECTION_UNSCORED_CODE",
+    "CODEX_UNREPORTED_EVALUATION_CODE",
     "CodexAdapter",
     "CodexOutputArtifact",
     "CodexRunResult",

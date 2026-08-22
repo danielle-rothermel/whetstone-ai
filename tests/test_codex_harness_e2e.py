@@ -36,6 +36,7 @@ from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
     CODEX_LEASE_TOKEN_MISMATCH_CODE,
     CODEX_SELECTION_UNEVALUATED_CODE,
+    CODEX_UNREPORTED_EVALUATION_CODE,
     CodexAdapter,
     codex_lease_token_hash,
 )
@@ -386,3 +387,82 @@ def test_the_run_is_tool_using_and_carries_exactly_one_tool_config(
         toy_capacity_binding(world.run).subject_ref
         == optimization_run_reference(world.run).record_ref
     )
+
+
+def _accepted_call_count(world, result) -> int:
+    """Read the durable accepted count the adapter recorded on the Step.
+
+    The adapter's ``state_delta`` is persisted as the Step Result's
+    ``state_ref`` snapshot, so the assertion reads it back from the store
+    rather than from the in-memory adapter output.
+    """
+    snapshot = world.store.get(result.state_ref.reference)
+    return int(snapshot["harness_store_accepted_call_count"])
+
+
+def test_an_unreported_admitted_evaluation_fails_the_step(
+    codex_world,
+) -> None:
+    """Under-reporting must not hide paid work from the ledger.
+
+    The agent makes two real admitted evaluations and names only one. The
+    ledger built from the artifact would see one entry and debit one
+    ``tool_calls``, leaving a paid evaluation unreachable from the Step
+    Result and the run's remaining budget overstated. The adapter
+    reconciles against the durable accepted count and refuses to
+    complete.
+    """
+    world = codex_world()
+    adapter = world.adapter(
+        [
+            world.tool_step(_TEMPLATE_A, "c1"),
+            world.tool_step(_TEMPLATE_B, "c2"),
+            {
+                "final": {
+                    "selected_call_id": "c1",
+                    "evaluated_call_ids": ["c1"],
+                }
+            },
+        ]
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_UNREPORTED_EVALUATION_CODE
+    )
+    assert result.terminal_failure.details["admitted_call_count"] == 2
+    assert result.terminal_failure.details["reported_call_count"] == 1
+    assert result.accepted_candidates == ()
+    # The durable ground truth is on the Step Result either way.
+    assert _accepted_call_count(world, result) == 2
+
+
+def test_reporting_every_admitted_call_debits_the_full_budget(
+    codex_world,
+) -> None:
+    """The reconciliation's success side: totality holds, budget matches."""
+    world = codex_world()
+    adapter = world.adapter(
+        [
+            world.tool_step(_TEMPLATE_A, "c1"),
+            world.tool_step(_TEMPLATE_B, "c2"),
+            {"final": {"selected_call_id": "c1"}},
+        ]
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.terminal_failure is None, result.terminal_failure
+    accepted = _accepted_call_count(world, result)
+    assert accepted == 2
+    assert len(result.tool_evidence) == accepted
+    assert result.budget_delta.consumed["tool_calls"] == accepted

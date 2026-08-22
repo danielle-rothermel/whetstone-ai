@@ -452,20 +452,49 @@ class SubprocessCodexRunner:
             "ALL_PROXY",
             "NO_PROXY",
         }
-        if self._runtime is not None:
-            allowed.add(
-                self._runtime.execution_policy.transport_policy.api_key_env
-            )
         # The allowlist is deliberately narrow: the Codex process is
         # untrusted and inherits nothing by default. A caller that must
         # grant one more variable names it explicitly.
         allowed.update(extra_environment_keys)
+        # The task-model API key is the eval transport's credential and is
+        # deliberately absent from ``allowed``. The Codex process is a
+        # general-purpose agent with network access, so holding that key
+        # would let it score candidates directly -- unadmitted, unleased,
+        # and outside the ledger. Only the MCP evaluation server needs it,
+        # and it receives it through the mcp_servers.whetstone.env block.
+        secret_key_env = (
+            self._runtime.execution_policy.transport_policy.api_key_env
+            if self._runtime is not None
+            else None
+        )
+        self._mcp_secret_environment = (
+            {secret_key_env: source_environment[secret_key_env]}
+            if secret_key_env is not None
+            and secret_key_env in source_environment
+            else {}
+        )
         self._environment = {
             key: value
             for key, value in source_environment.items()
-            if key in allowed
+            if key in allowed and key != secret_key_env
         }
         self._auth_source = auth_source
+
+    def codex_process_environment(self) -> dict[str, str]:
+        """Exactly what the untrusted Codex process is granted.
+
+        ``CODEX_HOME`` and ``PYTHONPATH`` are rewritten per run to point
+        at that run's scratch directory; everything else is fixed here.
+        """
+        return dict(self._environment)
+
+    def mcp_server_secret_environment(self) -> dict[str, str]:
+        """The credentials only the MCP evaluation server child receives.
+
+        These never enter :meth:`codex_process_environment`, so the agent
+        cannot read them out of its own environment.
+        """
+        return dict(self._mcp_secret_environment)
 
     def run(
         self,
@@ -524,6 +553,9 @@ class SubprocessCodexRunner:
                     self._reward_policy.model_dump_json()
                 ),
                 McpEnvironmentKey.RUN_LEASE_TOKEN: lease_token,
+                # The eval transport's credential reaches the server child
+                # and nothing else; see mcp_server_secret_environment.
+                **self._mcp_secret_environment,
             },
             stage_runtime=True,
         )
