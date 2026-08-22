@@ -19,7 +19,7 @@ dr-store's.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dr_store.content_addressing import ObjectReference
 from dr_store.lease import (
@@ -105,12 +105,50 @@ def typed_ref(reference: ObjectReference) -> TypedRef:
     )
 
 
-def _to_lease_failure(failure: TerminalFailure) -> _LeaseTerminalFailure:
-    return _LeaseTerminalFailure(
-        code=str(failure.code),
-        message=str(failure.message),
-        details=dict(failure.model_dump(mode="json")["details"]),
+# dr-store's ``TerminalFailure`` validates ``code`` and ``message`` far more
+# tightly than whetstone's ``NonEmptyId``, which only rejects the empty string.
+# Whetstone's failure text carries arbitrary provider and exception output, so
+# the conversion must be total: a message that dr-store would reject has to
+# still produce an orderly FAILED terminal rather than raising inside a
+# ``maintain(...)`` block and leaving the lease to expire and be redriven.
+_LEASE_TEXT_LIMIT = 1024
+_TRUNCATION_SUFFIX = "..."
+
+
+def _lease_text(value: str, *, field: str, details: dict[str, Any]) -> str:
+    """Coerce whetstone failure text into dr-store's accepted text shape.
+
+    Preserves the original under ``details[f"untruncated_{field}"]`` whenever
+    coercion loses information, so no diagnostic text is dropped.
+    """
+    coerced = value.replace("\x00", "")
+    coerced = "".join(
+        character
+        for character in coerced
+        if not "\ud800" <= character <= "\udfff"
     )
+    if len(coerced) > _LEASE_TEXT_LIMIT:
+        coerced = (
+            coerced[: _LEASE_TEXT_LIMIT - len(_TRUNCATION_SUFFIX)]
+            + _TRUNCATION_SUFFIX
+        )
+    if not coerced.strip():
+        # dr-store rejects empty and whitespace-only text; whetstone's
+        # NonEmptyId admits both beyond the empty string.
+        coerced = f"<unprintable {field}>"
+    if coerced != value:
+        details[f"untruncated_{field}"] = value
+    return coerced
+
+
+def _to_lease_failure(failure: TerminalFailure) -> _LeaseTerminalFailure:
+    details = dict(failure.model_dump(mode="json")["details"])
+    # Bind text before details so a coerced value can record its original.
+    code = _lease_text(str(failure.code), field="code", details=details)
+    message = _lease_text(
+        str(failure.message), field="message", details=details
+    )
+    return _LeaseTerminalFailure(code=code, message=message, details=details)
 
 
 def _from_lease_failure(failure: _LeaseTerminalFailure) -> TerminalFailure:

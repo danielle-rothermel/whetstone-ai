@@ -271,6 +271,50 @@ def test_a_failed_effect_replays_its_whetstone_terminal_failure(
     assert replay.terminal.failure == failure
 
 
+def test_an_oversized_failure_message_still_publishes_a_terminal(
+    authority: tuple[EffectLeaseAuthority, FakeClock],
+) -> None:
+    """Provider text too long for dr-store must not cost us the lease.
+
+    Whetstone's TerminalFailure.message is a NonEmptyId carrying arbitrary
+    provider and exception output; dr-store caps its text at 1024 characters.
+    The boundary truncates instead of raising, so an evaluation failure
+    terminalizes as FAILED rather than escalating into a lost lease that
+    expires and gets redriven.
+    """
+    lease_authority, _clock = authority
+    request = _request()
+    lease = _acquire(lease_authority, request)
+    long_message = "provider error: " + "x" * 1200
+    failure = TerminalFailure(
+        code="evaluation_RuntimeError",
+        message=long_message,
+        details=ImmutableJsonObject({"attempt": 1}),
+    )
+
+    terminal = lease_authority.fail(
+        lease, result_ref=_result_ref(), failure=failure
+    )
+
+    assert terminal.outcome is TerminalOutcome.FAILED
+    assert terminal.failure is not None
+    # Truncated to dr-store's limit, with the full text preserved.
+    assert len(terminal.failure.message) == 1024
+    assert terminal.failure.message.endswith("...")
+    assert terminal.failure.details["untruncated_message"] == long_message
+    assert terminal.failure.details["attempt"] == 1
+    # Truncation is stable, so the terminal stays authoritative.
+    assert lease_authority.verify_terminal(terminal) == terminal
+    replay = lease_authority.acquire(
+        request,
+        owner_id="owner-b",
+        attempt_id="attempt-b",
+        lease_duration=_LEASE,
+    )
+    assert replay.outcome is AcquireOutcome.FAILED
+    assert replay.terminal == terminal
+
+
 def test_a_stale_lease_cannot_publish_a_terminal(
     authority: tuple[EffectLeaseAuthority, FakeClock],
 ) -> None:
