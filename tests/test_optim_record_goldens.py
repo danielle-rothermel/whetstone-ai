@@ -21,6 +21,7 @@ from whetstone.optim.contracts import (
     STEP_REQUEST_SCHEMA_VERSION,
     STEP_RESULT_SCHEMA,
     STEP_RESULT_SCHEMA_VERSION,
+    SUPERSEDED_FAILURE_CODES_KEY,
     IntentOutcome,
     OptimResult,
     OptimRun,
@@ -115,6 +116,13 @@ GOLDEN_STEP_RESULT_KEYS = frozenset(
         "provenance_ordinal",
     }
 )
+
+#: A Step failure's ``details`` key naming the nested failure codes the
+#: Step supersedes. It is not a model field -- it lives inside a
+#: persisted ``TerminalFailure.details`` payload -- so the key set tests
+#: above cannot catch it drifting. Written out by hand for the same
+#: reason they are.
+GOLDEN_SUPERSEDED_FAILURE_CODES_KEY = "superseded_failure_codes"
 
 GOLDEN_OPTIM_RESULT_KEYS = frozenset(
     {
@@ -298,3 +306,17 @@ def test_seed_retained_serializes_on_the_wire() -> None:
     """The no-improvement signal is a persisted field, not a derived view."""
     assert _step_result().model_dump(mode="json")["seed_retained"] is True
     assert _optim_result().model_dump(mode="json")["seed_retained"] is True
+
+
+def test_superseded_failure_codes_key_is_pinned() -> None:
+    """The supersession key is persisted inside a Step failure.
+
+    A superseding Step Result records the nested codes it stands for
+    under this key, and the Step Result validator reads it back to check
+    that set. Renaming it would silently turn every stored supersession
+    into an unexplained disagreement with its own evidence, so the
+    literal is pinned here rather than derived.
+    """
+    assert (
+        SUPERSEDED_FAILURE_CODES_KEY == GOLDEN_SUPERSEDED_FAILURE_CODES_KEY
+    )

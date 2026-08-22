@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from dr_store.sync import open_sqlite
+
 from tests.test_gepa_harness_adapter import _toy_gepa_control
 from whetstone.coordination.step_contracts import (
     resolve_step_contract_provider,
@@ -15,16 +17,27 @@ from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import (
     IdentityRef,
     ImmutableJsonObject,
+    TerminalFailure,
     TypedRef,
     typed_ref_for_record,
 )
+from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.eval.schema_names import EVAL_FAILURE_SCHEMA
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import (
+    INTENT_RESOLUTION_SCHEMA_VERSION,
+    SUPERSEDED_FAILURE_CODES_KEY,
+    IntentOutcome,
+    IntentResolution,
+    OptimEvalRequest,
     OptimRun,
     OptimStepRequest,
     OptimStepResult,
     OutputContract,
+    ResolutionClass,
+    ResolutionDetail,
     StepKind,
     StepMode,
     StepStatus,
@@ -898,3 +911,128 @@ def test_a_nonterminal_step_persists_its_skipped_mutations(tmp_path) -> None:
     persisted = output.state_delta[GEPA_SKIPPED_MUTATIONS_KEY]
     assert list(persisted) == [skipped.model_dump(mode="json")]
     assert persisted[0]["exhausted"] is True
+
+
+# --- supersession is a tool-using privilege --------------------------------
+
+
+def _failed_intent(
+    experiment, eval_config_ref, *, code: str
+) -> IntentResolution:
+    """One FAILED Intent Resolution carrying its own terminal failure."""
+    return IntentResolution(
+        schema_version=INTENT_RESOLUTION_SCHEMA_VERSION,
+        optim_eval_request=OptimEvalRequest(
+            optim_run_id="proposal-only-supersession",
+            optim_step_index=0,
+            eval_request=EvalRequest(
+                request_id="intent-1",
+                candidate=experiment.initial_candidate,
+            ),
+        ),
+        outcome=IntentOutcome.FAILED,
+        detail=ResolutionDetail(
+            classification=ResolutionClass.INFRASTRUCTURE,
+            message="the provider refused the request",
+        ),
+        eval_result_ref=TypedRef(
+            schema_name=EVAL_FAILURE_SCHEMA,
+            content_hash="b" * 64,
+        ),
+        resolved_eval_config=eval_config_ref,
+        terminal_failure=TerminalFailure(code=code, message=code),
+    )
+
+
+def test_a_proposal_only_step_cannot_supersede_its_intent_failure(
+    tmp_path,
+) -> None:
+    """Only a Step that drove tools may outrank its own evidence.
+
+    A COPRO/GEPA/MIPROv2 Step resolves intents it issued itself, so a
+    failure it reports that disagrees with the intent it resolved is a
+    defect, not a verdict it needs to express -- even with a single
+    nested failure, and even if it names that code under
+    ``superseded_failure_codes``. Supersession exists for the tool-using
+    path, where the Step's failure can be about the agent's contract
+    rather than about any one evaluation.
+    """
+    experiment = build_toy_experiment(num_seeds=1)
+    sqlite_path = str(tmp_path / "gepa-supersede.sqlite")
+    control = _toy_gepa_control(
+        max_metric_calls=1,
+        sqlite_path=sqlite_path,
+    )
+    with open_sqlite(sqlite_path) as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(store)
+        eval_config_ref = engine.eval_config_ref
+    run = _gepa_run(control, run_id="proposal-only-supersession")
+    request = OptimStepRequest(
+        run=optimization_run_reference(run),
+        step_id="proposal-only-supersession:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        step_output_contract=gepa_step_output_contract(
+            optimization_run_reference(run)
+        ),
+    )
+    intent = _failed_intent(
+        experiment, eval_config_ref, code="evaluation_RuntimeError"
+    )
+
+    # The escape hatch the tool-using path uses is spelled correctly and
+    # still refused: the nested code is named, and the set matches.
+    with pytest.raises(ValueError, match="must adopt the exact nested"):
+        OptimStepResult(
+            request=step_request_reference(request),
+            resolved_intents=(intent,),
+            status=StepStatus.FAILED,
+            terminal_failure=TerminalFailure(
+                code="gepa_iteration_failed",
+                message="an unrelated adapter-owned code",
+                details={
+                    SUPERSEDED_FAILURE_CODES_KEY: [
+                        "evaluation_RuntimeError",
+                    ]
+                },
+            ),
+        )
+
+
+def test_a_proposal_only_step_adopting_its_intent_failure_is_accepted(
+    tmp_path,
+) -> None:
+    """The rule the intent-resolving path keeps: adopt it exactly."""
+    experiment = build_toy_experiment(num_seeds=1)
+    sqlite_path = str(tmp_path / "gepa-adopt.sqlite")
+    control = _toy_gepa_control(
+        max_metric_calls=1,
+        sqlite_path=sqlite_path,
+    )
+    with open_sqlite(sqlite_path) as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(store)
+        eval_config_ref = engine.eval_config_ref
+    run = _gepa_run(control, run_id="proposal-only-supersession")
+    request = OptimStepRequest(
+        run=optimization_run_reference(run),
+        step_id="proposal-only-supersession:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        step_output_contract=gepa_step_output_contract(
+            optimization_run_reference(run)
+        ),
+    )
+    intent = _failed_intent(
+        experiment, eval_config_ref, code="evaluation_RuntimeError"
+    )
+
+    result = OptimStepResult(
+        request=step_request_reference(request),
+        resolved_intents=(intent,),
+        status=StepStatus.FAILED,
+        terminal_failure=intent.terminal_failure,
+    )
+
+    assert result.terminal_failure == intent.terminal_failure
