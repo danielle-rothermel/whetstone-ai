@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from enum import UNIQUE, StrEnum, verify
 from typing import Any, NoReturn, Protocol
 
@@ -429,6 +430,15 @@ class _AdmissionBackend(Protocol):
         capacity_scope_id: str,
     ) -> int: ...
 
+    def admitted_entries(
+        self,
+        *,
+        store_namespace_key: str,
+        tool_config_hash: str,
+        capacity_scope: ToolCapacityScope,
+        capacity_scope_id: str,
+    ) -> tuple[ToolCallStoreEntry, ...]: ...
+
     def close(self) -> None: ...
 
 
@@ -457,6 +467,51 @@ def _backend_scope_id(
             f"{GLOBAL_CAPACITY_SCOPE_ID!r}"
         )
     return scope_id
+
+
+def _entries_in_scope(
+    entries: Iterable[ToolCallStoreEntry],
+    *,
+    store_namespace_key: str,
+    tool_config_hash: str,
+    capacity_scope: ToolCapacityScope,
+    capacity_scope_id: str,
+) -> tuple[ToolCallStoreEntry, ...]:
+    """Narrow decoded entries to one capacity scope, in debit order.
+
+    Only entries that debited capacity are returned: a REFUSED entry
+    consumed none, so it is not part of what the scope paid for. The
+    debit ordinal is one-based and dense within a scope, so ordering by
+    it reproduces admission order.
+    """
+    scope = (
+        store_namespace_key,
+        tool_config_hash,
+        capacity_scope.value,
+        _backend_scope_id(capacity_scope, capacity_scope_id),
+    )
+    selected = [
+        entry
+        for entry in entries
+        if entry.capacity_debit_ordinal is not None
+        and (
+            str(entry.store_namespace_key),
+            str(entry.tool_config_hash),
+            _capacity_scope_key(entry.tool_call.record.capacity_binding)[
+                0
+            ].value,
+            _backend_scope_id(
+                *_capacity_scope_key(entry.tool_call.record.capacity_binding)
+            ),
+        )
+        == scope
+    ]
+    return tuple(
+        sorted(
+            selected,
+            key=lambda entry: int(entry.capacity_debit_ordinal or 0),
+        )
+    )
 
 
 def _entry_key(entry: ToolCallStoreEntry) -> _EntryKey:

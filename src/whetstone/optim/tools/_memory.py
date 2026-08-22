@@ -7,6 +7,7 @@ from whetstone.optim.tools.admission import (
     _accepted_with_ordinal,
     _backend_scope_id,
     _complete_transition,
+    _entries_in_scope,
     _entry_key,
     _EntryKey,
     _replay_or_conflict,
@@ -94,6 +95,24 @@ class _MemoryAdmissionBackend:
                 ),
                 (0, 0),
             )[1]
+
+    def admitted_entries(
+        self,
+        *,
+        store_namespace_key: str,
+        tool_config_hash: str,
+        capacity_scope: ToolCapacityScope,
+        capacity_scope_id: str,
+    ) -> tuple[ToolCallStoreEntry, ...]:
+        with self._lock:
+            entries = list(self._entries.values())
+        return _entries_in_scope(
+            entries,
+            store_namespace_key=store_namespace_key,
+            tool_config_hash=tool_config_hash,
+            capacity_scope=capacity_scope,
+            capacity_scope_id=capacity_scope_id,
+        )
 
     def close(self) -> None:
         pass

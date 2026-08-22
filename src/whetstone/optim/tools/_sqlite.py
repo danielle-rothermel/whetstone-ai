@@ -24,6 +24,7 @@ from whetstone.optim.tools.admission import (
     _complete_transition,
     _decode_entry,
     _decode_persisted_count,
+    _entries_in_scope,
     _entry_key,
     _entry_text,
     _EntryKey,
@@ -381,6 +382,42 @@ class _SQLiteAdmissionBackend:
             raise
         finally:
             connection.close()
+
+    def admitted_entries(
+        self,
+        *,
+        store_namespace_key: str,
+        tool_config_hash: str,
+        capacity_scope: ToolCapacityScope,
+        capacity_scope_id: str,
+    ) -> tuple[ToolCallStoreEntry, ...]:
+        """Every entry this scope debited capacity for, in debit order.
+
+        The entry rows are keyed by call id, so the scope columns are not
+        indexed; the namespace narrows the scan and the decoded entry is
+        the authority on which scope it belongs to. Callers use this to
+        reconcile against ``accepted_count``, which counts the same
+        debits from the capacity row.
+        """
+        scope_id = _backend_scope_id(capacity_scope, capacity_scope_id)
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                f"""
+                SELECT entry_json FROM {_ENTRY_TABLE}
+                WHERE store_namespace_key = ?
+                """,
+                (store_namespace_key,),
+            ).fetchall()
+        finally:
+            connection.close()
+        return _entries_in_scope(
+            (_decode_entry(row[0]) for row in rows),
+            store_namespace_key=store_namespace_key,
+            tool_config_hash=tool_config_hash,
+            capacity_scope=capacity_scope,
+            capacity_scope_id=scope_id,
+        )
 
     def accepted_count(
         self,

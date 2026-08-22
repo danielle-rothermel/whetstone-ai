@@ -65,6 +65,7 @@ __all__ = [
     "STEP_REQUEST_SCHEMA_VERSION",
     "STEP_RESULT_SCHEMA",
     "STEP_RESULT_SCHEMA_VERSION",
+    "SUPERSEDED_FAILURE_CODES_KEY",
     "BudgetDelta",
     "BudgetState",
     "OptimEvalRequest",
@@ -916,6 +917,48 @@ class ToolEvidence(BaseModel):
         return self
 
 
+#: Key on a superseding Step failure's ``details`` naming the nested
+#: failure codes it stands for. A Step Result carries exactly one
+#: terminal failure, so a Step whose evidence failed in more than one way
+#: cannot adopt any single nested failure as its own; it fails under an
+#: adapter-owned code that accounts for all of them instead.
+SUPERSEDED_FAILURE_CODES_KEY = "superseded_failure_codes"
+
+
+def _validate_shared_terminal_failure(
+    *,
+    outer: TerminalFailure | None,
+    nested: tuple[TerminalFailure, ...],
+) -> None:
+    """A failed Step's own failure must account for its evidence.
+
+    The usual case is one nested failure, and the Step adopts it exactly:
+    a Step that failed because its evaluation failed must not report some
+    unrelated code. When the evidence failed in several distinct ways no
+    single nested failure can be adopted, so the Step supersedes them --
+    and must say so, naming every code it stands for, rather than
+    silently disagreeing with its own evidence.
+    """
+    if outer is None or not nested:
+        return
+    if all(failure == outer for failure in nested):
+        return
+    superseded = outer.details.to_json().get(SUPERSEDED_FAILURE_CODES_KEY)
+    if not isinstance(superseded, list):
+        raise ValueError(
+            "a Step Result whose nested terminal failures differ from its "
+            "own must record them under "
+            f"{SUPERSEDED_FAILURE_CODES_KEY!r}"
+        )
+    if sorted(str(code) for code in superseded) != sorted(
+        str(failure.code) for failure in nested
+    ):
+        raise ValueError(
+            "a superseding Step failure must name the exact set of nested "
+            "terminal failure codes it stands for"
+        )
+
+
 class OptimStepResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1168,13 +1211,10 @@ class OptimStepResult(BaseModel):
                 for evidence in self.tool_evidence
                 if evidence.result.record.terminal_failure is not None
             )
-            if any(
-                failure != self.terminal_failure for failure in nested_failures
-            ):
-                raise ValueError(
-                    "every nested terminal failure must equal the exact "
-                    "outer Step failure"
-                )
+            _validate_shared_terminal_failure(
+                outer=self.terminal_failure,
+                nested=nested_failures,
+            )
         if self.seed_retained:
             if self.status is not StepStatus.COMPLETE:
                 raise ValueError(

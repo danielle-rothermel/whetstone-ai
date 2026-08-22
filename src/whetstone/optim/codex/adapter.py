@@ -40,6 +40,7 @@ from whetstone.core.identity import TerminalFailure, TypedRef
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import (
+    SUPERSEDED_FAILURE_CODES_KEY,
     OptimStepRequest,
     StepMode,
     StepStatus,
@@ -62,6 +63,10 @@ CODEX_SELECTION_CONTRACT_CODE = "codex_selection_contract"
 CODEX_UNREPORTED_EVALUATION_CODE = "codex_unreported_evaluation"
 #: The selected call reached a terminal state carrying no score.
 CODEX_SELECTION_UNSCORED_CODE = "codex_selection_unscored"
+#: whetstone's own evaluation server admitted a call and never reached a
+#: terminal for it. The agent had no result to report, so this is a
+#: harness failure rather than the agent hiding paid work.
+CODEX_EVALUATION_INTERRUPTED_CODE = "codex_evaluation_interrupted"
 #: The Codex process hit the run's hard wall stop.
 CODEX_WALL_BUDGET_EXCEEDED_CODE = "codex_wall_budget_exceeded"
 
@@ -238,6 +243,25 @@ class CodexAdapter:
             # the Step here so the harness's effect-lease maintenance sees
             # a failure and releases the lease; letting this unwind would
             # wedge the run until the lease lapsed.
+            #
+            # There is no artifact on this path, so the agent names no
+            # calls -- but it may already have paid for many. The durable
+            # admission entries are the record of that spend, so every
+            # completed one is re-issued through the guarded handle
+            # before the Step terminalizes. The ledger stays total over
+            # admitted calls, and the tool_calls budget is debited for
+            # work that was really performed, on the path the code itself
+            # calls the expected end of a paid run.
+            reconciled = self._issue_completed(
+                tuple(
+                    entry
+                    for entry in self._bound_tool_store.admitted_entries(
+                        config, handle.binding
+                    )
+                    if entry.state is ToolCallState.COMPLETED
+                ),
+                handle,
+            )
             return self._failed(
                 {
                     "tool_namespace": str(config.store_namespace_key),
@@ -248,13 +272,17 @@ class CodexAdapter:
                     ),
                     "codex_isolation": exc.isolation,
                 },
-                TerminalFailure(
-                    code=CODEX_WALL_BUDGET_EXCEEDED_CODE,
-                    message=str(exc),
-                    details={
-                        "run_id": request.run_id,
-                        "wall_seconds": exc.wall_seconds,
-                    },
+                _shared_failure(
+                    reconciled,
+                    fallback=TerminalFailure(
+                        code=CODEX_WALL_BUDGET_EXCEEDED_CODE,
+                        message=str(exc),
+                        details={
+                            "run_id": request.run_id,
+                            "wall_seconds": exc.wall_seconds,
+                        },
+                    ),
+                    always_supersede=True,
                 ),
             )
         artifact = run.artifact
@@ -301,23 +329,12 @@ class CodexAdapter:
         # tool_calls budget is under-debited. Completing here would leave
         # invisible spend, so the Step fails loudly instead.
         if len(admitted) < accepted_count:
-            return self._failed(
-                state_delta,
-                TerminalFailure(
-                    code=CODEX_UNREPORTED_EVALUATION_CODE,
-                    message=(
-                        "Codex admitted more paid evaluations than it "
-                        "reported, so the Issued Tool Call ledger is not "
-                        "total over this Step's admitted calls"
-                    ),
-                    details={
-                        "admitted_call_count": accepted_count,
-                        "reported_call_count": len(admitted),
-                        "evaluated_call_ids": list(
-                            artifact.evaluated_call_ids
-                        ),
-                    },
-                ),
+            return self._reconciled_shortfall(
+                artifact=artifact,
+                handle=handle,
+                admitted=admitted,
+                accepted_count=accepted_count,
+                state_delta=state_delta,
             )
 
         if artifact.selected_call_id is None:
@@ -365,21 +382,24 @@ class CodexAdapter:
         if selected.result.output is None or selected.result.reward is None:
             return self._failed(
                 state_delta,
-                # A Step Result carries one shared terminal failure: when
-                # any Tool Evidence entry failed, the Step must fail under
-                # that exact failure. A failed evaluation always supplies
-                # one; the adapter's own code names the residual case
-                # where a scoreless result carried none.
-                selected.result.terminal_failure
-                or TerminalFailure(
-                    code=CODEX_SELECTION_UNSCORED_CODE,
-                    message=(
-                        "Codex selected a Tool Call whose durable result "
-                        "carries no score"
+                _shared_failure(
+                    admitted,
+                    # A Step Result carries one shared terminal failure. When
+                    # exactly one evaluation failed the Step adopts that
+                    # failure, so the Step says the same thing its evidence
+                    # does. When several failed, or the selected result
+                    # carried no failure at all, no single nested failure can
+                    # be adopted and the adapter's own code supersedes them.
+                    fallback=TerminalFailure(
+                        code=CODEX_SELECTION_UNSCORED_CODE,
+                        message=(
+                            "Codex selected a Tool Call whose durable result "
+                            "carries no score"
+                        ),
+                        details={
+                            "selected_call_id": artifact.selected_call_id,
+                        },
                     ),
-                    details={
-                        "selected_call_id": artifact.selected_call_id,
-                    },
                 ),
             )
 
@@ -394,6 +414,124 @@ class CodexAdapter:
             proposed_status=StepStatus.COMPLETE,
             state_delta=state_delta,
         )
+
+    def _reconciled_shortfall(
+        self,
+        *,
+        artifact: CodexOutputArtifact,
+        handle: RuntimeToolHandle,
+        admitted: tuple[_AdmittedCall, ...],
+        accepted_count: int,
+        state_delta: dict[str, Any],
+    ) -> AdapterOutput:
+        """Fail a shortfall, having first said what the shortfall is.
+
+        Two very different things produce one: the agent omitted a call
+        that COMPLETED, or whetstone's own server admitted a call and
+        never reached a terminal for it. Only the first is the agent
+        hiding paid work. The durable entries separate them -- an
+        omitted COMPLETED entry is under-reporting, an ACCEPTED entry
+        with no terminal is an interrupted evaluation -- so the Step
+        names the one that actually happened.
+
+        Either way the completed omissions are re-issued through the
+        guarded handle first, so the paid work they represent reaches
+        the ledger and the ``tool_calls`` budget instead of vanishing
+        with the failure.
+        """
+        reported = {call.call_id for call in admitted}
+        omitted = tuple(
+            entry
+            for entry in self._bound_tool_store.admitted_entries(
+                handle.config, handle.binding
+            )
+            if str(entry.call_id) not in reported
+        )
+        interrupted = tuple(
+            str(entry.call_id)
+            for entry in omitted
+            if entry.state is not ToolCallState.COMPLETED
+        )
+        reconciled = admitted + self._issue_completed(
+            tuple(
+                entry
+                for entry in omitted
+                if entry.state is ToolCallState.COMPLETED
+            ),
+            handle,
+        )
+        if interrupted:
+            return self._failed(
+                state_delta,
+                _shared_failure(
+                    reconciled,
+                    fallback=TerminalFailure(
+                        code=CODEX_EVALUATION_INTERRUPTED_CODE,
+                        message=(
+                            "whetstone's evaluation server admitted a paid "
+                            "evaluation and never reached a terminal for it, "
+                            "so this Step's ledger cannot be made total"
+                        ),
+                        details={
+                            "admitted_call_count": accepted_count,
+                            "reported_call_count": len(admitted),
+                            "interrupted_call_ids": list(interrupted),
+                        },
+                    ),
+                    always_supersede=True,
+                ),
+            )
+        return self._failed(
+            state_delta,
+            _shared_failure(
+                reconciled,
+                fallback=TerminalFailure(
+                    code=CODEX_UNREPORTED_EVALUATION_CODE,
+                    message=(
+                        "Codex admitted more paid evaluations than it "
+                        "reported, so the Issued Tool Call ledger is not "
+                        "total over this Step's admitted calls"
+                    ),
+                    details={
+                        "admitted_call_count": accepted_count,
+                        "reported_call_count": len(admitted),
+                        "evaluated_call_ids": list(
+                            artifact.evaluated_call_ids
+                        ),
+                    },
+                ),
+                always_supersede=True,
+            ),
+        )
+
+    @staticmethod
+    def _issue_completed(
+        entries: tuple[Any, ...],
+        handle: RuntimeToolHandle,
+    ) -> tuple[_AdmittedCall, ...]:
+        """Put durable completed calls on the ledger.
+
+        The handle reads the durable terminal rather than evaluating, so
+        this records work already paid for; it never buys more.
+        """
+        issued: list[_AdmittedCall] = []
+        for entry in entries:
+            call = entry.tool_call.record
+            result = handle(call)
+            recorded_args = call.args.to_json()
+            template = recorded_args.get("template")
+            raw_base = recorded_args.get("base_ref")
+            if not isinstance(template, str) or not isinstance(raw_base, dict):
+                continue
+            issued.append(
+                _AdmittedCall(
+                    call_id=str(entry.call_id),
+                    result=result,
+                    template=template,
+                    base_ref=TypedRef.model_validate(raw_base),
+                )
+            )
+        return tuple(issued)
 
     @staticmethod
     def _failed(
@@ -559,6 +697,48 @@ class CodexAdapter:
         return candidate
 
 
+def _shared_failure(
+    admitted: tuple[_AdmittedCall, ...],
+    *,
+    fallback: TerminalFailure,
+    always_supersede: bool = False,
+) -> TerminalFailure:
+    """The one terminal failure a failing Step Result may carry.
+
+    Every reported call is re-issued through the guarded handle, so a
+    terminally failed evaluation puts its own failure on the Step's Tool
+    Evidence. The Step Result contract requires the outer failure to
+    account for those: adopt the single nested failure when there is
+    exactly one, and otherwise supersede them under the adapter's own
+    code, naming every nested code it stands for.
+
+    ``always_supersede`` is for failures the adapter owns outright --
+    under-reporting is the agent's contract violation, not a verdict on
+    any one evaluation -- so they never masquerade as an evaluation
+    failure even when only one evaluation failed.
+    """
+    nested = tuple(
+        call.result.terminal_failure
+        for call in admitted
+        if call.result.terminal_failure is not None
+    )
+    if not nested:
+        return fallback
+    if not always_supersede and all(
+        failure == nested[0] for failure in nested
+    ):
+        return nested[0]
+    details = dict(fallback.details.to_json())
+    details[SUPERSEDED_FAILURE_CODES_KEY] = sorted(
+        str(failure.code) for failure in nested
+    )
+    return TerminalFailure(
+        code=fallback.code,
+        message=fallback.message,
+        details=details,
+    )
+
+
 class _UnevaluatedSelectionError(Exception):
     def __init__(self, failure: TerminalFailure) -> None:
         self.failure = failure
@@ -610,6 +790,7 @@ def codex_run_lease_binding(
 
 __all__ = [
     "CODEX_ADAPTER_KEY",
+    "CODEX_EVALUATION_INTERRUPTED_CODE",
     "CODEX_LEASE_TOKEN_MISMATCH_CODE",
     "CODEX_OUTPUT_ARTIFACT_SCHEMA",
     "CODEX_SELECTION_CONTRACT_CODE",
