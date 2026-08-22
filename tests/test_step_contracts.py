@@ -32,6 +32,7 @@ from whetstone.optim.contracts import (
     step_request_reference,
 )
 from whetstone.optim.harness import OptimHarness
+from whetstone.optim.codex.adapter import CODEX_ADAPTER_KEY
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 from whetstone.optim.miprov2.adapter import MIPROV2_ADAPTER_KEY
 from whetstone.optim.gepa.adapter import GepaTerminalResult
@@ -74,6 +75,7 @@ def _gepa_run(control, *, run_id: str = "gepa-seed-retained") -> OptimRun:
 
 def test_every_registered_optimizer_declares_its_own_key() -> None:
     assert set(step_contract_provider_keys()) == {
+        CODEX_ADAPTER_KEY,
         COPRO_ADAPTER_KEY,
         GEPA_ADAPTER_KEY,
         MIPROV2_ADAPTER_KEY,
