@@ -446,12 +446,16 @@ def run_command(
                 )
             if launch.control is None:
                 raise typer.BadParameter("launch is missing optimizer control")
-            runtime_config = ReferenceEvalRuntimeConfig()
-            engine = runtime_config.build_engine(
-                store,
+            # The launch's own rendering settings, carried on the runtime
+            # config rather than only passed here. The Codex MCP server
+            # runs out of process and rebuilds its engine from this
+            # config alone, so settings left off it would silently become
+            # the toy defaults there while the harness used the launch's.
+            runtime_config = ReferenceEvalRuntimeConfig(
                 mutation_field=launch.run.mutation_field,
                 render_contract=launch.run.template_render_contract,
             )
+            engine = runtime_config.build_engine(store)
             codex_run_root: Path | None = None
             if adapter == ADAPTER_CODEX:
                 codex_control = launch.control

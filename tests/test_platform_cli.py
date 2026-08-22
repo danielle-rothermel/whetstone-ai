@@ -504,3 +504,83 @@ def test_the_cli_codex_path_defaults_to_the_real_auth_preflight(
     )
 
     assert called == [1]
+
+
+def test_the_mcp_runtime_config_carries_the_launch_mutation_field() -> None:
+    """A non-default mutation field must reach the out-of-process server.
+
+    ``run --adapter codex`` hosts its evaluation endpoint in a separate
+    process that rebuilds the engine from the serialized runtime config
+    alone. A config that did not carry the launch's rendering settings
+    would rebuild the *toy* defaults there while the harness used the
+    launch's: every call would fail preflight on a different mutation
+    field, and a different render contract would score a prompt the
+    harness never declared.
+    """
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    runtime_config = ReferenceEvalRuntimeConfig(
+        mutation_field="system_prompt_template"
+    )
+
+    # The setting survives the trip through the environment variable the
+    # server reads it back from.
+    restored = ReferenceEvalRuntimeConfig.model_validate_json(
+        runtime_config.model_dump_json()
+    )
+
+    assert restored.mutation_field == "system_prompt_template"
+
+
+def test_the_mcp_server_refuses_a_runtime_config_without_the_field(
+    tmp_path, sqlite_store
+) -> None:
+    """Never silently default: a bare config is refused, not assumed.
+
+    The Tool Config pins the field the run's candidates are written to,
+    so the server has an independent value to check the rebuilt engine
+    against. A runtime config that cannot supply one cannot rebuild the
+    launch's engine, and evaluating anyway would score the wrong prompt.
+    """
+    from tests.codex_support import (
+        toy_capacity_binding,
+        toy_codex_control,
+        toy_codex_run,
+    )
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.codex.adapter import codex_run_lease_binding
+    from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+    from whetstone.optim.codex.runner import _capacity_subject_key
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    control = toy_codex_control(engine=engine, max_tool_calls=2)
+    run, config, _candidate = toy_codex_run(
+        control=control, engine=engine, run_id="codex-bare-runtime"
+    )
+    binding = toy_capacity_binding(run)
+    token = "token-for-codex-bare-runtime"
+    bare = ReferenceEvalRuntimeConfig()
+    environment = {
+        McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),
+        McpEnvironmentKey.TOOL_CONFIG: config.model_dump_json(),
+        McpEnvironmentKey.CAPACITY_BINDING: binding.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG: bare.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+            "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
+        ),
+        McpEnvironmentKey.REWARD_POLICY: (
+            engine.reward_policy.model_dump_json()
+        ),
+        McpEnvironmentKey.RUN_LEASE_TOKEN: token,
+        McpEnvironmentKey.RUN_LEASE_BINDING: codex_run_lease_binding(
+            token=token,
+            store_namespace_key=str(config.store_namespace_key),
+            tool_config_hash=str(config.identity_hash()),
+            capacity_scope=binding.scope.value,
+            capacity_subject=_capacity_subject_key(binding),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="mutation field"):
+        build_server_from_env(environment)

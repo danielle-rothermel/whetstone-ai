@@ -44,6 +44,26 @@ def build_server_from_env(
     runtime = load_runtime_config(class_path=runtime_class, raw=runtime_raw)
     reward_policy_raw = _strict_env_json(env[McpEnvironmentKey.REWARD_POLICY])
     reward_policy = RewardPolicy.model_validate_json(reward_policy_raw)
+    # This server rebuilds the engine from the runtime config alone, so a
+    # config that does not carry the launch's rendering settings would
+    # evaluate under the toy defaults while the harness used the launch's.
+    # The Tool Config pins the field independently, so it is the check: a
+    # different one makes every call fail preflight, and a silently
+    # defaulted render contract would score a different prompt than the
+    # harness declares. Refuse rather than evaluate the wrong thing.
+    persisted_field = getattr(runtime, "mutation_field", None)
+    if persisted_field is None:
+        raise ValueError(
+            "MCP runtime config does not carry the launch mutation field; "
+            "the evaluation server cannot rebuild the launch's engine and "
+            "would silently evaluate under the toy defaults"
+        )
+    if persisted_field != tool_config.candidate_template_field:
+        raise ValueError(
+            "MCP runtime config mutation field "
+            f"{persisted_field!r} does not match the Tool Config's "
+            f"{tool_config.candidate_template_field!r}"
+        )
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")

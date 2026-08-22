@@ -12,6 +12,7 @@ import pytest
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.codex.runner import SubprocessCodexRunner
+from whetstone.testing.toy.experiment import TOY_MUTATION_FIELD
 
 
 _TASK_MODEL_KEY_VALUE = "sk-TASK-MODEL-KEY"
@@ -29,7 +30,9 @@ def _runner(
     Nothing here executes: the tests read the two environments the runner
     computes at construction, which is where the boundary is decided.
     """
-    runtime_config = ReferenceEvalRuntimeConfig()
+    runtime_config = ReferenceEvalRuntimeConfig(
+        mutation_field=TOY_MUTATION_FIELD
+    )
     return SubprocessCodexRunner(
         executor=_NeverRunExecutor(),
         sqlite_path=str((tmp_path / "store.sqlite").resolve()),
@@ -159,7 +162,9 @@ def _server_environment(tmp_path, sqlite_store, *, run_id: str) -> dict:
     )
     binding = toy_capacity_binding(run)
     token = f"token-for-{run_id}"
-    runtime_config = ReferenceEvalRuntimeConfig()
+    runtime_config = ReferenceEvalRuntimeConfig(
+        mutation_field=TOY_MUTATION_FIELD
+    )
     return {
         McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),
         McpEnvironmentKey.TOOL_CONFIG: config.model_dump_json(),

@@ -156,7 +156,9 @@ class _CodexWorld:
         runner = SubprocessCodexRunner(
             executor=build_codex_executor(run_root=self.tmp_path / "runs"),
             sqlite_path=self.sqlite_path,
-            runtime_config=ReferenceEvalRuntimeConfig(),
+            runtime_config=ReferenceEvalRuntimeConfig(
+                mutation_field=TOY_MUTATION_FIELD
+            ),
             runtime_config_class=(
                 "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
             ),

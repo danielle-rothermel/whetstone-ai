@@ -466,6 +466,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `tool_eval_config_mismatch`, so such a call could never complete.
 - The unused `Path`-taking `_parse_output_artifact`.
 
+### Fixed
+
+- A Codex run whose stdout exceeded `max_output_bytes` no longer fails on
+  its own truncation. The retained stream is a stitched head+tail
+  carrying a deliberately non-JSON elision marker, and the budget may cut
+  the head's last line and the tail's first line mid-record; the strict
+  JSONL parser rejected all three, so a zero-exit run with a valid final
+  artifact could not complete. The parser now skips the marker and drops
+  the two boundary fragments a stitch can damage, recording the count as
+  `jsonl_dropped_partial_lines` in the process evidence. An untruncated
+  stream stays strict, and a truncated one still rejects malformed lines
+  away from the stitch.
+- `prepare_codex_run` attests every engine-derived binding on the
+  control, not just the reward policy and Eval Config. A control whose
+  `evaluation_execution_policy_hash`, `task_model_identity_hash`, or
+  `internal_task_hashes` disagreed with the runtime engine was accepted,
+  so evaluations ran against the engine's policy, model route, and task
+  split while the persisted optimizer identity claimed the control's --
+  silent provenance corruption no downstream reader could detect.
+- Every way the Codex runner can fail now terminalizes the step. The
+  adapter caught only `CodexStructuredExecutionFailure`, so a zero-exit
+  CLI whose artifact failed schema validation, and a dr-exec
+  `ExecutorFailure`, both raised the base `OpaqueStepError` past the
+  adapter checkpoint. The harness never ran its effect-lease
+  maintenance, leaving that `NO_REDRIVE` effect non-terminal instead of
+  producing `codex_execution_failed`.
+- `whetstone-optim run --adapter codex` carries the launch's mutation
+  field and template render contract on the serialized runtime
+  configuration, so the out-of-process MCP evaluation server rebuilds the
+  harness's engine rather than the toy defaults. Previously a non-default
+  mutation field made every tool call fail preflight and a non-default
+  render contract could score a different prompt than the harness
+  declared. The server refuses to start when the configuration cannot
+  supply the field or when it disagrees with the Tool Config's
+  `candidate_template_field`.
+
 ### Known limitations
 
 - Run cost can under-report GEPA proposer spend after a crash *inside* a Step.

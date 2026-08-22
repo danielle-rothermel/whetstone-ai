@@ -53,6 +53,14 @@ class ReferenceEvalRuntimeConfig(BaseModel):
     split_role: StrictStr = "internal_eval"
     transport_api_key_env: StrictStr = "WHETSTONE_TOY_API_KEY"
     provider_kind: ProviderKind = ProviderKind.OPENAI
+    #: The launch's rendering settings, carried so a process that rebuilds
+    #: the engine from this config alone -- the out-of-process Codex MCP
+    #: evaluation server -- renders the same prompt as the harness. Left
+    #: unset they fall back to the toy defaults, which is right for a toy
+    #: run and wrong for any launch that overrode them, so the caller
+    #: binding a launch sets them explicitly.
+    mutation_field: StrictStr | None = None
+    render_contract: TemplateRenderContract | None = None
 
     @property
     def execution_policy(self) -> ProviderExecutionPolicy:
@@ -86,8 +94,38 @@ class ReferenceEvalRuntimeConfig(BaseModel):
             ) from None
         execution_policy = self.execution_policy
         runner = eval_runner or FakeEvalProcedureRunner()
-        field = mutation_field or TOY_MUTATION_FIELD
-        contract = render_contract or toy_template_render_contract()
+        # An explicit argument wins, then this config's persisted setting,
+        # then the toy default. The persisted settings exist so a process
+        # holding only this config -- the Codex MCP evaluation server --
+        # rebuilds the launch's engine rather than the toy one.
+        field = mutation_field or self.mutation_field or TOY_MUTATION_FIELD
+        contract = (
+            render_contract
+            or self.render_contract
+            or toy_template_render_contract()
+        )
+        # A caller passing one thing while this config persists another
+        # would evaluate under one and record the other, so they must
+        # agree rather than one silently winning.
+        if (
+            mutation_field is not None
+            and self.mutation_field is not None
+            and mutation_field != self.mutation_field
+        ):
+            raise ValueError(
+                "ReferenceEvalRuntimeConfig mutation_field "
+                f"{self.mutation_field!r} conflicts with the requested "
+                f"{mutation_field!r}"
+            )
+        if (
+            render_contract is not None
+            and self.render_contract is not None
+            and render_contract != self.render_contract
+        ):
+            raise ValueError(
+                "ReferenceEvalRuntimeConfig render_contract conflicts with "
+                "the requested render contract"
+            )
         factory = transport_factory or fake_llm_transport_factory
 
         if self.driver_mode == "subprocess":
