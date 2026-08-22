@@ -166,16 +166,26 @@ class CanonicalGepaAdapterFactory:
         run_id: str,
         step_index: int,
     ) -> tuple[SearchEvidence, ...]:
-        """Evidence for every evaluation this Step's search drove."""
+        """Evidence for the evaluations this Step actually paid for.
+
+        Upstream ``optimize`` re-runs from the seed every Step, so each Step
+        replays the whole prefix its predecessors already paid for. Only the
+        evaluations that were *fresh* on this Step are recorded here:
+        reporting the replayed prefix too would make each Step carry roughly
+        as many entries as its index, so a run's evidence would grow
+        quadratically in steps while the paid evaluations stayed flat.
+
+        A replayed evaluation is not lost. The Step chain is durable --
+        each Step Request cites ``prior_step_result_ref`` -- and the Step
+        that paid for the evaluation recorded it as its own fresh evidence,
+        so every evaluation the search relied on resolves exactly once on an
+        ancestor Step.
+        """
         authority = self._evaluation_authority
         resolutions = authority.resolved_intents
         replayed = authority.replayed_flags
         return tuple(
-            (
-                SearchEvidence.from_replayed_resolution
-                if was_replayed
-                else SearchEvidence.from_resolution
-            )(
+            SearchEvidence.from_resolution(
                 resolution,
                 optim_run_id=run_id,
                 optim_step_index=step_index,
@@ -183,6 +193,7 @@ class CanonicalGepaAdapterFactory:
             for resolution, was_replayed in zip(
                 resolutions, replayed, strict=True
             )
+            if not was_replayed
         )
 
     def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:

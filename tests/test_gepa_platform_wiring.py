@@ -55,6 +55,28 @@ from whetstone.testing.toy.experiment import (
 )
 
 
+def _assert_run_evidence_is_linear(result) -> None:
+    """Every in-search evaluation resolves exactly once across the run.
+
+    A Step records only the evaluations fresh to it; the prefix it replays
+    belongs to the ancestor Steps that paid for it. So the run-level
+    invariant is total coverage without duplication, not per-Step presence.
+    """
+    entries = [
+        evidence
+        for step_ref in result.step_results
+        for evidence in step_ref.record.search_evidence
+    ]
+    assert entries, "the run carried no search evidence at all"
+    request_ids = [entry.eval_request_id for entry in entries]
+    assert len(set(request_ids)) == len(request_ids), (
+        "an evaluation is reported on more than one Step"
+    )
+    for step_index, step_ref in enumerate(result.step_results):
+        for evidence in step_ref.record.search_evidence:
+            assert evidence.optim_step_index == step_index
+
+
 def _gepa_runtime(
     store,
     *,
@@ -262,8 +284,11 @@ def test_seed_retained_completes_a_platform_run(sqlite_store) -> None:
     assert result.seed_retained is True
     assert not result.proposals
     assert result.step_results
-    for step_ref in result.step_results:
-        assert step_ref.record.search_evidence
+    # Each Step records only the evaluations it paid for, so a pure-replay
+    # Step legitimately carries none. What must hold is the run-level
+    # property: every in-search evaluation is reachable from the run, and
+    # each one resolves on exactly one Step.
+    _assert_run_evidence_is_linear(result)
 
 
 def test_gepa_two_intents_expand_per_intent_task_sets(sqlite_store) -> None:
@@ -410,8 +435,11 @@ def test_gepa_platform_deferral_same_step_resume(sqlite_store) -> None:
     result = OptimResult.model_validate(runtime.store.get(parsed))
     assert result.proposals or result.seed_retained
     assert result.step_results
-    for step_ref in result.step_results:
-        assert step_ref.record.search_evidence
+    # Each Step records only the evaluations it paid for, so a pure-replay
+    # Step legitimately carries none. What must hold is the run-level
+    # property: every in-search evaluation is reachable from the run, and
+    # each one resolves on exactly one Step.
+    _assert_run_evidence_is_linear(result)
 
 
 def test_gepa_search_eval_candidate_passes_lineage_check(sqlite_store) -> None:
@@ -1008,8 +1036,11 @@ def test_gepa_stale_fanin_of_earlier_episode_leaves_current_episode_intact(
     result = OptimResult.model_validate(runtime.store.get(parsed))
     assert result.proposals or result.seed_retained
     assert result.step_results
-    for step_ref in result.step_results:
-        assert step_ref.record.search_evidence
+    # Each Step records only the evaluations it paid for, so a pure-replay
+    # Step legitimately carries none. What must hold is the run-level
+    # property: every in-search evaluation is reachable from the run, and
+    # each one resolves on exactly one Step.
+    _assert_run_evidence_is_linear(result)
     assert adapter.invocations > invocations_before
 
 

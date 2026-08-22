@@ -403,12 +403,12 @@ def test_gepa_step_evidence_is_per_step_not_cumulative(sqlite_store) -> None:
     assert first_ids
     assert second_ids
     # ``run_one_gepa_iteration`` re-runs the search from the seed, so step 2
-    # replays step 1's evaluations from the effect cache and reports them as
-    # its own evidence -- an evaluation its search relied on must stay
-    # reachable from its Step Result. What it must not do is re-execute
-    # them, and it must add evidence of its own.
-    assert second_ids > first_ids
-    # Every entry is bound to the Step reporting it, replayed or executed.
+    # replays step 1's evaluations from the effect cache. It reports only
+    # what was fresh to it: the replayed prefix stays reachable through the
+    # durable Step chain on step 1, which paid for it. Re-reporting it here
+    # would make evidence grow quadratically in steps.
+    assert not (first_ids & second_ids)
+    # Every entry is bound to the Step that actually paid for it.
     assert {e.optim_step_index for e in first.search_evidence} == {0}
     assert {e.optim_step_index for e in second.search_evidence} == {1}
 
@@ -592,10 +592,14 @@ def test_gepa_step_replays_the_prior_step_prefix_without_re_executing(
 
     # The prefix step 1 already paid for is replayed, not re-executed.
     assert not (set(first_executions) & set(second_executions))
-    # And step 2 still reports the replayed prefix as its own evidence.
-    assert {e.eval_request_id for e in second.search_evidence} > {
-        e.eval_request_id for e in first.search_evidence
-    }
+    # Step 2 reports evidence only for what it freshly executed. The
+    # replayed prefix is not re-reported -- it resolves on step 1.
+    assert second.search_evidence
+    assert len(second.search_evidence) == len(second_executions)
+    assert not (
+        {e.eval_request_id for e in second.search_evidence}
+        & {e.eval_request_id for e in first.search_evidence}
+    )
 
 
 def test_a_replayed_gepa_step_keeps_its_search_evidence(
@@ -822,3 +826,125 @@ def test_search_evidence_with_a_dangling_reward_evidence_ref_is_rejected(
             request,
             AdapterOutput(search_evidence=(dangling,)),
         )
+
+
+def test_search_evidence_across_a_run_is_linear_in_evaluations(
+    sqlite_store,
+) -> None:
+    """A whole run's evidence totals its distinct evaluations, exactly once.
+
+    Upstream ``optimize`` re-runs from the seed each Step, so Step i replays
+    the prefix Steps 0..i-1 paid for. When a Step reports that replayed
+    prefix as its own evidence, the run accumulates ~n^2/2 entries for n
+    paid evaluations -- the shape that produced a 1.73 GB runtime.sqlite and
+    a 766 MB result.json on a 556-step run. Evidence must instead be
+    recorded once, by the Step that paid for it.
+    """
+    run_id = "gepa-evidence-linear"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=60
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+
+    results = []
+    while True:
+        result, result_ref = harness.run_step(request)
+        results.append(result)
+        if result.status is not StepStatus.CONTINUE:
+            break
+        assert len(results) <= 80, "the bounded run failed to terminalize"
+        request = builder.build_next(
+            prior=result,
+            prior_ref=result_ref,
+            prior_results=(result,),
+            control=control,
+            mutation_field=TOY_MUTATION_FIELD,
+        )
+
+    entries = [
+        evidence for result in results for evidence in result.search_evidence
+    ]
+    request_ids = [entry.eval_request_id for entry in entries]
+    distinct = set(request_ids)
+    # Enough steps that a quadratic shape is unmistakable: the pre-fix code
+    # produced sum(1..n) entries here, not n.
+    assert len(results) >= 20
+    assert entries
+    # Linear, not quadratic: one entry per distinct evaluation, run-wide.
+    assert len(request_ids) == len(distinct)
+    # And nothing was dropped: every Step that paid reported what it paid for.
+    for index, result in enumerate(results):
+        assert {e.optim_step_index for e in result.search_evidence} <= {index}
+
+
+def test_a_dropped_fresh_evaluation_is_caught_by_the_run_invariant(
+    sqlite_store,
+) -> None:
+    """Incremental evidence still makes a silently dropped evaluation visible.
+
+    Per-Step verification is per-entry -- it rejects a forged or dangling
+    entry but cannot, alone, notice one that was never submitted. Under the
+    incremental contract the completeness check is the run-level one: every
+    evaluation the search paid for resolves on exactly one Step. This pins
+    that a Step which drops a fresh evaluation breaks that invariant, so the
+    weaker per-Step rule did not create a silent hole.
+    """
+    run_id = "gepa-evidence-dropped"
+    experiment, engine, control, adapter, authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=8
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness.run_step(request)
+
+    # Every evaluation this Step executed fresh, straight from the authority.
+    paid = tuple(
+        resolution.optim_eval_request.eval_request.request_id
+        for resolution, replayed in zip(
+            authority.resolved_intents,
+            authority.replayed_flags,
+            strict=True,
+        )
+        if not replayed
+    )
+    reported = tuple(e.eval_request_id for e in result.search_evidence)
+    # The honest Step reports exactly what it paid for -- nothing dropped.
+    assert set(reported) == set(paid)
+    assert paid
+
+    # Now simulate a Step that dropped one of the evaluations it paid for,
+    # and run the same run-level completeness check a consumer applies.
+    truncated = result.model_copy(
+        update={"search_evidence": result.search_evidence[1:]}
+    )
+
+    def _unreported(step_results) -> set[str]:
+        """Evaluations paid for on some Step but reported on none."""
+        reported_ids = {
+            evidence.eval_request_id
+            for step in step_results
+            for evidence in step.search_evidence
+        }
+        return set(paid) - reported_ids
+
+    # The honest run is complete...
+    assert _unreported((result,)) == set()
+    # ...and the drop is caught, naming the exact vanished evaluation.
+    assert _unreported((truncated,)) == {result.search_evidence[0].eval_request_id}

@@ -223,6 +223,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A GEPA Step now records search evidence only for the evaluations it
+  actually paid for, instead of also re-reporting the prefix it replayed
+  from the durable effect cache. Upstream `optimize` re-runs from the seed
+  every Step, so the old behaviour made Step *i* carry roughly *i* entries
+  and a run's evidence grow quadratically in Steps while paid evaluations
+  stayed flat: a measured 556-step run produced 155,956 entries for 91
+  distinct evaluations, a 1.73 GB `runtime.sqlite`, and a 766 MB
+  `result.json`. Replayed evaluations are unchanged and undropped -- they
+  resolve on the ancestor Step that paid for them, reached through the
+  durable Step chain (`prior_step_result_ref`), so every in-search
+  evaluation of a run is still reachable and now resolves exactly once. On a
+  60-step fake-transport run this takes total entries from 1,770 to 59
+  (equal to the distinct evaluations) and `result.json` from 3.20 MB to
+  330 KB. No persisted record shape changed; the terminal Pareto-front
+  artifact is per-run and remains complete.
+- `SearchEvidence.from_replayed_resolution` is removed. It existed only to
+  rebind a replayed resolution onto the reporting Step, which is exactly the
+  re-reporting that is no longer done. Per-entry harness verification --
+  run/step binding, expected schema, and store resolution -- is unchanged,
+  so a dropped or forged entry is still rejected.
 - Pinned dependencies moved in lockstep: dr-exec 0.1.14, dr-store 0.2.6, and
   dr-platform 0.2.7.
 - The subprocess rollout driver reads `CancelledOutcome.started` to tell a row
