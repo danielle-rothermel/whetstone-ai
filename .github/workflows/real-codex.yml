@@ -57,9 +57,15 @@ jobs:
         env:
           # Written under the workspace so the artifact upload can reach it.
           WHETSTONE_REAL_CODEX_OUTPUT_DIR: ${{ github.workspace }}/real-codex-out
+          # The dispatcher's selector reaches bash as data, never as
+          # script text. Interpolating ${{ inputs.selector }} into the
+          # run block would splice an arbitrary string into a shell
+          # command on a self-hosted runner that holds a live Codex
+          # session -- an injection with a logged-in credential behind it.
+          SELECTOR: ${{ inputs.selector }}
         run: |
-          if [ -n "${{ inputs.selector }}" ]; then
-            bash scripts/check-real-codex.sh -k "${{ inputs.selector }}"
+          if [ -n "$SELECTOR" ]; then
+            bash scripts/check-real-codex.sh -k "$SELECTOR"
           else
             bash scripts/check-real-codex.sh
           fi
