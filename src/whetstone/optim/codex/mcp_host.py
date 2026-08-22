@@ -122,6 +122,16 @@ class CodexMcpHost:
     probe proves only that *something* accepts on the port; taking that
     as readiness would hand the agent -- and this run's bearer token --
     to whatever process happened to own it.
+
+    Known limitation: the exit join is bounded, and a join that times out
+    is not reported. The realistic cause is an evaluation wedged inside
+    the ASGI app. The still-running daemon thread then keeps the listener
+    bound while the host drops its handle to the ``uvicorn.Server``, so
+    nothing can stop it afterwards and no error is raised --
+    ``CodexMcpHostError`` is declared for a shutdown that did not
+    complete but is never raised for one. The happy paths are clean:
+    after a normal exit and after an exception raised inside the block,
+    the port refuses connections and no server thread remains.
     """
 
     def __init__(
