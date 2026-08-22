@@ -7,8 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+## 0.1.7 - 2026-08-22
 
+### Added
 - The Codex-direct optimizer is wired through the shared contracts:
   `CodexControl`, a `CodexStepContractProvider` registered under the
   `codex` adapter key, `prepare_codex_run` beside the other
@@ -126,7 +127,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ProcessExecutor` construction site.
 
 ### Changed
-
 - Run cost reads tool-mediated evaluations. `aggregate_run_cost` now walks
   `OptimStepResult.tool_evidence` alongside `resolved_intents` and
   `search_evidence`, following each Tool Result's
@@ -188,7 +188,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   release by exiting.
 
 ### Removed
-
 - `CodexControl.max_turns` and `CodexControl.seed`. Both shaped the
   control identity and the recorded hyperparameters while reaching no
   part of the invocation -- `codex exec` exposes neither, and
@@ -208,7 +207,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unused `Path`-taking `_parse_output_artifact`.
 
 ### Fixed
-
 - An admitted Tool Call whose evaluation the engine rejects now reaches a
   terminal instead of being stranded. `EngineToolEvaluator.validate` runs
   before admission and can only check the call's Eval Config binding and
@@ -349,7 +347,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from one the output budget cut in half.
 
 ### Known limitations
-
 - Codex process isolation is macOS-only: it requires `sandbox-exec` and
   refuses to run without it rather than falling back to an insecure
   path. A Linux containment profile is separate work. Of the 77 tests in
@@ -368,8 +365,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - dr-exec v1 accepts no finite limit on `process_count` or the resource
   axes, so those are recorded as unbudgeted in the artifact's isolation
   block. The wall budget and the process boundary are the containment.
-
-### Fixed
 
 ## 0.1.6 - 2026-08-22
 
