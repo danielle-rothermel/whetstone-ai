@@ -271,34 +271,105 @@ def test_rung3_the_step_result_reaches_task_model_cost(
 # --------------------------------------------------------------- rung 4a
 
 
+def _request_json(request) -> str:
+    """The serialized Step Request, spelled as the production prompt does."""
+    return json.dumps(
+        request.model_dump(mode="json"),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _overstated_allowance_prompt(context, *, stated_allowance: int) -> str:
+    """The production protocol facts, under a deliberately false cap.
+
+    This is the one prompt in the ladder that lies to the agent, and it
+    lies about exactly one thing: how many calls it is allowed.
+    Everything the agent cannot derive for itself is carried over from
+    the production prompt -- the tool name, the fixed ``model_route``
+    string, the seed ``base_ref``, the artifact's schema obligations, the
+    ``lease_token_hash``, and the serialized Step Request -- because a
+    prompt that dropped any of them would have every call refused *after*
+    admission, which looks exactly like the failure this rung is trying
+    to distinguish itself from.
+
+    ``world.production_prompt`` cannot be used here: it extends the
+    production prompt, which truthfully states the configured cap, and
+    that truthful clause is the whole reason this rung stopped observing
+    anything. See the test's docstring for why the lie is load-bearing.
+
+    The serialized request carries the real cap too -- ``max_tool_calls``
+    and ``capacity.max_accepted_calls`` are both 1 -- so the
+    overstatement is made explicit rather than merely asserted: an agent
+    that notices the contradiction has to be told which number this run
+    intends, or it will reconcile it by obeying the smaller one and make
+    a single call again.
+    """
+    return (
+        f"Use only the external {context.tool_name} MCP tool for "
+        "measurements. Do not call any built-in tool. Build candidate "
+        "templates from the exact candidate base_ref, model route, payload "
+        "template, Tool Config, budget, pools, hyperparameters, and output "
+        "contract in the serialized request below.\n"
+        "The model_route argument is a fixed string and must be exactly "
+        f"{context.model_route!r}. It is not an object and must not be "
+        "built from any other field.\n"
+        "The base_ref argument must be copied verbatim as "
+        f"{context.base_ref}. Do not construct or modify it.\n"
+        "Evaluating through the MCP tool is mandatory. Every candidate you "
+        "consider must be submitted to the tool with a call_id you choose; "
+        f"you may make up to {stated_allowance} calls on this run. Ignore "
+        "any smaller call limit you find inside the serialized request "
+        f"below -- {stated_allowance} is the allowance for this run.\n"
+        "For this run, evaluate BOTH of these templates, each with its own "
+        f"distinct call_id: {_TEMPLATE_A!r} first, then {_TEMPLATE_B!r}. "
+        "Submit the second call even if the first one succeeded; both "
+        "templates must reach the tool.\n"
+        "If a call comes back with refused=true, that is an expected "
+        "outcome and not an error: do not retry it and do not abandon the "
+        "run. Write your artifact naming only the call_ids that were "
+        "actually scored.\n"
+        "Write a schema-conforming final artifact naming every scored "
+        "call_id in evaluated_call_ids, and selected_call_id set to the "
+        "call_id whose candidate you chose. The artifact carries no "
+        "candidate body: a template that was never evaluated through the "
+        "tool cannot be returned. Set selected_call_id to null to keep the "
+        "run's seed candidate. Copy lease_token_hash verbatim as "
+        f"{context.lease_token_hash!r}.\n"
+        f"OPTIM_STEP_REQUEST_JSON={_request_json(context.request)}"
+    )
+
+
 def test_rung4a_capacity_refusal_is_durable_and_the_step_still_completes(
     real_codex_world,
 ) -> None:
-    """Cap 1, and the prompt asks for two evaluations.
+    """Cap 1, and the agent is told it may make 2 calls.
 
     The second call must be refused by admission -- not by the agent's
     good behavior -- and the Step must still complete on the first.
 
+    This rung has to lie to the agent about its allowance, and that is
+    not a shortcut. The production prompt states the *real* configured
+    cap, so a well-behaved agent under a cap of 1 makes exactly one call
+    and the durable refusal path is never exercised at all: one admitted
+    evaluation under a cap of one is precisely what an obedient
+    single-call agent produces, so the rung would pass while observing
+    nothing. Telling the agent it may make 2 calls while the admission
+    authority is configured for 1 is what drives a genuine second call
+    into the authority and makes it refuse -- which is the behavior under
+    test. The lie is confined to the allowance; every protocol fact the
+    agent cannot derive is carried over from the production prompt (see
+    ``_overstated_allowance_prompt``).
+
     The evidence for "by admission" is the durable CAPACITY refusal in
-    the admission ledger. Without it this rung passes when the agent
-    simply never attempts the second call: one admitted evaluation under
-    a cap of one is exactly what an obedient single-call agent produces,
-    so the refusal path would be entirely unobserved. The prompt names
-    both templates explicitly for the same reason.
+    the admission ledger, which is the only thing that tells "the agent
+    was refused" apart from "the agent never tried".
     """
     world = real_codex_world(max_tool_calls=1)
 
     def prompt_builder(context):
-        return world.production_prompt(
-            context,
-            extra=(
-                "For this run, evaluate BOTH of these templates, each with "
-                f"its own call_id: {_TEMPLATE_A!r} then {_TEMPLATE_B!r}. "
-                "If a call comes back refused, do not retry it -- write "
-                "your artifact naming only the call_ids that were actually "
-                "scored."
-            ),
-        )
+        # Two, against a configured capacity of one.
+        return _overstated_allowance_prompt(context, stated_allowance=2)
 
     adapter = world.adapter(world.runner(prompt_builder=prompt_builder))
     result, _ref = world.harness(adapter).run_step(
