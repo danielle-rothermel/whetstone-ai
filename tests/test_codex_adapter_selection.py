@@ -1270,6 +1270,73 @@ def test_an_mcp_host_that_never_starts_terminalizes_the_step(
         squatter.close()
 
 
+class _RunnerWithRaisingExecutor:
+    """A real host that comes up, then an executor that dies mid-run.
+
+    The host is genuine -- ``build_server_from_env`` and
+    ``CodexMcpHost.__enter__`` both succeed and the endpoint is live --
+    so every failure this produces belongs to the agent execution, not
+    to whetstone's evaluation server.
+
+    ``run_blocking`` raises a bare ``RuntimeError``: not an
+    ``ExecutorFailure`` (which the runner already maps to
+    ``OpaqueStepError``) and not an ``OpaqueStepError`` itself. It stands
+    for any unforeseen defect inside the execution path.
+    """
+
+    def __init__(self, world) -> None:
+        self._inner = SubprocessCodexRunner(
+            executor=_RaisingExecutor(),
+            sqlite_path=world.sqlite_path,
+            runtime_config=ReferenceEvalRuntimeConfig(
+                mutation_field=world.config.candidate_template_field,
+                render_contract=toy_template_render_contract(),
+            ),
+            runtime_config_class=(
+                "whetstone.eval.reference_runtime:"
+                "ReferenceEvalRuntimeConfig"
+            ),
+            reward_policy=world.engine.reward_policy,
+        )
+
+    def run(self, request, handle, *, lease_token):
+        return self._inner.run(request, handle, lease_token=lease_token)
+
+
+class _RaisingExecutor:
+    """Fails the agent execution with something outside the taxonomy."""
+
+    def run_blocking(self, job):
+        del job
+        raise RuntimeError("executor defect during agent execution")
+
+
+def test_an_executor_defect_is_not_reported_as_a_host_failure(
+    selection_world,
+) -> None:
+    """A failure after the host is up belongs to the execution, not the host.
+
+    ``codex_mcp_host_failed`` means one specific thing to the ledger:
+    whetstone's own evaluation server never came up, so the agent never
+    ran and the Step paid for nothing. Wrapping the agent execution in
+    the same handler makes every unforeseen failure inside the Codex run
+    -- and every teardown failure after a successful one -- claim that,
+    which reads as "we never started" for a Step that may well have
+    spent money.
+
+    The host here is real and comes up; the executor then dies. That has
+    to terminalize under the execution-failure code.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(_RunnerWithRaisingExecutor(world))
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_EXECUTION_FAILED_CODE
+    assert result.terminal_failure.code != CODEX_MCP_HOST_FAILED_CODE
+
+
 class _SchemaInvalidArtifactRunner:
     """Pays for one evaluation, then returns an unparseable artifact.
 

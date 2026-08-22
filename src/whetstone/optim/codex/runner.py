@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -343,11 +345,79 @@ def _codex_budgets(
     )
 
 
-#: Marks where an output budget elided the middle of a stream. It leads
-#: the line so a reader can find it without parsing, and it is not valid
-#: JSON, so a JSONL consumer fails loudly on it rather than silently
-#: treating a stitched stream as contiguous.
-CODEX_ELIDED_MARKER_PREFIX = b"[... "
+#: Identifies whetstone's elision marker inside an otherwise-Codex
+#: stream. The parser has to tell this synthetic line from the agent's
+#: own output, and a human-readable prefix cannot carry that: Codex
+#: streams reasoning, and a line opening with a bracketed aside is
+#: ordinary prose. Matching one loosely drops a genuine record silently
+#: and misdirects the stitch-boundary search. This fixed token is not
+#: something an agent emits by accident.
+CODEX_ELISION_SENTINEL = "whetstone-elision-53f1c0e2-8a47-4d19-9b6e-2c7d0f5a1b83"
+#: The marker whetstone writes between a retained head and tail. It
+#: leads the line so a reader can find it without parsing, and it is not
+#: valid JSON, so a JSONL consumer fails loudly on it rather than
+#: silently treating a stitched stream as contiguous.
+CODEX_ELIDED_MARKER_PREFIX = f"[... {CODEX_ELISION_SENTINEL} ".encode()
+#: Matches exactly the marker ``_retained_bytes`` writes, anchored on the
+#: sentinel and on the whole line -- never a prefix.
+CODEX_ELIDED_MARKER_PATTERN = re.compile(
+    rb"^\[\.\.\. "
+    + re.escape(CODEX_ELISION_SENTINEL.encode())
+    + rb" \d+ bytes elided \.\.\.\]$"
+)
+
+
+def _is_elision_marker(raw: bytes) -> bool:
+    """Is this line whetstone's elision marker, and not agent output?"""
+    return CODEX_ELIDED_MARKER_PATTERN.match(raw) is not None
+
+
+@contextlib.contextmanager
+def _entered_mcp_host(
+    build: Callable[[], CodexMcpHost],
+) -> Iterator[CodexMcpEndpoint]:
+    """Bring the evaluation host up, and take it back down, under one code.
+
+    This exists to keep ``codex_mcp_host_failed`` meaning what the ledger
+    reads it as: whetstone's own server, not the agent. Only the two
+    phases that are whetstone's are wrapped.
+
+    Startup -- building the server and entering the host -- fails before
+    the agent runs, so nothing was paid for. Teardown failures are
+    wrapped too, but only when the block itself succeeded: the host is
+    still whetstone's, yet the run did happen, so the message says so
+    rather than implying the agent never started. When the block raised,
+    that exception is the real failure and a teardown error must not
+    displace it.
+
+    Neither ``CodexMcpHostError`` nor a lifespan error is an
+    ``OpaqueStepError``, so unwrapped they would pass the adapter's
+    checkpoint and leave this ``NO_REDRIVE`` effect nonterminal until the
+    lease lapsed.
+    """
+    try:
+        host = build()
+        endpoint = host.__enter__()
+    except Exception as exc:
+        raise CodexMcpHostFailure(
+            "Codex MCP evaluation host failed to start", cause=exc
+        ) from exc
+    try:
+        yield endpoint
+    except BaseException:
+        # The block's own failure is the real one. Let the host tear down
+        # and let that exception continue; a teardown error here must not
+        # mask it.
+        host.__exit__(*sys.exc_info())
+        raise
+    try:
+        host.__exit__(None, None, None)
+    except Exception as exc:
+        raise CodexMcpHostFailure(
+            "Codex MCP evaluation host failed to shut down after a "
+            "completed run",
+            cause=exc,
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,31 +680,48 @@ class SubprocessCodexRunner:
         # failure, a startup that misses its deadline. None of those are
         # OpaqueStepError, so they would unwind past the adapter's
         # checkpoint and leave this NO_REDRIVE effect nonterminal until
-        # the lease lapsed. Terminalizing is about releasing the lease,
-        # not about which thing broke, so they leave through the same
-        # path as every other runner failure. The host closes its own
-        # thread and socket before raising, so normalizing here strands
-        # nothing.
-        try:
-            with CodexMcpHost(
+        # the lease lapsed, so they are normalized. The host closes its
+        # own thread and socket before raising, so that strands nothing.
+        #
+        # Only those phases are the host's. codex_mcp_host_failed tells
+        # the ledger one specific thing -- whetstone's own server never
+        # came up, so the agent never ran and this Step paid for nothing.
+        # Covering the agent execution under it too would let any
+        # unforeseen failure inside the Codex run claim that,
+        # misreporting a Step that may have spent money as one that
+        # never started, and burying the real defect behind a host
+        # diagnostic. Every failure still terminalizes; they differ only
+        # in which code they carry.
+        host = _entered_mcp_host(
+            lambda: CodexMcpHost(
                 build_server_from_env(
                     self._mcp_server_environment(handle, lease_token)
                 ),
                 auth_token=lease_token,
-            ) as endpoint:
+            )
+        )
+        with host as endpoint:
+            try:
                 execution = self._execute_structured(
                     prompt=prompt,
                     output_schema=schema,
                     mcp_endpoint=endpoint,
                 )
-        except OpaqueStepError:
-            # The agent's own failures already carry their taxonomy and
-            # their isolation evidence; re-wrapping would lose both.
-            raise
-        except Exception as exc:
-            raise CodexMcpHostFailure(
-                "Codex MCP evaluation host failed", cause=exc
-            ) from exc
+            except OpaqueStepError:
+                # The agent's own failures already carry their taxonomy
+                # and their isolation evidence; re-wrapping loses both,
+                # and the adapter terminalizes them as they are.
+                raise
+            except Exception as exc:
+                # An unforeseen defect inside the execution path. It
+                # still has to terminalize -- the harness releases the
+                # effect lease only once the adapter returns, so
+                # unwinding here wedges this NO_REDRIVE run until the
+                # lease lapses -- but under the execution taxonomy,
+                # because the host is up and the agent may have run.
+                raise OpaqueStepError(
+                    f"Codex execution failed unexpectedly: {exc}"
+                ) from exc
         artifact = _parse_output_artifact_bytes(
             execution.artifact_bytes,
             stdout=execution.stdout,
@@ -1034,7 +1121,7 @@ def _parse_jsonl_events(
     lines = [raw for raw in stdout.splitlines() if raw.strip()]
     dropped_partial = 0
     for ordinal, raw in enumerate(lines, start=1):
-        if truncated and raw.startswith(CODEX_ELIDED_MARKER_PREFIX):
+        if truncated and _is_elision_marker(raw):
             continue
         try:
             value = decode_strict_json_bytes(
@@ -1069,7 +1156,7 @@ def _is_stitch_boundary(ordinal: int, lines: list[bytes]) -> bool:
     """
     index = ordinal - 1
     for marker_index, raw in enumerate(lines):
-        if raw.startswith(CODEX_ELIDED_MARKER_PREFIX):
+        if _is_elision_marker(raw):
             return index in (marker_index - 1, marker_index + 1)
     return False
 

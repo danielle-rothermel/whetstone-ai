@@ -120,3 +120,50 @@ def test_a_truncated_stream_rejects_damage_away_from_the_stitch() -> None:
 
     with pytest.raises(OpaqueStepError, match="malformed"):
         _parse_jsonl_events(stitched, truncated=True)
+
+
+def test_a_marker_shaped_line_does_not_capture_the_stitch_search() -> None:
+    """Only the real marker locates the stitch, so real damage stays forgiven.
+
+    The elision marker is whetstone's own synthetic line, and the parser
+    has to tell it from Codex's output by something Codex cannot
+    plausibly emit. A human-readable ``[... `` prefix is not that: a
+    line opening with a bracketed aside is ordinary agent prose.
+
+    Matching loosely costs more than one line. ``_is_stitch_boundary``
+    stops at the *first* marker-shaped line, so a decoy captures the
+    search and points it away from the real stitch -- and then the two
+    lines the retention window genuinely cut are no longer recognized
+    as budget damage. A truncated run whose final artifact is perfectly
+    valid fails on exactly the damage the parser exists to tolerate.
+
+    Here the decoy sits in the head, ahead of the real marker. The
+    decoy is not JSON, so it is a real contract violation and the parse
+    must fail -- but it must fail on the *decoy*, not on the innocent
+    stitch line the decoy misdirected the search away from.
+    """
+    decoy = b"[... the model narrating its reasoning ...]"
+    stream = _FakeStream(
+        head=b'{"a": 1}\n' + decoy + b'\n{"cut": ',
+        tail=b'ue}\n{"b": 2}\n',
+        dropped_bytes=4096,
+    )
+    retained = _retained_bytes(stream)
+
+    with pytest.raises(OpaqueStepError, match="event 2 is malformed"):
+        _parse_jsonl_events(retained.data, truncated=True)
+
+
+def test_only_the_exact_marker_line_is_skipped() -> None:
+    """The marker is matched whole, on its sentinel, never on a prefix."""
+    stitched = (
+        b'{"a": 1}\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"4096 bytes elided ...]\n"
+        + b'{"b": 2}\n'
+    )
+
+    parsed = _parse_jsonl_events(stitched, truncated=True)
+
+    assert parsed.events == ({"a": 1}, {"b": 2})
+    assert parsed.dropped_partial_lines == 0

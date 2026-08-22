@@ -303,7 +303,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   drift apart.
 - Truncated Codex output is never presented as a contiguous stream. When
   a finite output budget retains a head and a tail and drops the middle,
-  the join carries an explicit `[... N bytes elided ...]` marker line and
+  the join carries an explicit elision marker line -- identified by a
+  fixed sentinel token rather than a human-readable prefix -- and
   the isolation block records `stdout_truncated` / `stderr_truncated`
   alongside the dropped byte counts. Concatenating the two fragments bare
   fabricated a line the process never emitted, which the JSONL parser
@@ -514,7 +515,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until the lease lapsed. They now fail the step under
   `codex_mcp_host_failed`, which the ledger keeps distinct from an agent
   that ran and failed: the Codex process never started, so nothing was
-  paid for.
+  paid for. That code covers host startup only. An unforeseen failure
+  inside the agent execution still terminalizes -- an escaping exception
+  would wedge the same `NO_REDRIVE` run -- but under
+  `codex_execution_failed`, because the host is up and the agent may
+  have run; reporting it as a host failure claimed the step never
+  started and buried the real defect behind a host diagnostic. A
+  teardown that fails after a completed run is labelled as such, and
+  never displaces an exception raised by the run itself.
+- The JSONL parser identifies the elision marker by an exact,
+  sentinel-anchored match on the whole line. It previously skipped any
+  line merely starting with `[... `, so a genuine Codex line opening
+  with a bracketed aside was dropped from the transcript silently, and
+  -- because the stitch-boundary search stops at the first
+  marker-shaped line -- such a line also misdirected that search, so
+  the two lines the output budget really did cut were no longer
+  forgiven and a truncated run with a valid final artifact failed.
 - Schema and JSONL parse failures keep their isolation evidence. Both
   were raised as a bare `OpaqueStepError` after `_execute_structured`
   had already built the isolation record, so the terminalized step stored
