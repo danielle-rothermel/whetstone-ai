@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.8 - 2026-08-22
+
 ### Added
 - `tests/real_codex/`: a nine-rung ladder that runs the Codex-direct
   optimizer against the real `codex` CLI with a fake task model (config
