@@ -1425,6 +1425,18 @@ def select_promotion(
     for candidate in ranked:
         if candidate.candidate_combination_identity_hash not in promoted:
             return candidate
+    # Every observed combination has already been promoted. DSPy reaches
+    # this state whenever the sampler re-proposes only combinations that
+    # earlier full evaluations already consumed -- reliably so when the
+    # search space is small enough that consecutive full-eval steps
+    # exhaust it (num_candidates == 2 with minibatching). Its
+    # get_program_with_highest_avg_score falls out of the same loop and
+    # returns the last-ranked combination, so the run re-evaluates the
+    # lowest-scoring combination rather than failing. Mirror that: the
+    # promotion is a full evaluation, and repeating one is wasteful but
+    # well defined, whereas raising kills the durable run mid-flight.
+    if ranked:
+        return ranked[-1]
     raise ValueError("No valid program found in param_score_dict")
 
 
