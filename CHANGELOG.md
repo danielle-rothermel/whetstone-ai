@@ -37,8 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fan-out through the same engine-narrowing path MIPROv2 uses.
   `load_terminal_optim_result` accepts a seed-retained result with no
   proposals.
-- GEPA fan-in is safe to retry: a replayed fan-in is idempotent and a
-  stale fan-in cannot truncate a later work-state head.
+- GEPA fan-in is safe to retry, guarded by deferral-episode identity
+  rather than `step_index` alone. Because GEPA resumes the same
+  `step_index` after every deferral, one step can own several episodes,
+  each identified by the optim_step stage index it was deferred from. A
+  retry of the current episode stays idempotent; a replay of an earlier
+  episode is inert — it leaves the live head, that head's pending
+  fan-out and step-keyed deferred intents, and its
+  `platform_stage_index` untouched, and enqueues no `optim_step`.
 
 ## 0.1.4 - 2026-08-22
 

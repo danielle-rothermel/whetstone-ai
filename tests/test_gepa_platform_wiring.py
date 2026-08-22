@@ -740,3 +740,255 @@ def test_gepa_stale_fanin_does_not_regress_later_head(sqlite_store) -> None:
     )
     assert replayed_state.step_index >= head.step_index
     assert len(replayed_state.step_result_refs) >= len(head.step_result_refs)
+
+
+def _gepa_second_episode_at_same_step(runtime, launch, monkeypatch):
+    """Drive a GEPA member to two deferral episodes under one step_index.
+
+    Returns the first episode's fan-in successor and the second episode's
+    rows/fan-in. GEPA resumes the same step after every deferral, so the two
+    episodes differ only by their deferral origin stage index.
+    """
+    from whetstone.platform.contracts import (
+        STAGE_EVAL_FANIN,
+        STAGE_EVAL_ROW,
+        load_deferral_join_input,
+    )
+    from whetstone.platform.eval_fanin import (
+        build_platform_row_executor,
+        execute_eval_fanin_sync,
+        execute_eval_row_sync,
+    )
+
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+
+    first_completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+    )
+    first_rows = [
+        successor
+        for successor in first_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    first_fanin = [
+        successor
+        for successor in first_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    ][0]
+    first_join = load_deferral_join_input(runtime.store, first_fanin.input_reference)
+    first_state = _load_work_state(runtime, first_join.work_state_ref)
+
+    platform_executor = build_platform_row_executor(runtime)
+    for row_successor in first_rows:
+        execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+            row_executor=platform_executor,
+        )
+    resumed = execute_eval_fanin_sync(
+        runtime,
+        input_reference=first_fanin.input_reference,
+        stage_index=first_fanin.stage_index,
+    )
+    resumed_successor = resumed.successors[0]
+
+    # Fault injection: the resumed step defers a second time at the same
+    # step_index, exactly as a real GEPA step does when optimize() issues
+    # another search eval after consuming the first episode's resolutions.
+    real_run_step = runtime.harness.run_step
+    episode_intents = first_state.pending_deferred_intents
+
+    def deferring_run_step(step_request, *, eval_context=None):
+        result, result_ref = real_run_step(step_request, eval_context=eval_context)
+        runtime.harness._last_deferred_platform_intents = episode_intents  # noqa: SLF001
+        return result.model_copy(update={"resolved_intents": ()}), result_ref
+
+    monkeypatch.setattr(runtime.harness, "run_step", deferring_run_step)
+    second_completion = execute_optim_step_sync(
+        runtime,
+        input_reference=resumed_successor.input_reference,
+        stage_index=resumed_successor.stage_index,
+    )
+    monkeypatch.undo()
+
+    second_rows = [
+        successor
+        for successor in second_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    second_fanin = [
+        successor
+        for successor in second_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    ][0]
+    second_join = load_deferral_join_input(runtime.store, second_fanin.input_reference)
+    second_state = _load_work_state(runtime, second_join.work_state_ref)
+
+    # Both episodes share a step_index and differ only by episode identity.
+    assert second_state.step_index == first_state.step_index
+    assert (
+        second_join.deferral_optim_step_stage_index
+        > first_join.deferral_optim_step_stage_index
+    )
+    return first_fanin, second_rows, second_fanin
+
+
+def test_gepa_stale_fanin_of_earlier_episode_leaves_current_episode_intact(
+    sqlite_store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replaying an earlier episode's fan-in must not disturb a live episode.
+
+    A single GEPA step_index owns several deferral episodes, so step_index
+    alone cannot order a fan-in against the head. The replayed episode must be
+    recognized as stale by episode identity and leave the live fan-out, its
+    deferred intents, and the head's stage index untouched.
+    """
+    from whetstone.platform.contracts import (
+        STAGE_EVAL_FANIN,
+        STAGE_EVAL_ROW,
+        load_deferral_join_input,
+    )
+    from whetstone.platform.deferred_intents import deferred_intents_binding_key
+    from whetstone.platform.eval_fanin import (
+        build_platform_row_executor,
+        execute_eval_fanin_sync,
+        execute_eval_row_sync,
+    )
+    from whetstone.platform.work_state_head import resolve_work_state_head
+
+    run_id = f"gepa-stale-episode-{uuid4().hex[:8]}"
+    runtime, launch, adapter, _experiment = _gepa_runtime(
+        sqlite_store,
+        run_id=run_id,
+        max_metric_calls=4,
+    )
+    first_fanin, second_rows, second_fanin = _gepa_second_episode_at_same_step(
+        runtime, launch, monkeypatch
+    )
+
+    def read_head():
+        head_ref = resolve_work_state_head(
+            runtime.store, run_id=run_id, work_key=""
+        )
+        assert head_ref is not None
+        return _load_work_state(runtime, head_ref)
+
+    head_before = read_head()
+    second_join = load_deferral_join_input(
+        runtime.store, second_fanin.input_reference
+    )
+    # The head is parked on the second episode with its fan-out pending.
+    assert (
+        head_before.deferral_optim_step_stage_index
+        == second_join.deferral_optim_step_stage_index
+    )
+    assert head_before.pending_deferred_intents
+    assert head_before.pending_step_result_ref is not None
+    intents_key = deferred_intents_binding_key(run_id, head_before.step_index)
+    intents_binding_before = runtime.store.resolve(intents_key)
+    invocations_before = adapter.invocations
+
+    replayed = execute_eval_fanin_sync(
+        runtime,
+        input_reference=first_fanin.input_reference,
+        stage_index=first_fanin.stage_index,
+    )
+
+    # The stale replay is inert: no successor displaces the live fan-out.
+    assert replayed.successors == ()
+    head_after = read_head()
+    assert head_after.step_index == head_before.step_index
+    assert (
+        head_after.deferral_optim_step_stage_index
+        == head_before.deferral_optim_step_stage_index
+    )
+    assert (
+        head_after.work_input.platform_stage_index
+        == head_before.work_input.platform_stage_index
+    )
+    assert head_after.pending_deferred_intents == head_before.pending_deferred_intents
+    assert head_after.pending_step_result_ref == head_before.pending_step_result_ref
+    # The current episode's step-keyed deferred intents were not evicted.
+    assert runtime.store.resolve(intents_key) == intents_binding_before
+    assert adapter.invocations == invocations_before
+
+    # The live episode still completes and the run reaches a terminal result.
+    platform_executor = build_platform_row_executor(runtime)
+    for row_successor in second_rows:
+        execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+            row_executor=platform_executor,
+        )
+    second = execute_eval_fanin_sync(
+        runtime,
+        input_reference=second_fanin.input_reference,
+        stage_index=second_fanin.stage_index,
+    )
+    current_ref = second.successors[0].input_reference
+    for _ in range(12):
+        completion = execute_optim_step_sync(
+            runtime,
+            input_reference=current_ref,
+        )
+        rows = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_ROW
+        ]
+        fanins = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_FANIN
+        ]
+        if rows or fanins:
+            for row_successor in rows:
+                execute_eval_row_sync(
+                    runtime,
+                    input_reference=row_successor.input_reference,
+                    stage_index=row_successor.stage_index,
+                    row_executor=platform_executor,
+                )
+            later = execute_eval_fanin_sync(
+                runtime,
+                input_reference=fanins[0].input_reference,
+                stage_index=fanins[0].stage_index,
+            )
+            current_ref = later.successors[0].input_reference
+            continue
+        if completion.successors:
+            current_ref = completion.successors[0].input_reference
+            continue
+        current_ref = completion.output_reference
+        break
+    else:
+        raise AssertionError("GEPA PLATFORM run did not reach a terminal state")
+
+    from dr_store.content_addressing import parse_object_reference
+    from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
+
+    terminal_ref = execute_run_completion_sync(
+        runtime,
+        input_reference=current_ref,
+    )
+    parsed = parse_object_reference(terminal_ref)
+    assert parsed.schema == OPTIM_RESULT_SCHEMA
+    result = OptimResult.model_validate(runtime.store.get(parsed))
+    assert result.proposals or result.seed_retained
+    assert result.step_results
+    for step_ref in result.step_results:
+        assert step_ref.record.search_evidence
+    assert adapter.invocations > invocations_before

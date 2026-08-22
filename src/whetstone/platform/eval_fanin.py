@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from dr_platform._core.identities import StageKey
@@ -419,6 +420,45 @@ def _resolve_episode_intent(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _StaleFanin:
+    """A replayed fan-in whose deferral episode the head has already left."""
+
+    head: OptimWorkState
+    head_ref: str
+
+
+def _head_is_later_episode(
+    head: OptimWorkState,
+    *,
+    step_index: int,
+    episode_stage_index: int | None,
+) -> bool:
+    """True when the bound head has moved past the episode being replayed.
+
+    GEPA resumes the same ``step_index`` after each deferral, so one step can
+    own several deferral episodes. ``step_index`` alone therefore cannot order
+    a fan-in against the head: the authoritative episode identity is the
+    optim_step stage index the episode was deferred from, carried by the
+    already-persisted ``OptimWorkState.deferral_optim_step_stage_index`` and
+    mirrored on ``DeferralJoinInput``. It strictly increases as the platform
+    walks stages, so it totally orders episodes within one step.
+    """
+    if head.step_index > step_index:
+        return True
+    if head.step_index < step_index:
+        return False
+    if episode_stage_index is None:
+        return False
+    head_episode = head.deferral_optim_step_stage_index
+    if head_episode is None:
+        # The head is not parked on a deferral episode. It is only "later" if
+        # it already consumed this step's fan-in and advanced past it, which
+        # the step_index comparison above already covers.
+        return False
+    return head_episode > episode_stage_index
+
+
 def _finalize_deferred_step(
     runtime: RegisteredRuntime,
     *,
@@ -428,7 +468,14 @@ def _finalize_deferred_step(
     run_id: str,
     step_index: int,
     resolutions: tuple[IntentResolution, ...],
-) -> OptimWorkState:
+    episode_stage_index: int | None = None,
+) -> OptimWorkState | _StaleFanin:
+    """Merge one resolved deferral episode into the member's work state.
+
+    Returns ``_StaleFanin`` when the head already belongs to a later deferral
+    episode, so the caller can re-report the live head untouched instead of
+    rebinding it to this episode's older stage.
+    """
     pending = OptimStepResult.model_validate(
         runtime.store.get(parse_object_reference(pending_step_result_ref))
     )
@@ -455,11 +502,6 @@ def _finalize_deferred_step(
     from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
     from whetstone.platform.deferred_intents import evict_deferred_intents
 
-    evict_deferred_intents(
-        runtime.store,
-        run_id=run_id,
-        step_index=step_index,
-    )
     adapter_key = pending.request.record.run.record.adapter_key
     if adapter_key == GEPA_ADAPTER_KEY:
         # Search was interrupted mid-optimize(). Do not keep the placeholder
@@ -470,10 +512,24 @@ def _finalize_deferred_step(
             run_id=run_id,
             work_key=work_state.work_input.work_key,
         )
-        if head_ref is not None:
-            head = _load_work_state(runtime, head_ref)
-            if head.step_index > step_index:
-                return head
+        head = None if head_ref is None else _load_work_state(runtime, head_ref)
+        if head is not None and _head_is_later_episode(
+            head,
+            step_index=step_index,
+            episode_stage_index=episode_stage_index,
+        ):
+            # Stale replay of an earlier episode. Leave the live head, its
+            # step-keyed deferred intents, and its stage index alone. The
+            # caller re-reports the head as-is instead of rebinding it.
+            return _StaleFanin(head=head, head_ref=head_ref)
+        # Only now is this episode confirmed current: its step-keyed deferred
+        # intents belong to the fan-in we are about to merge.
+        evict_deferred_intents(
+            runtime.store,
+            run_id=run_id,
+            step_index=step_index,
+        )
+        if head is not None:
             if (
                 head.step_index == step_index
                 and head.pending_step_result_ref is None
@@ -492,6 +548,15 @@ def _finalize_deferred_step(
             step_result_refs=loaded.step_result_refs[:step_index],
             terminal=False,
         )
+    # COPRO and MIPROv2 defer at most once per step_index: a step either
+    # resolves inline or defers exactly one episode and then advances to
+    # step_index + 1. step_index therefore already totally orders their
+    # fan-ins against the head, so no episode-stage comparison is needed.
+    evict_deferred_intents(
+        runtime.store,
+        run_id=run_id,
+        step_index=step_index,
+    )
     merged = pending.model_copy(update={"resolved_intents": resolutions})
     merged_ref = runtime.harness._put_result(merged)  # noqa: SLF001
     _bind_step_result(
@@ -556,7 +621,29 @@ def _complete_fanin_handoff(
         run_id=work_state.work_input.run_id,
         step_index=work_state.step_index,
         resolutions=resolutions,
+        episode_stage_index=join_input.deferral_optim_step_stage_index,
     )
+    if isinstance(resumed, _StaleFanin):
+        # A later deferral episode owns the head. Re-report the head exactly as
+        # it stands: no re-persist (which would rebind the head), no
+        # platform_stage_index bump, and no successor that would duplicate or
+        # displace the live fan-out. The head's own pending fan-out, and the
+        # deferred intents keyed to it, are left untouched.
+        head = resumed.head
+        if head.pending_step_result_ref is not None:
+            # The head is parked mid-episode; its optim_step successor is
+            # already enqueued by that episode's own fan-in.
+            return StageCompletion(output_reference=output_ref, successors=())
+        return StageCompletion(
+            output_reference=output_ref,
+            successors=(
+                StageSuccessor(
+                    stage_key=StageKey("optim_step"),
+                    stage_index=head.work_input.platform_stage_index,
+                    input_reference=resumed.head_ref,
+                ),
+            ),
+        )
     resumed_stage_index = resumed.work_input.platform_stage_index + 1
     resumed = OptimWorkState(
         work_input=resumed.work_input.model_copy(
