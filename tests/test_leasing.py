@@ -271,24 +271,35 @@ def test_a_failed_effect_replays_its_whetstone_terminal_failure(
     assert replay.terminal.failure == failure
 
 
-def test_an_oversized_failure_message_still_publishes_a_terminal(
+@pytest.mark.parametrize(
+    ("message", "json_safe"),
+    [
+        ("provider error: " + "x" * 1200, True),
+        ("   ", True),
+        ("hello\x00world", True),
+        ("bad\ud800surrogate", False),
+    ],
+    ids=["oversized", "whitespace-only", "nul", "unpaired-surrogate"],
+)
+def test_a_dirty_failure_message_round_trips_the_whetstone_failure(
     authority: tuple[EffectLeaseAuthority, FakeClock],
+    message: str,
+    json_safe: bool,
 ) -> None:
-    """Provider text too long for dr-store must not cost us the lease.
+    """Provider text that dr-store would reject still publishes as FAILED.
 
-    Whetstone's TerminalFailure.message is a NonEmptyId carrying arbitrary
-    provider and exception output; dr-store caps its text at 1024 characters.
-    The boundary truncates instead of raising, so an evaluation failure
-    terminalizes as FAILED rather than escalating into a lost lease that
-    expires and gets redriven.
+    The write path coerces code/message into dr-store's accepted shape so a
+    long or dirty provider message cannot raise inside ``maintain(...)`` and
+    lose the lease. ``EffectTerminal.failure`` restores the original so
+    persist-and-compare call sites stay equal. Unpaired surrogates cannot
+    ride in JSON details, so ``verify_terminal`` is skipped for that case.
     """
     lease_authority, _clock = authority
     request = _request()
     lease = _acquire(lease_authority, request)
-    long_message = "provider error: " + "x" * 1200
     failure = TerminalFailure(
         code="evaluation_RuntimeError",
-        message=long_message,
+        message=message,
         details=ImmutableJsonObject({"attempt": 1}),
     )
 
@@ -297,14 +308,16 @@ def test_an_oversized_failure_message_still_publishes_a_terminal(
     )
 
     assert terminal.outcome is TerminalOutcome.FAILED
-    assert terminal.failure is not None
-    # Truncated to dr-store's limit, with the full text preserved.
-    assert len(terminal.failure.message) == 1024
-    assert terminal.failure.message.endswith("...")
-    assert terminal.failure.details["untruncated_message"] == long_message
-    assert terminal.failure.details["attempt"] == 1
-    # Truncation is stable, so the terminal stays authoritative.
-    assert lease_authority.verify_terminal(terminal) == terminal
+    assert terminal.failure == failure
+    if json_safe:
+        assert lease_authority.verify_terminal(terminal) == terminal
+    lease_failure = terminal.to_lease().failure
+    assert lease_failure is not None
+    assert lease_failure.details["untruncated_message"] == message
+    assert lease_failure.details["attempt"] == 1
+    if len(message) > 1024:
+        assert len(lease_failure.message) == 1024
+        assert lease_failure.message.endswith("...")
     replay = lease_authority.acquire(
         request,
         owner_id="owner-b",
@@ -313,6 +326,8 @@ def test_an_oversized_failure_message_still_publishes_a_terminal(
     )
     assert replay.outcome is AcquireOutcome.FAILED
     assert replay.terminal == terminal
+    assert replay.terminal is not None
+    assert replay.terminal.failure == failure
 
 
 def test_a_stale_lease_cannot_publish_a_terminal(

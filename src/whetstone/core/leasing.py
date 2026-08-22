@@ -151,8 +151,32 @@ def _to_lease_failure(failure: TerminalFailure) -> _LeaseTerminalFailure:
     return _LeaseTerminalFailure(code=code, message=message, details=details)
 
 
+def _lease_text_shape(value: str, *, field: str) -> str:
+    """Return the dr-store text shape without recording the original."""
+    return _lease_text(value, field=field, details={})
+
+
 def _from_lease_failure(failure: _LeaseTerminalFailure) -> TerminalFailure:
-    return TerminalFailure.model_validate(failure.model_dump(mode="json"))
+    """Restore the whetstone failure that ``_to_lease_failure`` encoded.
+
+    Callers persist the original ``TerminalFailure`` on the Tool Result,
+    adapter checkpoint, or intent resolution, then exact-compare it to
+    ``EffectTerminal.failure``. The lease-side coercion is a transport
+    concern: invert it here so those comparisons stay equal. Restore
+    ``untruncated_*`` only when the stored text is our coercion of that
+    original, so a caller-owned detail of the same name is left alone.
+    """
+    data = failure.model_dump(mode="json")
+    details = dict(data["details"])
+    for field in ("code", "message"):
+        original = details.get(f"untruncated_{field}")
+        if original is None:
+            continue
+        if _lease_text_shape(str(original), field=field) == data[field]:
+            data[field] = original
+            del details[f"untruncated_{field}"]
+    data["details"] = details
+    return TerminalFailure.model_validate(data)
 
 
 class EffectTerminal(BaseModel):
