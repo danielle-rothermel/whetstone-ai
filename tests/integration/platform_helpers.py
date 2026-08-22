@@ -24,6 +24,7 @@ from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from dr_store.sync import BlockingObjectStore
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
+from whetstone.optim.cost import COST_REPORT_SCHEMA_VERSION
 from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
@@ -345,6 +346,23 @@ def load_terminal_optim_result(
     result = OptimResult.model_validate(context.store.get(parsed))
     assert result.run.record.run_id == context.launch.run.run_id
     assert result.proposals or result.seed_retained
+    # The platform completion path fills cost through the same shared
+    # aggregator the in-process path uses, so a platform run reports spend
+    # in the identical shape rather than leaving the field empty.
+    cost = result.cost.to_json()
+    assert cost, "platform run completion must populate OptimResult.cost"
+    assert cost["schema_version"] == COST_REPORT_SCHEMA_VERSION
+    assert set(cost) == {"schema_version", "task_model", "proposer"}
+    assert cost["proposer"]["calls"] >= 1
+    for role in ("task_model", "proposer"):
+        role_cost = cost[role]
+        assert (
+            role_cost["priced_calls"] + role_cost["unpriced_calls"]
+            == role_cost["calls"]
+        )
+        # A total is claimed only when every contributing call had a price.
+        if role_cost["unpriced_calls"]:
+            assert role_cost["usd"] is None
     return result
 
 

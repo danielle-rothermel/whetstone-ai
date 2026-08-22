@@ -1,0 +1,359 @@
+"""Deriving run cost from evidence persisted in the object store.
+
+These tests drive :func:`aggregate_run_cost` over records written to a real
+store, which is the property that matters: the number is re-derived from
+durable evidence rather than from counters the run happened to hold in
+memory, so a resumed or platform run reports the same total.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from dr_store.sync import open_sqlite
+
+from whetstone.core.identity import TypedRef
+from whetstone.eval.schema import EVAL_OUTPUTS_SCHEMA
+from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
+from whetstone.optim.cost import ProposerCallUsage
+from whetstone.optim.cost_aggregation import aggregate_run_cost
+
+
+class _FakeStepResult:
+    """Only the fields the aggregator reads off a Step Result."""
+
+    def __init__(
+        self,
+        *,
+        resolved_intents: tuple[Any, ...] = (),
+        search_evidence: tuple[Any, ...] = (),
+        proposer_usage: tuple[ProposerCallUsage, ...] = (),
+    ) -> None:
+        self.resolved_intents = resolved_intents
+        self.search_evidence = search_evidence
+        self.proposer_usage = proposer_usage
+
+
+class _FakeCitation:
+    def __init__(self, ref: TypedRef | None) -> None:
+        self.eval_result_ref = ref
+
+
+def _typed_ref(reference: Any) -> TypedRef:
+    return TypedRef(
+        schema_name=reference.schema,
+        content_hash=reference.content_hash,
+    )
+
+
+def _row(
+    *,
+    task_index: int,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    provider_cost: float | None,
+) -> dict[str, Any]:
+    """A minimal output row in its persisted shape."""
+    return {
+        "candidate_id": "candidate-1",
+        "task_id": f"task-{task_index}",
+        "task_hash": f"hash-{task_index}",
+        "task_index": task_index,
+        "seed_index": 0,
+        "rendered_prompt": "prompt",
+        "output_text": "answer",
+        "score": 1.0,
+        "failed": False,
+        "missing": False,
+        "invalid": False,
+        "failure_code": "",
+        "finish_reason": "stop",
+        "provider_error": None,
+        "max_budget": None,
+        "over_budget": None,
+        "submission_result": None,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "provider_cost": provider_cost,
+    }
+
+
+def _persist_evidence(store: Any, rows: list[dict[str, Any]]) -> TypedRef:
+    """Write one outputs record and the evidence that cites it."""
+    outputs_reference, _ = store.put(
+        EVAL_OUTPUTS_SCHEMA,
+        {"outputs": rows},
+    )
+    outputs_ref = _typed_ref(outputs_reference)
+    evidence_reference, _ = store.put(
+        EVAL_EVIDENCE_SCHEMA,
+        {"outputs_ref": outputs_ref.model_dump(mode="json")},
+    )
+    return _typed_ref(evidence_reference)
+
+
+def test_task_model_tokens_come_from_persisted_output_rows(tmp_path) -> None:
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=6,
+                    completion_tokens=2,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 2
+    assert report.task_model.input_tokens == 16
+    assert report.task_model.output_tokens == 6
+    assert report.task_model.usd is None
+
+
+def test_priced_rows_produce_a_usd_total(tmp_path) -> None:
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.2,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=6,
+                    completion_tokens=2,
+                    provider_cost=0.3,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.priced_calls == 2
+    assert report.task_model.usd == pytest.approx(0.5)
+
+
+def test_one_unpriced_row_withholds_the_task_model_usd_total(
+    tmp_path,
+) -> None:
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.2,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=6,
+                    completion_tokens=2,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 2
+    assert report.task_model.input_tokens == 16
+    assert report.task_model.priced_calls == 1
+    assert report.task_model.unpriced_calls == 1
+    assert report.task_model.usd is None
+
+
+def test_rows_without_usage_are_not_counted_as_calls(tmp_path) -> None:
+    """A cache hit or unexecuted row is not a billable call."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+
+
+def test_evidence_cited_twice_is_counted_once(tmp_path) -> None:
+    """A replayed evaluation must not inflate the run total."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                )
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+                # A later Step cites the same evaluation, as a replay does.
+                _FakeStepResult(search_evidence=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+
+
+def test_search_evidence_is_counted_alongside_resolved_intents(
+    tmp_path,
+) -> None:
+    """Evaluations driven inside an optimizer's own search are paid too."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        intent_ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                )
+            ],
+        )
+        search_ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=1,
+                    prompt_tokens=7,
+                    completion_tokens=1,
+                    provider_cost=None,
+                )
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    resolved_intents=(_FakeCitation(intent_ref),),
+                    search_evidence=(_FakeCitation(search_ref),),
+                ),
+            ),
+        )
+    assert report.task_model.calls == 2
+    assert report.task_model.input_tokens == 17
+    assert report.task_model.output_tokens == 5
+
+
+def test_proposer_usage_totals_across_steps(tmp_path) -> None:
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    proposer_usage=(
+                        ProposerCallUsage(
+                            prompt_tokens=30,
+                            completion_tokens=9,
+                            usd=0.4,
+                        ),
+                    )
+                ),
+                _FakeStepResult(
+                    proposer_usage=(
+                        ProposerCallUsage(
+                            prompt_tokens=20,
+                            completion_tokens=5,
+                            usd=0.1,
+                        ),
+                    )
+                ),
+            ),
+        )
+    assert report.proposer.calls == 2
+    assert report.proposer.input_tokens == 50
+    assert report.proposer.output_tokens == 14
+    assert report.proposer.usd == pytest.approx(0.5)
+
+
+def test_roles_are_totalled_independently(tmp_path) -> None:
+    """An unpriced task model must not suppress a priced proposer total."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                )
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    resolved_intents=(_FakeCitation(ref),),
+                    proposer_usage=(
+                        ProposerCallUsage(
+                            prompt_tokens=8,
+                            completion_tokens=2,
+                            usd=0.05,
+                        ),
+                    ),
+                ),
+            ),
+        )
+    assert report.task_model.usd is None
+    assert report.proposer.usd == pytest.approx(0.05)
+
+
+def test_a_run_with_no_evidence_reports_empty_roles(tmp_path) -> None:
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(_FakeStepResult(),),
+        )
+    assert report.task_model.calls == 0
+    assert report.proposer.calls == 0
+    assert report.task_model.usd is None

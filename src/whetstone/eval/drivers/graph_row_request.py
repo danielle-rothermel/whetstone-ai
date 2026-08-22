@@ -236,6 +236,21 @@ def rollout_row_output_from_worker_payload(
             if payload.get("provider_error") is None
             else dict(payload["provider_error"])  # type: ignore[arg-type]
         ),
+        prompt_tokens=(
+            None
+            if payload.get("prompt_tokens") is None
+            else int(payload["prompt_tokens"])  # type: ignore[call-overload]
+        ),
+        completion_tokens=(
+            None
+            if payload.get("completion_tokens") is None
+            else int(payload["completion_tokens"])  # type: ignore[call-overload]
+        ),
+        provider_cost=(
+            None
+            if payload.get("provider_cost") is None
+            else float(payload["provider_cost"])  # type: ignore[arg-type]
+        ),
         submission_result=payload.get("submission_result"),
     )
 

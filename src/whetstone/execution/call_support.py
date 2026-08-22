@@ -28,6 +28,9 @@ class CallTelemetry:
     latency_s: float | None = None
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
+    #: Provider-reported price for this call, when the provider returned one.
+    #: Never estimated: absent means the price is unknown, not zero.
+    provider_cost: float | None = None
 
 
 def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
@@ -38,12 +41,15 @@ def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
             latency_s=_accepted_latency(result),
             provider_error=_provider_error_of(result),
         )
-    usage = result.provider_generation.response.usage
-    finish_reason = result.provider_generation.response.stop_reason
+    response = result.provider_generation.response
+    usage = response.usage
+    finish_reason = response.stop_reason
+    provider_cost = response.cost.total_cost if response.cost is not None else None
     if usage is None:
         return CallTelemetry(
             latency_s=_accepted_latency(result),
             finish_reason=finish_reason,
+            provider_cost=provider_cost,
         )
     return CallTelemetry(
         prompt_tokens=usage.prompt_tokens,
@@ -52,6 +58,7 @@ def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
         reasoning_tokens=getattr(usage, "reasoning_tokens", None),
         latency_s=_accepted_latency(result),
         finish_reason=finish_reason,
+        provider_cost=provider_cost,
     )
 
 

@@ -18,10 +18,12 @@ from whetstone.optim.gepa.contracts import (
     GepaEvaluationEffectRequest,
     GepaProposalAuthorityBinding,
     GepaProposalEffectRequest,
+    GepaProposalEffectResult,
     GepaScoreMismatchEvidence,
     GepaSkippedMutation,
     GepaTrajectoryProjection,
 )
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.gepa.prompts import (
     GepaPromptServices,
     GepaReflectionRequest,
@@ -92,6 +94,7 @@ class WhetstoneGepaAdapter:
         self._score_mismatch_warned = False
         self._score_mismatch_evidence: list[GepaScoreMismatchEvidence] = []
         self._skipped_mutations: list[GepaSkippedMutation] = []
+        self._proposer_usage: list[ProposerCallUsage] = []
 
     @property
     def runtime_hash(self) -> str:
@@ -174,6 +177,7 @@ class WhetstoneGepaAdapter:
         self._score_mismatch_warned = False
         self._score_mismatch_evidence.clear()
         self._skipped_mutations.clear()
+        self._proposer_usage.clear()
 
     def _slot(self) -> GepaEffectSlot:
         slot = GepaEffectSlot(
@@ -424,6 +428,12 @@ class WhetstoneGepaAdapter:
                 raise ValueError(
                     "GEPA proposal result belongs to another effect request"
                 )
+            # Every attempt was paid for, including one a retry later
+            # recovered from, so each is recorded before any branch below
+            # can continue or raise.
+            self._proposer_usage.append(
+                _proposal_call_usage(result)
+            )
             if result.failed:
                 # A rejected response is retryable; a transport or provider
                 # failure is not, and must still surface.
@@ -472,6 +482,11 @@ class WhetstoneGepaAdapter:
         return None
 
     @property
+    def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:
+        """Usage for every reflection call this step made, in call order."""
+        return tuple(self._proposer_usage)
+
+    @property
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
         """Rejected reflection attempts recorded during this step.
 
@@ -480,6 +495,30 @@ class WhetstoneGepaAdapter:
         that actually dropped the component's mutation.
         """
         return tuple(self._skipped_mutations)
+
+
+def _proposal_call_usage(
+    result: GepaProposalEffectResult,
+) -> ProposerCallUsage:
+    """Project one reflection call's provider usage onto the cost contract.
+
+    ``usage`` is a dr-providers ``TokenUsage`` dump, so a field the provider
+    omitted reads as zero tokens, and ``cost`` stays ``None`` when no price
+    was reported.
+    """
+    usage = result.usage
+
+    def tokens(key: str) -> int:
+        value = usage.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return 0
+        return max(0, value)
+
+    return ProposerCallUsage(
+        prompt_tokens=tokens("prompt_tokens"),
+        completion_tokens=tokens("completion_tokens"),
+        usd=result.cost,
+    )
 
 
 __all__ = [

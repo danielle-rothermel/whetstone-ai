@@ -122,11 +122,17 @@ def graph_result_to_row_fields(
                 if telemetry.provider_error is None
                 else dict(telemetry.provider_error)
             ),
+            prompt_tokens=telemetry.prompt_tokens,
+            completion_tokens=telemetry.completion_tokens,
+            provider_cost=telemetry.provider_cost,
         )
 
     output_text: str | None = None
     finish_reason: str | None = None
     provider_error: dict[str, object] | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    provider_cost: float | None = None
     if llm_outcome is not None and llm_outcome.status is NodeOutcomeStatus.SUCCESS:
         llm_output = require_node_success(llm_outcome)
         output_text = node_text(llm_output, field=llm_output_field)
@@ -137,6 +143,9 @@ def graph_result_to_row_fields(
             if telemetry.provider_error is None
             else dict(telemetry.provider_error)
         )
+        prompt_tokens = telemetry.prompt_tokens
+        completion_tokens = telemetry.completion_tokens
+        provider_cost = telemetry.provider_cost
 
     score: float | None = None
     submission_result: object | None = None
@@ -175,5 +184,8 @@ def graph_result_to_row_fields(
         failure_code=failure_code,
         finish_reason=finish_reason,
         provider_error=provider_error,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        provider_cost=provider_cost,
         submission_result=submission_result,
     )

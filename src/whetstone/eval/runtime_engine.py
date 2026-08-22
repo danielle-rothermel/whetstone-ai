@@ -1028,6 +1028,9 @@ class RuntimeEvalEngine:
                     provider_error=output.provider_error,
                     max_budget=output.max_budget,
                     over_budget=output.over_budget,
+                    prompt_tokens=output.prompt_tokens,
+                    completion_tokens=output.completion_tokens,
+                    provider_cost=output.provider_cost,
                     submission_result=self._driver.submission_result_record(
                         output.submission_result
                     ),

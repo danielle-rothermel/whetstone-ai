@@ -60,6 +60,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PowerConfig.significance_alpha` (default `0.05`) and
   `PowerConfig.interaction_floor_fraction` (default `0.0`), plus
   `PowerConfig.mdd_multiplier`.
+- `OptimResult.cost` reports what a run actually spent, split into
+  `task_model` and `proposer` roles. Each role carries `calls`,
+  `input_tokens`, `output_tokens`, `priced_calls`, `unpriced_calls`, and an
+  optional `usd`. `whetstone.optim.cost` owns the wire keys and
+  `COST_REPORT_SCHEMA_VERSION`; `tests/test_run_cost_report_golden.py` pins
+  the exact literals.
+- `usd` is reported only when every contributing call carried a
+  provider-reported price, so a partial sum is never presented as a run
+  total. When any call lacks a price the field is absent and the
+  `priced_calls`/`unpriced_calls` split shows what a total would have
+  covered. Whetstone owns no pricing table: prices come from dr-providers'
+  `CostInfo`, which is populated only when the provider returns one.
+- `whetstone.optim.cost_aggregation.aggregate_run_cost` is the single owner
+  of the calculation. Both the in-process harness and the platform
+  run-completion path reach it through `OptimHarness.terminalize`, so a
+  run reports the same spend however it ran. Totals are re-derived from
+  persisted evidence rather than in-memory counters, so a resumed or
+  platform run reports the same number, and an evaluation cited by more
+  than one Step is counted once.
+- Task-model token usage and provider-reported price are now persisted per
+  evaluation row on `EvalOutputRow` (`prompt_tokens`, `completion_tokens`,
+  `provider_cost`), which is what makes run spend re-derivable from the
+  store. `EVAL_OUTPUTS_SCHEMA_VERSION` and `EVAL_EVIDENCE_SCHEMA_VERSION`
+  are now 5.
+- Proposer-model usage is recorded uniformly on
+  `OptimStepResult.proposer_usage` as `ProposerCallUsage`, reported by COPRO,
+  GEPA, and MIPROv2 through `AdapterOutput.proposer_usage` rather than three
+  different state layouts. GEPA records every reflection attempt, including
+  one a bounded retry later recovered from, because each was paid for.
+  `STEP_RESULT_SCHEMA_VERSION` is now 4.
+
+### Added
+
+- `prepare_miprov2_run` wires MIPROv2 through the in-process harness: a
+  step-contract provider registered by adapter key, opening state under
+  `MIPROV2_STATE_KEY`, and an explicit `experiment` plus `initial_state`.
+  Toy callers use `register_toy_runtime(..., extra_adapters={...})` with
+  `build_miprov2_adapter` / `prepare_toy_miprov2_run`. MIPROv2 is not on
+  the platform pipeline.
+- `Miprov2DemoMode` (`fewshot`, `zeroshot`, `ground_only`) is the persisted
+  demo decision. `zeroshot_opt` is derived from it. Faithful zeroshot keeps
+  control maxima at 0/0 and the demo dimension out of the study, but still
+  bootstraps 3/0 demos to ground instruction proposals and then discards
+  them (DSPy's zero-shot path). `ground_only` is the Whetstone extension:
+  it bootstraps fewshot-sized pools to ground proposals, never attaches a
+  demo set to a candidate, and marks the study transcript as a deviation.
+  Both non-searching modes share the zeroshot auto-mode trial/instruct
+  arm (`num_instruct_candidates = n`, one search variable per component).
+
+
+- `build_runtime` assembles a `RegisteredRuntime` from explicit
+  collaborators (store, engine, adapter registry, lease authority).
+  Platform mode requires a ledger engine so fan-in verification cannot
+  be silently off. `RegisteredRuntime.close()` forwards to the eval
+  engine (and any closeable authority).
+- `whetstone.testing.register_toy_runtime` holds the former toy
+  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
+- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
+  by integration tests and the CLI. `PlatformDbosConfig` is constructed
+  with explicit `application_version` and `executor_id`.
+- `whetstone-optim run`, `status`, and `result` submit a bound launch
+  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
+  to a live `ProviderProposerTransport` (`--proposer provider`);
+  `--proposer fake` keeps the scripted transport for tests. Controller
+  identity is pinned by `--owner-id`, or derived from
+  `--application-version` + `--executor-id`. The CLI always closes the
+  runtime if `build_runtime` succeeded, including when `deploy_platform`
+  fails. Effect leases persist on `--store-path` so a restarted CLI can
+  replay a completed proposal or eval instead of charging again.
 
 ### Changed
 
@@ -159,25 +228,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.1.4 - 2026-08-22
 
-### Added
-
-- `prepare_miprov2_run` wires MIPROv2 through the in-process harness: a
-  step-contract provider registered by adapter key, opening state under
-  `MIPROV2_STATE_KEY`, and an explicit `experiment` plus `initial_state`.
-  Toy callers use `register_toy_runtime(..., extra_adapters={...})` with
-  `build_miprov2_adapter` / `prepare_toy_miprov2_run`. MIPROv2 is not on
-  the platform pipeline.
-- `Miprov2DemoMode` (`fewshot`, `zeroshot`, `ground_only`) is the persisted
-  demo decision. `zeroshot_opt` is derived from it. Faithful zeroshot keeps
-  control maxima at 0/0 and the demo dimension out of the study, but still
-  bootstraps 3/0 demos to ground instruction proposals and then discards
-  them (DSPy's zero-shot path). `ground_only` is the Whetstone extension:
-  it bootstraps fewshot-sized pools to ground proposals, never attaches a
-  demo set to a candidate, and marks the study transcript as a deviation.
-  Both non-searching modes share the zeroshot auto-mode trial/instruct
-  arm (`num_instruct_candidates = n`, one search variable per component).
-
-### Changed
 
 - MIPROv2 control schema version 6 → 7; GEPA control schema version 1 → 2.
   `num_threads` is removed from both controls (concurrency belongs to the
@@ -196,27 +246,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.1.3 - 2026-08-21
 
-### Added
-
-- `build_runtime` assembles a `RegisteredRuntime` from explicit
-  collaborators (store, engine, adapter registry, lease authority).
-  Platform mode requires a ledger engine so fan-in verification cannot
-  be silently off. `RegisteredRuntime.close()` forwards to the eval
-  engine (and any closeable authority).
-- `whetstone.testing.register_toy_runtime` holds the former toy
-  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
-- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
-  by integration tests and the CLI. `PlatformDbosConfig` is constructed
-  with explicit `application_version` and `executor_id`.
-- `whetstone-optim run`, `status`, and `result` submit a bound launch
-  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
-  to a live `ProviderProposerTransport` (`--proposer provider`);
-  `--proposer fake` keeps the scripted transport for tests. Controller
-  identity is pinned by `--owner-id`, or derived from
-  `--application-version` + `--executor-id`. The CLI always closes the
-  runtime if `build_runtime` succeeded, including when `deploy_platform`
-  fails. Effect leases persist on `--store-path` so a restarted CLI can
-  replay a completed proposal or eval instead of charging again.
 
 ### Removed
 

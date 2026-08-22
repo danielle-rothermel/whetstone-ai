@@ -15,6 +15,7 @@ from whetstone.core.identity import (
     TypedRef,
 )
 from whetstone.experiment.candidate import Candidate
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.contracts import (
     BudgetDelta,
     OptimEvalRequest,
@@ -76,6 +77,10 @@ class AdapterOutput(BaseModel):
     #: ``seed_retained`` is set, so the harness can verify the claim names
     #: the run's seed rather than any candidate the search happened to like.
     retained_candidate: Candidate | None = None
+    #: Usage for each proposer-model call this Step made, in call order.
+    #: Every optimizer reports through this one field so run-level spend has
+    #: a single shape rather than a per-optimizer state layout.
+    proposer_usage: tuple[ProposerCallUsage, ...] = ()
     state_delta: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )

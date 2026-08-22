@@ -21,6 +21,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.experiment.candidate import CandidateRef
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.provider.driver import (
     Clock,
     Sleep,
@@ -194,6 +195,13 @@ def prompt_adapter_identity_hash(adapter: PlainPromptAdapter) -> str:
     )
 
 
+def _usage_tokens(usage: Mapping[str, Any], key: str) -> int:
+    value = usage.get(key)
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return max(0, value)
+
+
 class ProposalDraft(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -224,6 +232,22 @@ class ProposalDraft(BaseModel):
     @property
     def failed(self) -> bool:
         return self.terminal_failure is not None
+
+    def call_usage(self) -> ProposerCallUsage:
+        """Project this draft's provider usage onto the run cost contract.
+
+        ``usage`` is a dr-providers ``TokenUsage`` dump, so its keys are the
+        provider contract rather than local spelling. A field the provider
+        omitted counts as zero tokens; ``cost`` stays ``None`` when the
+        provider reported no price, which keeps the run total honest about
+        what it does not know.
+        """
+        usage = self.usage.to_json()
+        return ProposerCallUsage(
+            prompt_tokens=_usage_tokens(usage, "prompt_tokens"),
+            completion_tokens=_usage_tokens(usage, "completion_tokens"),
+            usd=self.cost,
+        )
 
     @classmethod
     def failure(

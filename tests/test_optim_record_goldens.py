@@ -51,7 +51,7 @@ GOLDEN_SCHEMA_NAMES = {
 GOLDEN_SCHEMA_VERSIONS = {
     "optim_run": 3,
     "step_request": 3,
-    "step_result": 3,
+    "step_result": 4,
     "optim_result": 3,
 }
 
@@ -101,6 +101,7 @@ GOLDEN_STEP_RESULT_KEYS = frozenset(
         "accepted_candidates",
         "resolved_intents",
         "search_evidence",
+        "proposer_usage",
         "tool_evidence",
         "state_ref",
         "history_ref",

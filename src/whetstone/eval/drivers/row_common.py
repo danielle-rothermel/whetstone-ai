@@ -30,6 +30,11 @@ class RolloutRowOutput:
     max_budget: int | None = None
     over_budget: bool | None = None
     submission_result: object | None = None
+    #: Task-model usage observed for this row, carried into persisted
+    #: evidence so run-level spend is re-derivable from the store.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    provider_cost: float | None = None
 
     @property
     def failed(self) -> bool:

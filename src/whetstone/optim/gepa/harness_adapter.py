@@ -6,6 +6,7 @@ from whetstone.core.identity import ImmutableJsonObject, canonical_json
 from whetstone.core.leasing import ReplayPolicy
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.contracts import (
     OptimStepRequest,
     SearchEvidence,
@@ -157,6 +158,10 @@ class GepaHarnessAdapterFactory:
             )
         )
 
+    def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:
+        """Usage for every reflection call this Step's search made."""
+        return tuple(self._factory.proposer_usage())
+
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
         """Reflection responses this Step's search rejected, in order."""
         return tuple(self._factory.skipped_mutations())
@@ -281,6 +286,7 @@ class GepaHarnessAdapter:
             run_id=str(request.run_id),
             step_index=int(request.step_index),
         )
+        proposer_usage = self._adapter_factory.proposer_usage()
         if checkpoint.terminal:
             artifact_ref = self._adapter_factory.persist_result(
                 control=self._control,
@@ -321,6 +327,7 @@ class GepaHarnessAdapter:
                     seed_retained=True,
                     retained_candidate=request.candidates[0],
                     search_evidence=search_evidence,
+                    proposer_usage=proposer_usage,
                     state_delta=state_delta,
                     history_delta=history_delta,
                     budget_delta=checkpoint.budget_delta,
@@ -341,6 +348,7 @@ class GepaHarnessAdapter:
                 proposed_candidates=(candidate,),
                 proposed_status=StepStatus.COMPLETE,
                 search_evidence=search_evidence,
+                proposer_usage=proposer_usage,
                 state_delta=state_delta,
                 history_delta=history_delta,
                 budget_delta=checkpoint.budget_delta,
@@ -348,6 +356,7 @@ class GepaHarnessAdapter:
         return AdapterOutput(
             proposed_status=StepStatus.CONTINUE,
             search_evidence=search_evidence,
+            proposer_usage=proposer_usage,
             state_delta=state_delta,
             budget_delta=checkpoint.budget_delta,
         )
