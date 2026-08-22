@@ -28,6 +28,18 @@ DEFAULT_NUM_SEEDS = 3
 
 INTERNAL_EVAL = "internal_eval"
 OFFICIAL = "official"
+HELD_OUT = "held_out"
+
+#: Every split role, in the order an experiment consumes them: the optimizer's
+#: own search signal, then selection across runs, then the reporting split that
+#: is touched exactly once.
+SPLIT_ROLES: tuple[str, ...] = (INTERNAL_EVAL, OFFICIAL, HELD_OUT)
+
+_ROLE_BY_SPLIT: dict[str, EvalRole] = {
+    INTERNAL_EVAL: EvalRole.INTERNAL,
+    OFFICIAL: EvalRole.OFFICIAL,
+    HELD_OUT: EvalRole.HELD_OUT,
+}
 
 
 @runtime_checkable
@@ -40,11 +52,10 @@ class SamplingTaskLike(Protocol):
 
 def evaluation_role_for_split(split_role: str) -> EvalRole:
     """Return the exact evidence role owned by a sampling split."""
-    if split_role == INTERNAL_EVAL:
-        return EvalRole.INTERNAL
-    if split_role == OFFICIAL:
-        return EvalRole.OFFICIAL
-    raise ValueError(f"unknown evaluation split role {split_role!r}")
+    role = _ROLE_BY_SPLIT.get(split_role)
+    if role is None:
+        raise ValueError(f"unknown evaluation split role {split_role!r}")
+    return role
 
 
 def validate_evaluation_role_for_split(
@@ -80,7 +91,7 @@ class Completeness(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class EvalSplit:
-    """The sampling artifacts for one split (internal_eval or official)."""
+    """The sampling artifacts for one split role in ``SPLIT_ROLES``."""
 
     split_role: str
     tasks: tuple[SamplingTaskLike, ...]
@@ -114,20 +125,101 @@ class EvalSplit:
 
 @dataclass(frozen=True, slots=True)
 class EvalConfigs:
-    """The internal + official eval configs and their shared procedure."""
+    """The experiment's eval splits and their shared evaluation procedure.
+
+    ``internal`` and ``official`` are required. ``held_out`` is optional: an
+    experiment that never reports on a frozen split (toy runs, envs smoke
+    experiments) leaves it ``None``. When it is present it is a full
+    :class:`EvalSplit` derived by its own ``derive_eval_split`` call, so its
+    task identity, seed plan, and Eval Config are content-addressed on the
+    same terms as the other two and can be intersected against them by
+    :func:`assert_split_disjointness`, which construction runs so a leaking
+    set of splits can never be assembled into an ``EvalConfigs`` at all.
+
+    ``procedure_config_hash`` is the one evaluation procedure the experiment
+    executes. Construction requires every present split to carry exactly that
+    procedure in *both* the procedure it was derived with
+    (``procedure_config``) and the procedure recorded in the Eval Config it
+    persists (``eval_config.evaluation_procedure_config_hash``), and raises
+    :class:`SplitProcedureMismatchError` otherwise, so no split can persist
+    an Eval Config claiming a procedure identity the runtime never ran.
+    """
 
     env_name: str
     procedure_config_hash: str
     internal: EvalSplit
     official: EvalSplit
-    held_out_task_hashes: tuple[str, ...]
+    held_out: EvalSplit | None = None
+
+    def __post_init__(self) -> None:
+        for expected, split in (
+            (INTERNAL_EVAL, self.internal),
+            (OFFICIAL, self.official),
+            (HELD_OUT, self.held_out),
+        ):
+            if split is not None and split.split_role != expected:
+                raise ValueError(
+                    f"eval configs field for {expected!r} carries split "
+                    f"role {split.split_role!r}"
+                )
+        # Every split must be measured by the experiment's one shared
+        # procedure. The runtime executes the experiment's rollout graph,
+        # which carries ``procedure_config_hash``, but persists each split's
+        # own ``eval_config_ref``; a split derived with a different procedure
+        # would therefore publish evidence claiming a procedure identity that
+        # was never executed. ``EvalSplit`` is a plain dataclass whose
+        # ``procedure_config`` and ``eval_config`` are not cross-validated
+        # against each other, so the persisted Eval Config is checked on its
+        # own terms rather than trusted to agree with the derived-with field.
+        for role, split in (
+            (INTERNAL_EVAL, self.internal),
+            (OFFICIAL, self.official),
+            (HELD_OUT, self.held_out),
+        ):
+            if split is None:
+                continue
+            for source, actual in (
+                ("derived with", split.procedure_config.config_hash),
+                (
+                    "persists an Eval Config recording",
+                    split.eval_config.evaluation_procedure_config_hash,
+                ),
+            ):
+                if actual != self.procedure_config_hash:
+                    raise SplitProcedureMismatchError(
+                        f"split {role!r} {source} evaluation procedure "
+                        f"{actual!r}, not the experiment's shared procedure "
+                        f"{self.procedure_config_hash!r}"
+                    )
+        # Leakage is a construction-time invariant, not a check a caller may
+        # forget to run: an experiment whose splits share a task identity
+        # cannot be built.
+        assert_split_disjointness(self)
+
+    @property
+    def held_out_task_hashes(self) -> tuple[str, ...]:
+        """The held-out task identities, empty when there is no held-out split."""
+        if self.held_out is None:
+            return ()
+        return self.held_out.task_set.task_hashes
+
+    def splits(self) -> dict[str, EvalSplit]:
+        """The present splits keyed by split role, in ``SPLIT_ROLES`` order."""
+        present = {INTERNAL_EVAL: self.internal, OFFICIAL: self.official}
+        if self.held_out is not None:
+            present[HELD_OUT] = self.held_out
+        return present
+
+    def split_for(self, split_role: str) -> EvalSplit:
+        try:
+            return self.splits()[split_role]
+        except KeyError:
+            raise KeyError(
+                f"no eval split for split role {split_role!r}"
+            ) from None
 
     def eval_config_for(self, split_role: str) -> EvalConfig:
-        if split_role == INTERNAL_EVAL:
-            return self.internal.eval_config
-        if split_role == OFFICIAL:
-            return self.official.eval_config
-        raise KeyError(f"no eval config for split role {split_role!r}")
+        return self.split_for(split_role).eval_config
 
 
 def derive_eval_split(
@@ -190,20 +282,69 @@ class HeldOutReferencedError(AssertionError):
     """A sampling config referenced a held-out task identity."""
 
 
+class SplitProcedureMismatchError(ValueError):
+    """A split's evaluation procedure is not the experiment's shared one."""
+
+
 class SplitOverlapError(AssertionError):
-    """The internal and official task sets share a task identity."""
+    """Two eval splits share a task identity."""
+
+
+def assert_split_disjointness(configs: EvalConfigs) -> frozenset[str]:
+    """Assert every present split owns a disjoint set of task hashes.
+
+    This is the mechanical leakage check: it intersects the content-addressed
+    task-hash sets of every split in ``configs`` pairwise. A held-out hash
+    reaching the internal or official split raises
+    :class:`HeldOutReferencedError`; any other overlap raises
+    :class:`SplitOverlapError`. Returns the union of all task hashes so a
+    caller can record the study's total task identity in one place.
+
+    :meth:`EvalConfigs.__post_init__` runs this, so any ``EvalConfigs`` that
+    exists is already disjoint. Call it directly to obtain the covered-hash
+    union, or to check a set of splits' disjointness before assembling them.
+    """
+    # Within-split uniqueness is already a TaskSet validation, so this only
+    # has to rule out cross-split sharing.
+    splits = configs.splits()
+    hashes = {
+        role: frozenset(split.task_set.task_hashes)
+        for role, split in splits.items()
+    }
+    roles = [role for role in SPLIT_ROLES if role in splits]
+    for index, left in enumerate(roles):
+        for right in roles[index + 1 :]:
+            shared = hashes[left] & hashes[right]
+            if not shared:
+                continue
+            sample = ", ".join(sorted(shared)[:3])
+            if HELD_OUT in (left, right):
+                raise HeldOutReferencedError(
+                    f"splits {left!r} and {right!r} share "
+                    f"{len(shared)} held-out task identities: {sample}"
+                )
+            raise SplitOverlapError(
+                f"splits {left!r} and {right!r} share "
+                f"{len(shared)} task identities: {sample}"
+            )
+    return frozenset().union(*hashes.values()) if hashes else frozenset()
 
 
 __all__ = [
     "DEFAULT_NUM_SEEDS",
+    "HELD_OUT",
     "INTERNAL_EVAL",
     "OFFICIAL",
+    "SPLIT_ROLES",
     "Completeness",
     "EvalConfigs",
     "EvalSplit",
     "HeldOutReferencedError",
     "SamplingTaskLike",
     "SplitOverlapError",
+    "SplitProcedureMismatchError",
+    "assert_split_disjointness",
     "derive_eval_split",
+    "evaluation_role_for_split",
     "validate_evaluation_role_for_split",
 ]

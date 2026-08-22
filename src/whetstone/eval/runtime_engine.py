@@ -797,9 +797,9 @@ class RuntimeEvalEngine:
         )
         if expected == self._sampling.eval_config:
             return
-        canonical = self._experiment.eval_configs.internal
-        if self._sampling.split_role != canonical.split_role:
-            canonical = self._experiment.eval_configs.official
+        canonical = self._experiment.eval_configs.split_for(
+            self._sampling.split_role
+        )
         if (
             len(self._sampling.tasks) == 1
             and self._sampling.seed_plan.num_seeds == 1

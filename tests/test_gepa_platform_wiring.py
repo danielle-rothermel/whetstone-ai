@@ -275,6 +275,11 @@ def test_gepa_two_intents_expand_per_intent_task_sets(sqlite_store) -> None:
             ToyTask(task_id="task-b", prompt_inputs={"prompt": "hello B"}, gold="B"),
             ToyTask(task_id="task-c", prompt_inputs={"prompt": "hello C"}, gold="C"),
         ),
+        # The default official split is task-c, so name an official task that
+        # cannot collide with the three internal ones: splits must stay disjoint.
+        official_tasks=(
+            ToyTask(task_id="task-o", prompt_inputs={"prompt": "hello O"}, gold="O"),
+        ),
     )
     engine = ReferenceEvalRuntimeConfig().build_engine(
         sqlite_store, experiment=experiment

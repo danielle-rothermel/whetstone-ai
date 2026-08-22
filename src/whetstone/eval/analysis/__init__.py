@@ -4,7 +4,9 @@ from whetstone.eval.analysis.calibration import (
 )
 from whetstone.eval.analysis.power import (
     DEFAULT_ALPHA,
+    DEFAULT_INTERACTION_FLOOR_FRACTION,
     DEFAULT_SAMPLE_CAP,
+    DEFAULT_SIGNIFICANCE_ALPHA,
     DEFAULT_TARGET_PROB,
     PowerConfig,
     PowerResult,
@@ -18,6 +20,7 @@ from whetstone.eval.analysis.statistics import (
     bootstrap_delta_ci,
     bootstrap_mean_ci,
     bootstrap_paired_delta_ci,
+    holm_adjust,
     mean,
     resample_indices,
 )
@@ -25,8 +28,10 @@ from whetstone.eval.analysis.statistics import (
 __all__ = [
     "AnchorCalibrationResult",
     "DEFAULT_ALPHA",
+    "DEFAULT_INTERACTION_FLOOR_FRACTION",
     "DEFAULT_RESAMPLES",
     "DEFAULT_SAMPLE_CAP",
+    "DEFAULT_SIGNIFICANCE_ALPHA",
     "DEFAULT_TARGET_PROB",
     "BootstrapCI",
     "PowerConfig",
@@ -37,6 +42,7 @@ __all__ = [
     "bootstrap_delta_ci",
     "bootstrap_mean_ci",
     "bootstrap_paired_delta_ci",
+    "holm_adjust",
     "mean",
     "resample_indices",
     "run_anchor_calibration",

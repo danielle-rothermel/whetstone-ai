@@ -17,6 +17,7 @@ from whetstone.eval.analysis.calibration import (
     AnchorCalibrationResult,
     run_anchor_calibration,
 )
+from whetstone.core.roles import EvalRole
 from whetstone.eval.analysis.power import PowerConfig
 from whetstone.eval.metadata import metadata_with_purpose
 from whetstone.eval.protocol import (
@@ -27,6 +28,7 @@ from whetstone.eval.protocol import (
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.schema import EvalFailureEvidence
+from whetstone.experiment.sampling import HELD_OUT, INTERNAL_EVAL, OFFICIAL
 from whetstone.optim.contracts import ResolutionClass, ResolutionDetail
 from whetstone.testing.toy.experiment import ToyTask, build_toy_experiment
 
@@ -316,28 +318,98 @@ def test_calibration_rejects_evidence_that_drifted_from_the_plan(
         )
 
 
-def test_calibration_requires_the_internal_evaluation_split() -> None:
-    tasks = _toy_tasks(2)
+#: One task per split role, so a three-role experiment can be calibrated on
+#: any of them and every role sees the same scripted lift.
+_ROLE_TASK_IDS = {
+    INTERNAL_EVAL: "task-0",
+    OFFICIAL: "task-1",
+    HELD_OUT: "task-2",
+}
+
+
+def _three_split_experiment() -> tuple[object, dict[tuple[str, str], float]]:
+    tasks = _toy_tasks(3)
+    scores = _scripted_scores(tasks)
     experiment = build_toy_experiment(
-        internal_tasks=tasks,
-        num_seeds=1,
+        internal_tasks=(tasks[0],),
+        official_tasks=(tasks[1],),
+        held_out_tasks=(tasks[2],),
+        num_seeds=2,
         initial_template=BASELINE_TEMPLATE,
         ceiling_template=CEILING_TEMPLATE,
     )
-    with temp_sqlite_store() as store:
-        official = ReferenceEvalRuntimeConfig(
-            split_role="official"
-        ).build_engine(store, experiment=experiment)
+    return experiment, scores
 
-        with pytest.raises(ValueError, match="requires internal evaluation"):
+
+@pytest.mark.parametrize(
+    ("split_role", "eval_role"),
+    [
+        (INTERNAL_EVAL, EvalRole.INTERNAL),
+        (OFFICIAL, EvalRole.OFFICIAL),
+        (HELD_OUT, EvalRole.HELD_OUT),
+    ],
+)
+def test_calibration_runs_on_every_evaluation_role(
+    split_role: str, eval_role: EvalRole
+) -> None:
+    # Stage-0 anchors are calibrated on internal, official, and held-out.
+    # The role is recorded on the result and asserted over the evidence.
+    experiment, scores = _three_split_experiment()
+    task_id = _ROLE_TASK_IDS[split_role]
+    baseline = scores[(task_id, "baseline")]
+    with temp_sqlite_store() as store:
+        engine = ReferenceEvalRuntimeConfig(split_role=split_role).build_engine(
+            store,
+            experiment=experiment,
+            eval_runner=ScriptedEvalProcedureRunner(scores),
+        )
+        result = run_anchor_calibration(
+            engine=engine,
+            baseline_candidate=experiment.initial_candidate,
+            ceiling_candidate=experiment.ceiling_candidate,
+            baseline_purpose="calibration-baseline",
+            ceiling_purpose="calibration-ceiling",
+            task_ids=(task_id,),
+            pool_ceiling=1,
+            eval_role=eval_role,
+            bootstrap_resamples=50,
+            bootstrap_seed=1,
+        )
+
+    assert result.eval_role is eval_role
+    assert result.split_role == split_role
+    assert result.baseline.evidence.eval_role is eval_role
+    assert result.ceiling.evidence.eval_role is eval_role
+    assert result.baseline.evidence.per_task_values == pytest.approx(
+        (baseline,)
+    )
+    assert result.ceiling.evidence.per_task_values == pytest.approx(
+        (baseline + CEILING_LIFT,)
+    )
+    assert result.power.certified_headroom == pytest.approx(CEILING_LIFT)
+
+
+def test_calibration_rejects_an_eval_role_the_engine_is_not_bound_to() -> None:
+    # A caller that names a role must name the engine's own role; otherwise a
+    # mis-bound engine would silently produce a relabelled calibration.
+    experiment, scores = _three_split_experiment()
+    with temp_sqlite_store() as store:
+        engine = ReferenceEvalRuntimeConfig(split_role=OFFICIAL).build_engine(
+            store,
+            experiment=experiment,
+            eval_runner=ScriptedEvalProcedureRunner(scores),
+        )
+
+        with pytest.raises(ValueError, match="but the engine is bound to"):
             run_anchor_calibration(
-                engine=official,
+                engine=engine,
                 baseline_candidate=experiment.initial_candidate,
                 ceiling_candidate=experiment.ceiling_candidate,
                 baseline_purpose="calibration-baseline",
                 ceiling_purpose="calibration-ceiling",
-                task_ids=("task-c",),
+                task_ids=("task-1",),
                 pool_ceiling=1,
+                eval_role=EvalRole.HELD_OUT,
             )
 
 
@@ -417,3 +489,67 @@ def test_calibration_logs_progress_for_both_anchors() -> None:
     # 3 tasks x 2 repeats
     assert any("(6 rows)" in line for line in messages)
     assert any("present=6/6" in line for line in messages)
+
+
+def test_calibration_rejects_reward_evidence_on_a_non_internal_role() -> None:
+    # Reward evidence is minted only on the internal role. If a non-internal
+    # anchor ever arrives carrying one, the producer's role gate and this
+    # consumer's have drifted apart, so the calibration must refuse rather
+    # than attribute reward to a role that never earned it.
+    experiment, scores = _three_split_experiment()
+    with temp_sqlite_store() as store:
+        internal_engine = ReferenceEvalRuntimeConfig(
+            split_role=INTERNAL_EVAL
+        ).build_engine(
+            store,
+            experiment=experiment,
+            eval_runner=ScriptedEvalProcedureRunner(scores),
+        )
+        internal = internal_engine.for_task_ids(("task-0",)).evaluate(
+            EvalRequest(
+                request_id="reward-source",
+                candidate=experiment.initial_candidate,
+                metadata=metadata_with_purpose("reward-source"),
+            )
+        )
+        assert isinstance(internal, EvalEvidenceWithRef)
+        stray_reward_ref = internal.evidence.reward_ref
+        assert stray_reward_ref is not None
+
+        official_engine = ReferenceEvalRuntimeConfig(
+            split_role=OFFICIAL
+        ).build_engine(
+            store,
+            experiment=experiment,
+            eval_runner=ScriptedEvalProcedureRunner(scores),
+        )
+        official = official_engine.for_task_ids(("task-1",)).evaluate(
+            EvalRequest(
+                request_id="official-anchor",
+                candidate=experiment.initial_candidate,
+                metadata=metadata_with_purpose("official-anchor"),
+            )
+        )
+        assert isinstance(official, EvalEvidenceWithRef)
+        assert official.evidence.reward_ref is None
+        drifted = EvalEvidenceWithRef(
+            evidence=official.evidence.model_copy(
+                update={"reward_ref": stray_reward_ref}
+            ),
+            evidence_ref=official.evidence_ref,
+        )
+
+        with pytest.raises(
+            ValueError, match="reward evidence on a non-internal role"
+        ):
+            run_anchor_calibration(
+                engine=_StubbedEvalEngine(official_engine, drifted),
+                baseline_candidate=experiment.initial_candidate,
+                ceiling_candidate=experiment.ceiling_candidate,
+                baseline_purpose="calibration-baseline",
+                ceiling_purpose="calibration-ceiling",
+                task_ids=("task-1",),
+                pool_ceiling=1,
+                eval_role=EvalRole.OFFICIAL,
+                bootstrap_resamples=50,
+            )

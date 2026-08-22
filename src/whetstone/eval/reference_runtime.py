@@ -76,12 +76,14 @@ class ReferenceEvalRuntimeConfig(BaseModel):
     ) -> EvalEngine:
         _ = self.env_name
         resolved_experiment = experiment or build_toy_experiment()
-        if self.split_role == "internal_eval":
-            sampling = resolved_experiment.eval_configs.internal
-        elif self.split_role == "official":
-            sampling = resolved_experiment.eval_configs.official
-        else:
-            raise ValueError(f"unknown split role {self.split_role!r}")
+        try:
+            sampling = resolved_experiment.eval_configs.split_for(
+                self.split_role
+            )
+        except KeyError:
+            raise ValueError(
+                f"unknown split role {self.split_role!r}"
+            ) from None
         execution_policy = self.execution_policy
         runner = eval_runner or FakeEvalProcedureRunner()
         field = mutation_field or TOY_MUTATION_FIELD

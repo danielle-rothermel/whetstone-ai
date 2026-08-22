@@ -7,7 +7,9 @@ import numpy as np
 
 __all__ = [
     "DEFAULT_ALPHA",
+    "DEFAULT_INTERACTION_FLOOR_FRACTION",
     "DEFAULT_SAMPLE_CAP",
+    "DEFAULT_SIGNIFICANCE_ALPHA",
     "DEFAULT_TARGET_PROB",
     "PowerConfig",
     "PowerResult",
@@ -16,22 +18,60 @@ __all__ = [
     "analyze_power",
 ]
 
+#: The certified-headroom *fraction* the design targets. This is not a
+#: significance level; see ``DEFAULT_SIGNIFICANCE_ALPHA`` for that.
 DEFAULT_ALPHA = 0.25
 
+#: The two-sided significance level the minimum detectable difference is
+#: computed against.
+DEFAULT_SIGNIFICANCE_ALPHA = 0.05
+
+#: The statistical power the minimum detectable difference is computed at.
 DEFAULT_TARGET_PROB = 0.80
 
 DEFAULT_SAMPLE_CAP = 16
+
+#: Fraction of the within-sample variance used as a lower bound on the
+#: estimated interaction variance. Zero by default: the method-of-moments
+#: estimate is already truncated at zero, and a nonzero floor silently
+#: inflates every MDE on the surface by an amount that has no estimator
+#: behind it. Set it explicitly if a study pre-registers a floor.
+DEFAULT_INTERACTION_FLOOR_FRACTION = 0.0
 
 
 def _sample_grid(sample_cap: int) -> tuple[int, ...]:
     return tuple(range(1, max(1, sample_cap) + 1))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PowerConfig:
+    """The design knobs of one power analysis.
+
+    Every field is keyword-only: ``alpha`` and ``significance_alpha`` are both
+    plausible-looking small floats, and a positional call could silently swap
+    a headroom fraction for a significance level.
+
+    ``alpha`` and ``significance_alpha`` are different quantities and are
+    deliberately not merged:
+
+    - ``alpha`` is the *headroom fraction* the design aims at, so
+      ``target_gap = alpha * (ceiling - naive)``. It has no distributional
+      meaning.
+    - ``significance_alpha`` is the two-sided significance level of the
+      minimum detectable difference, and ``target_prob`` is its power.
+      Together they give the MDD multiplier
+      ``z_{1 - significance_alpha/2} + z_{target_prob}``, which is
+      ``1.9600 + 0.8416 = 2.8016`` at the defaults.
+    - ``interaction_floor_fraction`` optionally floors the estimated
+      interaction variance at that fraction of the within-sample variance;
+      see ``DEFAULT_INTERACTION_FLOOR_FRACTION``.
+    """
+
     alpha: float = DEFAULT_ALPHA
     target_prob: float = DEFAULT_TARGET_PROB
     sample_cap: int = DEFAULT_SAMPLE_CAP
+    significance_alpha: float = DEFAULT_SIGNIFICANCE_ALPHA
+    interaction_floor_fraction: float = DEFAULT_INTERACTION_FLOOR_FRACTION
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.alpha) or not 0.0 < self.alpha <= 1.0:
@@ -43,6 +83,25 @@ class PowerConfig:
             raise ValueError("target_prob must be in (0.5, 1)")
         if self.sample_cap < 1:
             raise ValueError("sample_cap must be at least 1")
+        if (
+            not math.isfinite(self.significance_alpha)
+            or not 0.0 < self.significance_alpha < 1.0
+        ):
+            raise ValueError("significance_alpha must be in (0, 1)")
+        if (
+            not math.isfinite(self.interaction_floor_fraction)
+            or self.interaction_floor_fraction < 0.0
+        ):
+            raise ValueError(
+                "interaction_floor_fraction must be finite and non-negative"
+            )
+
+    @property
+    def mdd_multiplier(self) -> float:
+        """``z_{1 - significance_alpha/2} + z_{target_prob}``."""
+        return _normal_ppf(1.0 - self.significance_alpha / 2.0) + _normal_ppf(
+            self.target_prob
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +126,8 @@ class VarianceDecomposition:
 
 @dataclass(frozen=True, slots=True)
 class PowerSurfacePoint:
+    """One (T, K) design point and its two-sided minimum detectable difference."""
+
     n_tasks: int
     num_seeds: int
     calls: int
@@ -90,6 +151,7 @@ def _decompose_variance(
     ceiling_per_task: np.ndarray,
     *,
     anchor_samples: int,
+    interaction_floor_fraction: float = DEFAULT_INTERACTION_FLOOR_FRACTION,
 ) -> VarianceDecomposition:
     both = np.concatenate([naive_per_task, ceiling_per_task])
     r = max(1, anchor_samples)
@@ -104,7 +166,8 @@ def _decompose_variance(
     diff = ceiling_per_task - naive_per_task
     raw_interaction = float(np.var(diff, ddof=1)) if diff.size > 1 else 0.0
     interaction = max(
-        0.1 * within, max(0.0, raw_interaction - 2.0 * within_obs / r)
+        interaction_floor_fraction * within,
+        max(0.0, raw_interaction - 2.0 * within_obs / r),
     )
     return VarianceDecomposition(
         base_rate=base_rate,
@@ -119,6 +182,7 @@ def _decompose_variance(
 def _paired_diff_se(
     decomp: VarianceDecomposition, *, n_tasks: int, num_seeds: int
 ) -> float:
+    """``sqrt((tau^2 + 2 sigma^2 / K) / T)`` — the SE of the paired delta."""
     per_task_diff_var = (
         decomp.interaction_var
         + 2.0 * decomp.within_sample_var / max(1, num_seeds)
@@ -132,15 +196,26 @@ def _mdd_at_target(
     n_tasks: int,
     num_seeds: int,
     target_prob: float,
+    significance_alpha: float = DEFAULT_SIGNIFICANCE_ALPHA,
 ) -> float:
+    """The two-sided minimum detectable difference of the paired delta.
+
+    ``MDD(T, K) = (z_{1 - alpha/2} + z_{power}) * sqrt((tau^2 + 2 sigma^2/K) / T)``
+
+    Both quantiles are required: ``z_{1 - alpha/2}`` buys the two-sided
+    significance level and ``z_{power}`` buys the detection probability.
+    Using ``z_{power}`` alone yields a one-sided detection threshold, not an
+    MDE, and understates the detectable effect by a factor of
+    ``2.8016 / 0.8416 = 3.329`` at the defaults.
+    """
     se = _paired_diff_se(decomp, n_tasks=n_tasks, num_seeds=num_seeds)
-    z = _normal_ppf(target_prob)
+    z = _normal_ppf(1.0 - significance_alpha / 2.0) + _normal_ppf(target_prob)
     return z * se
 
 
 def _normal_ppf(p: float) -> float:
     if not math.isfinite(p) or not 0.5 < p < 1.0:
-        raise ValueError("target_prob must be in (0.5, 1)")
+        raise ValueError("normal quantile probability must be in (0.5, 1)")
     from statistics import NormalDist
 
     return NormalDist().inv_cdf(p)
@@ -154,6 +229,13 @@ def analyze_power(
     anchor_samples: int,
     config: PowerConfig | None = None,
 ) -> PowerResult:
+    """Decompose anchor variance and tabulate the MDD over a (T, K) grid.
+
+    Each surface point reports the **two-sided** minimum detectable difference
+    ``(z_{1 - significance_alpha/2} + z_{target_prob}) *
+    sqrt((interaction_var + 2 * within_sample_var / K) / T)``. See
+    :func:`_mdd_at_target`.
+    """
     cfg = config or PowerConfig()
     if pool_ceiling < 1:
         raise ValueError("pool_ceiling must be at least 1")
@@ -180,7 +262,12 @@ def analyze_power(
     certified_headroom = max(0.0, ceiling_mean - naive_mean)
     target_gap = cfg.alpha * certified_headroom
 
-    decomp = _decompose_variance(naive, ceiling, anchor_samples=anchor_samples)
+    decomp = _decompose_variance(
+        naive,
+        ceiling,
+        anchor_samples=anchor_samples,
+        interaction_floor_fraction=cfg.interaction_floor_fraction,
+    )
 
     n_grid = tuple(range(1, max(1, pool_ceiling) + 1))
     s_grid = _sample_grid(cfg.sample_cap)
@@ -193,6 +280,7 @@ def analyze_power(
                 n_tasks=n_tasks,
                 num_seeds=num_seeds,
                 target_prob=cfg.target_prob,
+                significance_alpha=cfg.significance_alpha,
             )
             surface.append(
                 PowerSurfacePoint(

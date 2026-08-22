@@ -8,6 +8,7 @@ test agree with any drift it was meant to catch.
 
 from __future__ import annotations
 
+from whetstone.core.roles import EvalRole
 from whetstone.eval.schema import (
     EVAL_EVIDENCE_SCHEMA_VERSION,
     EVAL_OUTPUTS_SCHEMA,
@@ -68,3 +69,27 @@ def test_retired_scheduler_evidence_fields_are_gone() -> None:
     """The worker pool cannot produce these, so they must not be persisted."""
     assert "concurrency_halved" not in EvalEvidence.model_fields
     assert "guard_timeouts" not in EvalEvidence.model_fields
+
+
+#: The persisted spellings of every evaluation role, written by hand. These
+#: strings land inside stored `EvalEvidence` records, so renaming a member or
+#: changing a value silently orphans every record that carries the old
+#: spelling.
+EXPECTED_EVAL_ROLE_LITERALS = (
+    ("INTERNAL", "internal"),
+    ("OFFICIAL", "official"),
+    ("HELD_OUT", "held_out"),
+)
+
+
+def test_eval_role_wire_literals_are_pinned() -> None:
+    assert tuple(
+        (member.name, member.value) for member in EvalRole
+    ) == EXPECTED_EVAL_ROLE_LITERALS
+
+
+def test_eval_role_values_are_unique() -> None:
+    """`@verify(UNIQUE)` on the enum; asserted here so the decorator cannot
+    be dropped without a test noticing."""
+    values = [member.value for member in EvalRole]
+    assert len(set(values)) == len(values)
