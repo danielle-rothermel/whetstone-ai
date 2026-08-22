@@ -74,7 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `calls` alone for spend. A billable call whose provider reported a price
   but no per-direction token split still counts and still contributes its
   price; `rows_missing_token_breakdown` records that its tokens are missing
-  from the token totals.
+  from the token totals. A call reporting only one token direction is
+  recorded there too, in both roles: the known side still evidences the
+  call, but the absent side enters the totals as zero, so the token totals
+  understate it and one direction is not a breakdown.
 - What counts as a billable call is decided by whether a provider answered,
   not by whether telemetry came back with the answer. An evaluation row that
   succeeded counts as a call even when the provider reported no usage and no

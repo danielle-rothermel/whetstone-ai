@@ -537,8 +537,55 @@ def test_a_priced_row_without_a_token_breakdown_keeps_its_price(
     assert report.task_model.usd == pytest.approx(0.52)
 
 
-def test_a_row_with_only_one_token_field_is_a_full_call(tmp_path) -> None:
-    """A partial token split still evidences one call with a known side."""
+@pytest.mark.parametrize(
+    ("prompt_tokens", "completion_tokens", "input_tokens", "output_tokens"),
+    [(5, None, 5, 0), (None, 7, 0, 7)],
+)
+def test_a_row_with_only_one_token_direction_is_an_incomplete_breakdown(
+    tmp_path,
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    input_tokens: int,
+    output_tokens: int,
+) -> None:
+    """One known direction evidences a call, but it is not a breakdown.
+
+    The known side is positive evidence the provider answered, so the row is
+    a billable call. The absent side is carried into the totals as zero,
+    though, so the role's token totals understate what the call really used.
+    ``rows_missing_token_breakdown`` is what makes that understatement
+    visible, exactly as it does for a proposer call reporting one direction
+    -- the two roles must not disagree about what counts as a breakdown.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == input_tokens
+    assert report.task_model.output_tokens == output_tokens
+    assert report.task_model.rows_missing_token_breakdown == 1
+    assert report.task_model.usd is None
+
+
+def test_a_row_with_both_token_directions_is_a_complete_breakdown(
+    tmp_path,
+) -> None:
+    """The counterpart: both directions present is a full breakdown."""
     with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
         ref = _persist_evidence(
             store,
@@ -546,7 +593,7 @@ def test_a_row_with_only_one_token_field_is_a_full_call(tmp_path) -> None:
                 _row(
                     task_index=0,
                     prompt_tokens=5,
-                    completion_tokens=None,
+                    completion_tokens=7,
                     provider_cost=None,
                 ),
             ],
@@ -559,9 +606,8 @@ def test_a_row_with_only_one_token_field_is_a_full_call(tmp_path) -> None:
         )
     assert report.task_model.calls == 1
     assert report.task_model.input_tokens == 5
-    assert report.task_model.output_tokens == 0
+    assert report.task_model.output_tokens == 7
     assert report.task_model.rows_missing_token_breakdown == 0
-    assert report.task_model.usd is None
 
 
 def test_a_proposer_call_reported_twice_is_counted_once(tmp_path) -> None:
