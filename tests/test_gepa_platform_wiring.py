@@ -729,9 +729,7 @@ def test_gepa_stale_fanin_does_not_regress_later_head(sqlite_store) -> None:
     )
     assert head_ref is not None
     head = _load_work_state(runtime, head_ref)
-    assert head.step_index > deferred_state.step_index or (
-        len(head.step_result_refs) > len(deferred_state.step_result_refs)
-    )
+    assert head.step_index > deferred_state.step_index
     replayed = execute_eval_fanin_sync(
         runtime,
         input_reference=fanin_successor.input_reference,

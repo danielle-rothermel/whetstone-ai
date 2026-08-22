@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fake).
 - Continuation pools re-supply both the GEPA checkpoint and accumulated
   skipped mutations from the last completed `prior.state_ref`.
+- GEPA search-eval candidates must round-trip the run's canonical
+  assembler: the run base candidate plus the control `component_names`.
+  An intent that does not is rejected with "not assembled from the run
+  base and control component_names", and a GEPA step without the run
+  seed candidate is rejected with "GEPA step must carry the run seed
+  candidate". Known limitation: in PLATFORM mode the eval authority
+  persists the `OptimEvalRequest` and binds its intent key before
+  deferring, so a rejected candidate spends no budget and executes no
+  row but leaves an orphan intent record in the store.
 
 ### Changed
 
@@ -28,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fan-out through the same engine-narrowing path MIPROv2 uses.
   `load_terminal_optim_result` accepts a seed-retained result with no
   proposals.
+- GEPA fan-in is safe to retry: a replayed fan-in is idempotent and a
+  stale fan-in cannot truncate a later work-state head.
 
 ## 0.1.4 - 2026-08-22
 

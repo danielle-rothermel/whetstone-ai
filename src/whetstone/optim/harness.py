@@ -839,9 +839,21 @@ class OptimHarness(OptimRunStore):
         request: OptimStepRequest,
         optim_eval_request: OptimEvalRequest,
     ) -> None:
-        # Search evals are minted inside optimize() for candidates the step
-        # has not proposed yet. Require the same assembler binding the run
-        # used: seed candidate + control component_names.
+        """Require the run's assembler lineage on a GEPA search-eval candidate.
+
+        Search evals are minted inside ``optimize()`` for candidates the step
+        has not proposed yet, so require the same assembler binding the run
+        used: seed candidate + control ``component_names``.
+
+        Known limitation: this check only runs once the adapter surfaces the
+        deferred intent. In PLATFORM mode
+        ``EvalEngineService._evaluate_and_bind`` already persisted the
+        ``OptimEvalRequest`` and bound its platform intent key before raising
+        ``EvalPlatformDeferred``, so rejecting here spends no budget and
+        executes no row but leaves an orphan intent record in the store.
+        Fixing that means moving this lineage check into the GEPA eval
+        authority, ahead of ``resolve_optim_eval_request``.
+        """
         from whetstone.optim.gepa.authorities import (
             CanonicalGepaCandidateAssembler,
             GepaCandidateFieldBinding,
