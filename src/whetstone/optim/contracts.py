@@ -298,11 +298,36 @@ class OptimEvalRequest(BaseModel):
     optim_step_index: NonNegativeInt
     eval_request: EvalRequest
     expected_reward_policy_hash: IdentityHash | None = None
+    #: The ordered task subset this intent evaluates, when the optimizer
+    #: evaluates less than the full task set.
+    #:
+    #: An optimizer that always evaluates the whole set -- COPRO, GEPA --
+    #: leaves this unset. MIPROv2 does not: it evaluates one task for a
+    #: bootstrap generation and a minibatch for a sampled trial, and the
+    #: Eval Config it records names that exact subset. Declaring the subset
+    #: on the intent is what lets the evaluating side reproduce the same
+    #: sampling rather than silently evaluating everything.
+    task_hashes: tuple[IdentityHash, ...] | None = None
+
+    @field_validator("task_hashes", mode="before")
+    @classmethod
+    def _validate_task_hashes(cls, value: Any, info: ValidationInfo) -> Any:
+        if value is None:
+            return None
+        return _require_ordered_sequence(value, info)
 
     @model_validator(mode="after")
     def _validate(self) -> OptimEvalRequest:
-        if self.expected_reward_policy_hash is None:
-            return self
+        if self.task_hashes is not None:
+            if not self.task_hashes:
+                raise ValueError(
+                    "an Optim Eval Request task subset must not be empty; "
+                    "omit it to evaluate the full task set"
+                )
+            if len(set(self.task_hashes)) != len(self.task_hashes):
+                raise ValueError(
+                    "an Optim Eval Request task subset must be unique"
+                )
         return self
 
 

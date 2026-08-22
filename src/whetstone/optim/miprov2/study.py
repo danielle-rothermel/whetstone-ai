@@ -44,6 +44,7 @@ from whetstone.optim.miprov2.control import (
     Miprov2ProgramLayout,
 )
 from whetstone.optim.miprov2.demo import ComponentDemoSet
+from whetstone.optim.miprov2.demo_mode import Miprov2DemoMode
 from whetstone.optim.miprov2.eval_config import (
     EvalBinding,
 )
@@ -51,7 +52,7 @@ from whetstone.optim.miprov2.render import candidate_from_components
 from whetstone.optim.proposal.mutation import diff_check
 
 MIPROV2_STUDY_SCHEMA = "whetstone.miprov2_study_transcript"
-MIPROV2_STUDY_SCHEMA_VERSION = 5
+MIPROV2_STUDY_SCHEMA_VERSION = 6
 OPTUNA_VERSION = MIPROV2_OPTUNA_VERSION
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA = "whetstone.miprov2_candidate_assembly"
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 4
@@ -765,7 +766,7 @@ class Promotion(_IdentityRecord):
         return self
 
 
-class EvalObservation(_IdentityRecord):
+class SampleObservation(_IdentityRecord):
     _identity_schema = "whetstone.miprov2_sample_observation"
 
     trial_number: StrictInt
@@ -802,7 +803,7 @@ class EvalObservation(_IdentityRecord):
         }
 
     @model_validator(mode="after")
-    def _validate_sample(self) -> EvalObservation:
+    def _validate_sample(self) -> SampleObservation:
         if self.trial_number < 1:
             raise ValueError("sample trial_number must be positive")
         require_full_hash(
@@ -842,12 +843,16 @@ class StudyTranscript(_IdentityRecord):
     schema_name: Literal["whetstone.miprov2_study_transcript"] = (
         MIPROV2_STUDY_SCHEMA
     )
-    schema_version: Literal[5] = MIPROV2_STUDY_SCHEMA_VERSION
+    schema_version: Literal[6] = MIPROV2_STUDY_SCHEMA_VERSION
     algorithm_version: Literal["dspy_miprov2/v2"] = MIPROV2_ALGORITHM_VERSION
     reference_commit: Literal["6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"] = (
         MIPROV2_REFERENCE_COMMIT
     )
     optuna_version: Literal["4.8.0"] = OPTUNA_VERSION
+    #: The demo regime this study ran under. ``GROUND_ONLY`` is a Whetstone
+    #: extension rather than frozen DSPy behavior, so it is recorded here and
+    #: marked by ``whetstone_deviation`` below.
+    demo_mode: Miprov2DemoMode
     seed: StrictInt
     run_id: StrictStr
     validation_task_hashes: tuple[StrictStr, ...]
@@ -864,13 +869,15 @@ class StudyTranscript(_IdentityRecord):
     distribution_identity_hash: StrictStr
     schedule: Miprov2StudySchedule
     baseline: BaselineObservation
-    samples: tuple[EvalObservation, ...] = ()
+    samples: tuple[SampleObservation, ...] = ()
 
     def identity_payload(self) -> dict[str, Any]:
         return {
             "schema_name": self.schema_name,
             "schema_version": self.schema_version,
             "algorithm_version": self.algorithm_version,
+            "whetstone_deviation": self.whetstone_deviation,
+            "demo_mode": self.demo_mode.value,
             "reference_commit": self.reference_commit,
             "optuna_version": self.optuna_version,
             "seed": self.seed,
@@ -908,11 +915,32 @@ class StudyTranscript(_IdentityRecord):
             ],
         }
 
+    @property
+    def whetstone_deviation(self) -> str | None:
+        """Name the Whetstone extension this study used, if any.
+
+        ``algorithm_version`` stays at the frozen DSPy version for the two
+        faithful modes. ``GROUND_ONLY`` is not DSPy behavior, so the
+        transcript carries an explicit marker instead of silently claiming
+        faithfulness under the same version string.
+        """
+
+        if self.demo_mode.is_faithful_dspy:
+            return None
+        return f"demo_mode:{self.demo_mode.value}"
+
     @model_validator(mode="after")
     def _validate_contract(self) -> StudyTranscript:
         space = self.parameter_space
         if not self.run_id:
             raise ValueError("run_id must be non-empty")
+        if self.demo_mode.searches_demos != (
+            self.demo_pool_identity_hashes is not None
+        ):
+            raise ValueError(
+                f"demo_mode {self.demo_mode.value!r} conflicts with the "
+                "presence of a searched demo dimension"
+            )
         if self.run.record.run_id != self.run_id:
             raise ValueError("study run_id conflicts with the exact run")
         if not self.validation_task_hashes:
@@ -1110,7 +1138,7 @@ class StudyTranscript(_IdentityRecord):
 
     def _validate_evaluation_binding(
         self,
-        binding: EvalObservation,
+        binding: SampleObservation,
         *,
         expected_purpose: EvalPurpose,
         expected_tasks: tuple[str, ...],
@@ -1220,7 +1248,9 @@ def _require_candidate_assembly(
             )
         if space.demo_pool_identity_hashes is None:
             if component.demo_index is not None:
-                raise ValueError("zeroshot candidate cannot select a demo")
+                raise ValueError(
+                    "candidate without a demo dimension cannot select a demo"
+                )
         else:
             demo_index = values[f"{index}_predictor_demos"]
             if (
@@ -1362,11 +1392,11 @@ class FullEvaluation(_IdentityRecord):
 
 
 def select_promotion(
-    samples: Sequence[EvalObservation],
+    samples: Sequence[SampleObservation],
 ) -> PromotionCandidate:
 
     scores: OrderedDict[str, list[float]] = OrderedDict()
-    first_observation: dict[str, EvalObservation] = {}
+    first_observation: dict[str, SampleObservation] = {}
     promoted: set[str] = set()
     for sample in samples:
         key = sample.candidate_combination_identity_hash
@@ -1403,6 +1433,7 @@ class Miprov2Study:
         self,
         *,
         seed: int,
+        demo_mode: Miprov2DemoMode,
         space: Miprov2ParameterSpace,
         schedule: Miprov2StudySchedule,
         run_id: str,
@@ -1416,6 +1447,7 @@ class Miprov2Study:
         run: OptimRunRef,
     ) -> None:
         self.seed = seed
+        self.demo_mode = demo_mode
         self.space = space
         self.schedule = schedule
         self.run_id = run_id
@@ -1429,6 +1461,13 @@ class Miprov2Study:
         self.run = run
         if self.run.record.run_id != self.run_id:
             raise ValueError("study run_id conflicts with the exact run")
+        if self.demo_mode.searches_demos != (
+            self.space.demo_pool_identity_hashes is not None
+        ):
+            raise ValueError(
+                f"demo_mode {self.demo_mode.value!r} conflicts with the "
+                "parameter space demo dimension"
+            )
         _require_run_authorities(
             self.run,
             optimizer_config=self.optimizer_config,
@@ -1453,6 +1492,7 @@ class Miprov2Study:
             evaluation=baseline_evaluation,
         )
         return StudyTranscript(
+            demo_mode=self.demo_mode,
             seed=self.seed,
             run_id=self.run_id,
             validation_task_hashes=self.validation_task_hashes,
@@ -1693,7 +1733,7 @@ class Miprov2Study:
         score: float,
         evaluation: EvalObservation,
         candidate_assembly: Miprov2CandidateAssemblyBinding,
-    ) -> EvalObservation:
+    ) -> SampleObservation:
         _require_candidate_assembly(
             candidate_assembly,
             space=self.space,
@@ -1730,7 +1770,7 @@ class Miprov2Study:
             expected_purpose="miprov2_sample",
             expected_tasks=expected_tasks,
         )
-        return EvalObservation(
+        return SampleObservation(
             trial_number=suggestion.trial_number,
             params=suggestion.params,
             candidate_combination_identity_hash=(
@@ -1749,7 +1789,7 @@ class Miprov2Study:
 
     def _validate_evaluation_binding(
         self,
-        binding: EvalObservation,
+        binding: SampleObservation,
         *,
         expected_purpose: EvalPurpose,
         expected_tasks: tuple[str, ...],
@@ -1834,7 +1874,7 @@ class Miprov2Study:
                 "transcript does not match the bound MIPROv2 study contract"
             )
         expected_trial_number = 1
-        replayed: list[EvalObservation] = []
+        replayed: list[SampleObservation] = []
         for sample in transcript.samples:
             if sample.trial_number != expected_trial_number:
                 raise StudyTranscriptMismatch(
@@ -1893,7 +1933,7 @@ class Miprov2Study:
                 "Optuna did not assign the baseline to trial zero"
             )
 
-        replayed: list[EvalObservation] = []
+        replayed: list[SampleObservation] = []
         for recorded in transcript.samples:
             trial = study.ask()
             params = self._suggest(trial)
@@ -2059,7 +2099,7 @@ __all__ = [
     "Miprov2StudySchedule",
     "Promotion",
     "PromotionCandidate",
-    "EvalObservation",
+    "SampleObservation",
     "StudySuggestion",
     "StudyTranscript",
     "StudyTranscriptMismatch",

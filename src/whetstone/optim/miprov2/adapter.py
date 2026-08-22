@@ -7,7 +7,6 @@ from dr_store import ObjectStore
 from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import (
     TerminalFailure,
-    TypedRef,
     require_full_hash,
 )
 from whetstone.eval.metadata import metadata_with_purpose
@@ -22,11 +21,8 @@ from whetstone.optim.contracts import (
     OptimEvalRequest,
     IntentOutcome,
     IntentResolution,
-    OptimRunRef,
     OptimStepRequest,
     OptimStepResult,
-    OutputContract,
-    StepKind,
     StepMode,
     StepStatus,
     step_result_reference,
@@ -107,6 +103,64 @@ def _terminalized(state: Miprov2State, *, failure: str) -> Miprov2State:
     )
 
 
+def fold_resolution(
+    store: ObjectStore,
+    state: Miprov2State,
+    resolution: IntentResolution,
+    *,
+    driver: Miprov2Driver | None = None,
+) -> Miprov2State:
+    """Fold one resolved Evaluation Intent into the MIPROv2 state.
+
+    The state snapshot a Step persists is taken *before* the harness
+    resolves that Step's Evaluation Intents, so both the adapter running the
+    next Step and the step contract deriving its Step Request must apply the
+    same resolutions to reach the same phase. Keeping the projection here
+    means they cannot drift apart.
+    """
+
+    resolved_driver = driver or Miprov2Driver()
+    evidence = Miprov2EvidenceResolver(store)
+    context = load_miprov2_intent_context(store, resolution.optim_eval_request)
+    if context.control_identity_hash != state.control.identity_hash():
+        raise ValueError("Intent Resolution belongs to another control")
+    if resolution.outcome is IntentOutcome.REJECTED:
+        return _terminalized(
+            state, failure=_rejection_detail(context.intent_id, resolution)
+        )
+    if context.effect_kind == "bootstrap":
+        if resolution.outcome is IntentOutcome.COMPLETED:
+            result = evidence.resolve_bootstrap(resolution)
+        else:
+            result = evidence.resolve_bootstrap_failure(resolution)
+        return resolved_driver.fold_bootstrap(state, result)
+    if resolution.outcome is IntentOutcome.COMPLETED:
+        resolved = evidence.resolve_evaluation(resolution)
+    else:
+        resolved = evidence.resolve_evaluation_failure(resolution)
+    return resolved_driver.fold_evaluation(state, resolved)
+
+
+def fold_prior_resolutions(
+    store: ObjectStore,
+    state: Miprov2State,
+    prior: OptimStepResult,
+    *,
+    driver: Miprov2Driver | None = None,
+) -> Miprov2State:
+    """Fold every Intent Resolution the prior Step produced, in order."""
+
+    resolved_driver = driver or Miprov2Driver()
+    for resolution in prior.resolved_intents:
+        state = fold_resolution(
+            store,
+            state,
+            resolution,
+            driver=resolved_driver,
+        )
+    return state
+
+
 class Miprov2Adapter:
     def __init__(
         self,
@@ -172,114 +226,17 @@ class Miprov2Adapter:
     def proposer_config(self) -> ProposerConfig:
         return self._proposer_config
 
-    def build_step_request(
-        self,
-        *,
-        run: OptimRunRef | None = None,
-        step_index: int,
-        initial_state: Miprov2State | None = None,
-        initial_budget: BudgetState | None = None,
-        prior_result: OptimStepResult | None = None,
-        prior_result_ref: TypedRef | None = None,
-    ) -> OptimStepRequest:
+    @property
+    def proposal_transport_durability_identity_hash(self) -> str:
+        """The transport durability identity the opening state must bind."""
 
-        if step_index == 0:
-            if (
-                initial_state is None
-                or initial_budget is None
-                or prior_result is not None
-                or prior_result_ref is not None
-            ):
-                raise ValueError(
-                    "initial request requires only state and budget"
-                )
-            if run is None:
-                raise ValueError("initial request requires the exact run")
-            state = initial_state
-            budget = initial_budget
-            pools = {MIPROV2_STATE_KEY: state.model_dump(mode="json")}
-            prior_state_ref = None
-            exact_run = run
-        else:
-            if (
-                initial_state is not None
-                or initial_budget is not None
-                or prior_result is None
-                or prior_result_ref is None
-            ):
-                raise ValueError(
-                    "continuation requires only exact prior result and ref"
-                )
-            if (
-                step_result_reference(prior_result).record_ref
-                != prior_result_ref
-            ):
-                raise ValueError("prior result ref is not its exact record")
-            state_ref = prior_result.state_ref
-            if state_ref is None:
-                raise ValueError("prior result has no state snapshot")
-            snapshot = self._store.get(state_ref.reference)
-            if not isinstance(snapshot, dict):
-                raise ValueError("prior state snapshot must be an object")
-            state = Miprov2State.model_validate(snapshot[MIPROV2_STATE_KEY])
-            state = self._fold_prior_resolutions(state, prior_result)
-            budget = prior_result.budget
-            pools = {}
-            prior_state_ref = state_ref
-            exact_run = prior_result.request.record.run
-        if exact_run.record.optimizer_config != state.control.reference():
-            raise ValueError(
-                "run optimizer config differs from MIPROv2 control"
-            )
-        if exact_run != state.run:
-            raise ValueError("run differs from the MIPROv2 state authority")
-        if (
-            exact_run.record.template_render_contract
-            != state.control.template_render_contract
-        ):
-            raise ValueError(
-                "run render contract differs from MIPROv2 control"
-            )
-        if (
-            exact_run.record.reward_policy is None
-            or exact_run.record.reward_policy != state.control.reward_policy
-        ):
-            raise ValueError("run Reward Policy differs from MIPROv2 control")
-        self._require_budget_agreement(budget, state)
-        if state.phase == MIPROV2_FAILED:
-            kind_label = MIPROV2_FAILED
-            returned_count = 0
-            terminal_contract = OutputContract(returned_proposal_count=0)
-        else:
-            preview = self._driver.plan(state)
-            kind_label = preview.kind
-            returned_count = 1 if preview.kind == MIPROV2_COMPLETE else 0
-            terminal_contract = (
-                exact_run.record.terminal_output_contract
-                if preview.kind == MIPROV2_COMPLETE
-                else OutputContract(returned_proposal_count=returned_count)
-            )
-        return OptimStepRequest(
-            run=exact_run,
-            step_id=f"{state.run_id}:miprov2:{step_index}",
-            kind=StepKind.PROPOSAL,
-            kind_label=kind_label,
-            step_index=step_index,
-            prior_step_result_ref=prior_result_ref,
-            prior_state_ref=prior_state_ref,
-            pools=pools,
-            candidates=(
-                (state.control.base_candidate.record,)
-                if state.control.teacher_candidate
-                == state.control.base_candidate
-                else (
-                    state.control.base_candidate.record,
-                    state.control.teacher_candidate.record,
-                )
-            ),
-            budget=budget,
-            step_output_contract=terminal_contract,
-        )
+        return self._proposal_transport_durability_identity_hash
+
+    @property
+    def proposal_executor_policy_identity_hash(self) -> str:
+        """The executor policy identity the opening state must bind."""
+
+        return self._proposal_executor_policy_identity_hash
 
     def invoke(
         self,
@@ -342,13 +299,28 @@ class Miprov2Adapter:
             return self._proposal_output(plan)
         if plan.kind == MIPROV2_COMPLETE:
             assert plan.accepted_candidate is not None
+            state_delta = {
+                MIPROV2_STATE_KEY: plan.state.model_dump(mode="json")
+            }
+            seed_ref = request.run.record.initial_candidate_ref
+            winner_ref = candidate_reference(plan.accepted_candidate)
+            if seed_ref is not None and winner_ref == seed_ref:
+                # The baseline is one of the fully evaluated candidates, so
+                # MIPROv2's study can legitimately conclude that nothing it
+                # searched beat the seed. That is a clean completion, not a
+                # failure, and it proposes no candidate the run carries
+                # forward.
+                return AdapterOutput(
+                    proposed_status=StepStatus.COMPLETE,
+                    seed_retained=True,
+                    retained_candidate=plan.accepted_candidate,
+                    state_delta=state_delta,
+                )
             return AdapterOutput(
                 proposed_candidates=(plan.accepted_candidate,),
                 accepted_candidates=(plan.accepted_candidate,),
                 proposed_status=StepStatus.COMPLETE,
-                state_delta={
-                    MIPROV2_STATE_KEY: plan.state.model_dump(mode="json")
-                },
+                state_delta=state_delta,
             )
         if plan.kind == MIPROV2_BOOTSTRAP:
             assert plan.bootstrap_generation is not None
@@ -387,6 +359,9 @@ class Miprov2Adapter:
             optim_eval_request = OptimEvalRequest(
                 optim_run_id=request.run_id,
                 optim_step_index=request.step_index,
+                # A bootstrap generation runs one task, and the Eval Config
+                # this Step records is derived from exactly that task.
+                task_hashes=(attempt.task_hash,),
                 eval_request=EvalRequest(
                     request_id=intent_id,
                     candidate=teacher_candidate.record,
@@ -449,6 +424,10 @@ class Miprov2Adapter:
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.run_id,
             optim_step_index=request.step_index,
+            # Baseline and promotion evaluate the full validation set while a
+            # sampled trial evaluates a minibatch; either way the Step records
+            # the Eval Config derived from this exact ordered subset.
+            task_hashes=effect.task_batch_hashes,
             eval_request=EvalRequest(
                 request_id=intent_id,
                 candidate=effect.candidate,
@@ -597,26 +576,12 @@ class Miprov2Adapter:
         resolution: IntentResolution,
     ) -> Miprov2State:
 
-        context = load_miprov2_intent_context(
-            self._store, resolution.optim_eval_request
+        return fold_resolution(
+            self._store,
+            state,
+            resolution,
+            driver=self._driver,
         )
-        if context.control_identity_hash != state.control.identity_hash():
-            raise ValueError("Intent Resolution belongs to another control")
-        if resolution.outcome is IntentOutcome.REJECTED:
-            return _terminalized(
-                state, failure=_rejection_detail(context.intent_id, resolution)
-            )
-        if context.effect_kind == "bootstrap":
-            if resolution.outcome is IntentOutcome.COMPLETED:
-                result = self._evidence.resolve_bootstrap(resolution)
-            else:
-                result = self._evidence.resolve_bootstrap_failure(resolution)
-            return self._driver.fold_bootstrap(state, result)
-        if resolution.outcome is IntentOutcome.COMPLETED:
-            resolved = self._evidence.resolve_evaluation(resolution)
-        else:
-            resolved = self._evidence.resolve_evaluation_failure(resolution)
-        return self._driver.fold_evaluation(state, resolved)
 
     def _load_request_state(
         self,
@@ -685,9 +650,12 @@ class Miprov2Adapter:
         state: Miprov2State,
         prior: OptimStepResult,
     ) -> Miprov2State:
-        for resolution in prior.resolved_intents:
-            state = self.fold_resolution(state, resolution)
-        return state
+        return fold_prior_resolutions(
+            self._store,
+            state,
+            prior,
+            driver=self._driver,
+        )
 
     def _require_transport_bindings(self, state: Miprov2State) -> None:
         current_executor_contract: ProposalExecutorDurabilityContract = (
@@ -777,6 +745,9 @@ __all__ = [
     "MIPROV2_PROMOTION",
     "MIPROV2_PROPOSAL",
     "MIPROV2_SAMPLE",
+    "MIPROV2_FAILED",
     "MIPROV2_STATE_KEY",
     "Miprov2Adapter",
+    "fold_prior_resolutions",
+    "fold_resolution",
 ]

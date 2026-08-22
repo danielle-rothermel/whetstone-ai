@@ -33,6 +33,7 @@ from whetstone.optim.contracts import (
 )
 from whetstone.optim.harness import OptimHarness
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
+from whetstone.optim.miprov2.adapter import MIPROV2_ADAPTER_KEY
 from whetstone.optim.gepa.adapter import GepaTerminalResult
 from whetstone.optim.gepa.engine import GepaDetailedResult
 from whetstone.optim.gepa.harness_adapter import (
@@ -75,6 +76,7 @@ def test_every_registered_optimizer_declares_its_own_key() -> None:
     assert set(step_contract_provider_keys()) == {
         COPRO_ADAPTER_KEY,
         GEPA_ADAPTER_KEY,
+        MIPROV2_ADAPTER_KEY,
     }
     for key in step_contract_provider_keys():
         assert resolve_step_contract_provider(key).adapter_key == key
@@ -82,7 +84,7 @@ def test_every_registered_optimizer_declares_its_own_key() -> None:
 
 def test_an_unregistered_adapter_key_is_rejected() -> None:
     with pytest.raises(ValueError, match="no optimizer step contract"):
-        resolve_step_contract_provider("miprov2")
+        resolve_step_contract_provider("no_such_optimizer")
 
 
 # --- contract shape -------------------------------------------------------

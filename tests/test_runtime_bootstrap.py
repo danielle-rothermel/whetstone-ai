@@ -681,3 +681,67 @@ def test_registered_runtime_close_stops_child_workers(sqlite_store) -> None:
     assert child_pids() - before
     runtime.close()
     assert child_pids() - before == frozenset()
+
+
+def test_prepare_miprov2_run_rejects_a_differing_mutation_field(
+    sqlite_store,
+) -> None:
+    from whetstone.coordination.runtime_bootstrap import prepare_miprov2_run
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.miprov2.adapter import (
+        MIPROV2_ADAPTER_KEY,
+        MIPROV2_STATE_KEY,
+    )
+    from whetstone.optim.miprov2.runtime import Miprov2State
+    from whetstone.testing.runtime import (
+        build_miprov2_adapter,
+        prepare_toy_miprov2_run,
+    )
+    from whetstone.testing.toy.miprov2 import build_toy_miprov2_control
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_miprov2_control(engine=engine, experiment=experiment)
+    adapter = build_miprov2_adapter(
+        store=sqlite_store, control=control, engine=engine
+    )
+    runtime = register_toy_runtime(
+        store=sqlite_store,
+        engine=engine,
+        copro_control=build_toy_copro_control(engine=engine),
+        extra_adapters={MIPROV2_ADAPTER_KEY: adapter},
+    )
+    with pytest.raises(ValueError, match="mutation_field must match"):
+        prepare_toy_miprov2_run(
+            runtime,
+            run_id="toy-wrong-field",
+            control=control,
+            engine=engine,
+            experiment=experiment,
+            mutation_field="other_prompt_field",
+        )
+
+    launch = prepare_toy_miprov2_run(
+        runtime,
+        run_id="miprov2-field-ok",
+        control=control,
+        engine=engine,
+        experiment=experiment,
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+    assert launch.run.mutation_field == control.mutation_field
+    opened = Miprov2State.model_validate(
+        launch.extra_pools[MIPROV2_STATE_KEY]
+    )
+    with pytest.raises(ValueError, match="mutation_field must match"):
+        prepare_miprov2_run(
+            runtime,
+            run_id="prod-wrong-field",
+            control=control,
+            experiment=experiment,
+            initial_state=opened,
+            mutation_field="other_prompt_field",
+        )

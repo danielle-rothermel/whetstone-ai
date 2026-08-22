@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, StrictStr, model_validator
@@ -28,6 +29,7 @@ from whetstone.optim.harness import OptimHarness
 if TYPE_CHECKING:
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
+    from whetstone.optim.miprov2.control import Miprov2Control
 
 RUN_LAUNCH_SCHEMA = "whetstone.optim_run_launch"
 RUN_LAUNCH_SCHEMA_VERSION = 1
@@ -71,7 +73,13 @@ class RunRequest(BaseModel):
 class OptimRunLaunch:
     run: OptimRun
     initial_candidate: Candidate
-    control: CoproControl | GepaControl | None = None
+    control: CoproControl | GepaControl | Miprov2Control | None = None
+    #: Extra opening pools this optimizer's first Step Request needs.
+    #: An optimizer whose search starts from durable state larger than its
+    #: control -- MIPROv2 opens with a labeled trainset, rendered proposal
+    #: examples, and an RNG checkpoint -- carries that state here so the
+    #: first Step reads exactly what was bound, not a rebuild of it.
+    extra_pools: Mapping[str, Any] | None = None
 
 
 class HarnessRunController:
@@ -119,6 +127,11 @@ class HarnessRunController:
                     if launch.control is None
                     else launch.control.model_dump(mode="json")
                 ),
+                "extra_pools": (
+                    None
+                    if launch.extra_pools is None
+                    else dict(launch.extra_pools)
+                ),
             },
         )
         self._store.bind(
@@ -164,6 +177,11 @@ class HarnessRunController:
             adapter_key=adapter_key,
             initial_candidate=launch.initial_candidate,
             control=control,
+            extra_pools=(
+                None
+                if launch.extra_pools is None
+                else dict(launch.extra_pools)
+            ),
         )
         while True:
             result, result_ref = self._harness.run_step(step_request)
@@ -212,10 +230,14 @@ def load_launch(store: ObjectStore, run_id: str) -> OptimRunLaunch:
         control = resolve_step_contract_provider(
             run.adapter_key
         ).parse_control(record["control"])
+    extra_pools = record.get("extra_pools")
     return OptimRunLaunch(
         run=run,
         initial_candidate=candidate,
         control=control,
+        extra_pools=(
+            None if extra_pools is None else dict(extra_pools)
+        ),
     )
 
 

@@ -20,6 +20,7 @@ from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,
 )
+from whetstone.optim.miprov2.demo_mode import Miprov2DemoMode
 
 MIPROV2_ACCEPTANCE_SCHEMA = "whetstone.miprov2_bootstrap_acceptance"
 MIPROV2_COMPONENT_DEMO_SCHEMA = "whetstone.miprov2_component_demo"
@@ -449,20 +450,32 @@ def _json_object_at(
 def proposal_demo_context(
     demo_candidates: tuple[ComponentDemoSet, ...],
     *,
-    zeroshot_opt: bool,
+    demo_mode: Miprov2DemoMode,
 ) -> tuple[ComponentDemoSet, ...]:
+    """Demo sets that ground instruction proposals.
 
-    del zeroshot_opt
+    Every mode that bootstraps grounds its proposals in what it bootstrapped,
+    including ``ZEROSHOT`` (the 3/0 grounding set, then discarded) and
+    ``GROUND_ONLY`` (fewshot-sized pools that never enter the study).
+    """
+
+    del demo_mode
     return demo_candidates
 
 
 def study_demo_context(
     demo_candidates: tuple[ComponentDemoSet, ...],
     *,
-    zeroshot_opt: bool,
+    demo_mode: Miprov2DemoMode,
 ) -> tuple[ComponentDemoSet, ...] | None:
+    """Demo sets that become a dimension of the study's search space.
 
-    return None if zeroshot_opt else demo_candidates
+    Only ``FEWSHOT`` searches over demo sets. ``ZEROSHOT`` has none, and
+    ``GROUND_ONLY`` deliberately withholds the ones it bootstrapped so the
+    study optimizes instructions alone and no candidate carries a demo set.
+    """
+
+    return demo_candidates if demo_mode.searches_demos else None
 
 
 __all__ = [

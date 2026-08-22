@@ -31,6 +31,7 @@ from whetstone.experiment.candidate import (
     TemplateRenderContract,
 )
 from whetstone.experiment.reward import RewardPolicy
+from whetstone.optim.miprov2.demo_mode import Miprov2DemoMode
 from whetstone.optim.miprov2.bootstrap import (
     MIPROV2_TRACE_SELECTION_PROJECTION_VERSION,
 )
@@ -54,7 +55,7 @@ MIPROV2_ALGORITHM_VERSION = "dspy_miprov2/v2"
 MIPROV2_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 MIPROV2_OPTUNA_VERSION = "4.8.0"
 MIPROV2_CONTROL_SCHEMA = "whetstone.miprov2_optimizer_config"
-MIPROV2_CONTROL_SCHEMA_VERSION = 6
+MIPROV2_CONTROL_SCHEMA_VERSION = 7
 MIPROV2_COMPONENT_SPEC_SCHEMA = "whetstone.miprov2_component_spec"
 MIPROV2_COMPONENT_SPEC_SCHEMA_VERSION = 1
 MIPROV2_PROGRAM_LAYOUT_SCHEMA = "whetstone.miprov2_program_layout"
@@ -88,10 +89,11 @@ MIPROV2_PHASE_SCHEMA_MANIFEST: tuple[tuple[str, int], ...] = (
     ("whetstone.miprov2_eval_binding_request", 1),
     ("whetstone.miprov2_eval_binding", 1),
     ("whetstone.miprov2_intent_context", 2),
-    ("whetstone.miprov2_study_transcript", 5),
+    ("whetstone.miprov2_study_transcript", 6),
 )
 
 Miprov2AutoMode = Literal["light", "medium", "heavy"]
+
 
 _AUTO_RUN_SETTINGS: dict[Miprov2AutoMode, tuple[int, int]] = {
     "light": (6, 100),
@@ -331,7 +333,6 @@ class Miprov2Control(BaseModel):
     num_instruct_candidates: StrictInt
     num_fewshot_candidates: StrictInt
     num_trials: StrictInt
-    num_threads: StrictInt | None
     max_errors: StrictInt
     seed: StrictInt
     init_temperature: float
@@ -348,7 +349,7 @@ class Miprov2Control(BaseModel):
     tip_aware_proposer: StrictBool
     fewshot_aware_proposer: StrictBool
     provide_traceback: StrictBool | None
-    zeroshot_opt: StrictBool
+    demo_mode: Miprov2DemoMode
 
     algorithm_version: StrictStr = MIPROV2_ALGORITHM_VERSION
     reference_commit: StrictStr = MIPROV2_REFERENCE_COMMIT
@@ -513,6 +514,28 @@ class Miprov2Control(BaseModel):
         return self
 
     @property
+    def zeroshot_opt(self) -> bool:
+        """Whether this run is DSPy's 0-shot mode.
+
+        Derived from :attr:`demo_mode`, not stored: the persisted control
+        carries one demo decision, so the two cannot drift apart.
+        """
+
+        return self.demo_mode is Miprov2DemoMode.ZEROSHOT
+
+    @property
+    def bootstraps_demos(self) -> bool:
+        """Whether this run bootstraps demonstrations through the engine."""
+
+        return self.demo_mode.bootstraps
+
+    @property
+    def searches_demo_dimension(self) -> bool:
+        """Whether the study's parameter space carries a demo dimension."""
+
+        return self.demo_mode.searches_demos
+
+    @property
     def component_ids(self) -> tuple[str, ...]:
         """Return ordered component ids derived from bound component specs."""
 
@@ -612,7 +635,6 @@ class Miprov2Control(BaseModel):
             "num_instruct_candidates": self.num_instruct_candidates,
             "num_fewshot_candidates": self.num_fewshot_candidates,
             "num_trials": self.num_trials,
-            "num_threads": self.num_threads,
             "max_errors": self.max_errors,
             "seed": self.seed,
             "init_temperature": self.init_temperature,
@@ -629,7 +651,7 @@ class Miprov2Control(BaseModel):
             "tip_aware_proposer": self.tip_aware_proposer,
             "fewshot_aware_proposer": self.fewshot_aware_proposer,
             "provide_traceback": self.provide_traceback,
-            "zeroshot_opt": self.zeroshot_opt,
+            "demo_mode": self.demo_mode.value,
         }
 
     def identity_hash(self) -> str:
@@ -717,12 +739,17 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
             "resolved MIPROv2 trainset conflicts with source datasets"
         )
 
+    # ``zeroshot_opt`` is derived from ``demo_mode``, so the invariant that
+    # used to compare two stored fields now constrains the one stored
+    # decision against the demo maxima it implies.
     expected_zeroshot = (
         control.max_bootstrapped_demos == 0 and control.max_labeled_demos == 0
     )
     if control.zeroshot_opt is not expected_zeroshot:
         raise ValueError(
-            "resolved MIPROv2 zeroshot_opt conflicts with demo maxima"
+            "resolved MIPROv2 demo_mode conflicts with demo maxima: "
+            f"{control.demo_mode.value!r} requires "
+            f"{'zero' if control.zeroshot_opt else 'positive'} demo maxima"
         )
 
     if control.auto is None:
@@ -772,7 +799,9 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
             raise ValueError(
                 "resolved MIPROv2 valset order conflicts with sample indices"
             )
-        expected_instruct = n if expected_zeroshot else int(n * 0.5)
+        expected_instruct = (
+            int(n * 0.5) if control.searches_demo_dimension else n
+        )
         if (
             control.num_instruct_candidates != expected_instruct
             or control.num_fewshot_candidates != n
@@ -782,7 +811,7 @@ def _validate_resolved_derivations(control: Miprov2Control) -> None:
             )
         expected_trials = _recommended_num_trials(
             component_count=len(control.component_specs),
-            zeroshot_opt=expected_zeroshot,
+            searches_demos=control.searches_demo_dimension,
             num_candidates=n,
         )
         if control.num_trials != expected_trials:
@@ -886,8 +915,6 @@ def _validate_resolved_numeric_controls(control: Miprov2Control) -> None:
         field="num_fewshot_candidates",
     )
     _require_positive_int(control.num_trials, field="num_trials")
-    if control.num_threads is not None:
-        _require_positive_int(control.num_threads, field="num_threads")
     _require_positive_int(control.max_errors, field="max_errors")
     _require_strict_int(control.seed, field="seed")
     _require_finite(control.init_temperature, field="init_temperature")
@@ -958,7 +985,6 @@ def _validate_input_numeric_controls(
     run_max_labeled_demos: int | None,
     num_candidates: int | None,
     num_trials: int | None,
-    num_threads: int | None,
     max_errors: int | None,
     seed: int,
     run_seed: int | None,
@@ -990,8 +1016,6 @@ def _validate_input_numeric_controls(
         _require_positive_int(num_candidates, field="num_candidates")
     if num_trials is not None:
         _require_positive_int(num_trials, field="num_trials")
-    if num_threads is not None:
-        _require_positive_int(num_threads, field="num_threads")
     if max_errors is not None:
         _require_positive_int(max_errors, field="max_errors")
     _require_strict_int(seed, field="seed")
@@ -1014,16 +1038,52 @@ def _validate_input_numeric_controls(
 def _recommended_num_trials(
     *,
     component_count: int,
-    zeroshot_opt: bool,
+    searches_demos: bool,
     num_candidates: int,
 ) -> int:
-    num_vars = component_count * (1 if zeroshot_opt else 2)
+    # One search variable per component (its instruction), plus a second
+    # when the demo set is also a searched dimension. ``GROUND_ONLY`` grounds
+    # proposals in demos but does not search them, so it counts as one.
+    num_vars = component_count * (2 if searches_demos else 1)
     return int(
         max(
             2 * num_vars * math.log2(num_candidates),
             1.5 * num_candidates,
         )
     )
+
+
+def _resolve_demo_mode(
+    requested: Miprov2DemoMode | None,
+    *,
+    maxima_are_zero: bool,
+) -> Miprov2DemoMode:
+    """Resolve the run's demo mode against the demo maxima it must honor.
+
+    The maxima are the hard constraint: zero maxima admit only
+    :attr:`Miprov2DemoMode.ZEROSHOT`, and positive maxima admit the two
+    bootstrapping modes. An unspecified mode takes the DSPy default the
+    maxima imply.
+    """
+
+    if requested is None:
+        return (
+            Miprov2DemoMode.ZEROSHOT
+            if maxima_are_zero
+            else Miprov2DemoMode.FEWSHOT
+        )
+    if maxima_are_zero and requested is not Miprov2DemoMode.ZEROSHOT:
+        raise ValueError(
+            f"demo_mode {requested.value!r} requires positive demo maxima; "
+            "zero max_bootstrapped_demos and max_labeled_demos is "
+            f"{Miprov2DemoMode.ZEROSHOT.value!r}"
+        )
+    if not maxima_are_zero and requested is Miprov2DemoMode.ZEROSHOT:
+        raise ValueError(
+            f"demo_mode {Miprov2DemoMode.ZEROSHOT.value!r} requires zero "
+            "max_bootstrapped_demos and max_labeled_demos"
+        )
+    return requested
 
 
 def configure_miprov2(
@@ -1035,7 +1095,6 @@ def configure_miprov2(
     max_labeled_demos: int = 4,
     auto: Miprov2AutoMode | None = "light",
     num_candidates: int | None = None,
-    num_threads: int | None = None,
     max_errors: int | None = None,
     seed: int = 9,
     init_temperature: float = 1.0,
@@ -1063,6 +1122,7 @@ def configure_miprov2(
     tip_aware_proposer: bool = True,
     fewshot_aware_proposer: bool = True,
     provide_traceback: bool | None = None,
+    demo_mode: Miprov2DemoMode | None = None,
     defaults: Miprov2InjectedDefaults,
 ) -> Miprov2Control:
     """Resolve DSPy's constructor and compile controls without effects.
@@ -1103,9 +1163,15 @@ def configure_miprov2(
         if run_max_labeled_demos is None
         else run_max_labeled_demos
     )
-    zeroshot_opt = (
+    # The demo maxima decide whether this run can bootstrap at all; the
+    # caller only chooses between the two modes those maxima allow.
+    maxima_are_zero = (
         effective_max_bootstrapped_demos == 0
         and effective_max_labeled_demos == 0
+    )
+    resolved_demo_mode = _resolve_demo_mode(
+        demo_mode,
+        maxima_are_zero=maxima_are_zero,
     )
     component_count = (
         1 if program_layout is None else len(program_layout.component_specs)
@@ -1116,7 +1182,7 @@ def configure_miprov2(
             _require_positive_int(num_candidates, field="num_candidates")
         recommendation = _recommended_num_trials(
             component_count=component_count,
-            zeroshot_opt=zeroshot_opt,
+            searches_demos=resolved_demo_mode.searches_demos,
             num_candidates=num_candidates,
         )
         raise ValueError(
@@ -1180,11 +1246,13 @@ def configure_miprov2(
             pre_auto_valset[index] for index in sample_indices
         )
         resolved_minibatch = len(resolved_valset) > _MIN_MINIBATCH_SIZE
-        num_instruct_candidates = n if zeroshot_opt else int(n * 0.5)
+        num_instruct_candidates = (
+            int(n * 0.5) if resolved_demo_mode.searches_demos else n
+        )
         num_fewshot_candidates = n
         resolved_num_trials = _recommended_num_trials(
             component_count=component_count,
-            zeroshot_opt=zeroshot_opt,
+            searches_demos=resolved_demo_mode.searches_demos,
             num_candidates=n,
         )
 
@@ -1212,7 +1280,6 @@ def configure_miprov2(
         run_max_labeled_demos=run_max_labeled_demos,
         num_candidates=num_candidates,
         num_trials=num_trials,
-        num_threads=num_threads,
         max_errors=max_errors,
         seed=seed,
         run_seed=run_seed,
@@ -1311,7 +1378,6 @@ def configure_miprov2(
         num_instruct_candidates=num_instruct_candidates,
         num_fewshot_candidates=num_fewshot_candidates,
         num_trials=resolved_num_trials,
-        num_threads=num_threads,
         max_errors=effective_max_errors,
         seed=resolved_seed,
         init_temperature=init_temperature,
@@ -1328,7 +1394,7 @@ def configure_miprov2(
         tip_aware_proposer=tip_aware_proposer,
         fewshot_aware_proposer=fewshot_aware_proposer,
         provide_traceback=provide_traceback,
-        zeroshot_opt=zeroshot_opt,
+        demo_mode=resolved_demo_mode,
     )
 
 
@@ -1353,6 +1419,7 @@ __all__ = [
     "Miprov2AutoMode",
     "Miprov2ComponentSpec",
     "Miprov2Control",
+    "Miprov2DemoMode",
     "Miprov2InjectedDefaults",
     "Miprov2ProgramLayout",
     "configure_miprov2",
