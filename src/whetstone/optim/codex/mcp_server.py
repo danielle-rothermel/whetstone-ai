@@ -6,8 +6,8 @@ import sys
 from dr_serialize import decode_strict_json_bytes
 from dr_store.sync import close_persistent, persistent_sqlite
 
-from whetstone.core.effects.authority import (
-    EffectAuthority,
+from whetstone.core.leasing import (
+    EffectLeaseAuthority,
     ReplayPolicy,
 )
 from whetstone.experiment.reward import RewardPolicy
@@ -46,7 +46,7 @@ def build_server_from_env(
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")
-    effect_authority = EffectAuthority.sqlite(sqlite_path)
+    effect_authority = EffectLeaseAuthority.sqlite(sqlite_path)
     tool_store = ToolCallStore(
         store,
         ToolAdmissionAuthority.sqlite(sqlite_path),

@@ -11,7 +11,7 @@ except ImportError as exc:
         "pip install 'whetstone-ai[dbos]'"
     ) from exc
 
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import (
     compute_identity_hash,
     require_full_hash,

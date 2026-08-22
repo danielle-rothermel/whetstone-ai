@@ -6,7 +6,7 @@ import pytest
 from dr_store.sync import BlockingObjectStore, open_sqlite
 
 from whetstone.coordination.runtime_bootstrap import register_runtime
-from whetstone.core.effects.authority import ReplayPolicy
+from whetstone.core.leasing import ReplayPolicy
 from whetstone.optim.contracts import StepMode
 from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 

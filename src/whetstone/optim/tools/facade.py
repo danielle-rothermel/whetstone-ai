@@ -5,8 +5,8 @@ from typing import Any
 
 from dr_store import ObjectStore
 
-from whetstone.core.effects.authority import (
-    EffectAuthority,
+from whetstone.core.leasing import (
+    EffectLeaseAuthority,
     EffectTerminal,
     TerminalOutcome,
 )
@@ -145,7 +145,7 @@ class ToolCallStore:
         self,
         store: ObjectStore,
         admission_authority: ToolAdmissionAuthority,
-        effect_authority: EffectAuthority,
+        effect_authority: EffectLeaseAuthority,
     ) -> None:
         self._store = store
         self._admission = admission_authority
@@ -311,9 +311,10 @@ class ToolCallStore:
                 "completion requires an exact authoritative "
                 "EffectTerminal proof"
             )
-        exact_terminal = EffectTerminal.model_validate_json(
-            terminal.model_dump_json()
-        )
+        # Revalidate in place. A JSON hop cannot carry unpaired surrogates
+        # (Pydantic dumps UTF-8), and strict EffectTerminal rejects enum
+        # strings from model_dump(mode="json").
+        exact_terminal = EffectTerminal.model_validate(terminal)
         expected_request = tool_effect_request(validated.call.record)
         if exact_terminal.request != expected_request:
             raise ValueError(
@@ -491,7 +492,7 @@ class ToolCallStore:
         )
 
     @property
-    def effect_authority(self) -> EffectAuthority:
+    def effect_authority(self) -> EffectLeaseAuthority:
         return self._effect_authority
 
     def close(self) -> None:

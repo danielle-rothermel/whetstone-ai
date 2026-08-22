@@ -7,7 +7,7 @@ from whetstone.coordination.eval_service import EvalEngineService
 from whetstone.coordination.harness_run_controller import OptimRunLaunch
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from dr_store.sync import open_sqlite
-from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
+from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.core.identity import TypedRef
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry
@@ -94,7 +94,7 @@ def test_gepa_harness_e2e_terminalizes(tmp_path) -> None:
             adapter_factory=GepaHarnessAdapterFactory(factory=factory),
         )
         registry = MappingAdapterRegistry({GEPA_ADAPTER_KEY: adapter})
-        effect_authority = EffectAuthority.memory()
+        effect_authority = EffectLeaseAuthority.memory()
         harness = OptimHarness(
             store=store,
             adapter_registry=registry,

@@ -14,7 +14,7 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.core.effects.authority import TerminalOutcome
+from whetstone.core.leasing import TerminalOutcome
 from whetstone.core.identity import (
     IdentityHash,
     IdentityRef,

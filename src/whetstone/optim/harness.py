@@ -8,10 +8,10 @@ from uuid import uuid4
 from dr_store import BindingConflictError, BindStatus, ObjectStore
 
 from whetstone.coordination.eval_service import EvalExecutionContext
-from whetstone.core.effects.authority import (
+from whetstone.core.leasing import (
     AcquireOutcome,
-    AcquireResult,
-    EffectAuthority,
+    EffectAcquireResult,
+    EffectLeaseAuthority,
     EffectLease,
     EffectRequest,
     ReplayPolicy,
@@ -168,7 +168,7 @@ class OptimHarness(OptimRunStore):
         store: ObjectStore,
         adapter_registry: AdapterRegistry,
         tool_store: ToolCallStore,
-        effect_authority: EffectAuthority,
+        effect_authority: EffectLeaseAuthority,
         owner_id: str,
         adapter_replay_policy: ReplayPolicy,
         lease_duration: timedelta,
@@ -593,7 +593,7 @@ class OptimHarness(OptimRunStore):
             replay_policy=replay_policy,
         )
 
-    def _acquired_lease(self, acquisition: AcquireResult) -> EffectLease:
+    def _acquired_lease(self, acquisition: EffectAcquireResult) -> EffectLease:
         request = acquisition.request
         semantic_key = str(request.semantic_key)
         if acquisition.outcome is AcquireOutcome.BUSY:

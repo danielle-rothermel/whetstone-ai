@@ -643,7 +643,7 @@ def test_a_seed_retaining_run_terminalizes_through_the_harness(
     from datetime import timedelta
 
     from whetstone.coordination.eval_service import EvalEngineService
-    from whetstone.core.effects.authority import EffectAuthority, ReplayPolicy
+    from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
     from whetstone.optim.adapters import MappingAdapterRegistry
     from whetstone.optim.contracts import step_result_reference
@@ -686,7 +686,7 @@ def test_a_seed_retaining_run_terminalizes_through_the_harness(
         valset=None,
         adapter_factory=GepaHarnessAdapterFactory(factory=factory),
     )
-    effect_authority = EffectAuthority.memory()
+    effect_authority = EffectLeaseAuthority.memory()
     harness = OptimHarness(
         store=sqlite_store,
         adapter_registry=MappingAdapterRegistry({GEPA_ADAPTER_KEY: adapter}),
