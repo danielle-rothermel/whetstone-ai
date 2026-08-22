@@ -283,7 +283,6 @@ def test_gepa_platform_deferral_same_step_resume(sqlite_store) -> None:
         sqlite_store,
         run_id=run_id,
         max_metric_calls=2,
-        bind_platform_eval_service=True,
     )
     control = launch.control
     assert control is not None

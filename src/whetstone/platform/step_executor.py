@@ -642,6 +642,13 @@ def execute_optim_step_sync(
     adapter_key = bound.record.adapter_key
     control = launch.control
     step_builder = StepRequestBuilder(store=runtime.store)
+    adapter = runtime.adapter_registry.resolve(adapter_key)
+    bind_evaluation_service = getattr(adapter, "bind_evaluation_service", None)
+    if callable(bind_evaluation_service):
+        # PLATFORM fan-in completes intents on runtime.eval_service. GEPA
+        # must acquire those claims with the same owner, not a fresh
+        # EvalEngineService minted inside evaluate().
+        bind_evaluation_service(runtime.eval_service)
 
     extra_pools = None
     if adapter_key == GEPA_ADAPTER_KEY:
