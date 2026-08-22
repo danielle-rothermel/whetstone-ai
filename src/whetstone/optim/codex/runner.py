@@ -1157,15 +1157,14 @@ def _is_cut_stitch_boundary(ordinal: int, lines: list[bytes]) -> bool:
     output and reports it as retention damage, so the persisted
     ``jsonl_events`` no longer match the retained stream.
 
-    A cut is demonstrable from the line's own shape, and the two sides
-    are cut in opposite directions. The head's last line is the *front*
-    of a record whose end the budget removed, so it opens a record it
-    never closes. The tail's first line is the *back* of a record whose
-    start was removed, so it closes structure it never opened. Either
-    way the line cannot be a complete record. A line that is balanced --
-    ``not json``, or a whole object followed by trailing garbage -- is
-    not a partial record in either direction, so it stays a contract
-    violation whatever it sits next to.
+    On the head side a cut is demonstrable from the line's own shape:
+    the head's last line is the *front* of a record whose end the budget
+    removed, so it opens a record it never closes. A line that is
+    balanced -- ``not json``, or a whole object followed by trailing
+    garbage -- is not a partial record, so it stays a contract violation
+    whatever it sits next to.
+
+    The tail side has no such self-evidence, so it reads the head's.
     """
     index = ordinal - 1
     for marker_index, raw in enumerate(lines):
@@ -1174,7 +1173,10 @@ def _is_cut_stitch_boundary(ordinal: int, lines: list[bytes]) -> bool:
         if index == marker_index - 1:
             return _is_cut_record_head(lines[index])
         if index == marker_index + 1:
-            return _is_cut_record_tail(lines[index])
+            return _is_cut_record_tail(
+                lines[index],
+                head=lines[marker_index - 1] if marker_index > 0 else None,
+            )
         return False
     return False
 
@@ -1193,22 +1195,34 @@ def _is_cut_record_head(raw: bytes) -> bool:
     return _brace_balance(stripped) > 0
 
 
-def _is_cut_record_tail(raw: bytes) -> bool:
+def _is_cut_record_tail(raw: bytes, *, head: bytes | None) -> bool:
     """Is this the closing fragment of a record cut after its start?
 
-    A tail fragment is whatever survived from somewhere inside the
-    record through its closing brace. Its first retained byte lands
-    mid-token, so brace counting cannot be trusted on this side -- a cut
-    that lands inside a string value leaves quote parity meaningless.
-    What is reliable is the two ends: a record Codex emitted whole opens
-    on ``{``, and a fragment that reaches the record's end closes on
-    ``}``. A line that closes without opening is missing its start, and
-    only the retention window removes a record's start.
+    Two independent things must hold, because neither is sufficient.
+
+    The line must be incapable of being a whole record. A record Codex
+    emitted whole opens on ``{`` and ends on ``}``; a fragment that
+    survived from somewhere inside a record through its closing brace
+    reaches the end without the start.
+
+    And the retained stream must actually show a record spanning the
+    elision, which only the head side can witness. The tail fragment's
+    first retained byte lands mid-token, so its own shape proves
+    nothing further: brace counting is unreliable once a cut lands
+    inside a string value, and a complete malformed line like
+    ``not json}`` closes without opening exactly as a real fragment
+    does. The head's last line opening a record it never closes is the
+    stream's own evidence that the budget fell inside a record. Without
+    it, a malformed tail line is indistinguishable from genuine
+    malformed process output, and this parser rejects the run rather
+    than delete that output and report retention damage in its place.
     """
     stripped = raw.strip()
     if stripped.startswith(b"{"):
         return False
-    return stripped.endswith(b"}")
+    if not stripped.endswith(b"}"):
+        return False
+    return head is not None and _is_cut_record_head(head)
 
 
 def _brace_balance(raw: bytes) -> int:

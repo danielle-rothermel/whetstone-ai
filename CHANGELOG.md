@@ -7,6 +7,370 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Codex-direct optimizer is wired through the shared contracts:
+  `CodexControl`, a `CodexStepContractProvider` registered under the
+  `codex` adapter key, `prepare_codex_run` beside the other
+  `prepare_*_run` functions, `whetstone-optim run --adapter codex`, and
+  `build_toy_codex_control` / `build_toy_codex_adapter` /
+  `prepare_toy_codex_run` in `whetstone.testing`.
+- Codex is granted exactly one tool: evaluate a candidate on the run's
+  internal split and read back the aggregate reward plus per-task
+  scores. Every call is admitted against a per-run `ToolCapacity` whose
+  size is the control's `max_tool_calls`, which is simultaneously the
+  step's `tool_calls` budget, so the admission cap and the Issued Tool
+  Call ledger's limit cannot drift. A capacity refusal is advisory --
+  the agent is told further calls will be refused, and the wall budget
+  is the hard stop.
+- The Codex output artifact carries no candidate body. It names the
+  `call_id` it selected, and the adapter rebuilds that candidate from
+  the call's recorded, content-addressed arguments, so a template that
+  was never evaluated through the tool cannot be returned. An artifact
+  naming a call that was never issued is a terminal failure, and so is
+  one naming a call whose evaluation terminally failed: `COMPLETED` is
+  also the terminal state of a failed evaluation, which carries no
+  output and no reward, and a candidate that was never successfully
+  scored is not a result.
+- The ledger is total over *admitted* calls, not reported ones, on every
+  path that terminalizes a step. Every failing exit leaves the adapter
+  through one path that reconciles first and fails second, so ledger
+  totality does not depend on which thing went wrong. It enumerates the
+  durable admission entries and re-issues every completed one through the
+  guarded handle before it fails. The handle reads the recorded terminal
+  instead of evaluating, so this records work already paid for and never
+  buys more. An agent therefore cannot hide paid evaluations from the
+  Step Result or leave the `tool_calls` budget under-debited -- not by
+  omitting them from `evaluated_call_ids`, not by corrupting or omitting
+  the artifact's `lease_token_hash`, not by reporting a call id twice or
+  naming a selection it never evaluated, and not by exiting nonzero
+  without an artifact at all. A run that simply ran out of wall clock
+  still surfaces everything it spent.
+- A Codex process that fails without a usable artifact -- a nonzero exit,
+  an unspawnable process, an unreadable or malformed final message --
+  terminalizes the step under `codex_execution_failed` instead of raising
+  out of the adapter. The harness runs its effect-lease maintenance only
+  once the adapter returns, so an escaping exception left the effect
+  non-terminal, and this adapter's `NO_REDRIVE` policy then blocked the
+  run from recovering until the lease lapsed.
+- A shortfall says which kind it is. An omitted call that `COMPLETED` is
+  the agent under-reporting (`codex_unreported_evaluation`); an admitted
+  call whetstone's own evaluation server never reached a terminal for is
+  a harness failure (`codex_evaluation_interrupted`), named with the
+  interrupted call ids. The agent had no result to report in the second
+  case, so the two no longer share one accusatory code. This holds on the
+  wall-budget stop too, where the kill can strand an in-flight evaluation
+  in `ACCEPTED` with its capacity already debited. The admission contract
+  has no typed release, so that capacity slot stays consumed -- the run
+  really did commit the evaluation -- and the step names the stranded
+  calls rather than letting them vanish into the accepted count.
+- A durable admitted call whose recorded `template` and `base_ref` cannot
+  be read back is a typed failure (`codex_recorded_call_contract`), not a
+  silent skip. Reconciliation validates the recorded arguments before it
+  issues the call, so a call can no longer reach the Issued Tool Call
+  ledger while being omitted from the evidence the step's single shared
+  terminal failure is computed over.
+- The candidate rebuilt from the selected tool call is assembled the same
+  way every other proposal path assembles one: from the base candidate's
+  payload with only the run's mutation field replaced. Rebuilding it from
+  the mutation field alone dropped every other payload field the base
+  carried, so any multi-field candidate failed the mutation diff even on
+  a legitimately evaluated selection.
+- The Codex preflight probe resolves the default `~/.codex` credentials
+  when `CODEX_HOME` is unset, so a user authenticated the ordinary way
+  passes it. The probe is constructed with an explicit environment, which
+  previously resolved its auth source to nothing and staged no
+  credentials into the scratch `CODEX_HOME`. Credentials still reach the
+  untrusted agent only as files in its own scratch home, never as
+  environment values, and `containment` now owns the accepted auth
+  filenames so the preflight's check and the runner's staging cannot
+  drift apart.
+- Truncated Codex output is never presented as a contiguous stream. When
+  a finite output budget retains a head and a tail and drops the middle,
+  the join carries an explicit elision marker line -- identified by a
+  fixed sentinel token rather than a human-readable prefix -- and
+  the isolation block records `stdout_truncated` / `stderr_truncated`
+  alongside the dropped byte counts. Concatenating the two fragments bare
+  fabricated a line the process never emitted, which the JSONL parser
+  then read as a malformed event at a boundary Codex never produced -- or
+  as a well-formed event that never happened.
+- `ToolCallStore.admitted_entries` joins `accepted_count` across the
+  memory, SQLite, and PostgreSQL admission backends: the count says how
+  many evaluations a scope paid for, the projection says which calls and
+  what durable state each one reached.
+- whetstone hosts the MCP evaluation endpoint itself, outside the Codex
+  sandbox, and gives the agent only a loopback URL and a bearer token.
+  The evaluation server is the sole writer of the whetstone store -- the
+  durable ledger, and the admission-capacity rows that cap paid
+  evaluations -- so the agent's sandbox profile grants no write access to
+  it at all; its scratch directory is the whole writable set. The
+  containment profile permits network, so the endpoint is authenticated
+  rather than merely bound to loopback.
+- A run-scoped lease token (`WS_MCP_RUN_LEASE_TOKEN`) does two separate
+  jobs. `WS_MCP_RUN_LEASE_BINDING` binds it to the run's exact Tool
+  Config and capacity binding, and the server refuses to start when the
+  digest it recomputes disagrees, so a token minted for another run
+  brings up nothing. Separately, the adapter refuses an artifact whose
+  recorded token hash is not the one it minted, which shows the artifact
+  came from a process that received this step's prompt.
+- A Codex wall-budget stop terminalizes the step under a typed failure
+  instead of raising `subprocess.TimeoutExpired` out of the optimizer,
+  which previously escaped the harness's effect-lease maintenance and
+  wedged the run until the lease lapsed.
+- `codex_auth_preflight` proves a usable Codex session -- binary, auth
+  source, and one cheap structured probe. It is required rather than
+  optional: `prepare_codex_run` takes no default `preflight`, and the
+  CLI's `--adapter codex` path runs the real check before it builds an
+  adapter, so a broken session commits no capacity or eval budget.
+- `build_codex_executor` is the repository's one production dr-exec
+  `ProcessExecutor` construction site.
+
+### Changed
+
+- Run cost reads tool-mediated evaluations. `aggregate_run_cost` now walks
+  `OptimStepResult.tool_evidence` alongside `resolved_intents` and
+  `search_evidence`, following each Tool Result's
+  `evaluation_evidence_refs` to the output rows behind it. The Codex arm
+  has no proposer -- the agent proposes -- and drives every evaluation
+  through a tool, so it cited all of its spend from a channel run cost did
+  not read and an entire Codex run reported `task_model.calls == 0`. The
+  three channels are unioned and still de-duplicated by evidence ref, so an
+  evaluation reachable through more than one is paid for once.
+- `EngineToolEvaluator` was dead on arrival: it referenced `Candidate`,
+  `EvalEvidence`, and `EvalFailureEvidence` without importing them, and
+  raised `ToolEvaluationError` with a plain string where the constructor
+  takes a `TerminalFailure`. Every failure path now constructs a real
+  `TerminalFailure` under an owned code, and each is covered by a test.
+- `build_runtime` takes an injectable `admission` authority, an
+  injectable `tool_executor`, and derives `adapter_replay_policy` from
+  the registered adapters instead of hardcoding `DURABLE_WORKFLOW`.
+  Codex requires `NO_REDRIVE` and a durable admission authority, because
+  its capacity gates an out-of-process MCP server; a `TOOL_USING` run
+  additionally needs a tool executor, which `build_runtime` never
+  passed.
+- The Codex dr-exec job now bounds `payload_output` as well as
+  `wall_time`, and truncation under that budget is a reported outcome
+  rather than an error. `RegisteredRuntime` exposes the exact
+  `tool_store` the harness admits through, and the runtime engine
+  exposes its `reward_policy`.
+- `SubprocessCodexRunner` calls `Executor.run_blocking`; it previously
+  called the coroutine `Executor.run` without awaiting it.
+- The task-model API key reaches the evaluation server alone. It was
+  previously added to the environment allowlist of the Codex process
+  itself, which -- with network allowed and an interpreter on PATH --
+  was the credential an agent would need to score candidates outside the
+  tool entirely.
+- `CodexControl` carries `reasoning_effort`, which now reaches the CLI as
+  `-c model_reasoning_effort`. No control field shapes identity without
+  shaping execution; the module docstring names the route each one takes,
+  since only `codex_binary`, `model`, `reasoning_effort`, and
+  `denied_features` reach the argv itself.
+- A failed Step Result may now supersede its nested terminal failures
+  instead of being required to equal every one of them. Two evaluations
+  that failed for different reasons -- the ordinary shape, since
+  `EngineToolEvaluator` names the failing call in its own failure --
+  previously made the Step Result unconstructable: it raised a raw
+  `ValidationError` after the effect lease had already been terminalized,
+  so every re-run replayed the same checkpoint and raised again. A
+  superseding Step failure must name the exact set of nested codes it
+  stands for, under `superseded_failure_codes`, so it still cannot
+  silently disagree with its own evidence.
+- The Codex MCP host serves on the loopback socket it reserved rather
+  than closing it and letting uvicorn re-bind, and takes readiness from
+  uvicorn's own started signal rather than a connect probe. A probe
+  proved only that *something* accepted on the port, so a process that
+  won the re-bind window became the agent's evaluation endpoint and
+  received the run's bearer token while uvicorn's bind failure went
+  unread. Its startup budget is also now the real time it names: the
+  previous wait counted iterations without sleeping, spending a nominal
+  30 seconds in about 0.14 of them. The host closes the persistent store
+  session its server opened, which the stdio server it replaced used to
+  release by exiting.
+
+### Removed
+
+- `CodexControl.max_turns` and `CodexControl.seed`. Both shaped the
+  control identity and the recorded hyperparameters while reaching no
+  part of the invocation -- `codex exec` exposes neither, and
+  `--strict-config` rejects both as unknown configuration fields -- so
+  two runs differing only in `max_turns` recorded different identities
+  and executed byte-identical commands.
+- The stdio MCP server entrypoint, the `whetstone-mcp-eval` console
+  script, and the runtime staging that copied the whetstone package into
+  every run's scratch directory. The agent no longer spawns the
+  evaluation server, so none of it has a caller.
+- `CodexOutputArtifact.proposals` and the adapter's proposal-contract
+  validation, superseded by ledger-resolved selection.
+- The MCP evaluation tool's optional `task_ids` subset variant, and the
+  evaluator's engine-narrowing branch. A narrowed engine mints a
+  different Eval Config identity, which `EvaluatingToolExecutor` rejects
+  as `tool_eval_config_mismatch`, so such a call could never complete.
+- The unused `Path`-taking `_parse_output_artifact`.
+
+### Fixed
+
+- An admitted Tool Call whose evaluation the engine rejects now reaches a
+  terminal instead of being stranded. `EngineToolEvaluator.validate` runs
+  before admission and can only check the call's Eval Config binding and
+  model route; a render-contract violation, or an output field the engine
+  cannot supply, is discovered inside `evaluate`, when the entry is
+  already `ACCEPTED`, its capacity debited, and its effect lease held.
+  `EvaluatingToolExecutor` caught only `ToolEvaluationError` around
+  `evaluate`, so the `ToolValidationError` raised there propagated out as
+  an MCP error, left the entry nonterminal until its lease expired, and
+  made reconciliation fail the whole Step as
+  `codex_evaluation_interrupted` -- an agent that submitted one bad
+  template could not recover by submitting a good one. The rejection now
+  persists a terminal `ToolResult` under the new
+  `tool_evaluation_rejected` code, on the same path an evaluation failure
+  takes, so the ledger stays total and the Step still completes on the
+  agent's next valid call.
+- Every Tool Call the Codex adapter reconciles must bind one of its Step
+  Request's candidates as its base, not only the call the agent selected.
+  A `base_ref` is never resolved during evaluation, so a syntactically
+  valid ref from another run -- or a forged one -- was scored, and
+  `_candidate_from_call` checked the base against the request only for
+  the *selected* call. An agent could therefore evaluate a candidate
+  outside the run's mutation ancestry, then select a legitimate call, and
+  the Step would complete carrying that candidate on its paid Tool
+  Evidence. `_admitted_calls` now requires exact ref equality against the
+  Step Request's candidates for every reported call, failing under
+  `codex_recorded_call_contract` through the terminalizing path.
+- `_admitted_calls` validates a reported call's recorded `template` and
+  `base_ref` before issuing it, matching `_issue_completed`. It called the
+  guarded handle first, so a call with unusable recorded args reached the
+  Issued Tool Call ledger and was then left out of the reconciled
+  evidence carried to the terminal path -- the ledger-versus-evidence
+  split the reconciliation rule exists to prevent -- and the failure was
+  attributed to the agent's reporting rather than to the recorded call's
+  contract. Such a call now never reaches the ledger, and fails under
+  `codex_recorded_call_contract`.
+- A Codex output artifact naming another run now terminalizes the step
+  under `codex_artifact_run_mismatch` instead of raising past the adapter
+  checkpoint. `CodexRunner` is a Protocol, so the adapter cannot assume
+  the runner validated the artifact's run; the mismatch check sat outside
+  the terminalizing block, and the harness releases the effect lease only
+  once the adapter returns an `AdapterOutput`, so a `NO_REDRIVE` run was
+  wedged until the lease lapsed. The check now runs on the single
+  `_terminalize` path, reconciling the ledger first, so evaluations the
+  step already paid for stay reachable and debited.
+- Run cost reads the rows a tool-mediated evaluation paid for before it
+  failed. `EvaluatingToolExecutor` builds a failed `ToolResult` from the
+  evaluator's `TerminalFailure` alone, leaving `evaluation_evidence_refs`
+  empty, so an evaluation that produced `EvalFailureEvidence` with an
+  `outputs_ref` -- scoring or persistence failing after billed provider
+  rows were produced -- cited its evidence only from the failure's
+  `details`. `aggregate_run_cost` now follows that typed ref, symmetric
+  with the `resolved_intents` path and de-duplicated by ref, so those
+  billed rows no longer drop out of Codex task-model spend.
+- The truncated-JSONL parser no longer forgives a complete malformed
+  record next to the stitch. When retention ended or began exactly on a
+  record boundary, a whole malformed line adjacent to the elision marker
+  was classified as budget damage on position alone and silently dropped,
+  so the persisted `jsonl_events` differed from the retained output. A
+  boundary line is now forgiven only when it is demonstrably cut. The
+  head side must open a record it never closes. The tail side cannot be
+  read off its own shape -- its first retained byte lands mid-token, so
+  brace and quote parity are both meaningless there, and a complete
+  malformed line such as `not json}` closes without opening exactly as a
+  real fragment does -- so it additionally requires the retained head to
+  end mid-record, which is the one place the stream demonstrably shows a
+  record spanning the elision. A tail line beside a head that ended on a
+  clean record boundary now fails the run rather than being deleted and
+  reported as retention damage. Genuinely cut fragments are still
+  tolerated and counted.
+- A Codex run whose stdout exceeded `max_output_bytes` no longer fails on
+  its own truncation. The retained stream is a stitched head+tail
+  carrying a deliberately non-JSON elision marker, and the budget may cut
+  the head's last line and the tail's first line mid-record; the strict
+  JSONL parser rejected all three, so a zero-exit run with a valid final
+  artifact could not complete. The parser now skips the marker and drops
+  the two boundary fragments a stitch can damage, recording the count as
+  `jsonl_dropped_partial_lines` in the process evidence. An untruncated
+  stream stays strict, and a truncated one still rejects malformed lines
+  away from the stitch.
+- `prepare_codex_run` attests every engine-derived binding on the
+  control, not just the reward policy and Eval Config. A control whose
+  `evaluation_execution_policy_hash`, `task_model_identity_hash`, or
+  `internal_task_hashes` disagreed with the runtime engine was accepted,
+  so evaluations ran against the engine's policy, model route, and task
+  split while the persisted optimizer identity claimed the control's --
+  silent provenance corruption no downstream reader could detect.
+- Every way the Codex runner can fail now terminalizes the step. The
+  adapter caught only `CodexStructuredExecutionFailure`, so a zero-exit
+  CLI whose artifact failed schema validation, and a dr-exec
+  `ExecutorFailure`, both raised the base `OpaqueStepError` past the
+  adapter checkpoint. The harness never ran its effect-lease
+  maintenance, leaving that `NO_REDRIVE` effect non-terminal instead of
+  producing `codex_execution_failed`.
+- `whetstone-optim run --adapter codex` carries the launch's mutation
+  field and template render contract on the serialized runtime
+  configuration, so the out-of-process MCP evaluation server rebuilds the
+  harness's engine rather than the toy defaults. Previously a non-default
+  mutation field made every tool call fail preflight and a non-default
+  render contract could score a different prompt than the harness
+  declared. The server refuses to start when the configuration cannot
+  supply the field, when it disagrees with the Tool Config's
+  `candidate_template_field`, or when it carries no render contract. The
+  contract previously defaulted silently to the toy one even though the
+  mutation-field check passed, so the server rendered the agent's
+  candidate under different rules than the harness scored the baseline
+  with and reported the result as comparable.
+- MCP host setup and lifecycle failures terminalize the step instead of
+  escaping it. `build_server_from_env` raising on a mismatched runtime
+  configuration, and `CodexMcpHost.__enter__` raising `CodexMcpHostError`
+  for a squatted port, a bind or lifespan failure, or a startup that
+  missed its deadline, are not `OpaqueStepError`, so they unwound past
+  the adapter checkpoint and left that `NO_REDRIVE` effect non-terminal
+  until the lease lapsed. They now fail the step under
+  `codex_mcp_host_failed`, which the ledger keeps distinct from an agent
+  that ran and failed: the Codex process never started, so nothing was
+  paid for. That code covers host startup only. An unforeseen failure
+  inside the agent execution still terminalizes -- an escaping exception
+  would wedge the same `NO_REDRIVE` run -- but under
+  `codex_execution_failed`, because the host is up and the agent may
+  have run; reporting it as a host failure claimed the step never
+  started and buried the real defect behind a host diagnostic. A
+  teardown that fails after a completed run is labelled as such, and
+  never displaces an exception raised by the run itself.
+- The JSONL parser identifies the elision marker by an exact,
+  sentinel-anchored match on the whole line. It previously skipped any
+  line merely starting with `[... `, so a genuine Codex line opening
+  with a bracketed aside was dropped from the transcript silently, and
+  -- because the stitch-boundary search stops at the first
+  marker-shaped line -- such a line also misdirected that search, so
+  the two lines the output budget really did cut were no longer
+  forgiven and a truncated run with a valid final artifact failed.
+- Schema and JSONL parse failures keep their isolation evidence. Both
+  were raised as a bare `OpaqueStepError` after `_execute_structured`
+  had already built the isolation record, so the terminalized step stored
+  an empty `codex_isolation` -- no profile, no budgets, and no output
+  truncation flags, leaving a reader unable to tell a malformed artifact
+  from one the output budget cut in half.
+
+### Known limitations
+
+- Codex process isolation is macOS-only: it requires `sandbox-exec` and
+  refuses to run without it rather than falling back to an insecure
+  path. A Linux containment profile is separate work. Of the 77 tests in
+  `tests/test_codex_*.py`, 13 are Darwin-gated -- the 10 end-to-end tests
+  that spawn a sandboxed process, the 2 sandbox-profile tests, and the
+  one preflight test that asserts a nonzero probe exit -- so 64 run on
+  Linux. Every guarantee whetstone enforces in Python is among them: the
+  environment allowlist and run lease binding
+  (`tests/test_codex_containment_boundary.py`), ledger totality,
+  selection, and shared-failure terminalization
+  (`tests/test_codex_adapter_selection.py`), admission
+  (`tests/test_codex_admission.py`), timeout terminalization
+  (`tests/test_codex_budget_exhaustion.py`), the evaluation endpoint's
+  startup and teardown (`tests/test_codex_mcp_host_lifecycle.py`), and
+  both golden files.
+- dr-exec v1 accepts no finite limit on `process_count` or the resource
+  axes, so those are recorded as unbudgeted in the artifact's isolation
+  block. The wall budget and the process boundary are the containment.
+
+### Fixed
+
 ## 0.1.6 - 2026-08-22
 
 ### Added
@@ -225,121 +589,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole reflection prefix from that cache on every Step and the Step that
   first drove the call already carries its spend.
   `STEP_RESULT_SCHEMA_VERSION` is now 4.
-- The Codex-direct optimizer is wired through the shared contracts:
-  `CodexControl`, a `CodexStepContractProvider` registered under the
-  `codex` adapter key, `prepare_codex_run` beside the other
-  `prepare_*_run` functions, `whetstone-optim run --adapter codex`, and
-  `build_toy_codex_control` / `build_toy_codex_adapter` /
-  `prepare_toy_codex_run` in `whetstone.testing`.
-- Codex is granted exactly one tool: evaluate a candidate on the run's
-  internal split and read back the aggregate reward plus per-task
-  scores. Every call is admitted against a per-run `ToolCapacity` whose
-  size is the control's `max_tool_calls`, which is simultaneously the
-  step's `tool_calls` budget, so the admission cap and the Issued Tool
-  Call ledger's limit cannot drift. A capacity refusal is advisory --
-  the agent is told further calls will be refused, and the wall budget
-  is the hard stop.
-- The Codex output artifact carries no candidate body. It names the
-  `call_id` it selected, and the adapter rebuilds that candidate from
-  the call's recorded, content-addressed arguments, so a template that
-  was never evaluated through the tool cannot be returned. An artifact
-  naming a call that was never issued is a terminal failure, and so is
-  one naming a call whose evaluation terminally failed: `COMPLETED` is
-  also the terminal state of a failed evaluation, which carries no
-  output and no reward, and a candidate that was never successfully
-  scored is not a result.
-- The ledger is total over *admitted* calls, not reported ones, on every
-  path that terminalizes a step. Every failing exit leaves the adapter
-  through one path that reconciles first and fails second, so ledger
-  totality does not depend on which thing went wrong. It enumerates the
-  durable admission entries and re-issues every completed one through the
-  guarded handle before it fails. The handle reads the recorded terminal
-  instead of evaluating, so this records work already paid for and never
-  buys more. An agent therefore cannot hide paid evaluations from the
-  Step Result or leave the `tool_calls` budget under-debited -- not by
-  omitting them from `evaluated_call_ids`, not by corrupting or omitting
-  the artifact's `lease_token_hash`, not by reporting a call id twice or
-  naming a selection it never evaluated, and not by exiting nonzero
-  without an artifact at all. A run that simply ran out of wall clock
-  still surfaces everything it spent.
-- A Codex process that fails without a usable artifact -- a nonzero exit,
-  an unspawnable process, an unreadable or malformed final message --
-  terminalizes the step under `codex_execution_failed` instead of raising
-  out of the adapter. The harness runs its effect-lease maintenance only
-  once the adapter returns, so an escaping exception left the effect
-  non-terminal, and this adapter's `NO_REDRIVE` policy then blocked the
-  run from recovering until the lease lapsed.
-- A shortfall says which kind it is. An omitted call that `COMPLETED` is
-  the agent under-reporting (`codex_unreported_evaluation`); an admitted
-  call whetstone's own evaluation server never reached a terminal for is
-  a harness failure (`codex_evaluation_interrupted`), named with the
-  interrupted call ids. The agent had no result to report in the second
-  case, so the two no longer share one accusatory code. This holds on the
-  wall-budget stop too, where the kill can strand an in-flight evaluation
-  in `ACCEPTED` with its capacity already debited. The admission contract
-  has no typed release, so that capacity slot stays consumed -- the run
-  really did commit the evaluation -- and the step names the stranded
-  calls rather than letting them vanish into the accepted count.
-- A durable admitted call whose recorded `template` and `base_ref` cannot
-  be read back is a typed failure (`codex_recorded_call_contract`), not a
-  silent skip. Reconciliation validates the recorded arguments before it
-  issues the call, so a call can no longer reach the Issued Tool Call
-  ledger while being omitted from the evidence the step's single shared
-  terminal failure is computed over.
-- The candidate rebuilt from the selected tool call is assembled the same
-  way every other proposal path assembles one: from the base candidate's
-  payload with only the run's mutation field replaced. Rebuilding it from
-  the mutation field alone dropped every other payload field the base
-  carried, so any multi-field candidate failed the mutation diff even on
-  a legitimately evaluated selection.
-- The Codex preflight probe resolves the default `~/.codex` credentials
-  when `CODEX_HOME` is unset, so a user authenticated the ordinary way
-  passes it. The probe is constructed with an explicit environment, which
-  previously resolved its auth source to nothing and staged no
-  credentials into the scratch `CODEX_HOME`. Credentials still reach the
-  untrusted agent only as files in its own scratch home, never as
-  environment values, and `containment` now owns the accepted auth
-  filenames so the preflight's check and the runner's staging cannot
-  drift apart.
-- Truncated Codex output is never presented as a contiguous stream. When
-  a finite output budget retains a head and a tail and drops the middle,
-  the join carries an explicit elision marker line -- identified by a
-  fixed sentinel token rather than a human-readable prefix -- and
-  the isolation block records `stdout_truncated` / `stderr_truncated`
-  alongside the dropped byte counts. Concatenating the two fragments bare
-  fabricated a line the process never emitted, which the JSONL parser
-  then read as a malformed event at a boundary Codex never produced -- or
-  as a well-formed event that never happened.
-- `ToolCallStore.admitted_entries` joins `accepted_count` across the
-  memory, SQLite, and PostgreSQL admission backends: the count says how
-  many evaluations a scope paid for, the projection says which calls and
-  what durable state each one reached.
-- whetstone hosts the MCP evaluation endpoint itself, outside the Codex
-  sandbox, and gives the agent only a loopback URL and a bearer token.
-  The evaluation server is the sole writer of the whetstone store -- the
-  durable ledger, and the admission-capacity rows that cap paid
-  evaluations -- so the agent's sandbox profile grants no write access to
-  it at all; its scratch directory is the whole writable set. The
-  containment profile permits network, so the endpoint is authenticated
-  rather than merely bound to loopback.
-- A run-scoped lease token (`WS_MCP_RUN_LEASE_TOKEN`) does two separate
-  jobs. `WS_MCP_RUN_LEASE_BINDING` binds it to the run's exact Tool
-  Config and capacity binding, and the server refuses to start when the
-  digest it recomputes disagrees, so a token minted for another run
-  brings up nothing. Separately, the adapter refuses an artifact whose
-  recorded token hash is not the one it minted, which shows the artifact
-  came from a process that received this step's prompt.
-- A Codex wall-budget stop terminalizes the step under a typed failure
-  instead of raising `subprocess.TimeoutExpired` out of the optimizer,
-  which previously escaped the harness's effect-lease maintenance and
-  wedged the run until the lease lapsed.
-- `codex_auth_preflight` proves a usable Codex session -- binary, auth
-  source, and one cheap structured probe. It is required rather than
-  optional: `prepare_codex_run` takes no default `preflight`, and the
-  CLI's `--adapter codex` path runs the real check before it builds an
-  adapter, so a broken session commits no capacity or eval budget.
-- `build_codex_executor` is the repository's one production dr-exec
-  `ProcessExecutor` construction site.
 
 ### Changed
 
@@ -375,15 +624,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a dropped or forged entry is still rejected.
 - Pinned dependencies moved in lockstep: dr-exec 0.1.14, dr-store 0.2.6, and
   dr-platform 0.2.7.
-- Run cost reads tool-mediated evaluations. `aggregate_run_cost` now walks
-  `OptimStepResult.tool_evidence` alongside `resolved_intents` and
-  `search_evidence`, following each Tool Result's
-  `evaluation_evidence_refs` to the output rows behind it. The Codex arm
-  has no proposer -- the agent proposes -- and drives every evaluation
-  through a tool, so it cited all of its spend from a channel run cost did
-  not read and an entire Codex run reported `task_model.calls == 0`. The
-  three channels are unioned and still de-duplicated by evidence ref, so an
-  evaluation reachable through more than one is paid for once.
 - The subprocess rollout driver reads `CancelledOutcome.started` to tell a row
   the batch deadline killed inside a worker from one that never left the queue.
   dr-exec now publishes that flag, so the driver no longer infers the
@@ -405,174 +645,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument asserts the engine is bound to the role the caller expects. Reward
   evidence is validated only on the internal role, which is the only role that
   mints it.
-- `EngineToolEvaluator` was dead on arrival: it referenced `Candidate`,
-  `EvalEvidence`, and `EvalFailureEvidence` without importing them, and
-  raised `ToolEvaluationError` with a plain string where the constructor
-  takes a `TerminalFailure`. Every failure path now constructs a real
-  `TerminalFailure` under an owned code, and each is covered by a test.
-- `build_runtime` takes an injectable `admission` authority, an
-  injectable `tool_executor`, and derives `adapter_replay_policy` from
-  the registered adapters instead of hardcoding `DURABLE_WORKFLOW`.
-  Codex requires `NO_REDRIVE` and a durable admission authority, because
-  its capacity gates an out-of-process MCP server; a `TOOL_USING` run
-  additionally needs a tool executor, which `build_runtime` never
-  passed.
-- The Codex dr-exec job now bounds `payload_output` as well as
-  `wall_time`, and truncation under that budget is a reported outcome
-  rather than an error. `RegisteredRuntime` exposes the exact
-  `tool_store` the harness admits through, and the runtime engine
-  exposes its `reward_policy`.
-- `SubprocessCodexRunner` calls `Executor.run_blocking`; it previously
-  called the coroutine `Executor.run` without awaiting it.
-- The task-model API key reaches the evaluation server alone. It was
-  previously added to the environment allowlist of the Codex process
-  itself, which -- with network allowed and an interpreter on PATH --
-  was the credential an agent would need to score candidates outside the
-  tool entirely.
-- `CodexControl` carries `reasoning_effort`, which now reaches the CLI as
-  `-c model_reasoning_effort`. No control field shapes identity without
-  shaping execution; the module docstring names the route each one takes,
-  since only `codex_binary`, `model`, `reasoning_effort`, and
-  `denied_features` reach the argv itself.
-- A failed Step Result may now supersede its nested terminal failures
-  instead of being required to equal every one of them. Two evaluations
-  that failed for different reasons -- the ordinary shape, since
-  `EngineToolEvaluator` names the failing call in its own failure --
-  previously made the Step Result unconstructable: it raised a raw
-  `ValidationError` after the effect lease had already been terminalized,
-  so every re-run replayed the same checkpoint and raised again. A
-  superseding Step failure must name the exact set of nested codes it
-  stands for, under `superseded_failure_codes`, so it still cannot
-  silently disagree with its own evidence.
-- The Codex MCP host serves on the loopback socket it reserved rather
-  than closing it and letting uvicorn re-bind, and takes readiness from
-  uvicorn's own started signal rather than a connect probe. A probe
-  proved only that *something* accepted on the port, so a process that
-  won the re-bind window became the agent's evaluation endpoint and
-  received the run's bearer token while uvicorn's bind failure went
-  unread. Its startup budget is also now the real time it names: the
-  previous wait counted iterations without sleeping, spending a nominal
-  30 seconds in about 0.14 of them. The host closes the persistent store
-  session its server opened, which the stdio server it replaced used to
-  release by exiting.
-
-### Removed
-
-- `CodexControl.max_turns` and `CodexControl.seed`. Both shaped the
-  control identity and the recorded hyperparameters while reaching no
-  part of the invocation -- `codex exec` exposes neither, and
-  `--strict-config` rejects both as unknown configuration fields -- so
-  two runs differing only in `max_turns` recorded different identities
-  and executed byte-identical commands.
-- The stdio MCP server entrypoint, the `whetstone-mcp-eval` console
-  script, and the runtime staging that copied the whetstone package into
-  every run's scratch directory. The agent no longer spawns the
-  evaluation server, so none of it has a caller.
-- `CodexOutputArtifact.proposals` and the adapter's proposal-contract
-  validation, superseded by ledger-resolved selection.
-- The MCP evaluation tool's optional `task_ids` subset variant, and the
-  evaluator's engine-narrowing branch. A narrowed engine mints a
-  different Eval Config identity, which `EvaluatingToolExecutor` rejects
-  as `tool_eval_config_mismatch`, so such a call could never complete.
-- The unused `Path`-taking `_parse_output_artifact`.
-
-### Fixed
-
-- A Codex output artifact naming another run now terminalizes the step
-  under `codex_artifact_run_mismatch` instead of raising past the adapter
-  checkpoint. `CodexRunner` is a Protocol, so the adapter cannot assume
-  the runner validated the artifact's run; the mismatch check sat outside
-  the terminalizing block, and the harness releases the effect lease only
-  once the adapter returns an `AdapterOutput`, so a `NO_REDRIVE` run was
-  wedged until the lease lapsed. The check now runs on the single
-  `_terminalize` path, reconciling the ledger first, so evaluations the
-  step already paid for stay reachable and debited.
-- Run cost reads the rows a tool-mediated evaluation paid for before it
-  failed. `EvaluatingToolExecutor` builds a failed `ToolResult` from the
-  evaluator's `TerminalFailure` alone, leaving `evaluation_evidence_refs`
-  empty, so an evaluation that produced `EvalFailureEvidence` with an
-  `outputs_ref` -- scoring or persistence failing after billed provider
-  rows were produced -- cited its evidence only from the failure's
-  `details`. `aggregate_run_cost` now follows that typed ref, symmetric
-  with the `resolved_intents` path and de-duplicated by ref, so those
-  billed rows no longer drop out of Codex task-model spend.
-- The truncated-JSONL parser no longer forgives a complete malformed
-  record next to the stitch. When retention ended or began exactly on a
-  record boundary, a whole malformed line adjacent to the elision marker
-  was classified as budget damage on position alone and silently dropped,
-  so the persisted `jsonl_events` differed from the retained output. A
-  boundary line is now forgiven only when it is demonstrably cut: the
-  head side must open a record it never closes, and the tail side must
-  close one it never opened. Genuinely cut fragments are still tolerated
-  and counted.
-- A Codex run whose stdout exceeded `max_output_bytes` no longer fails on
-  its own truncation. The retained stream is a stitched head+tail
-  carrying a deliberately non-JSON elision marker, and the budget may cut
-  the head's last line and the tail's first line mid-record; the strict
-  JSONL parser rejected all three, so a zero-exit run with a valid final
-  artifact could not complete. The parser now skips the marker and drops
-  the two boundary fragments a stitch can damage, recording the count as
-  `jsonl_dropped_partial_lines` in the process evidence. An untruncated
-  stream stays strict, and a truncated one still rejects malformed lines
-  away from the stitch.
-- `prepare_codex_run` attests every engine-derived binding on the
-  control, not just the reward policy and Eval Config. A control whose
-  `evaluation_execution_policy_hash`, `task_model_identity_hash`, or
-  `internal_task_hashes` disagreed with the runtime engine was accepted,
-  so evaluations ran against the engine's policy, model route, and task
-  split while the persisted optimizer identity claimed the control's --
-  silent provenance corruption no downstream reader could detect.
-- Every way the Codex runner can fail now terminalizes the step. The
-  adapter caught only `CodexStructuredExecutionFailure`, so a zero-exit
-  CLI whose artifact failed schema validation, and a dr-exec
-  `ExecutorFailure`, both raised the base `OpaqueStepError` past the
-  adapter checkpoint. The harness never ran its effect-lease
-  maintenance, leaving that `NO_REDRIVE` effect non-terminal instead of
-  producing `codex_execution_failed`.
-- `whetstone-optim run --adapter codex` carries the launch's mutation
-  field and template render contract on the serialized runtime
-  configuration, so the out-of-process MCP evaluation server rebuilds the
-  harness's engine rather than the toy defaults. Previously a non-default
-  mutation field made every tool call fail preflight and a non-default
-  render contract could score a different prompt than the harness
-  declared. The server refuses to start when the configuration cannot
-  supply the field, when it disagrees with the Tool Config's
-  `candidate_template_field`, or when it carries no render contract. The
-  contract previously defaulted silently to the toy one even though the
-  mutation-field check passed, so the server rendered the agent's
-  candidate under different rules than the harness scored the baseline
-  with and reported the result as comparable.
-- MCP host setup and lifecycle failures terminalize the step instead of
-  escaping it. `build_server_from_env` raising on a mismatched runtime
-  configuration, and `CodexMcpHost.__enter__` raising `CodexMcpHostError`
-  for a squatted port, a bind or lifespan failure, or a startup that
-  missed its deadline, are not `OpaqueStepError`, so they unwound past
-  the adapter checkpoint and left that `NO_REDRIVE` effect non-terminal
-  until the lease lapsed. They now fail the step under
-  `codex_mcp_host_failed`, which the ledger keeps distinct from an agent
-  that ran and failed: the Codex process never started, so nothing was
-  paid for. That code covers host startup only. An unforeseen failure
-  inside the agent execution still terminalizes -- an escaping exception
-  would wedge the same `NO_REDRIVE` run -- but under
-  `codex_execution_failed`, because the host is up and the agent may
-  have run; reporting it as a host failure claimed the step never
-  started and buried the real defect behind a host diagnostic. A
-  teardown that fails after a completed run is labelled as such, and
-  never displaces an exception raised by the run itself.
-- The JSONL parser identifies the elision marker by an exact,
-  sentinel-anchored match on the whole line. It previously skipped any
-  line merely starting with `[... `, so a genuine Codex line opening
-  with a bracketed aside was dropped from the transcript silently, and
-  -- because the stitch-boundary search stops at the first
-  marker-shaped line -- such a line also misdirected that search, so
-  the two lines the output budget really did cut were no longer
-  forgiven and a truncated run with a valid final artifact failed.
-- Schema and JSONL parse failures keep their isolation evidence. Both
-  were raised as a bare `OpaqueStepError` after `_execute_structured`
-  had already built the isolation record, so the terminalized step stored
-  an empty `codex_isolation` -- no profile, no budgets, and no output
-  truncation flags, leaving a reader unable to tell a malformed artifact
-  from one the output budget cut in half.
 
 ### Known limitations
 
@@ -595,24 +667,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OptimStepResult.tool_evidence`, which `aggregate_run_cost` does not
   traverse; that wiring lands with the Codex tool work on branch
   `08-22-codex`.
-- Codex process isolation is macOS-only: it requires `sandbox-exec` and
-  refuses to run without it rather than falling back to an insecure
-  path. A Linux containment profile is separate work. Of the 77 tests in
-  `tests/test_codex_*.py`, 13 are Darwin-gated -- the 10 end-to-end tests
-  that spawn a sandboxed process, the 2 sandbox-profile tests, and the
-  one preflight test that asserts a nonzero probe exit -- so 64 run on
-  Linux. Every guarantee whetstone enforces in Python is among them: the
-  environment allowlist and run lease binding
-  (`tests/test_codex_containment_boundary.py`), ledger totality,
-  selection, and shared-failure terminalization
-  (`tests/test_codex_adapter_selection.py`), admission
-  (`tests/test_codex_admission.py`), timeout terminalization
-  (`tests/test_codex_budget_exhaustion.py`), the evaluation endpoint's
-  startup and teardown (`tests/test_codex_mcp_host_lifecycle.py`), and
-  both golden files.
-- dr-exec v1 accepts no finite limit on `process_count` or the resource
-  axes, so those are recorded as unbudgeted in the artifact's isolation
-  block. The wall budget and the process boundary are the containment.
 
 ### Fixed
 

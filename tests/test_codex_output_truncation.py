@@ -230,3 +230,47 @@ def test_a_genuinely_cut_boundary_line_is_still_forgiven() -> None:
 
     assert parsed.events == ({"a": 1}, {"b": 2})
     assert parsed.dropped_partial_lines == 2
+
+
+def test_a_complete_malformed_tail_beside_the_marker_still_fails() -> None:
+    """Closing without opening is not proof the budget cut the record.
+
+    ``not json}`` does not begin on ``{`` and does end on ``}``, so the
+    tail line's own shape is indistinguishable from a real fragment --
+    yet here the retained head ended on a whole record, so nothing in
+    the stream shows a record spanning the elision. Forgiving this line
+    would delete genuine malformed process output and report it as
+    retention damage instead of rejecting the run.
+    """
+    stitched = (
+        b'{"a": 1}\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"4096 bytes elided ...]\n"
+        + b"not json}\n"
+        + b'{"b": 2}\n'
+    )
+
+    with pytest.raises(OpaqueStepError, match="event 3 is malformed"):
+        _parse_jsonl_events(stitched, truncated=True)
+
+
+def test_a_cut_head_still_corroborates_a_cut_tail() -> None:
+    """The tolerance survives: a head cut mid-record witnesses the tail.
+
+    The head's last line opens a record it never closes, so the stream
+    itself shows the budget falling inside a record. The tail line that
+    closes that record is then demonstrably its back half, and both
+    count as retention damage rather than contract violations.
+    """
+    stitched = (
+        b'{"a": 1}\n{"cut": "val\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"4096 bytes elided ...]\n"
+        + b"not json}\n"
+        + b'{"b": 2}\n'
+    )
+
+    parsed = _parse_jsonl_events(stitched, truncated=True)
+
+    assert parsed.events == ({"a": 1}, {"b": 2})
+    assert parsed.dropped_partial_lines == 2
