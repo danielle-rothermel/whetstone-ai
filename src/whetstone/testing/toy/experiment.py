@@ -36,9 +36,11 @@ from whetstone.experiment.env import Experiment
 from whetstone.experiment.graph.rollout_template import build_single_llm_eval_graph
 from whetstone.experiment.reward import RewardPolicy, RewardTerm
 from whetstone.experiment.sampling import (
+    HELD_OUT,
     INTERNAL_EVAL,
     OFFICIAL,
     EvalConfigs,
+    EvalSplit,
     derive_eval_split,
 )
 
@@ -192,6 +194,7 @@ def build_toy_experiment(
     *,
     internal_tasks: tuple[ToyTask, ...] | None = None,
     official_tasks: tuple[ToyTask, ...] | None = None,
+    held_out_tasks: tuple[ToyTask, ...] | None = None,
     num_seeds: int = 1,
     initial_template: str = DEFAULT_TOY_TEMPLATE,
     ceiling_template: str | None = None,
@@ -232,12 +235,24 @@ def build_toy_experiment(
         aggregation=aggregation,
         num_seeds=num_seeds,
     )
+    held_out: EvalSplit | None = None
+    if held_out_tasks:
+        held_out = derive_eval_split(
+            namespace=TOY_NAMESPACE,
+            dataset_revision=TOY_DATASET_REVISION,
+            split_role=HELD_OUT,
+            tasks=held_out_tasks,
+            task_hash_of=_task_hash,
+            procedure=procedure,
+            aggregation=aggregation,
+            num_seeds=num_seeds,
+        )
     eval_configs = EvalConfigs(
         env_name=TOY_NAMESPACE,
         procedure_config_hash=procedure_hash,
         internal=internal,
         official=official,
-        held_out_task_hashes=(),
+        held_out=held_out,
     )
     render_contract = TemplateRenderContract(
         kind=TemplateRenderKind.PYTHON_FORMAT_V1,
