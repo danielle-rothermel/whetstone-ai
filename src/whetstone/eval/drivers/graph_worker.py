@@ -203,6 +203,7 @@ def _rollout_row_output_to_json(
         "prompt_tokens": output.prompt_tokens,
         "completion_tokens": output.completion_tokens,
         "provider_cost": output.provider_cost,
+        "cache_hit": output.cache_hit,
         "submission_result": output.submission_result,
         "request_identities": list(request_identities),
     }

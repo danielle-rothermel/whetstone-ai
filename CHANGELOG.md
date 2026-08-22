@@ -62,10 +62,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PowerConfig.mdd_multiplier`.
 - `OptimResult.cost` reports what a run actually spent, split into
   `task_model` and `proposer` roles. Each role carries `calls`,
-  `input_tokens`, `output_tokens`, `priced_calls`, `unpriced_calls`, and an
-  optional `usd`. `whetstone.optim.cost` owns the wire keys and
+  `input_tokens`, `output_tokens`, `priced_calls`, `unpriced_calls`,
+  `cached_calls`, `rows_missing_token_breakdown`, and an optional `usd`.
+  `whetstone.optim.cost` owns the wire keys and
   `COST_REPORT_SCHEMA_VERSION`; `tests/test_run_cost_report_golden.py` pins
   the exact literals.
+- `calls` counts *billable* provider calls: calls the run actually paid for.
+  A call the prompt cache replayed is not billable and is reported in
+  `cached_calls` instead, so two optimizers with different cache-hit rates
+  stay comparable -- on `calls + cached_calls` for evaluation volume, and on
+  `calls` alone for spend. A billable call whose provider reported a price
+  but no per-direction token split still counts and still contributes its
+  price; `rows_missing_token_breakdown` records that its tokens are missing
+  from the token totals.
 - `usd` is reported only when every contributing call carried a
   provider-reported price, so a partial sum is never presented as a run
   total. When any call lacks a price the field is absent and the
@@ -74,21 +83,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CostInfo`, which is populated only when the provider returns one.
 - `whetstone.optim.cost_aggregation.aggregate_run_cost` is the single owner
   of the calculation. Both the in-process harness and the platform
-  run-completion path reach it through `OptimHarness.terminalize`, so a
-  run reports the same spend however it ran. Totals are re-derived from
-  persisted evidence rather than in-memory counters, so a resumed or
-  platform run reports the same number, and an evaluation cited by more
-  than one Step is counted once.
-- Task-model token usage and provider-reported price are now persisted per
-  evaluation row on `EvalOutputRow` (`prompt_tokens`, `completion_tokens`,
-  `provider_cost`), which is what makes run spend re-derivable from the
-  store. `EVAL_OUTPUTS_SCHEMA_VERSION` and `EVAL_EVIDENCE_SCHEMA_VERSION`
-  are now 5.
+  run-completion path reach it through `OptimHarness.terminalize`, so a run
+  reports the same spend however it ran; a platform run and an in-process
+  run of the same control over the same transport produce an identical
+  report, asserted in `tests/integration/test_platform_optim.py`.
+  Task-model totals are re-derived from persisted evaluation evidence rather
+  than from in-memory counters. Proposer totals are recorded by the
+  optimizer's adapter as it drives each call and flushed onto the Step
+  Result, since a proposer call has no evaluation row to live on. Both roles
+  de-duplicate: an evaluation cited by more than one Step is counted once by
+  its evidence ref, and a proposer call reported by more than one Step
+  Result is counted once by its `call_id`.
+- Task-model token usage, provider-reported price, and prompt-cache status
+  are now persisted per evaluation row on `EvalOutputRow` (`prompt_tokens`,
+  `completion_tokens`, `provider_cost`, `cache_hit`), which is what makes run
+  spend re-derivable from the store. A cache hit replays the original call's
+  tokens and price verbatim, so `cache_hit` is what keeps it from being
+  billed a second time. `EVAL_OUTPUTS_SCHEMA_VERSION` and
+  `EVAL_EVIDENCE_SCHEMA_VERSION` are now 5.
 - Proposer-model usage is recorded uniformly on
   `OptimStepResult.proposer_usage` as `ProposerCallUsage`, reported by COPRO,
   GEPA, and MIPROv2 through `AdapterOutput.proposer_usage` rather than three
-  different state layouts. GEPA records every reflection attempt, including
-  one a bounded retry later recovered from, because each was paid for.
+  different state layouts. Each entry carries a `call_id` -- GEPA's
+  reflection effect request hash, the proposer's logical call id for COPRO
+  and MIPROv2 -- so run cost can de-duplicate it the way it de-duplicates an
+  evidence ref. GEPA records every reflection attempt it *paid for*,
+  including one a bounded retry later recovered from; a reflection the
+  durable effect cache replayed is not recorded, because GEPA re-drives its
+  whole reflection prefix from that cache on every Step and the Step that
+  first drove the call already carries its spend.
   `STEP_RESULT_SCHEMA_VERSION` is now 4.
 
 ### Added

@@ -6,12 +6,13 @@ model drafting them. The Step 10 validation protocol compares optimizers on
 this record, so its wire keys are a persisted format with a golden test
 pinning the exact literals.
 
-Two rules keep the record honest rather than merely populated.
+Three rules keep the record honest rather than merely populated.
 
-First, every total is aggregated from evidence in the object store, never
-from an in-memory counter. A resumed run, a platform run, and an in-process
-run therefore report the same number, because they all re-derive it from the
-same persisted records.
+First, every total is aggregated from durable records rather than from a
+counter the run happened to hold: task-model usage from the evaluation
+evidence in the object store, proposer usage from the Step Results. Both are
+de-duplicated by call identity, so a resumed run, a platform run, and an
+in-process run of the same work report the same number.
 
 Second, ``usd`` is present only when *every* contributing call carried a
 price. dr-providers reports a per-call price only when the provider returns
@@ -19,6 +20,11 @@ one (OpenRouter does; most OpenAI-compatible endpoints do not), so a partial
 sum would understate spend while looking authoritative. When any call lacks a
 price the field is absent and ``priced_calls``/``unpriced_calls`` show the
 split. Whetstone owns no pricing table and infers no prices.
+
+Third, a call is counted where it was paid for, and only once. A prompt-cache
+hit and a replayed GEPA reflection both come back carrying the original
+call's tokens and price; each is reported separately rather than billed
+again, so reuse shows up as a lower cost instead of a higher one.
 """
 
 from __future__ import annotations
@@ -68,6 +74,14 @@ class ProposerCallUsage(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
+    #: Identity of the provider call this usage came from: the reflection
+    #: effect's request hash for GEPA, the proposer's logical call id for
+    #: COPRO and MIPROv2. Run cost de-duplicates on it exactly as the
+    #: task-model side de-duplicates on an evidence ref, so a call two Step
+    #: Results both report -- a replay, a resumed Step -- is counted once.
+    #: Empty only for a call whose source recorded no identity, which is then
+    #: counted every time it appears.
+    call_id: str = ""
     prompt_tokens: StrictInt = 0
     completion_tokens: StrictInt = 0
     #: Provider-reported price for this call, absent when none was reported.
@@ -96,11 +110,21 @@ class UsageObservation:
 
     ``usd`` is the provider-reported price for this single call, or ``None``
     when the provider reported none. It is never estimated.
+
+    ``cached`` marks a call the prompt cache replayed. Its tokens and price
+    belong to the original call, which was already counted, so a cached
+    observation contributes only to ``RoleCost.cached_calls``.
+
+    ``missing_token_breakdown`` marks a billable call the provider priced (or
+    otherwise evidenced) without splitting tokens by direction. It counts as
+    a call and contributes its price, but no tokens.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
     usd: float | None = None
+    cached: bool = False
+    missing_token_breakdown: bool = False
 
 
 class RoleCost(BaseModel):
@@ -108,6 +132,12 @@ class RoleCost(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
+    #: Billable provider calls observed for this role: calls the run
+    #: actually paid a provider for. A call the prompt cache replayed is not
+    #: billable and is reported in ``cached_calls`` instead, so an optimizer
+    #: that reuses cached evaluations reports fewer ``calls`` for the same
+    #: evaluation volume. Compare optimizers on ``calls + cached_calls`` for
+    #: work done, and on ``calls`` alone for spend.
     calls: StrictInt = 0
     input_tokens: StrictInt = 0
     output_tokens: StrictInt = 0
@@ -116,6 +146,15 @@ class RoleCost(BaseModel):
     #: ``usd`` total would have covered even when it is absent.
     priced_calls: StrictInt = 0
     unpriced_calls: StrictInt = 0
+    #: Calls the prompt cache served from a stored result. They contribute no
+    #: tokens, no price, and no ``calls``, because the original call already
+    #: did. Reported so a reader can tell a cheap run from a small one.
+    cached_calls: StrictInt = 0
+    #: Billable calls whose provider reported a price or a total but no
+    #: per-direction token split. They count in ``calls`` and in ``usd``;
+    #: their tokens are simply not in ``input_tokens``/``output_tokens``, so
+    #: a nonzero count means the token totals understate the real usage.
+    rows_missing_token_breakdown: StrictInt = 0
     #: Total price, present only when ``unpriced_calls`` is zero and at least
     #: one call was made. Absent means "not knowable", never "zero".
     usd: float | None = None
@@ -128,12 +167,18 @@ class RoleCost(BaseModel):
             "output_tokens",
             "priced_calls",
             "unpriced_calls",
+            "cached_calls",
+            "rows_missing_token_breakdown",
         ):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be non-negative")
         if self.priced_calls + self.unpriced_calls != self.calls:
             raise ValueError(
                 "priced_calls and unpriced_calls must sum to calls"
+            )
+        if self.rows_missing_token_breakdown > self.calls:
+            raise ValueError(
+                "rows_missing_token_breakdown cannot exceed calls"
             )
         if self.usd is not None:
             if self.unpriced_calls:
@@ -148,16 +193,28 @@ class RoleCost(BaseModel):
 
 
 def aggregate_role_cost(observations: tuple[UsageObservation, ...]) -> RoleCost:
-    """Total one role's observed calls, withholding ``usd`` when incomplete."""
-    priced = tuple(item for item in observations if item.usd is not None)
-    unpriced_count = len(observations) - len(priced)
-    complete = bool(observations) and not unpriced_count
+    """Total one role's observed calls, withholding ``usd`` when incomplete.
+
+    A cached observation is excluded from every billable total -- calls,
+    tokens, and ``usd`` alike -- and reported only as a ``cached_calls``
+    count, because the call it replays was already counted when it was paid
+    for. In particular a cached call never makes ``usd`` incomplete.
+    """
+    cached = tuple(item for item in observations if item.cached)
+    billable = tuple(item for item in observations if not item.cached)
+    priced = tuple(item for item in billable if item.usd is not None)
+    unpriced_count = len(billable) - len(priced)
+    complete = bool(billable) and not unpriced_count
     return RoleCost(
-        calls=len(observations),
-        input_tokens=sum(item.input_tokens for item in observations),
-        output_tokens=sum(item.output_tokens for item in observations),
+        calls=len(billable),
+        input_tokens=sum(item.input_tokens for item in billable),
+        output_tokens=sum(item.output_tokens for item in billable),
         priced_calls=len(priced),
         unpriced_calls=unpriced_count,
+        cached_calls=len(cached),
+        rows_missing_token_breakdown=sum(
+            1 for item in billable if item.missing_token_breakdown
+        ),
         usd=(
             sum(item.usd for item in priced if item.usd is not None)
             if complete

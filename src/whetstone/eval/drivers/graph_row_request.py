@@ -251,6 +251,7 @@ def rollout_row_output_from_worker_payload(
             if payload.get("provider_cost") is None
             else float(payload["provider_cost"])  # type: ignore[arg-type]
         ),
+        cache_hit=payload.get("cache_hit") is True,
         submission_result=payload.get("submission_result"),
     )
 

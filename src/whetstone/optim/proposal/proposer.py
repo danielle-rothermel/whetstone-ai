@@ -241,13 +241,26 @@ class ProposalDraft(BaseModel):
         omitted counts as zero tokens; ``cost`` stays ``None`` when the
         provider reported no price, which keeps the run total honest about
         what it does not know.
+
+        The call identity is the ``logical_call_id`` this draft's request
+        evidence already carries, which is derived from the proposal request
+        and batch slot and so is stable across a re-drive. Run cost
+        de-duplicates on it, so a Step Result replayed after a crash reports
+        the same proposer spend as the uninterrupted one.
         """
         usage = self.usage.to_json()
         return ProposerCallUsage(
+            call_id=self.logical_call_id,
             prompt_tokens=_usage_tokens(usage, "prompt_tokens"),
             completion_tokens=_usage_tokens(usage, "completion_tokens"),
             usd=self.cost,
         )
+
+    @property
+    def logical_call_id(self) -> str:
+        """This draft's provider call identity, empty when unrecorded."""
+        value = self.request_evidence.to_json().get("logical_call_id")
+        return value if isinstance(value, str) else ""
 
     @classmethod
     def failure(

@@ -423,17 +423,20 @@ class WhetstoneGepaAdapter:
                 rendered_prompt=rendered,
                 authority=self._proposal_authority,
             )
-            result = self._broker.propose(request)
+            result, replayed = self._broker.propose(request)
             if result.request_hash != request.identity_hash():
                 raise ValueError(
                     "GEPA proposal result belongs to another effect request"
                 )
-            # Every attempt was paid for, including one a retry later
-            # recovered from, so each is recorded before any branch below
-            # can continue or raise.
-            self._proposer_usage.append(
-                _proposal_call_usage(result)
-            )
+            # Every attempt this Step paid for is recorded before any branch
+            # below can continue or raise, including one a bounded retry
+            # later recovered from. A replayed attempt is skipped: the
+            # durable effect cache answered it, so the Step that first drove
+            # it already carries the spend on its own Step Result.
+            if not replayed:
+                self._proposer_usage.append(
+                    _proposal_call_usage(result)
+                )
             if result.failed:
                 # A rejected response is retryable; a transport or provider
                 # failure is not, and must still surface.
@@ -515,6 +518,10 @@ def _proposal_call_usage(
         return max(0, value)
 
     return ProposerCallUsage(
+        # The effect request hash identifies this reflection call, so a Step
+        # Result that reports it twice -- or two Step Results that both do --
+        # is de-duplicated by run cost rather than counted twice.
+        call_id=result.request_hash,
         prompt_tokens=tokens("prompt_tokens"),
         completion_tokens=tokens("completion_tokens"),
         usd=result.cost,

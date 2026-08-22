@@ -11,10 +11,15 @@ memory:
 * task-model usage comes from the ``EvalOutputRow`` entries inside each
   ``EvalEvidence`` record a Step cites, reached through the Step's
   ``resolved_intents`` and ``search_evidence``;
-* proposer usage comes from ``OptimStepResult.proposer_usage``.
+* proposer usage comes from ``OptimStepResult.proposer_usage``, which the
+  optimizer's adapter records as it drives each proposer call.
 
-An evaluation that a Step cites more than once is counted once, keyed by its
-evidence reference, so a replayed or shared evaluation cannot inflate a total.
+Both roles de-duplicate. An evaluation that a Step cites more than once is
+counted once, keyed by its evidence reference; a proposer call reported more
+than once is counted once, keyed by its ``call_id``. That is what makes a
+replay free: GEPA re-drives its whole reflection prefix from the durable
+effect cache on every Step, and a resumed Step re-drives the prefix it had
+already paid for, so without both keys a replayed call would be billed again.
 """
 
 from __future__ import annotations
@@ -53,6 +58,9 @@ class EvalOutputRowUsage(BaseModel):
     prompt_tokens: StrictInt | None = None
     completion_tokens: StrictInt | None = None
     provider_cost: float | None = None
+    #: The prompt cache replayed this row's call, so the usage above is the
+    #: original call's and this row was not paid for again.
+    cache_hit: bool = False
 
 
 def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
@@ -88,20 +96,41 @@ def _task_model_observations(
         # Only the usage fields are read, so cost aggregation stays decoupled
         # from the rest of the outputs record's shape.
         for row in (EvalOutputRowUsage.model_validate(item) for item in rows):
-            # A row with no recorded tokens made no billable task-model call
-            # we can account for: a cache hit, a missing row, or a failure
-            # before the provider answered. Counting it as a zero-token call
-            # would overstate the call count.
-            if row.prompt_tokens is None and row.completion_tokens is None:
-                continue
-            observations.append(
-                UsageObservation(
-                    input_tokens=row.prompt_tokens or 0,
-                    output_tokens=row.completion_tokens or 0,
-                    usd=row.provider_cost,
-                )
-            )
+            observation = _row_observation(row)
+            if observation is not None:
+                observations.append(observation)
     return tuple(observations)
+
+
+def _row_observation(row: EvalOutputRowUsage) -> UsageObservation | None:
+    """Classify one output row as billable, cached, or no call at all.
+
+    Any recorded usage -- a token count *or* a provider-reported price -- is
+    positive evidence the provider answered, so the row is a call. A price
+    without a token split still counts, and still contributes its price;
+    ``rows_missing_token_breakdown`` records that its tokens are unknown so
+    the token totals are not read as complete.
+
+    A row the prompt cache replayed carries the original call's usage
+    verbatim. It is reported as a cached call and contributes nothing
+    billable, which is what keeps a cache hit from being charged twice.
+
+    A row with no tokens and no price evidences no provider call at all -- a
+    missing row, or a failure before the provider answered -- and is dropped.
+    """
+    has_tokens = (
+        row.prompt_tokens is not None or row.completion_tokens is not None
+    )
+    if not has_tokens and row.provider_cost is None:
+        return None
+    if row.cache_hit:
+        return UsageObservation(cached=True)
+    return UsageObservation(
+        input_tokens=row.prompt_tokens or 0,
+        output_tokens=row.completion_tokens or 0,
+        usd=row.provider_cost,
+        missing_token_breakdown=not has_tokens,
+    )
 
 
 def aggregate_run_cost(
@@ -111,6 +140,7 @@ def aggregate_run_cost(
 ) -> RunCostReport:
     """Total one run's task-model and proposer spend from persisted evidence."""
     seen: set[tuple[str, str]] = set()
+    seen_proposer_calls: set[str] = set()
     distinct_refs: list[TypedRef] = []
     proposer: list[UsageObservation] = []
     for result in step_results:
@@ -120,9 +150,15 @@ def aggregate_run_cost(
                 continue
             seen.add(key)
             distinct_refs.append(ref)
-        proposer.extend(
-            usage.observation() for usage in result.proposer_usage
-        )
+        for usage in result.proposer_usage:
+            # An identified call is counted once however many Step Results
+            # report it. An unidentified one has nothing to key on, so it is
+            # counted every time rather than silently collapsed together.
+            if usage.call_id:
+                if usage.call_id in seen_proposer_calls:
+                    continue
+                seen_proposer_calls.add(usage.call_id)
+            proposer.append(usage.observation())
     return RunCostReport(
         task_model=aggregate_role_cost(
             _task_model_observations(store, tuple(distinct_refs))

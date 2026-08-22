@@ -1031,6 +1031,7 @@ class RuntimeEvalEngine:
                     prompt_tokens=output.prompt_tokens,
                     completion_tokens=output.completion_tokens,
                     provider_cost=output.provider_cost,
+                    cache_hit=output.cache_hit,
                     submission_result=self._driver.submission_result_record(
                         output.submission_result
                     ),

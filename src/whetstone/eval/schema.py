@@ -134,6 +134,10 @@ class EvalOutputRow(BaseModel):
     prompt_tokens: StrictInt | None = None
     completion_tokens: StrictInt | None = None
     provider_cost: float | None = None
+    #: The prompt cache replayed this row's provider call. The usage above is
+    #: then the *original* call's, replayed verbatim, so run cost reports the
+    #: row as a cache hit instead of billing it a second time.
+    cache_hit: StrictBool = False
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvalOutputRow:

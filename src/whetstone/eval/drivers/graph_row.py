@@ -7,6 +7,7 @@ from dr_graph import GraphRunResult, NodeOutcomeStatus
 
 from whetstone.eval.drivers.graph_execution import (
     METADATA_SUBMISSION_RESULT_KEY,
+    cache_marks_from_metadata,
     graph_run_cancelled,
     metadata_prompt,
     node_error_failure_code,
@@ -125,6 +126,7 @@ def graph_result_to_row_fields(
             prompt_tokens=telemetry.prompt_tokens,
             completion_tokens=telemetry.completion_tokens,
             provider_cost=telemetry.provider_cost,
+            cache_hit=cache_marks_from_metadata(error.metadata).cache_hit,
         )
 
     output_text: str | None = None
@@ -133,6 +135,7 @@ def graph_result_to_row_fields(
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     provider_cost: float | None = None
+    cache_hit = False
     if llm_outcome is not None and llm_outcome.status is NodeOutcomeStatus.SUCCESS:
         llm_output = require_node_success(llm_outcome)
         output_text = node_text(llm_output, field=llm_output_field)
@@ -146,6 +149,7 @@ def graph_result_to_row_fields(
         prompt_tokens = telemetry.prompt_tokens
         completion_tokens = telemetry.completion_tokens
         provider_cost = telemetry.provider_cost
+        cache_hit = cache_marks_from_metadata(llm_output.metadata).cache_hit
 
     score: float | None = None
     submission_result: object | None = None
@@ -187,5 +191,6 @@ def graph_result_to_row_fields(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         provider_cost=provider_cost,
+        cache_hit=cache_hit,
         submission_result=submission_result,
     )
