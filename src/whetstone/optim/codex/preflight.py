@@ -23,6 +23,10 @@ from whetstone.optim.codex.adapter import (
     CodexStructuredExecutionFailure,
     OpaqueStepError,
 )
+from whetstone.optim.codex.containment import (
+    CODEX_AUTH_ENV_KEY,
+    CODEX_AUTH_FILENAMES,
+)
 
 if TYPE_CHECKING:
     from dr_exec import Executor
@@ -39,9 +43,6 @@ CODEX_PREFLIGHT_SCHEMA: dict[str, object] = {
     "required": ["ready"],
     "properties": {"ready": {"type": "boolean", "const": True}},
 }
-#: The auth material the Codex CLI accepts, in the order it is looked for.
-CODEX_AUTH_FILENAMES = ("auth.json", ".credentials.json")
-CODEX_AUTH_ENV_KEY = "OPENAI_API_KEY"
 
 
 class CodexPreflightError(RuntimeError):

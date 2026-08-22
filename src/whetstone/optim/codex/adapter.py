@@ -11,17 +11,28 @@ Issued Tool Call ledger produces one Tool Evidence entry per reported
 call, and the adapter reconciles that count against the durable number
 of calls this run actually admitted. A shortfall is a terminal failure,
 so a Step never completes with paid evaluations invisible to the ledger
-and undebited from the ``tool_calls`` budget -- and before it fails, the
-adapter re-issues the durable completed entries the agent left out, so
-the failure does not take that spend down with it. The wall-budget stop
-takes the same path from the durable entries alone, because it
-terminalizes before any artifact exists.
+and undebited from the ``tool_calls`` budget.
 
-A shortfall has two causes, and the durable entries tell them apart. An
-omitted entry that ``COMPLETED`` is the agent under-reporting. An entry
-still ``ACCEPTED`` is one whetstone's own evaluation server admitted and
-never finished, which the agent could not have reported; that fails
-under a harness-attributed code instead.
+Every failing exit leaves through one path, ``_terminalize``, which
+reconciles first and fails second. Ledger totality therefore does not
+depend on *which* thing went wrong: a shortfall, a corrupted or omitted
+lease-token hash, a duplicated or unevaluated call id, a selection that
+was never scored, a wall-budget stop with no artifact at all, or a
+Codex process that exited nonzero without one. Each of those still
+fails the Step under its own code -- it just does not take the run's
+paid spend down with it. The durable admission entries are the record
+of that spend, and the guarded handle reads their recorded terminals
+rather than evaluating, so reconciliation surfaces work already paid
+for and never buys more.
+
+The durable entries also tell two kinds of shortfall apart. An omitted
+entry that ``COMPLETED`` is the agent under-reporting. An entry still
+``ACCEPTED`` is one whetstone's own evaluation server admitted and never
+finished -- an in-flight evaluation killed with the host, say -- which
+the agent could not have reported; that fails under a
+harness-attributed code instead. Its capacity stays debited, because
+the admission contract has no typed release and the run really did
+commit that evaluation.
 
 The final candidate is resolved *from the ledger*, not from the artifact.
 The artifact names a ``selected_call_id``; the adapter reconstructs the
@@ -55,7 +66,11 @@ from whetstone.optim.contracts import (
     StepMode,
     StepStatus,
 )
-from whetstone.optim.proposal.mutation import DiffCheckError, diff_check
+from whetstone.optim.proposal.mutation import (
+    DiffCheckError,
+    candidate_from_draft,
+)
+from whetstone.optim.proposal.proposer import ProposalDraft
 from whetstone.optim.tools.admission import ToolCallState
 from whetstone.optim.tools.contracts import RuntimeToolHandle, ToolResult
 from whetstone.optim.tools.facade import ToolCallStore
@@ -79,6 +94,15 @@ CODEX_SELECTION_UNSCORED_CODE = "codex_selection_unscored"
 CODEX_EVALUATION_INTERRUPTED_CODE = "codex_evaluation_interrupted"
 #: The Codex process hit the run's hard wall stop.
 CODEX_WALL_BUDGET_EXCEEDED_CODE = "codex_wall_budget_exceeded"
+#: The Codex process failed without producing a usable artifact -- a
+#: nonzero exit, an unspawnable process, an unreadable or malformed final
+#: message. It is not the wall stop, and it terminalizes the Step so the
+#: harness releases the effect lease rather than wedging the run.
+CODEX_EXECUTION_FAILED_CODE = "codex_execution_failed"
+#: A durable admission entry this Step must reconcile does not carry the
+#: recorded ``template`` and ``base_ref`` the adapter rebuilds from, so
+#: it cannot be represented as Tool Evidence.
+CODEX_RECORDED_CALL_CONTRACT_CODE = "codex_recorded_call_contract"
 
 
 class OpaqueStepError(RuntimeError):
@@ -249,50 +273,44 @@ class CodexAdapter:
         try:
             run = self._runner.run(request, handle, lease_token=lease_token)
         except CodexWallBudgetExceeded as exc:
-            # The hard stop of a long-running paid agent. It terminalizes
-            # the Step here so the harness's effect-lease maintenance sees
-            # a failure and releases the lease; letting this unwind would
-            # wedge the run until the lease lapsed.
-            #
-            # There is no artifact on this path, so the agent names no
-            # calls -- but it may already have paid for many. The durable
-            # admission entries are the record of that spend, so every
-            # completed one is re-issued through the guarded handle
-            # before the Step terminalizes. The ledger stays total over
-            # admitted calls, and the tool_calls budget is debited for
-            # work that was really performed, on the path the code itself
-            # calls the expected end of a paid run.
-            reconciled = self._issue_completed(
-                tuple(
-                    entry
-                    for entry in self._bound_tool_store.admitted_entries(
-                        config, handle.binding
-                    )
-                    if entry.state is ToolCallState.COMPLETED
-                ),
+            # The hard stop of a long-running paid agent, and the expected
+            # end of one. It terminalizes the Step here so the harness's
+            # effect-lease maintenance sees a failure and releases the
+            # lease; letting this unwind would wedge the run until the
+            # lease lapsed.
+            return self._terminalize(
                 handle,
-            )
-            return self._failed(
-                {
+                state_delta={
                     "tool_namespace": str(config.store_namespace_key),
-                    "harness_store_accepted_call_count": (
-                        self._bound_tool_store.accepted_count(
-                            config, handle.binding
-                        )
-                    ),
                     "codex_isolation": exc.isolation,
                 },
-                _shared_failure(
-                    reconciled,
-                    fallback=TerminalFailure(
-                        code=CODEX_WALL_BUDGET_EXCEEDED_CODE,
-                        message=str(exc),
-                        details={
-                            "run_id": request.run_id,
-                            "wall_seconds": exc.wall_seconds,
-                        },
-                    ),
-                    always_supersede=True,
+                fallback=TerminalFailure(
+                    code=CODEX_WALL_BUDGET_EXCEEDED_CODE,
+                    message=str(exc),
+                    details={
+                        "run_id": request.run_id,
+                        "wall_seconds": exc.wall_seconds,
+                    },
+                ),
+            )
+        except CodexStructuredExecutionFailure as exc:
+            # A nonzero exit, an unspawnable process, an unreadable or
+            # malformed final message. It is not the wall stop, but it
+            # ends the Step the same way: the harness only runs its
+            # effect-lease maintenance once the adapter returns an
+            # AdapterOutput, so an exception escaping here leaves the
+            # effect non-terminal, and this adapter's NO_REDRIVE policy
+            # then blocks the run from recovering until the lease lapses.
+            return self._terminalize(
+                handle,
+                state_delta={
+                    "tool_namespace": str(config.store_namespace_key),
+                    "codex_isolation": exc.isolation,
+                },
+                fallback=TerminalFailure(
+                    code=CODEX_EXECUTION_FAILED_CODE,
+                    message=str(exc),
+                    details={"run_id": request.run_id},
                 ),
             )
         artifact = run.artifact
@@ -316,9 +334,17 @@ class CodexAdapter:
         }
 
         if artifact.lease_token_hash != codex_lease_token_hash(lease_token):
-            return self._failed(
-                state_delta,
-                TerminalFailure(
+            # The agent holds the bearer token for the MCP endpoint, so it
+            # can pay for evaluations and *then* omit or corrupt the hash
+            # that proves this artifact is this Step's. Rejecting the hash
+            # before reconciling would hand it an exit from ledger
+            # totality: real spend recorded in accepted_count, no Tool
+            # Evidence, and a zero tool_calls debit. The reconciliation
+            # runs first; the hash still fails the Step.
+            return self._terminalize(
+                handle,
+                state_delta=state_delta,
+                fallback=TerminalFailure(
                     code=CODEX_LEASE_TOKEN_MISMATCH_CODE,
                     message=(
                         "Codex output artifact does not carry this Step's "
@@ -331,7 +357,14 @@ class CodexAdapter:
         try:
             admitted = self._admitted_calls(request, artifact, handle)
         except _UnevaluatedSelectionError as exc:
-            return self._failed(state_delta, exc.failure)
+            # _admitted_calls re-issues as it goes, so calls may already
+            # be on the ledger when it rejects a later one.
+            return self._terminalize(
+                handle,
+                state_delta=state_delta,
+                fallback=exc.failure,
+                already_issued=exc.issued,
+            )
 
         # Ledger totality. Every admitted call was a paid evaluation; the
         # ledger only sees the ones the agent reported, so a shortfall
@@ -339,12 +372,25 @@ class CodexAdapter:
         # tool_calls budget is under-debited. Completing here would leave
         # invisible spend, so the Step fails loudly instead.
         if len(admitted) < accepted_count:
-            return self._reconciled_shortfall(
-                artifact=artifact,
-                handle=handle,
-                admitted=admitted,
-                accepted_count=accepted_count,
+            return self._terminalize(
+                handle,
                 state_delta=state_delta,
+                fallback=TerminalFailure(
+                    code=CODEX_UNREPORTED_EVALUATION_CODE,
+                    message=(
+                        "Codex admitted more paid evaluations than it "
+                        "reported, so the Issued Tool Call ledger is not "
+                        "total over this Step's admitted calls"
+                    ),
+                    details={
+                        "admitted_call_count": accepted_count,
+                        "reported_call_count": len(admitted),
+                        "evaluated_call_ids": list(
+                            artifact.evaluated_call_ids
+                        ),
+                    },
+                ),
+                already_issued=admitted,
             )
 
         if artifact.selected_call_id is None:
@@ -366,9 +412,10 @@ class CodexAdapter:
             None,
         )
         if selected is None:
-            return self._failed(
-                state_delta,
-                TerminalFailure(
+            return self._terminalize(
+                handle,
+                state_delta=state_delta,
+                fallback=TerminalFailure(
                     code=CODEX_SELECTION_UNEVALUATED_CODE,
                     message=(
                         "Codex selected a candidate that was never evaluated "
@@ -381,6 +428,7 @@ class CodexAdapter:
                         ),
                     },
                 ),
+                already_issued=admitted,
             )
 
         # ``COMPLETED`` is also the terminal state of an evaluation that
@@ -390,33 +438,38 @@ class CodexAdapter:
         # returning an unevaluated one -- the agent would be claiming a
         # winner it never successfully measured -- so the Step fails.
         if selected.result.output is None or selected.result.reward is None:
-            return self._failed(
-                state_delta,
-                _shared_failure(
-                    admitted,
-                    # A Step Result carries one shared terminal failure. When
-                    # exactly one evaluation failed the Step adopts that
-                    # failure, so the Step says the same thing its evidence
-                    # does. When several failed, or the selected result
-                    # carried no failure at all, no single nested failure can
-                    # be adopted and the adapter's own code supersedes them.
-                    fallback=TerminalFailure(
-                        code=CODEX_SELECTION_UNSCORED_CODE,
-                        message=(
-                            "Codex selected a Tool Call whose durable result "
-                            "carries no score"
-                        ),
-                        details={
-                            "selected_call_id": artifact.selected_call_id,
-                        },
+            return self._terminalize(
+                handle,
+                state_delta=state_delta,
+                # A Step Result carries one shared terminal failure. When
+                # exactly one evaluation failed the Step adopts that
+                # failure, so the Step says the same thing its evidence
+                # does. When several failed, or the selected result
+                # carried no failure at all, no single nested failure can
+                # be adopted and the adapter's own code supersedes them.
+                fallback=TerminalFailure(
+                    code=CODEX_SELECTION_UNSCORED_CODE,
+                    message=(
+                        "Codex selected a Tool Call whose durable result "
+                        "carries no score"
                     ),
+                    details={
+                        "selected_call_id": artifact.selected_call_id,
+                    },
                 ),
+                already_issued=admitted,
+                adoptable=True,
             )
 
         try:
             candidate = self._candidate_from_call(request, selected)
         except _SelectionContractError as exc:
-            return self._failed(state_delta, exc.failure)
+            return self._terminalize(
+                handle,
+                state_delta=state_delta,
+                fallback=exc.failure,
+                already_issued=admitted,
+            )
 
         return AdapterOutput(
             proposed_candidates=(candidate,),
@@ -425,52 +478,82 @@ class CodexAdapter:
             state_delta=state_delta,
         )
 
-    def _reconciled_shortfall(
+    def _terminalize(
         self,
-        *,
-        artifact: CodexOutputArtifact,
         handle: RuntimeToolHandle,
-        admitted: tuple[_AdmittedCall, ...],
-        accepted_count: int,
+        *,
         state_delta: dict[str, Any],
+        fallback: TerminalFailure,
+        already_issued: tuple[_AdmittedCall, ...] = (),
+        adoptable: bool = False,
     ) -> AdapterOutput:
-        """Fail a shortfall, having first said what the shortfall is.
+        """The one path a failing Codex Step leaves by.
 
-        Two very different things produce one: the agent omitted a call
-        that COMPLETED, or whetstone's own server admitted a call and
-        never reached a terminal for it. Only the first is the agent
-        hiding paid work. The durable entries separate them -- an
-        omitted COMPLETED entry is under-reporting, an ACCEPTED entry
-        with no terminal is an interrupted evaluation -- so the Step
-        names the one that actually happened.
+        Every terminalizing exit reconciles first and fails second, so
+        ledger totality does not depend on *which* thing went wrong. The
+        durable admission entries are the record of what this run paid
+        for, independent of what the agent chose to report -- or whether
+        it produced a usable artifact at all. Every COMPLETED entry not
+        already on the ledger is re-issued through the guarded handle,
+        which reads the recorded terminal rather than evaluating, so this
+        surfaces work already paid for and never buys more.
 
-        Either way the completed omissions are re-issued through the
-        guarded handle first, so the paid work they represent reaches
-        the ledger and the ``tool_calls`` budget instead of vanishing
-        with the failure.
+        An entry still ACCEPTED is one whetstone's own evaluation server
+        admitted and never reached a terminal for. The agent had no
+        result to report, so that is a harness failure rather than the
+        agent hiding paid work, and it supersedes the caller's code.
+
+        ``already_issued`` names the calls the caller already put on the
+        ledger, so they are not issued twice. ``adoptable`` lets a
+        failure that really is a verdict on one evaluation adopt that
+        evaluation's own failure; everything else is the adapter's own
+        code and supersedes the nested ones.
         """
-        reported = {call.call_id for call in admitted}
-        omitted = tuple(
-            entry
-            for entry in self._bound_tool_store.admitted_entries(
-                handle.config, handle.binding
-            )
-            if str(entry.call_id) not in reported
+        issued = {call.call_id for call in already_issued}
+        entries = self._bound_tool_store.admitted_entries(
+            handle.config, handle.binding
         )
+        state_delta = {
+            **state_delta,
+            "harness_store_accepted_call_count": (
+                self._bound_tool_store.accepted_count(
+                    handle.config, handle.binding
+                )
+            ),
+        }
+        outstanding = tuple(
+            entry for entry in entries if str(entry.call_id) not in issued
+        )
+        try:
+            reconciled = already_issued + self._issue_completed(
+                tuple(
+                    entry
+                    for entry in outstanding
+                    if entry.state is ToolCallState.COMPLETED
+                ),
+                handle,
+            )
+        except _RecordedCallContractError as exc:
+            # The entry is already on the ledger by contract -- it is a
+            # durable admitted call -- so it can never be dropped
+            # silently. It simply cannot be represented as reconciled
+            # evidence, which is itself the failure.
+            return self._failed(state_delta, exc.failure)
         interrupted = tuple(
             str(entry.call_id)
-            for entry in omitted
-            if entry.state is not ToolCallState.COMPLETED
-        )
-        reconciled = admitted + self._issue_completed(
-            tuple(
-                entry
-                for entry in omitted
-                if entry.state is ToolCallState.COMPLETED
-            ),
-            handle,
+            for entry in outstanding
+            if entry.state is ToolCallState.ACCEPTED
         )
         if interrupted:
+            # whetstone's own server admitted these and never reached a
+            # terminal for them -- an in-flight evaluation killed with
+            # the host, or a server that died mid-call. Their capacity is
+            # already debited and the admission contract has no typed
+            # release (ToolCallState is ACCEPTED, REFUSED, or COMPLETED
+            # only), so the slot stays consumed: the run really did
+            # commit that evaluation, and inventing a release here would
+            # let a killed call be silently re-bought. The Step names
+            # them instead, under a harness-attributed code.
             return self._failed(
                 state_delta,
                 _shared_failure(
@@ -483,8 +566,7 @@ class CodexAdapter:
                             "so this Step's ledger cannot be made total"
                         ),
                         details={
-                            "admitted_call_count": accepted_count,
-                            "reported_call_count": len(admitted),
+                            **fallback.details.to_json(),
                             "interrupted_call_ids": list(interrupted),
                         },
                     ),
@@ -495,22 +577,8 @@ class CodexAdapter:
             state_delta,
             _shared_failure(
                 reconciled,
-                fallback=TerminalFailure(
-                    code=CODEX_UNREPORTED_EVALUATION_CODE,
-                    message=(
-                        "Codex admitted more paid evaluations than it "
-                        "reported, so the Issued Tool Call ledger is not "
-                        "total over this Step's admitted calls"
-                    ),
-                    details={
-                        "admitted_call_count": accepted_count,
-                        "reported_call_count": len(admitted),
-                        "evaluated_call_ids": list(
-                            artifact.evaluated_call_ids
-                        ),
-                    },
-                ),
-                always_supersede=True,
+                fallback=fallback,
+                always_supersede=not adoptable,
             ),
         )
 
@@ -523,20 +591,37 @@ class CodexAdapter:
 
         The handle reads the durable terminal rather than evaluating, so
         this records work already paid for; it never buys more.
+
+        The recorded ``template`` and ``base_ref`` are validated *before*
+        the call is issued. Issuing first and skipping an unusable entry
+        afterwards would leave it on the Issued Tool Call ledger while
+        omitting it from the reconciled evidence the shared-failure rule
+        reasons over, so the Step Result's outer code could contradict
+        its own nested Tool Evidence. An unusable recorded call is a
+        typed failure instead -- never a silent skip.
         """
         issued: list[_AdmittedCall] = []
         for entry in entries:
             call = entry.tool_call.record
-            result = handle(call)
             recorded_args = call.args.to_json()
             template = recorded_args.get("template")
             raw_base = recorded_args.get("base_ref")
             if not isinstance(template, str) or not isinstance(raw_base, dict):
-                continue
+                raise _RecordedCallContractError(
+                    TerminalFailure(
+                        code=CODEX_RECORDED_CALL_CONTRACT_CODE,
+                        message=(
+                            "a durable admitted Tool Call does not carry the "
+                            "recorded template and base_ref this Step must "
+                            "reconcile it from"
+                        ),
+                        details={"call_id": str(entry.call_id)},
+                    )
+                )
             issued.append(
                 _AdmittedCall(
                     call_id=str(entry.call_id),
-                    result=result,
+                    result=handle(call),
                     template=template,
                     base_ref=TypedRef.model_validate(raw_base),
                 )
@@ -589,9 +674,15 @@ class CodexAdapter:
         namespace = str(config.store_namespace_key)
         seen: set[str] = set()
         admitted: list[_AdmittedCall] = []
+
+        def reject(failure: TerminalFailure) -> _UnevaluatedSelectionError:
+            return _UnevaluatedSelectionError(
+                failure, issued=tuple(admitted)
+            )
+
         for call_id in artifact.evaluated_call_ids:
             if call_id in seen:
-                raise _UnevaluatedSelectionError(
+                raise reject(
                     TerminalFailure(
                         code=CODEX_SELECTION_UNEVALUATED_CODE,
                         message=(
@@ -606,7 +697,7 @@ class CodexAdapter:
                 call_id=call_id,
             )
             if entry is None or entry.state is not ToolCallState.COMPLETED:
-                raise _UnevaluatedSelectionError(
+                raise reject(
                     TerminalFailure(
                         code=CODEX_SELECTION_UNEVALUATED_CODE,
                         message=(
@@ -621,7 +712,7 @@ class CodexAdapter:
                 call.tool_config != handle.tool_config_ref
                 or call.capacity_binding != handle.binding
             ):
-                raise _UnevaluatedSelectionError(
+                raise reject(
                     TerminalFailure(
                         code=CODEX_SELECTION_UNEVALUATED_CODE,
                         message=(
@@ -640,7 +731,7 @@ class CodexAdapter:
             template = recorded_args.get("template")
             raw_base = recorded_args.get("base_ref")
             if not isinstance(template, str) or not isinstance(raw_base, dict):
-                raise _UnevaluatedSelectionError(
+                raise reject(
                     TerminalFailure(
                         code=CODEX_SELECTION_UNEVALUATED_CODE,
                         message=(
@@ -681,15 +772,19 @@ class CodexAdapter:
                     details={"call_id": selected.call_id},
                 )
             )
-        candidate = Candidate(
-            candidate_id=selected.call_id,
-            base_ref=selected.base_ref,
-            payload={
-                request.run.record.mutation_field: selected.template,
-            },
-        )
+        # Build from the base payload and replace only the mutation
+        # field, exactly as every other proposal path does. Rebuilding
+        # from the mutation field alone would drop every other payload
+        # field the base carries, and diff_check requires those to equal
+        # the base's -- so a legitimately evaluated selection on any
+        # multi-field candidate would always fail the mutation diff.
         try:
-            diff_check(base=base, proposed=candidate, run=request.run)
+            candidate = candidate_from_draft(
+                base=base,
+                candidate_id=selected.call_id,
+                draft=ProposalDraft(template=selected.template),
+                run=request.run,
+            )
         except DiffCheckError as exc:
             raise _SelectionContractError(
                 TerminalFailure(
@@ -750,6 +845,29 @@ def _shared_failure(
 
 
 class _UnevaluatedSelectionError(Exception):
+    """A reported call cannot be admitted as this Step's Tool Evidence.
+
+    ``_admitted_calls`` re-issues each reported call as it validates it,
+    so calls are already on the Issued Tool Call ledger when a later one
+    is rejected. Those are carried here: the terminal path must not
+    re-issue them (call ids are unique within a Step attempt) and must
+    not omit them from the evidence it reconciles.
+    """
+
+    def __init__(
+        self,
+        failure: TerminalFailure,
+        *,
+        issued: tuple[_AdmittedCall, ...] = (),
+    ) -> None:
+        self.failure = failure
+        self.issued = issued
+        super().__init__(failure.message)
+
+
+class _RecordedCallContractError(Exception):
+    """A durable admitted call cannot be rebuilt into Tool Evidence."""
+
     def __init__(self, failure: TerminalFailure) -> None:
         self.failure = failure
         super().__init__(failure.message)
@@ -801,7 +919,9 @@ def codex_run_lease_binding(
 __all__ = [
     "CODEX_ADAPTER_KEY",
     "CODEX_EVALUATION_INTERRUPTED_CODE",
+    "CODEX_EXECUTION_FAILED_CODE",
     "CODEX_LEASE_TOKEN_MISMATCH_CODE",
+    "CODEX_RECORDED_CALL_CONTRACT_CODE",
     "CODEX_OUTPUT_ARTIFACT_SCHEMA",
     "CODEX_SELECTION_CONTRACT_CODE",
     "CODEX_SELECTION_UNEVALUATED_CODE",

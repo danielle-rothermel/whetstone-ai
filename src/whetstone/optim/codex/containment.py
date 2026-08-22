@@ -16,6 +16,15 @@ CODEX_NETWORK_POLICY = "allowed"
 CODEX_FILESYSTEM_POLICY = "scratch_only"
 CODEX_CONTAINMENT_PROFILE = "process_boundary_only"
 
+#: The auth material the Codex CLI accepts, in the order it looks for it.
+#: One owner, because two consumers must not drift: the preflight checks
+#: that a usable auth source exists, and the runner stages exactly these
+#: files into each run's scratch CODEX_HOME. A file the preflight accepts
+#: and the runner never copies would pass the check and then fail the run.
+CODEX_AUTH_FILENAMES = ("auth.json", ".credentials.json")
+#: The environment variable that is an auth source on its own.
+CODEX_AUTH_ENV_KEY = "OPENAI_API_KEY"
+
 #: Default cap on the retained Codex stdout+stderr payload. Codex emits one
 #: JSONL event per turn, so a run that overruns this is producing output the
 #: adapter would not read anyway.

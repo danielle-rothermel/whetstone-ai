@@ -49,6 +49,7 @@ from whetstone.optim.codex.adapter import (
     codex_run_lease_binding,
 )
 from whetstone.optim.codex.containment import (
+    CODEX_AUTH_FILENAMES,
     CODEX_CONTAINMENT_PROFILE,
     CODEX_DEFAULT_MAX_OUTPUT_BYTES,
     CODEX_DENIED_FEATURES,
@@ -341,6 +342,13 @@ def _codex_budgets(
     )
 
 
+#: Marks where an output budget elided the middle of a stream. It leads
+#: the line so a reader can find it without parsing, and it is not valid
+#: JSON, so a JSONL consumer fails loudly on it rather than silently
+#: treating a stitched stream as contiguous.
+CODEX_ELIDED_MARKER_PREFIX = b"[... "
+
+
 @dataclass(frozen=True, slots=True)
 class _RetainedStream:
     """One captured stream plus whether the output budget truncated it."""
@@ -359,9 +367,31 @@ def _retained_bytes(stream: RetainedPayloadStream) -> _RetainedStream:
     Under a finite ``payload_output`` budget truncation is an expected
     outcome, not a contract violation: the retained head and tail are still
     exact, and the artifact records how many bytes the budget dropped.
+
+    The head and tail were not adjacent in the real stream, so joining
+    them bare would fabricate a line the process never emitted -- the
+    truncated last head line running straight into the truncated first
+    tail line. Parsed as JSONL that is either a malformed event at a
+    boundary Codex never produced, or a well-formed event that never
+    happened. An explicit marker line separates them, on its own line in
+    both directions, so nothing downstream can read the join as
+    contiguous.
     """
+    if stream.dropped_bytes <= 0:
+        return _RetainedStream(
+            data=stream.head + stream.tail,
+            dropped_bytes=stream.dropped_bytes,
+        )
+    marker = (
+        f"{CODEX_ELIDED_MARKER_PREFIX.decode()}"
+        f"{stream.dropped_bytes} bytes elided ...]"
+    ).encode()
+    head = stream.head
+    if head and not head.endswith(b"\n"):
+        head += b"\n"
+    tail = stream.tail
     return _RetainedStream(
-        data=stream.head + stream.tail,
+        data=head + marker + b"\n" + tail,
         dropped_bytes=stream.dropped_bytes,
     )
 
@@ -440,20 +470,24 @@ class SubprocessCodexRunner:
             raise ValueError("max_output_bytes must leave room for retention")
         self._max_output_bytes = max_output_bytes
         self._prompt_builder = prompt_builder
-        if environment is None:
-            source_environment = dict(os.environ)
-            configured_home = source_environment.get("CODEX_HOME")
-            auth_source = (
-                Path(configured_home)
-                if configured_home is not None
-                else Path.home() / ".codex"
-            )
-        else:
-            source_environment = dict(environment)
-            configured_home = source_environment.get("CODEX_HOME")
-            auth_source = (
-                Path(configured_home) if configured_home is not None else None
-            )
+        source_environment = (
+            dict(os.environ) if environment is None else dict(environment)
+        )
+        # Where this run's credentials are copied from. An explicit
+        # CODEX_HOME names it; otherwise it is the location the Codex CLI
+        # itself uses, and a user who logged in normally has it there.
+        # Resolving it the same way whether or not the caller passed an
+        # explicit environment is what lets the preflight probe -- which
+        # always passes one -- see the credentials the real run will use.
+        # The path is a *source to copy from*: CODEX_HOME is rewritten
+        # per run to the scratch directory, and nothing here widens the
+        # environment the untrusted agent receives.
+        configured_home = source_environment.get("CODEX_HOME")
+        auth_source = (
+            Path(configured_home)
+            if configured_home is not None
+            else Path.home() / ".codex"
+        )
         allowed = {
             "PATH",
             "CODEX_HOME",
@@ -645,7 +679,7 @@ class SubprocessCodexRunner:
             root = Path(working_directory)
             codex_home = root / "codex-home"
             codex_home.mkdir()
-            self._stage_auth(codex_home)
+            self.stage_auth(codex_home)
             isolated_environment = {
                 **self._environment,
                 "CODEX_HOME": str(codex_home),
@@ -733,8 +767,13 @@ class SubprocessCodexRunner:
                     # wall budget and the process boundary are the stop.
                     "unbudgeted_axes": list(_CODEX_UNBUDGETED_AXES),
                 },
+                # A truncated stream is a stitched head+tail carrying an
+                # elision marker, not a contiguous capture. Anything
+                # reading these bytes back has to know that.
                 "output_truncation": {
+                    "stdout_truncated": stdout_stream.truncated,
                     "stdout_dropped_bytes": stdout_stream.dropped_bytes,
+                    "stderr_truncated": stderr_stream.truncated,
                     "stderr_dropped_bytes": stderr_stream.dropped_bytes,
                 },
             }
@@ -832,12 +871,19 @@ class SubprocessCodexRunner:
                 isolation=isolation,
             )
 
-    def _stage_auth(self, destination: Path) -> None:
-        source = self._auth_source
-        if source is None:
-            return
-        for name in ("auth.json", ".credentials.json"):
-            candidate = source / name
+    @property
+    def auth_source(self) -> Path:
+        """The directory this run's Codex credentials are copied from."""
+        return self._auth_source
+
+    def stage_auth(self, destination: Path) -> None:
+        """Copy the run's Codex credentials into its scratch CODEX_HOME.
+
+        The credentials reach the untrusted agent as files inside the
+        scratch home it is given, never as environment values.
+        """
+        for name in CODEX_AUTH_FILENAMES:
+            candidate = self._auth_source / name
             if candidate.is_file():
                 shutil.copy2(candidate, destination / name)
 

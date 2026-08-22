@@ -219,3 +219,91 @@ def test_prepare_codex_run_has_no_preflight_default(tmp_path) -> None:
 
     assert parameter.default is inspect.Parameter.empty
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_the_probe_stages_the_default_codex_credentials(
+    tmp_path, monkeypatch
+) -> None:
+    """An ordinary logged-in user must pass the preflight.
+
+    ``_require_auth_source`` accepts the default ``~/.codex/auth.json``
+    when ``CODEX_HOME`` is unset, but the probe runner is constructed with
+    an explicit environment -- which used to resolve its auth source to
+    ``None`` and stage nothing into the scratch ``CODEX_HOME``. The
+    preflight then rejected a perfectly valid Codex login. The evidence is
+    what reaches the probe's scratch home, so the fake CLI reports it
+    instead of a real Codex ever being invoked.
+    """
+    from whetstone.optim.codex.runner import SubprocessCodexRunner
+
+    fake_home = tmp_path / "home"
+    codex_dir = fake_home / ".codex"
+    codex_dir.mkdir(parents=True)
+    (codex_dir / CODEX_AUTH_FILENAMES[0]).write_text(
+        '{"token": "fake"}', encoding="utf-8"
+    )
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+    binary_dir = tmp_path / "bin"
+    _write_binary(binary_dir, script="#!/bin/sh\nexit 0\n")
+
+    runner = SubprocessCodexRunner(
+        executor=object(),
+        codex_binary="codex",
+        environment={"PATH": str(binary_dir)},
+    )
+
+    # The default location is what the run's own auth staging will copy
+    # from, so the probe sees exactly the credentials the real run would.
+    assert runner.auth_source == codex_dir
+
+    staged = tmp_path / "scratch-codex-home"
+    staged.mkdir()
+    runner.stage_auth(staged)
+    assert (staged / CODEX_AUTH_FILENAMES[0]).is_file()
+
+
+def test_an_explicit_codex_home_still_wins_over_the_default(
+    tmp_path, monkeypatch
+) -> None:
+    """An explicitly configured CODEX_HOME is the auth source."""
+    from whetstone.optim.codex.runner import SubprocessCodexRunner
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".codex").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+
+    configured = _auth_home(tmp_path)
+    runner = SubprocessCodexRunner(
+        executor=object(),
+        codex_binary="codex",
+        environment={"PATH": str(tmp_path), "CODEX_HOME": str(configured)},
+    )
+
+    assert runner.auth_source == configured
+
+
+def test_the_probe_environment_carries_no_secrets(tmp_path, monkeypatch) -> None:
+    """Staging credentials must not put them in the agent's environment.
+
+    The Codex process is untrusted and network-capable. Its credentials
+    reach it as files in its own scratch ``CODEX_HOME``; nothing about
+    resolving the default location may widen the allowlisted environment.
+    """
+    from whetstone.optim.codex.runner import SubprocessCodexRunner
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".codex").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(fake_home))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+
+    runner = SubprocessCodexRunner(
+        executor=object(),
+        codex_binary="codex",
+        environment={"PATH": str(tmp_path), "OPENAI_API_KEY": "sk-fake"},
+    )
+
+    environment = runner.codex_process_environment()
+    assert "CODEX_HOME" not in environment
+    assert set(environment) <= {"PATH", "OPENAI_API_KEY"}

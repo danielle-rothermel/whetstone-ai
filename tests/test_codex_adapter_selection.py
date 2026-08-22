@@ -9,6 +9,7 @@ macOS sandbox.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
@@ -21,6 +22,8 @@ from tests.codex_support import (
     toy_codex_step_request,
     toy_tool_args,
 )
+from whetstone.experiment.candidate import Candidate, candidate_reference
+from whetstone.testing.toy.experiment import build_toy_experiment
 from whetstone.core.identity import ImmutableJsonObject, TerminalFailure
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -28,12 +31,17 @@ from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
     CODEX_EVALUATION_INTERRUPTED_CODE,
+    CODEX_EXECUTION_FAILED_CODE,
+    CODEX_LEASE_TOKEN_MISMATCH_CODE,
+    CODEX_RECORDED_CALL_CONTRACT_CODE,
+    CODEX_SELECTION_UNEVALUATED_CODE,
     CODEX_SELECTION_UNSCORED_CODE,
     CODEX_UNREPORTED_EVALUATION_CODE,
     CODEX_WALL_BUDGET_EXCEEDED_CODE,
     CodexAdapter,
     CodexOutputArtifact,
     CodexRunResult,
+    CodexStructuredExecutionFailure,
     CodexWallBudgetExceeded,
     codex_lease_token_hash,
 )
@@ -111,13 +119,65 @@ class _ScriptedRunner:
         return CodexRunResult(artifact=CodexOutputArtifact(**fields))
 
 
+class _PermissiveEvaluator(EngineToolEvaluator):
+    """Evaluates using the base template regardless of recorded args.
+
+    It exists to produce a durable COMPLETED entry whose recorded args do
+    not carry a usable ``template``, which the real evaluator refuses to
+    do.
+    """
+
+    def evaluate(self, call, config):
+        patched = call.model_copy(
+            update={
+                "args": ImmutableJsonObject(
+                    {**call.args.to_json(), "template": _TEMPLATE_B}
+                )
+            }
+        )
+        return super().evaluate(patched, config)
+
+
+def _enriched_candidate(base: Candidate, extra: dict[str, str]) -> Candidate:
+    """The same candidate with extra, non-mutation payload fields."""
+    payload = base.payload.to_json()
+    payload.update(extra)
+    return candidate_reference(
+        Candidate(
+            candidate_id=base.candidate_id,
+            base_ref=base.base_ref,
+            payload=payload,
+        )
+    ).record
+
+
 class _SelectionWorld:
-    def __init__(self, store, *, failing_call_ids: frozenset[str]) -> None:
+    def __init__(
+        self,
+        store,
+        *,
+        failing_call_ids: frozenset[str],
+        extra_payload: dict[str, str] | None = None,
+    ) -> None:
         self.store = store
         self.engine = ReferenceEvalRuntimeConfig().build_engine(store)
         self.control = toy_codex_control(engine=self.engine, max_tool_calls=4)
+        experiment = build_toy_experiment(num_seeds=1)
+        if extra_payload:
+            # A base candidate whose payload carries more than the
+            # mutation field. Nothing restricts a Codex run's candidates
+            # to a single field, and the extra field is inert to the
+            # evaluation itself.
+            experiment = replace(
+                experiment,
+                initial_candidate=_enriched_candidate(
+                    experiment.initial_candidate, extra_payload
+                ),
+            )
         self.run, self.config, self.candidate = toy_codex_run(
-            control=self.control, engine=self.engine
+            control=self.control,
+            engine=self.engine,
+            experiment=experiment,
         )
         self.binding = toy_capacity_binding(self.run)
         self.effect_authority = EffectLeaseAuthority.memory()
@@ -154,6 +214,49 @@ class _SelectionWorld:
                         template=template,
                     )
                 ),
+            )
+        )
+
+    def use_permissive_evaluator(self) -> None:
+        """Swap in an evaluator that completes a call with no template.
+
+        The real evaluator reads ``template`` and ``base_ref`` off the
+        call, so a durable COMPLETED entry with unusable recorded args
+        cannot be built through it. This stands in for a recorded call
+        whose args do not carry what the adapter must rebuild from.
+        """
+        self.tool_executor = EvaluatingToolExecutor(
+            _PermissiveEvaluator(self.engine),
+            self.engine.reward_policy,
+            self.effect_authority,
+            owner_id="codex-selection-owner",
+            replay_policy=ReplayPolicy.IDEMPOTENT,
+            lease_duration=timedelta(minutes=5),
+        )
+        self._agent_handle = self.tool_executor.runtime_handle(
+            self.config, self.tool_store, self.binding
+        )
+
+    def issue_malformed(self, call_id: str):
+        """Admit and complete a call whose ``template`` is not a string.
+
+        ``ToolCall`` pins the arg *keys* to the Definition's
+        ``input_fields``, so a missing key is unreachable; the value
+        types are not pinned, so this is the shape a durable entry can
+        actually reach.
+        """
+        args = toy_tool_args(
+            candidate=self.candidate,
+            engine=self.engine,
+            template=_TEMPLATE_A,
+        )
+        args["template"] = {"not": "a template"}
+        return self._agent_handle(
+            ToolCall(
+                call_id=call_id,
+                tool_config=tool_config_reference(self.config),
+                capacity_binding=self.binding,
+                args=ImmutableJsonObject(args),
             )
         )
 
@@ -548,3 +651,444 @@ def test_a_wall_stop_still_ledgers_the_evaluations_it_already_paid_for(
     assert result.terminal_failure.code == CODEX_WALL_BUDGET_EXCEEDED_CODE
     assert len(result.tool_evidence) == 2
     assert result.budget_delta.consumed["tool_calls"] == 2
+
+
+class _LeaseMismatchRunner:
+    """Pays for real evaluations, then returns a corrupt lease hash.
+
+    The agent holds the bearer token for the MCP endpoint, so it can spend
+    the run's capacity and then omit or corrupt the artifact field that
+    proves the artifact is this Step's. That must not buy it an exit from
+    ledger totality.
+    """
+
+    def __init__(self, world, *, calls, lease_token_hash: str) -> None:
+        self._world = world
+        self._calls = calls
+        self._lease_token_hash = lease_token_hash
+
+    def run(self, request, handle, *, lease_token):
+        del handle, lease_token
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=tuple(
+                    call_id for call_id, _template in self._calls
+                ),
+                selected_call_id=self._calls[0][0],
+                lease_token_hash=self._lease_token_hash,
+            )
+        )
+
+
+@pytest.mark.parametrize("bad_hash", ["", codex_lease_token_hash("wrong")])
+def test_a_lease_mismatch_still_ledgers_the_evaluations_it_paid_for(
+    selection_world, bad_hash: str
+) -> None:
+    """A malformed artifact must not short-circuit ledger totality.
+
+    The lease hash is checked before anything is reconciled, so an agent
+    that pays for evaluations and then corrupts or omits the hash used to
+    produce a Step with no Tool Evidence and a zero ``tool_calls`` debit,
+    while ``accepted_count`` recorded real spend. The hash check still
+    fails the Step -- it just no longer takes the paid work with it.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _LeaseMismatchRunner(
+            world,
+            calls=[("c1", _TEMPLATE_A), ("c2", _TEMPLATE_B)],
+            lease_token_hash=bad_hash,
+        )
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_LEASE_TOKEN_MISMATCH_CODE
+    assert len(result.tool_evidence) == 2
+    assert result.budget_delta.consumed["tool_calls"] == 2
+
+
+class _DuplicateReportRunner:
+    """Reports one paid call id twice, taking the unevaluated path.
+
+    ``_UnevaluatedSelectionError`` used to return a bare terminal failure,
+    skipping the shared-failure reconciliation even though the calls it
+    already re-issued were on the ledger.
+    """
+
+    def __init__(self, world, *, calls) -> None:
+        self._world = world
+        self._calls = calls
+
+    def run(self, request, handle, *, lease_token):
+        del handle
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        first = self._calls[0][0]
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=(first, first),
+                selected_call_id=first,
+                lease_token_hash=codex_lease_token_hash(lease_token),
+            )
+        )
+
+
+def test_an_unevaluated_report_still_ledgers_its_paid_calls(
+    selection_world,
+) -> None:
+    """The unevaluated paths take the same terminal path as the rest.
+
+    A duplicate report fails under ``codex_selection_unevaluated``, but
+    the run had already paid for two evaluations. Returning a bare
+    terminal failure left them off the ledger and off the budget.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _DuplicateReportRunner(
+            world, calls=[("c1", _TEMPLATE_A), ("c2", _TEMPLATE_B)]
+        )
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_SELECTION_UNEVALUATED_CODE
+    )
+    assert len(result.tool_evidence) == 2
+    assert result.budget_delta.consumed["tool_calls"] == 2
+
+
+class _MissingSelectionRunner:
+    """Names a selected call it never reported, after paying for calls."""
+
+    def __init__(self, world, *, calls) -> None:
+        self._world = world
+        self._calls = calls
+
+    def run(self, request, handle, *, lease_token):
+        del handle
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=tuple(
+                    call_id for call_id, _template in self._calls
+                ),
+                selected_call_id="never-issued",
+                lease_token_hash=codex_lease_token_hash(lease_token),
+            )
+        )
+
+
+def test_a_missing_selected_call_still_ledgers_its_paid_calls(
+    selection_world,
+) -> None:
+    """The selected-call miss is a terminal path like any other."""
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _MissingSelectionRunner(
+            world, calls=[("c1", _TEMPLATE_A), ("c2", _TEMPLATE_B)]
+        )
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_SELECTION_UNEVALUATED_CODE
+    )
+    assert len(result.tool_evidence) == 2
+    assert result.budget_delta.consumed["tool_calls"] == 2
+
+
+class _ExecutionFailureRunner:
+    """Pays for one evaluation, then fails without a usable artifact.
+
+    A nonzero Codex exit, an unreadable artifact, or a malformed one all
+    raise ``CodexStructuredExecutionFailure``. That is not the wall-budget
+    subclass, so it used to escape ``invoke`` entirely and leave the
+    effect nonterminal under ``NO_REDRIVE``.
+    """
+
+    def __init__(self, world, *, calls) -> None:
+        self._world = world
+        self._calls = calls
+
+    def run(self, request, handle, *, lease_token):
+        del request, handle, lease_token
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        raise CodexStructuredExecutionFailure(
+            "Codex exited 3 without a final output artifact",
+            stdout=b"",
+            stderr=b"codex: not logged in\n",
+            isolation={"strategy": "test"},
+        )
+
+
+def test_a_structured_execution_failure_terminalizes_the_step(
+    selection_world,
+) -> None:
+    """A nonzero Codex exit fails the Step instead of unwinding.
+
+    The harness calls ``maintenance.fail`` only once the adapter returns
+    an ``AdapterOutput``, so an exception escaping ``invoke`` leaves the
+    effect lease non-terminal. Under ``NO_REDRIVE`` the run then cannot
+    recover until the lease lapses. The evidence that the lease was
+    released is a state fact: the identical Step runs again immediately
+    rather than raising ``EffectBusyError``.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _ExecutionFailureRunner(world, calls=[("c1", _TEMPLATE_A)])
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_EXECUTION_FAILED_CODE
+    )
+    # The evaluation it paid for before dying stays on the ledger.
+    assert len(result.tool_evidence) == 1
+    assert result.budget_delta.consumed["tool_calls"] == 1
+
+    retried = world.run_step_with_runner(
+        _ExecutionFailureRunner(world, calls=[("c2", _TEMPLATE_B)])
+    )
+    assert retried.status is StepStatus.FAILED
+
+
+class _StrandedWallBudgetRunner:
+    """Crashes one in-flight evaluation, then hits the wall stop.
+
+    A wall kill takes the host down with any evaluation still in flight,
+    leaving the entry ``ACCEPTED`` with its capacity already debited and
+    no durable terminal. The agent never saw a result for it.
+    """
+
+    def __init__(self, world, *, calls, crashing_call_ids, wall_seconds):
+        self._world = world
+        self._calls = calls
+        self._crashing = crashing_call_ids
+        self.wall_seconds = wall_seconds
+
+    def run(self, request, handle, *, lease_token):
+        del request, handle, lease_token
+        for call_id, template in self._calls:
+            if call_id in self._crashing:
+                with pytest.raises(OSError):
+                    self._world.issue(call_id, template)
+                continue
+            self._world.issue(call_id, template)
+        raise CodexWallBudgetExceeded(
+            f"Codex exceeded its wall budget of {self.wall_seconds} seconds",
+            wall_seconds=self.wall_seconds,
+            stdout=b"",
+            stderr=b"",
+            isolation={"strategy": "test"},
+        )
+
+
+def test_a_wall_stop_names_the_admissions_it_stranded(tmp_path) -> None:
+    """A wall kill must account for its in-flight admissions.
+
+    The wall branch re-issued only ``COMPLETED`` entries, so an admission
+    the kill stranded in ``ACCEPTED`` held its capacity slot and appeared
+    nowhere on the Step Result -- paid work visible only in
+    ``accepted_count``. It now fails as an interrupted evaluation naming
+    the stranded ids, while the completed work still reaches the ledger.
+    """
+    with open_sqlite(str(tmp_path / "codex-stranded.sqlite")) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset())
+        world.tool_executor = EvaluatingToolExecutor(
+            _CrashingCallEvaluator(
+                world.engine, crashing_call_ids=frozenset({"c2"})
+            ),
+            world.engine.reward_policy,
+            world.effect_authority,
+            owner_id="codex-selection-owner",
+            replay_policy=ReplayPolicy.IDEMPOTENT,
+            lease_duration=timedelta(minutes=5),
+        )
+        world._agent_handle = world.tool_executor.runtime_handle(
+            world.config, world.tool_store, world.binding
+        )
+
+        result = world.run_step_with_runner(
+            _StrandedWallBudgetRunner(
+                world,
+                calls=[("c1", _TEMPLATE_A), ("c2", _TEMPLATE_B)],
+                crashing_call_ids=frozenset({"c2"}),
+                wall_seconds=0.25,
+            )
+        )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_EVALUATION_INTERRUPTED_CODE
+    )
+    details = result.terminal_failure.details.to_json()
+    assert details["interrupted_call_ids"] == ["c2"]
+    # The completed evaluation still reaches the ledger and the budget.
+    assert len(result.tool_evidence) == 1
+    assert result.budget_delta.consumed["tool_calls"] == 1
+
+
+class _UnreportedMalformedArgsRunner:
+    """Under-reports a call whose recorded args are malformed.
+
+    Reconciliation re-issues the omitted completed entry through the
+    guarded handle, putting it on the Issued Tool Call ledger. If the
+    recorded args then fail validation, skipping the entry leaves a
+    ledgered call with no matching evidence in the reconciled tuple.
+    """
+
+    def __init__(self, world, *, calls) -> None:
+        self._world = world
+        self._calls = calls
+
+    def run(self, request, handle, *, lease_token):
+        del handle
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=(self._calls[0][0],),
+                selected_call_id=self._calls[0][0],
+                lease_token_hash=codex_lease_token_hash(lease_token),
+            )
+        )
+
+
+def test_a_malformed_reconciled_call_fails_rather_than_being_skipped(
+    selection_world,
+) -> None:
+    """A ledgered call is never dropped from the reconciled evidence.
+
+    ``_issue_completed`` issued the call before validating its recorded
+    ``template``/``base_ref`` and then skipped it, so the call reached the
+    ledger while the reconciled tuple fed to the shared-failure rule did
+    not know about it. Validation now precedes issuance, and a malformed
+    recorded call is a typed Step failure rather than a silent skip.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _UnreportedMalformedArgsRunner(
+            world, calls=[("c1", _TEMPLATE_A), ("c2", _TEMPLATE_B)]
+        )
+    )
+
+    # The well-formed control: the shortfall is reported as such, and
+    # both calls are on the ledger.
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_UNREPORTED_EVALUATION_CODE
+    assert len(result.tool_evidence) == 2
+
+
+class _MalformedArgsShortfallRunner:
+    """Under-reports a completed call whose recorded args are malformed.
+
+    Reconciliation must re-issue the omitted entry, and the entry's own
+    recorded ``template``/``base_ref`` is what the adapter rebuilds a
+    candidate from. When those are missing, the entry cannot be
+    represented as reconciled evidence.
+    """
+
+    def __init__(self, world, *, reported, malformed_call_id: str) -> None:
+        self._world = world
+        self._reported = reported
+        self._malformed = malformed_call_id
+
+    def run(self, request, handle, *, lease_token):
+        del handle
+        for call_id, template in self._reported:
+            self._world.issue(call_id, template)
+        self._world.issue_malformed(self._malformed)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=tuple(
+                    call_id for call_id, _template in self._reported
+                ),
+                selected_call_id=self._reported[0][0],
+                lease_token_hash=codex_lease_token_hash(lease_token),
+            )
+        )
+
+
+def test_a_recorded_call_with_malformed_args_is_a_typed_failure(
+    tmp_path,
+) -> None:
+    """Malformed recorded args on a reconciled entry fail the Step.
+
+    ``_issue_completed`` put the call on the Issued Tool Call ledger and
+    only then looked at its recorded args, dropping it from the
+    reconciled tuple when they were unusable. That left a ledgered call
+    with no matching evidence for the shared-failure rule to account
+    for. Validation now runs first, and an unusable recorded call is a
+    typed Step failure rather than a silent skip.
+    """
+    with open_sqlite(str(tmp_path / "codex-malformed.sqlite")) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset())
+        world.use_permissive_evaluator()
+
+        result = world.run_step_with_runner(
+            _MalformedArgsShortfallRunner(
+                world,
+                reported=[("c1", _TEMPLATE_A)],
+                malformed_call_id="c2",
+            )
+        )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_RECORDED_CALL_CONTRACT_CODE
+    )
+    assert result.terminal_failure.details["call_id"] == "c2"
+
+
+def test_the_selected_candidate_keeps_every_non_mutation_field(
+    tmp_path,
+) -> None:
+    """Reconstruction copies the base payload, not just the template.
+
+    ``diff_check`` requires every non-mutation field to equal the base's,
+    so building the candidate from the mutation field alone made any base
+    carrying an extra payload field fail ``codex_selection_contract`` on
+    a legitimately evaluated selection. ``prepare_codex_run`` puts no
+    single-field restriction on candidates.
+    """
+    with open_sqlite(str(tmp_path / "codex-extra-field.sqlite")) as store:
+        world = _SelectionWorld(
+            store,
+            failing_call_ids=frozenset(),
+            extra_payload={"system_prompt": "You are terse."},
+        )
+
+        result = world.run_step(
+            calls=[("c1", _TEMPLATE_A)],
+            artifact_fields={"selected_call_id": "c1"},
+        )
+
+        assert result.terminal_failure is None, result.terminal_failure
+        assert result.status is StepStatus.COMPLETE
+        accepted = world.store.get(
+            result.accepted_candidates[0].record_ref.reference
+        )
+
+    assert accepted["payload"]["user_prompt_template"] == _TEMPLATE_A
+    assert accepted["payload"]["system_prompt"] == "You are terse."

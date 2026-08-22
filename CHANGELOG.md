@@ -249,22 +249,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output and no reward, and a candidate that was never successfully
   scored is not a result.
 - The ledger is total over *admitted* calls, not reported ones, on every
-  path that terminalizes a step. The adapter reconciles the reported
-  `evaluated_call_ids` against the durable per-run accepted count; on a
-  shortfall, and on a wall-budget stop where there is no artifact to read
-  call ids from at all, it enumerates the durable admission entries and
-  re-issues every completed one through the guarded handle before it
-  fails. The handle reads the recorded terminal instead of evaluating, so
-  this records work already paid for and never buys more. An agent
-  therefore cannot hide paid evaluations from the Step Result or leave
-  the `tool_calls` budget under-debited by omitting them, and a run that
-  simply ran out of wall clock still surfaces everything it spent.
+  path that terminalizes a step. Every failing exit leaves the adapter
+  through one path that reconciles first and fails second, so ledger
+  totality does not depend on which thing went wrong. It enumerates the
+  durable admission entries and re-issues every completed one through the
+  guarded handle before it fails. The handle reads the recorded terminal
+  instead of evaluating, so this records work already paid for and never
+  buys more. An agent therefore cannot hide paid evaluations from the
+  Step Result or leave the `tool_calls` budget under-debited -- not by
+  omitting them from `evaluated_call_ids`, not by corrupting or omitting
+  the artifact's `lease_token_hash`, not by reporting a call id twice or
+  naming a selection it never evaluated, and not by exiting nonzero
+  without an artifact at all. A run that simply ran out of wall clock
+  still surfaces everything it spent.
+- A Codex process that fails without a usable artifact -- a nonzero exit,
+  an unspawnable process, an unreadable or malformed final message --
+  terminalizes the step under `codex_execution_failed` instead of raising
+  out of the adapter. The harness runs its effect-lease maintenance only
+  once the adapter returns, so an escaping exception left the effect
+  non-terminal, and this adapter's `NO_REDRIVE` policy then blocked the
+  run from recovering until the lease lapsed.
 - A shortfall says which kind it is. An omitted call that `COMPLETED` is
   the agent under-reporting (`codex_unreported_evaluation`); an admitted
   call whetstone's own evaluation server never reached a terminal for is
   a harness failure (`codex_evaluation_interrupted`), named with the
   interrupted call ids. The agent had no result to report in the second
-  case, so the two no longer share one accusatory code.
+  case, so the two no longer share one accusatory code. This holds on the
+  wall-budget stop too, where the kill can strand an in-flight evaluation
+  in `ACCEPTED` with its capacity already debited. The admission contract
+  has no typed release, so that capacity slot stays consumed -- the run
+  really did commit the evaluation -- and the step names the stranded
+  calls rather than letting them vanish into the accepted count.
+- A durable admitted call whose recorded `template` and `base_ref` cannot
+  be read back is a typed failure (`codex_recorded_call_contract`), not a
+  silent skip. Reconciliation validates the recorded arguments before it
+  issues the call, so a call can no longer reach the Issued Tool Call
+  ledger while being omitted from the evidence the step's single shared
+  terminal failure is computed over.
+- The candidate rebuilt from the selected tool call is assembled the same
+  way every other proposal path assembles one: from the base candidate's
+  payload with only the run's mutation field replaced. Rebuilding it from
+  the mutation field alone dropped every other payload field the base
+  carried, so any multi-field candidate failed the mutation diff even on
+  a legitimately evaluated selection.
+- The Codex preflight probe resolves the default `~/.codex` credentials
+  when `CODEX_HOME` is unset, so a user authenticated the ordinary way
+  passes it. The probe is constructed with an explicit environment, which
+  previously resolved its auth source to nothing and staged no
+  credentials into the scratch `CODEX_HOME`. Credentials still reach the
+  untrusted agent only as files in its own scratch home, never as
+  environment values, and `containment` now owns the accepted auth
+  filenames so the preflight's check and the runner's staging cannot
+  drift apart.
+- Truncated Codex output is never presented as a contiguous stream. When
+  a finite output budget retains a head and a tail and drops the middle,
+  the join carries an explicit `[... N bytes elided ...]` marker line and
+  the isolation block records `stdout_truncated` / `stderr_truncated`
+  alongside the dropped byte counts. Concatenating the two fragments bare
+  fabricated a line the process never emitted, which the JSONL parser
+  then read as a malformed event at a boundary Codex never produced -- or
+  as a well-formed event that never happened.
 - `ToolCallStore.admitted_entries` joins `accepted_count` across the
   memory, SQLite, and PostgreSQL admission backends: the count says how
   many evaluations a scope paid for, the projection says which calls and
