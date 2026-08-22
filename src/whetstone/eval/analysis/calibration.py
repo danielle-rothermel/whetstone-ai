@@ -26,7 +26,7 @@ from whetstone.eval.protocol import (
 from whetstone.eval.schema import EvalEvidence, EvalFailureEvidence
 from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
-from whetstone.experiment.sampling import INTERNAL_EVAL, evaluation_role_for_split
+from whetstone.experiment.sampling import evaluation_role_for_split
 
 __all__ = [
     "AnchorCalibrationResult",
@@ -36,7 +36,17 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class AnchorCalibrationResult:
+    """One naive/ceiling anchor pair calibrated on a single evaluation role.
+
+    ``eval_role`` and ``split_role`` record which split the anchors were
+    measured on. Anchors calibrate on any role — the Stage-0 power analysis
+    inverts the MDE on the held-out split, which is the split the study
+    reports from — and both anchors of a result always share one role.
+    """
+
     eval_config_ref: EvalConfigRef
+    eval_role: EvalRole
+    split_role: str
     baseline: EvalEvidenceWithRef
     ceiling: EvalEvidenceWithRef
     paired_delta_ci: BootstrapCI
@@ -66,7 +76,7 @@ def _validate_anchor_evidence(
     expected_eval_role: EvalRole,
     expected_task_hashes: tuple[str, ...],
     expected_samples: int,
-    expected_reward_policy_hash: str,
+    expected_reward_policy_hash: str | None,
 ) -> None:
     if not isinstance(evaluated.evidence, EvalEvidence):
         raise ValueError("calibration requires successful evaluation evidence")
@@ -89,6 +99,10 @@ def _validate_anchor_evidence(
         len(expected_task_hashes) * expected_samples
     ):
         raise ValueError("calibration evidence changed planned row accounting")
+    if expected_reward_policy_hash is None:
+        # Reward evidence is minted only on the internal role, so a non-internal
+        # anchor legitimately carries no reward reference.
+        return
     if evidence.reward_ref is None:
         raise ValueError("calibration requires internal reward evidence")
     observed_policy_hash = (
@@ -107,6 +121,7 @@ def run_anchor_calibration(
     ceiling_purpose: str,
     task_ids: tuple[str, ...],
     pool_ceiling: int,
+    eval_role: EvalRole | None = None,
     power_config: PowerConfig | None = None,
     bootstrap_level: float = 0.95,
     bootstrap_resamples: int = DEFAULT_RESAMPLES,
@@ -115,12 +130,21 @@ def run_anchor_calibration(
     ceiling_log_label: str = "comparison anchor",
     log: Callable[[str], None] | None = None,
 ) -> AnchorCalibrationResult:
-    expected_eval_role = evaluation_role_for_split(engine.sampling.split_role)
-    if expected_eval_role is not EvalRole.INTERNAL:
-        raise ValueError("anchor calibration requires internal evaluation")
-    if engine.sampling.split_role != INTERNAL_EVAL:
+    """Evaluate a naive/ceiling anchor pair on one split and analyze its power.
+
+    The anchors calibrate on whichever split ``engine`` is bound to. Pass
+    ``eval_role`` to state the expected role explicitly; it must be the role
+    the split owns, which makes an accidentally mis-bound engine a loud error
+    rather than a silently relabelled calibration. Both anchors are validated
+    against the same role, Eval Config, task identity, and sample count.
+    """
+    split_role = engine.sampling.split_role
+    expected_eval_role = evaluation_role_for_split(split_role)
+    if eval_role is not None and eval_role is not expected_eval_role:
         raise ValueError(
-            "anchor calibration requires the internal sampling split"
+            f"anchor calibration was asked for evaluation role "
+            f"{eval_role.value!r} but the engine is bound to split "
+            f"{split_role!r} ({expected_eval_role.value!r})"
         )
     if pool_ceiling < len(task_ids):
         raise ValueError(
@@ -175,7 +199,11 @@ def run_anchor_calibration(
             f"invalid={accounting.invalid})"
         )
     samples = subset_engine.sampling.num_seeds
-    reward_policy_hash = subset_engine.reward_policy_identity_hash()
+    reward_policy_hash = (
+        subset_engine.reward_policy_identity_hash()
+        if expected_eval_role is EvalRole.INTERNAL
+        else None
+    )
     expected_eval_config_ref = subset_engine.eval_config_ref
     for evaluated in (baseline, ceiling):
         _validate_anchor_evidence(
@@ -209,6 +237,8 @@ def run_anchor_calibration(
     )
     return AnchorCalibrationResult(
         eval_config_ref=expected_eval_config_ref,
+        eval_role=expected_eval_role,
+        split_role=split_role,
         baseline=baseline,
         ceiling=ceiling,
         paired_delta_ci=paired_delta_ci,
