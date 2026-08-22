@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `EvalRole.HELD_OUT` (`"held_out"`) completes the evaluation-role
+  enumeration. The role's persisted spelling is pinned by a golden literal
+  test alongside the `EvalEvidence` wire format, since stored evidence
+  carries the value.
+- `EvalConfigs.held_out` is an optional third `EvalSplit`, derived by its own
+  `derive_eval_split` call under the `HELD_OUT` split role. Two-role
+  experiments leave it `None` and behave exactly as before;
+  `held_out_task_hashes` is now derived from the split. `EvalConfigs` also
+  gains `splits()` and `split_for()`, and rejects a split filed under the
+  wrong role.
+- `assert_split_disjointness(configs)` is the mechanical leakage check: it
+  intersects the content-addressed task-hash sets of every present split
+  pairwise, raising `HeldOutReferencedError` when held-out reaches another
+  split and `SplitOverlapError` otherwise, and returns the union of task
+  hashes. `EvalConfigs.__post_init__` runs it, so splits that share a task
+  identity cannot be assembled into an `EvalConfigs` — and therefore into an
+  `Experiment` — at all; calling it directly is now only for the covered-hash
+  union or for checking splits before assembly. Enlarging the held-out split
+  leaves the internal and official splits byte-identical, which a test now
+  encodes.
+- `BootstrapCI.p_value` carries the two-sided bootstrap p-value
+  `2 * min(P(stat* <= 0), P(stat* >= 0))`, computed from the same resample
+  vector as the interval and clamped into `[1 / resamples, 1]` so an
+  all-one-sided bootstrap cannot report an exact zero.
+- `BootstrapCI.degenerate` marks an interval built from fewer than two paired
+  observations (`n < 2`), where every resample is the same point and the
+  bootstrap carries no information about sampling uncertainty. A degenerate
+  interval reports `p_value = 1.0` rather than the `1 / resamples` floor, so
+  a single task can no longer present itself as maximally significant and
+  survive the Holm adjustment as a false positive. `n >= 2` resamples
+  normally, including vectors with only one nonzero delta.
+- `holm_adjust(pvalues)` returns Holm-Bonferroni step-down adjusted p-values
+  in the input order, so a family of bootstrap p-values can be corrected
+  without recomputing any bootstrap.
+- `PowerConfig.significance_alpha` (default `0.05`) and
+  `PowerConfig.interaction_floor_fraction` (default `0.0`), plus
+  `PowerConfig.mdd_multiplier`.
+
 ### Changed
 
 - Pinned dependencies moved in lockstep: dr-exec 0.1.14, dr-store 0.2.6, and
@@ -15,6 +55,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the batch deadline killed inside a worker from one that never left the queue.
   dr-exec now publishes that flag, so the driver no longer infers the
   distinction from the cancelled row's measured span.
+- `analyze_power` reports a **two-sided** minimum detectable difference:
+  `(z_{1 - significance_alpha/2} + z_{target_prob}) * sqrt((tau^2 + 2 sigma^2/K) / T)`.
+  It previously used `z_{target_prob}` alone, which is a one-sided 80%
+  detection threshold rather than a 95% significance MDE and understated the
+  detectable effect by a factor of 3.33 at every grid point. The
+  pre-registered MDE table is pinned by a numeric golden test.
+- The interaction-variance estimate no longer carries an implicit
+  `0.1 * within_sample_var` floor. The method-of-moments estimate is already
+  truncated at zero, and the floor inflated every MDE by an amount with no
+  estimator behind it; a study that wants a floor now sets
+  `interaction_floor_fraction` explicitly.
+- `run_anchor_calibration` calibrates anchors on any evaluation role instead
+  of refusing every non-internal split. `AnchorCalibrationResult` records the
+  `eval_role` and `split_role` it measured, and the optional `eval_role`
+  argument asserts the engine is bound to the role the caller expects. Reward
+  evidence is validated only on the internal role, which is the only role that
+  mints it.
 
 ## 0.1.5 - 2026-08-22
 
