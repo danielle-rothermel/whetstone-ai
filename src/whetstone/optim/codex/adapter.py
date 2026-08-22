@@ -61,7 +61,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from secrets import token_hex
-from typing import Any, Protocol
+from typing import Any, Final, Protocol
 
 from dr_store import ObjectStore
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
@@ -219,6 +219,65 @@ class CodexOutputArtifact(BaseModel):
     lease_token_hash: StrictStr = ""
     conversation_evidence: dict[str, Any] = Field(default_factory=dict)
     control_cost: dict[str, Any] = Field(default_factory=dict)
+
+
+#: The fields the *agent* is asked to produce. ``conversation_evidence`` and
+#: ``control_cost`` are deliberately absent: the runner overwrites
+#: ``conversation_evidence`` with whetstone's own process evidence after the
+#: run, and nothing reads ``control_cost``. Asking the model for either would
+#: invite it to invent evidence whetstone then discards.
+CODEX_ARTIFACT_AGENT_FIELDS: Final = (
+    "run_id",
+    "evaluated_call_ids",
+    "selected_call_id",
+    "lease_token_hash",
+)
+
+
+def codex_output_schema(
+    *, run_id: str, lease_token_hash: str
+) -> dict[str, Any]:
+    """The structured-output schema handed to the Codex CLI.
+
+    This is written out explicitly rather than derived from
+    :meth:`CodexOutputArtifact.model_json_schema`, because the two have
+    different jobs and different validators. The model is whetstone's
+    storage shape; this is a contract the OpenAI structured-output
+    validator enforces, and it is stricter than JSON Schema:
+
+    * every object -- nested ones included -- must set
+      ``additionalProperties: false``;
+    * every property must appear in ``required``, so an optional field is
+      expressed as a nullable type rather than by omission.
+
+    Pydantic emits ``additionalProperties: true`` for a ``dict[str, Any]``
+    field, so the derived schema was rejected with
+    ``invalid_json_schema`` before the agent produced a single token. The
+    fake CLI never validated the schema, so only a real run surfaced it.
+
+    ``run_id`` and ``lease_token_hash`` are pinned as constants: a
+    non-conforming artifact then fails at the CLI boundary rather than as
+    a Step terminal failure.
+    """
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(CODEX_ARTIFACT_AGENT_FIELDS),
+        "properties": {
+            "run_id": {"type": "string", "const": run_id},
+            "evaluated_call_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            # Null is the seed-retaining selection, so it is a nullable
+            # type rather than an omitted property.
+            "selected_call_id": {"type": ["string", "null"]},
+            "lease_token_hash": {
+                "type": "string",
+                "const": lease_token_hash,
+            },
+        },
+    }
 
 
 @dataclass(frozen=True, slots=True)

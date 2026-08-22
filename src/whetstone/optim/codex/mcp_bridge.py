@@ -112,7 +112,12 @@ def tool_result_to_mcp_result(
 
 
 class EvaluateCandidateServer(MCPServer[None]):
-    def __init__(self, *, handle: RuntimeToolHandle) -> None:
+    def __init__(
+        self,
+        *,
+        handle: RuntimeToolHandle,
+        expected_model_route: str | None = None,
+    ) -> None:
         definition = handle.config.definition.record
         input_fields = frozenset(definition.input_fields)
         if input_fields != _BASE_INPUT_FIELDS:
@@ -130,6 +135,10 @@ class EvaluateCandidateServer(MCPServer[None]):
         #: the only party that knows when the session may be released, so
         #: the path travels with the server rather than being rediscovered.
         self.sqlite_path: str | None = None
+        #: The one model route this engine will accept. It is advertised as
+        #: a ``const`` on the tool's input schema so the agent cannot guess
+        #: it wrong; see :meth:`list_tools`.
+        self._expected_model_route = expected_model_route
 
         def evaluate_candidate(
             call_id: NonEmptyId,
@@ -153,19 +162,45 @@ class EvaluateCandidateServer(MCPServer[None]):
             structured_output=False,
         )
 
+    @property
+    def expected_model_route(self) -> str | None:
+        """The one route this server's evaluator accepts, if it knows it."""
+        return self._expected_model_route
+
     async def list_tools(self) -> list[mcp_types.Tool]:
+        """Advertise the schema, with the fixed arguments pinned.
+
+        ``model_route`` must equal the engine's exact Provider Call Config
+        route or the evaluator refuses the call. That value appears
+        nowhere the agent can see -- not in the prompt, not in the
+        serialized step request -- so an agent driving this tool for real
+        had to guess it, and every guess was refused as a validation
+        refusal that still consumed a turn. The scripted fake CLI was
+        handed the right value, so nothing caught it.
+
+        Advertising it as a ``const`` makes the correct value part of the
+        tool contract the agent reads, rather than a secret it must
+        discover. The evaluator still validates: this narrows what a
+        well-behaved agent sends, it does not replace the check.
+        """
         tools = await super().list_tools()
-        return [
-            tool.model_copy(
-                update={
-                    "input_schema": {
-                        **tool.input_schema,
-                        "additionalProperties": False,
-                    }
-                }
-            )
-            for tool in tools
-        ]
+        pinned: list[mcp_types.Tool] = []
+        for tool in tools:
+            schema = {
+                **tool.input_schema,
+                "additionalProperties": False,
+            }
+            if (
+                tool.name == str(self.tool_config.definition.record.tool_name)
+                and self._expected_model_route is not None
+            ):
+                properties = dict(schema.get("properties", {}))
+                route_schema = dict(properties.get("model_route", {}))
+                route_schema["const"] = self._expected_model_route
+                properties["model_route"] = route_schema
+                schema["properties"] = properties
+            pinned.append(tool.model_copy(update={"input_schema": schema}))
+        return pinned
 
     async def call_tool(
         self,

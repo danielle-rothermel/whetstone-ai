@@ -50,6 +50,12 @@ from typing import Any
 FAKE_CODEX_TRANSCRIPT_ENV = "WS_FAKE_CODEX_TRANSCRIPT"
 FAKE_CODEX_CLI_MODULE = "whetstone.testing.fake_codex_cli"
 
+#: Where this CLI echoes the prompt it was given, inside the artifact's
+#: ``conversation_evidence``. The runner preserves that field under
+#: ``conversation_evidence["agent"]``, so a test reads the emitted prompt
+#: back from the persisted artifact without a production seam.
+FAKE_CODEX_PROMPT_EVIDENCE_KEY = "fake_codex_prompt"
+
 #: Keys of the JSONL events this CLI writes to stdout. The runner parses
 #: them with the same strict decoder it uses for the real CLI.
 _EVENT_TYPE_KEY = "type"
@@ -60,6 +66,7 @@ _EVENT_FINAL = "final"
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     parsed = _parse_args(args)
+    prompt = _prompt_from_args(args)
     endpoint = _endpoint_from_args(args)
     transcript = _load_transcript()
     evaluated: list[str] = []
@@ -101,7 +108,12 @@ def main(argv: list[str] | None = None) -> int:
         "evaluated_call_ids": evaluated,
         "selected_call_id": None,
         "lease_token_hash": parsed.lease_token_hash,
-        "conversation_evidence": {},
+        # The prompt the runner actually emitted, echoed back through the
+        # field the agent's own evidence already travels on. A real agent
+        # reports what it was told; this one reports it verbatim, which is
+        # what lets a test assert on the prompt the runner built rather
+        # than on one the test rebuilt for itself.
+        "conversation_evidence": {FAKE_CODEX_PROMPT_EVIDENCE_KEY: prompt},
         "control_cost": {},
     }
     artifact.update(final_overrides)
@@ -147,6 +159,17 @@ def _parse_args(args: list[str]) -> _ParsedArgs:
         lease_token_hash=str(properties["lease_token_hash"]["const"]),
         output_artifact_path=artifact_path,
     )
+
+
+def _prompt_from_args(args: list[str]) -> str:
+    """The prompt, which the real command takes as its last positional.
+
+    ``build_codex_command`` appends it after every flag, so the trailing
+    argument is it.
+    """
+    if not args:
+        raise ValueError("fake Codex requires a prompt argument")
+    return args[-1]
 
 
 def _option(args: list[str], name: str) -> str | None:
@@ -283,6 +306,7 @@ if __name__ == "__main__":
 
 __all__ = [
     "FAKE_CODEX_CLI_MODULE",
+    "FAKE_CODEX_PROMPT_EVIDENCE_KEY",
     "FAKE_CODEX_TRANSCRIPT_ENV",
     "install_fake_codex_binary",
     "main",

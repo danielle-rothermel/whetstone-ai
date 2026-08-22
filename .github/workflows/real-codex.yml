@@ -1,0 +1,78 @@
+# Real-Codex ladder — MANUAL ONLY.
+#
+# This workflow drives the real Codex CLI against a live, logged-in Codex
+# subscription session and spends real Codex agent turns. It is
+# workflow_dispatch-only and is never triggered by a push, a pull request,
+# or a schedule.
+#
+# It requires a self-hosted macOS runner that:
+#   * is macOS (the Codex sandbox is sandbox-exec only),
+#   * has the Codex CLI installed, and
+#   * has an existing logged-in session at ~/.codex/auth.json
+#     (run `codex login` on the runner once, interactively).
+#
+# GitHub-hosted runners cannot satisfy the third condition, so this job
+# will not run there. No credential is passed as a secret and none is
+# printed: the optimizer's own auth staging copies the runner's existing
+# session into each run's scratch CODEX_HOME.
+#
+# The task model stays fake: evaluations run on the reference transport,
+# so this spends Codex turns and no eval-provider credit.
+name: Real Codex ladder
+
+on:
+  workflow_dispatch:
+    inputs:
+      selector:
+        description: >-
+          Optional pytest -k selector to run a subset of rungs
+          (for example "rung3" or "rung4a or rung4b"). Empty runs them all.
+        required: false
+        default: ""
+
+concurrency:
+  # One real ladder at a time: the rungs drive a shared Codex session.
+  group: real-codex
+  cancel-in-progress: false
+
+jobs:
+  ladder:
+    # Self-hosted because a logged-in Codex session is a property of the
+    # machine, not something a secret can provide.
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked --extra platform
+      - name: Confirm a Codex session exists
+        run: |
+          # Existence only -- never the contents.
+          test -f "$HOME/.codex/auth.json" \
+            || { echo "no Codex session on this runner; run 'codex login' once"; exit 1; }
+          codex --version
+      - name: Run the ladder
+        env:
+          # Written under the workspace so the artifact upload can reach it.
+          WHETSTONE_REAL_CODEX_OUTPUT_DIR: ${{ github.workspace }}/real-codex-out
+          # The dispatcher's selector reaches bash as data, never as
+          # script text. Interpolating ${{ inputs.selector }} into the
+          # run block would splice an arbitrary string into a shell
+          # command on a self-hosted runner that holds a live Codex
+          # session -- an injection with a logged-in credential behind it.
+          SELECTOR: ${{ inputs.selector }}
+        run: |
+          if [ -n "$SELECTOR" ]; then
+            bash scripts/check-real-codex.sh -k "$SELECTOR"
+          else
+            bash scripts/check-real-codex.sh
+          fi
+      - name: Upload the rung table and transcript
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: real-codex-ladder
+          path: real-codex-out/
+          if-no-files-found: warn

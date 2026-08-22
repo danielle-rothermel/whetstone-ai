@@ -40,6 +40,7 @@ from dr_exec import (
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import ValidationError
 
+from whetstone.experiment.candidate import CandidateRef, candidate_reference
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.optim.codex.adapter import (
     CodexMcpHostFailure,
@@ -49,6 +50,7 @@ from whetstone.optim.codex.adapter import (
     CodexWallBudgetExceeded,
     OpaqueStepError,
     codex_lease_token_hash,
+    codex_output_schema,
     codex_run_lease_binding,
 )
 from whetstone.optim.codex.containment import (
@@ -58,9 +60,12 @@ from whetstone.optim.codex.containment import (
     CODEX_DENIED_FEATURES,
     CODEX_FILESYSTEM_POLICY,
     CODEX_NETWORK_POLICY,
+    CODEX_WEB_SEARCH_CONFIG_KEY,
+    CODEX_WEB_SEARCH_DISABLED,
 )
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.codex.mcp_host import CodexMcpEndpoint, CodexMcpHost
+from whetstone.optim.codex.mcp_bridge import EvaluateCandidateServer
 from whetstone.optim.codex.mcp_server import build_server_from_env
 from whetstone.optim.contracts import OptimStepRequest
 from whetstone.optim.tools.contracts import (
@@ -74,7 +79,16 @@ if TYPE_CHECKING:
 _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
 
-_MCP_TOOLS_APPROVAL_MODE = "auto"
+#: How the CLI treats this server's tools. ``codex exec`` runs with the
+#: session approval policy ``never``, and under ``auto`` an MCP tool call
+#: is still routed through approval -- so every call fails with "MCP tool
+#: call requires approval, but approval policy is never" and the agent
+#: cannot evaluate anything. ``approve`` pre-approves this server's tools,
+#: which is the whole point of a server whetstone hosts itself: the
+#: evaluation tool is admission-gated and capacity-capped on the server
+#: side, so the CLI's own approval prompt adds nothing but a deadlock.
+#: The accepted variants are auto, prompt, writes, and approve.
+_MCP_TOOLS_APPROVAL_MODE = "approve"
 
 #: The variable the Codex CLI reads the evaluation endpoint's bearer
 #: token from. It crosses into the CLI's configuration, so it is pinned.
@@ -242,6 +256,13 @@ def build_codex_command(
         output_artifact_path,
         "-c",
         'shell_environment_policy.inherit="none"',
+        # Web search is enabled by default from 0.148 and the feature flags
+        # that once gated it are deprecated, so this key is the only thing
+        # that still turns it off. The agent must reach the evaluation tool
+        # and nothing else.
+        "-c",
+        f"{CODEX_WEB_SEARCH_CONFIG_KEY}="
+        f"{json.dumps(CODEX_WEB_SEARCH_DISABLED)}",
     ]
     for feature in CODEX_DENIED_FEATURES:
         argv.extend(["--disable", feature])
@@ -507,7 +528,7 @@ class SubprocessCodexRunner:
         environment: Mapping[str, str] | None = None,
         extra_environment_keys: frozenset[str] = frozenset(),
         prompt_builder: (
-            Callable[[OptimStepRequest], str] | None
+            Callable[[CodexPromptContext], str] | None
         ) = None,
     ) -> None:
         mcp_values = (sqlite_path, runtime_config, reward_policy)
@@ -646,27 +667,13 @@ class SubprocessCodexRunner:
                 "Codex optimizer run requires its MCP runtime configuration"
             )
         token_hash = codex_lease_token_hash(lease_token)
-        schema = CodexOutputArtifact.model_json_schema()
-        # Pin the two fields the adapter checks before it reads anything
-        # else, so a non-conforming artifact fails at the CLI boundary
-        # rather than as a Step terminal failure.
-        for field, constant in (
-            ("run_id", request.run_id),
-            ("lease_token_hash", token_hash),
-        ):
-            field_schema = schema["properties"][field]
-            assert isinstance(field_schema, dict)
-            field_schema["const"] = constant
-        prompt = (
-            _default_prompt(
-                request,
-                tool_name=handle.config.tool_name,
-                lease_token_hash=token_hash,
-                max_tool_calls=handle.config.capacity.max_accepted_calls,
-            )
-            if self._prompt_builder is None
-            else self._prompt_builder(request)
+        # The agent-facing schema is built explicitly: the structured
+        # output validator is stricter than JSON Schema, and the shape
+        # derived from the storage model does not satisfy it.
+        schema = codex_output_schema(
+            run_id=request.run_id, lease_token_hash=token_hash
         )
+
         # whetstone hosts the evaluation server itself, before the sandbox
         # exists, and hands the agent only a loopback URL and this run's
         # bearer token. The server is the sole writer of the whetstone
@@ -692,16 +699,62 @@ class SubprocessCodexRunner:
         # never started, and burying the real defect behind a host
         # diagnostic. Every failure still terminalizes; they differ only
         # in which code they carry.
-        host = _entered_mcp_host(
-            lambda: CodexMcpHost(
-                build_server_from_env(
-                    self._mcp_server_environment(handle, lease_token)
-                ),
-                auth_token=lease_token,
+        # The server is built inside the host builder on purpose: it opens
+        # a process-lifetime store session, and the host is what closes
+        # that session on teardown. Building it eagerly out here leaks the
+        # session past this Step.
+        #
+        # It is captured so the prompt can name the very route this server
+        # advertises as a const on its tool schema. An agent told one route
+        # and offered another burns a turn per refused guess, so the two
+        # are read off one object rather than derived twice.
+        built: list[EvaluateCandidateServer] = []
+
+        def _build_host() -> CodexMcpHost:
+            server = build_server_from_env(
+                self._mcp_server_environment(handle, lease_token)
             )
-        )
+            built.append(server)
+            return CodexMcpHost(server, auth_token=lease_token)
+
+        host = _entered_mcp_host(_build_host)
         with host as endpoint:
             try:
+                # Building the prompt is inside the try for the same
+                # reason the execution is: it reads the built server, the
+                # Step Request, and a caller-supplied builder, and an
+                # unexpected shape or a raising builder is none of the
+                # three exceptions the adapter catches. Escaping here
+                # would unwind past the adapter's checkpoint and leave
+                # this NO_REDRIVE effect nonterminal until its lease
+                # lapsed, so it is normalized like every other failure
+                # under an entered host.
+                # Resolved once, for either builder. The two protocol
+                # facts are mandatory whoever writes the prompt, so a
+                # custom builder receives them rather than rederiving
+                # them from private helpers.
+                context = CodexPromptContext(
+                    request=request,
+                    tool_name=handle.config.tool_name,
+                    lease_token_hash=token_hash,
+                    max_tool_calls=(
+                        handle.config.capacity.max_accepted_calls
+                    ),
+                    model_route=_expected_model_route(built),
+                    base_ref=_request_base_ref_json(request),
+                )
+                prompt = (
+                    _default_prompt(
+                        context.request,
+                        tool_name=context.tool_name,
+                        lease_token_hash=context.lease_token_hash,
+                        max_tool_calls=context.max_tool_calls,
+                        model_route=context.model_route,
+                        base_ref=context.base_ref,
+                    )
+                    if self._prompt_builder is None
+                    else self._prompt_builder(context)
+                )
                 execution = self._execute_structured(
                     prompt=prompt,
                     output_schema=schema,
@@ -713,12 +766,13 @@ class SubprocessCodexRunner:
                 # and the adapter terminalizes them as they are.
                 raise
             except Exception as exc:
-                # An unforeseen defect inside the execution path. It
-                # still has to terminalize -- the harness releases the
-                # effect lease only once the adapter returns, so
-                # unwinding here wedges this NO_REDRIVE run until the
-                # lease lapses -- but under the execution taxonomy,
-                # because the host is up and the agent may have run.
+                # An unforeseen defect in building the prompt or running
+                # the agent. It still has to terminalize -- the harness
+                # releases the effect lease only once the adapter
+                # returns, so unwinding here wedges this NO_REDRIVE run
+                # until the lease lapses -- but under the execution
+                # taxonomy, because the host is up and the agent may
+                # have run.
                 raise OpaqueStepError(
                     f"Codex execution failed unexpectedly: {exc}"
                 ) from exc
@@ -1049,19 +1103,134 @@ class SubprocessCodexRunner:
         return (root.resolve(),)
 
 
+def _seed_candidate_reference(request: OptimStepRequest) -> CandidateRef:
+    """The run's seed candidate, resolved by identity rather than position.
+
+    This is the same resolution the adapter's seed-retaining path makes:
+    the run names its ``initial_candidate_ref``, and the candidate on the
+    Request carrying that reference is the base every evaluation binds.
+    Reading ``candidates[0]`` instead would be silently wrong for any
+    Request whose first candidate is not the seed.
+    """
+    seed_ref = request.run.record.initial_candidate_ref
+    if seed_ref is None:
+        raise OpaqueStepError(
+            "Codex prompt requires the run to name its initial candidate"
+        )
+    for candidate in request.candidates:
+        reference = candidate_reference(candidate)
+        if reference == seed_ref:
+            return reference
+    raise OpaqueStepError(
+        "the run seed candidate is not on the Codex Step Request"
+    )
+
+
+def _expected_model_route(built: list[EvaluateCandidateServer]) -> str:
+    """The one route this Step's evaluation server accepts.
+
+    The value is read off the server that was actually built, so the
+    prompt names the same route the tool schema advertises as a const.
+    A missing server or an unset route is a defect in this runner, not a
+    prompt to degrade: dropping the clause sends the agent back to
+    guessing a route object out of the model and reasoning-effort
+    fields, and every guess is refused after admission -- paying
+    capacity for calls that can never score. Failing here is loud and
+    terminalizes, which is why it raises rather than returning "".
+    """
+    if not built:
+        raise OpaqueStepError(
+            "Codex prompt requires the evaluation server that was built "
+            "for this Step"
+        )
+    route = built[0].expected_model_route
+    if not route:
+        raise OpaqueStepError(
+            "Codex prompt requires the evaluation server's expected "
+            "model route"
+        )
+    return route
+
+
+def _request_base_ref_json(request: OptimStepRequest) -> str:
+    """The seed candidate's reference, as the tool argument spells it.
+
+    Every evaluation binds the run's seed as its base. The value is a
+    two-field object the agent must reproduce exactly, and it appears
+    nowhere in the serialized request, so an agent driving the tool for
+    real invents one and has the call refused *after* admission -- paying
+    capacity for a call that can never score. A Step Request with no
+    candidate cannot name a base, and silently dropping the clause
+    reintroduces exactly that unguessable-argument failure, so it raises.
+
+    The seed is resolved through the run's ``initial_candidate_ref``, the
+    same identity the adapter's seed-retaining path uses, rather than by
+    position on the Request.
+    """
+    record_ref = _seed_candidate_reference(request).record_ref
+    return json.dumps(
+        {
+            "schema_name": record_ref.schema_name,
+            "content_hash": record_ref.content_hash,
+        },
+        sort_keys=True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CodexPromptContext:
+    """Everything a prompt builder needs, resolved by the runner.
+
+    A custom builder replaces the whole prompt, so it inherits the
+    default's obligations: ``model_route`` and ``base_ref`` are the two
+    values the agent can derive from nothing it can see, and a prompt
+    missing either sends it back to guessing -- every guess admitted and
+    then refused, paying capacity for calls that can never score.
+
+    Both are handed over here because the runner is the only thing that
+    can resolve them correctly. ``model_route`` is read off the
+    evaluation server actually built for this Step, and ``base_ref`` off
+    the run's seed candidate; a builder that rederived them would be
+    reaching into private helpers and could drift from the route the
+    tool schema advertises as a const.
+    """
+
+    request: OptimStepRequest
+    tool_name: str
+    lease_token_hash: str
+    max_tool_calls: int
+    #: The exact fixed string the evaluation tool accepts.
+    model_route: str
+    #: The seed candidate's reference, JSON as the tool argument spells it.
+    base_ref: str
+
+
 def _default_prompt(
     request: OptimStepRequest,
     *,
     tool_name: str,
     lease_token_hash: str,
     max_tool_calls: int,
+    model_route: str,
+    base_ref: str,
 ) -> str:
     """The instruction Codex receives.
 
     Evaluating through the Tool is mandatory, not guidance: the artifact
     carries no candidate body, so the only way to return a candidate is to
     name the ``call_id`` of a call that was actually admitted and scored.
+
+    ``model_route`` and ``base_ref`` are required and are the two values
+    the agent can derive from nothing it can see. Their callers resolve
+    them or raise; there is no empty default, because a prompt missing
+    either clause reads as valid and sends the agent back to guessing.
     """
+    if not model_route:
+        raise OpaqueStepError("Codex prompt requires the model route")
+    if not base_ref:
+        raise OpaqueStepError(
+            "Codex prompt requires the seed candidate base_ref"
+        )
     context = json.dumps(
         request.model_dump(mode="json"),
         sort_keys=True,
@@ -1073,7 +1242,21 @@ def _default_prompt(
         "exact candidate base_ref, model route, payload template, Tool "
         "Config, capacity, budget, pools, hyperparameters, and output "
         "contract in the serialized request below.\n"
-        "Evaluating through the MCP tool is mandatory. Every candidate you "
+        # The one value the agent cannot derive from anything it can
+        # see. It is a const on the tool schema too, but a real agent
+        # reads the prompt first and will otherwise assemble a route
+        # object out of the model and reasoning-effort fields in the
+        # serialized request -- which the evaluator refuses, burning a
+        # turn per guess.
+        + "The model_route argument is a fixed string and must be "
+        f"exactly {model_route!r}. It is not an object and must not be "
+        "built from any other field.\n"
+        # Same class of problem as model_route: the seed candidate's
+        # reference is the base every call must bind, and an agent
+        # that invents one has its call refused after admission.
+        + "The base_ref argument must be copied verbatim as "
+        f"{base_ref}. Do not construct or modify it.\n"
+        + "Evaluating through the MCP tool is mandatory. Every candidate you "
         "consider must be submitted to the tool with a call_id you choose; "
         f"you may make at most {max_tool_calls} calls, and every further "
         "call is refused with refused=true and refusal_class=capacity. A "
@@ -1332,6 +1515,7 @@ def _decode_stderr(stderr: bytes) -> str:
 
 
 __all__ = [
+    "CodexPromptContext",
     "CodexStructuredExecution",
     "SubprocessCodexRunner",
     "build_codex_command",

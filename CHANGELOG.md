@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `tests/real_codex/`: a nine-rung ladder that runs the Codex-direct
+  optimizer against the real `codex` CLI with a fake task model (config
+  acceptance, auth preflight, one hosted-MCP Step, capacity / wall-budget /
+  no-call terminalization, multi-evaluation loop, reasoning efforts,
+  transcript retention, sandbox denial, bearer-token refusal). Marked
+  `real_codex`, deselected by default, opt-in with `WHETSTONE_REAL_CODEX=1`.
+  `scripts/check-real-codex.sh` runs it and writes the transcript and rung
+  table under `~/drotherm/data/whetstone-ai/real-codex/<timestamp>/`;
+  `.github/workflows/real-codex.yml` runs it on demand on a self-hosted
+  macOS runner.
+- `tests/test_codex_wire_goldens.py` pins the structured-output schema and the
+  config keys the runner writes for the real CLI as literals.
+
+### Changed
+- A custom `SubprocessCodexRunner(prompt_builder=...)` now receives a
+  `CodexPromptContext` instead of the bare `OptimStepRequest`. It carries
+  the Step's `model_route` and `base_ref` — the two values the agent can
+  derive from nothing it can see — alongside `tool_name`,
+  `lease_token_hash`, and `max_tool_calls`, so a builder no longer has to
+  rederive them from private runner helpers and risk disagreeing with the
+  route the Step's own evaluation server advertises. Breaking: builders
+  take one context argument.
+
+### Fixed
+- `.github/workflows/real-codex.yml` passes the dispatch `selector` input
+  through the environment rather than interpolating it into the `run:`
+  script, so a dispatcher cannot inject shell onto the self-hosted macOS
+  runner that holds a logged-in Codex session. An empty selector still
+  runs the whole ladder.
+- The Codex-direct optimizer now produces evaluations against the real CLI.
+  Four defects each made every real run yield zero evaluations and were
+  unreachable by the scripted fake CLI: the output schema derived from
+  Pydantic carried `additionalProperties: true` and was rejected by the
+  structured-output validator; `code_mode_host` — which routes MCP tool
+  calls in codex 0.148 — was denied, hiding `evaluate_candidate`; the MCP
+  approval mode `auto` failed every call under `codex exec`'s `never`
+  approval policy (now `approve`); and `model_route` / `base_ref` were
+  unguessable, so the agent spent admitted capacity on refused guesses (now
+  named in the prompt and pinned as schema `const`).
+- Codex web search is disabled through `web_search = "disabled"`; the two
+  feature-flag denials it replaced are deprecated no-ops in codex 0.148.
+- A failure while building the Codex prompt now terminalizes the Step
+  instead of stranding its effect lease. Prompt construction runs under
+  the entered MCP host but sat outside the runner's normalized region, so
+  an unexpected Step Request shape or a raising `prompt_builder` escaped
+  `CodexAdapter.invoke` entirely and left the `NO_REDRIVE` effect
+  nonterminal until the lease lapsed.
+
 ## 0.1.7 - 2026-08-22
 
 ### Added

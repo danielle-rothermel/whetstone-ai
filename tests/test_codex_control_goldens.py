@@ -36,8 +36,8 @@ _PLACEHOLDER_TASK_HASHES = ("d" * 64, "e" * 64)
 
 #: The identity hash of :func:`_toy_control`. Regenerate deliberately.
 _TOY_CONTROL_HASH = (
-    "23ccda059b88fffee4a21d63a1d04961"
-    "9f60e9513e1ee7d2a0179653c18a8535"
+    "96cde1c8e0130a75b7c3868ca74697b7"
+    "b98675f55bf529156687579309dd1602"
 )
 
 

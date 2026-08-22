@@ -41,8 +41,9 @@ dev = [
 testpaths = ["tests"]
 markers = [
     "integration: requires postgres + dbos + dr-platform",
+    "real_codex: drives the real Codex CLI against a live subscription session; opt in with WHETSTONE_REAL_CODEX=1",
 ]
-addopts = "-m 'not integration'"
+addopts = "-m 'not integration and not real_codex'"
 [project.urls]
 Repository = "https://github.com/danielle-rothermel/whetstone-ai"
 Issues = "https://github.com/danielle-rothermel/whetstone-ai/issues"
