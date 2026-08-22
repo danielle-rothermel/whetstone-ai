@@ -484,10 +484,10 @@ def prepare_codex_run(
     broken Codex session fails before any capacity or eval budget is
     committed. It has no default: an optional check is only as good as
     each caller remembering it, and the whole point is that no budgeted
-    run starts without a proven session. A caller that drives a scripted
-    stand-in rather than a real CLI passes
-    :func:`whetstone.testing.runtime.scripted_codex_preflight`, which
-    lives outside this package and so cannot be selected here.
+    run starts without a proven session. The production caller passes
+    ``codex_auth_preflight``; a caller driving a scripted stand-in rather
+    than a real CLI names its own no-op explicitly, and that stand-in
+    lives in the testing package, which production code may not import.
     """
     from whetstone.optim.codex.adapter import CODEX_ADAPTER_KEY
     from whetstone.optim.tools.contracts import tool_config_reference

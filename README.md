@@ -42,11 +42,13 @@ packages or repos), one-off experiment scripts, and product-facing runners.
 4. **Sandbox & interpretation** — dry-run previews and toy-graph helpers to step
    through optimizer behavior before spending full eval budget
    (`whetstone-sandbox`).
-5. **Codex MCP eval** — `whetstone-mcp-eval` serves the one tool a Codex run is
-   granted: evaluate a candidate on the run's internal split and read back the
-   aggregate reward and per-task scores. Every call is admitted through
-   `ToolAdmissionAuthority` against a per-run capacity, leased, persisted, and
-   recorded in the step's Issued Tool Call ledger. The Codex output artifact
+5. **Codex MCP eval** — whetstone hosts, outside the Codex sandbox, the one
+   tool a Codex run is granted: evaluate a candidate on the run's internal
+   split and read back the aggregate reward and per-task scores. The agent
+   receives only an authenticated loopback endpoint, never the store. Every
+   call is admitted through `ToolAdmissionAuthority` against a per-run
+   capacity, leased, persisted, and recorded in the step's Issued Tool Call
+   ledger. The Codex output artifact
    carries no candidate body -- it names the `call_id` it selected, and the
    adapter rebuilds that candidate from the call's recorded, content-addressed
    arguments, so a template that was never evaluated through the tool cannot be
