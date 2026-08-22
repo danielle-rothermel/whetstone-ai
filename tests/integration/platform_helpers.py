@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
 from sqlalchemy import Engine, select
@@ -38,10 +38,18 @@ from whetstone.platform.deploy import (
     wait_for_run_released,
 )
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
+from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 from whetstone.testing.runtime import (
     build_toy_copro_control,
+    build_toy_gepa_adapter,
+    build_toy_gepa_control,
     prepare_toy_copro_run,
+    prepare_toy_gepa_run,
     register_toy_runtime,
+)
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    build_toy_experiment,
 )
 
 if TYPE_CHECKING:
@@ -221,6 +229,8 @@ def bootstrap_platform_runtime(
     dispatch_mode: EvalDispatchMode,
     breadth: int = 2,
     depth: int = 1,
+    optimizer: Literal["copro", "gepa"] = "copro",
+    max_metric_calls: int = 2,
 ) -> PlatformIntegrationContext:
     migrate_platform_schema(pg_engine)
     suffix = uuid4().hex[:10]
@@ -229,18 +239,62 @@ def bootstrap_platform_runtime(
     work_key = f"work-{suffix}"
 
     eval_engine = ReferenceEvalRuntimeConfig().build_engine(store)
-    control = build_toy_copro_control(
-        breadth=breadth,
-        depth=depth,
-        engine=eval_engine,
-    )
-    runtime = register_toy_runtime(
-        store=store,
-        ledger_engine=pg_engine,
-        engine=eval_engine,
-        copro_control=control,
-        platform=True,
-    )
+    run_id = f"integration-run-{suffix}"
+    if optimizer == "gepa":
+        experiment = build_toy_experiment(num_seeds=1)
+        gepa_control = build_toy_gepa_control(
+            engine=eval_engine,
+            max_metric_calls=max_metric_calls,
+        )
+        gepa_adapter = build_toy_gepa_adapter(
+            store=store,
+            engine=eval_engine,
+            control=gepa_control,
+            run_id=run_id,
+            initial_candidate=experiment.initial_candidate,
+            mutation_field=TOY_MUTATION_FIELD,
+            evaluation_service=None,
+        )
+        copro_control = build_toy_copro_control(
+            breadth=breadth,
+            depth=depth,
+            engine=eval_engine,
+        )
+        runtime = register_toy_runtime(
+            store=store,
+            ledger_engine=pg_engine,
+            engine=eval_engine,
+            copro_control=copro_control,
+            extra_adapters={GEPA_ADAPTER_KEY: gepa_adapter},
+            platform=True,
+        )
+        launch = prepare_toy_gepa_run(
+            runtime,
+            run_id=run_id,
+            control=gepa_control,
+            experiment=experiment,
+        )
+        if dispatch_mode is EvalDispatchMode.PLATFORM:
+            gepa_adapter.bind_evaluation_service(runtime.eval_service)
+    else:
+        control = build_toy_copro_control(
+            breadth=breadth,
+            depth=depth,
+            engine=eval_engine,
+        )
+        runtime = register_toy_runtime(
+            store=store,
+            ledger_engine=pg_engine,
+            engine=eval_engine,
+            copro_control=control,
+            platform=True,
+        )
+        launch = prepare_toy_copro_run(
+            runtime,
+            run_id=run_id,
+            control=control,
+            terminal_top_k=1,
+        )
     deployment = deploy_platform(
         runtime=runtime,
         engine=pg_engine,
@@ -250,12 +304,6 @@ def bootstrap_platform_runtime(
         now=now,
         app_name=f"whetstone-platform-{suffix}",
         sweep_cron=None,
-    )
-    launch = prepare_toy_copro_run(
-        runtime,
-        run_id=f"integration-run-{suffix}",
-        control=control,
-        terminal_top_k=1,
     )
     submit_optim_run(
         runtime=runtime,
@@ -296,7 +344,7 @@ def load_terminal_optim_result(
     assert parsed.schema == OPTIM_RESULT_SCHEMA
     result = OptimResult.model_validate(context.store.get(parsed))
     assert result.run.record.run_id == context.launch.run.run_id
-    assert result.proposals
+    assert result.proposals or result.seed_retained
     return result
 
 

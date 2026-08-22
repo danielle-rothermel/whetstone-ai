@@ -72,6 +72,7 @@ class StepContractProvider(Protocol):
         prior_results: tuple[OptimStepResult, ...],
         control: OptimizerControl,
         mutation_field: str,
+        extra_pools: dict[str, Any] | None,
     ) -> OptimStepRequest: ...
 
 

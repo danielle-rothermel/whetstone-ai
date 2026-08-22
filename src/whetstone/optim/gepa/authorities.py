@@ -11,15 +11,20 @@ from pydantic import (
     model_validator,
 )
 
-from whetstone.coordination.eval_service import EvalEngineService, EvalExecutionContext
+from whetstone.coordination.eval_service import (
+    EvalEngineService,
+    EvalExecutionContext,
+    EvalPlatformDeferred,
+)
 from whetstone.core.identity import (
+    ImmutableJsonObject,
     TypedRef,
     compute_identity_hash,
     require_full_hash,
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvalRole
-from whetstone.eval.metadata import metadata_with_purpose
+from whetstone.eval.metadata import PURPOSE_METADATA_KEY
 from whetstone.eval.protocol import EvalRequest, EvalEngine
 from whetstone.eval.schema import (
     EVAL_TRACES_SCHEMA,
@@ -66,6 +71,7 @@ from whetstone.optim.proposal.proposer import (
     require_canonical_proposal_executor,
 )
 
+GEPA_EVAL_INTENT_ALIAS_PREFIX = "whetstone.gepa.eval_intent:"
 GEPA_REFLECTION_BASE_SCHEMA = "whetstone.gepa.reflection_base"
 GEPA_CANDIDATE_ASSEMBLER_SCHEMA = "whetstone.gepa.candidate_assembler"
 GEPA_CANDIDATE_ASSEMBLER_SCHEMA_VERSION = 1
@@ -380,6 +386,7 @@ class CanonicalGepaEvalAuthority:
         candidate_assembler: CanonicalGepaCandidateAssembler,
         data_registry: GepaDataRegistry,
         submission_projector: GepaSubmissionProjector | None = None,
+        evaluation_service: EvalEngineService | None = None,
     ) -> None:
         if engine.eval_config_ref != control.metric:
             raise ValueError(
@@ -439,6 +446,8 @@ class CanonicalGepaEvalAuthority:
         self._resolutions: list[IntentResolution] = []
         self._replayed: list[bool] = []
         self._step_index: int | None = None
+        self._evaluation_service = evaluation_service
+        self._eval_context = EvalExecutionContext()
         self._submission_projector = submission_projector or (
             DefaultGepaSubmissionProjector(
                 submission_result_field=control.submission_result_field,
@@ -516,6 +525,12 @@ class CanonicalGepaEvalAuthority:
     def component_names(self) -> tuple[str, ...]:
         return self._candidate_assembler.component_names
 
+    def bind_eval_context(self, context: EvalExecutionContext) -> None:
+        self._eval_context = context
+
+    def bind_evaluation_service(self, service: EvalEngineService) -> None:
+        self._evaluation_service = service
+
     def evaluate(
         self,
         request: GepaEvaluationEffectRequest,
@@ -525,9 +540,7 @@ class CanonicalGepaEvalAuthority:
             self._data_registry.require_exact(item)
             self._store.get(item.data_ref.reference)
         candidate = self._candidate_assembler.assemble(request.candidate)
-        # data_id is the engine-resolvable task id; no translation needed.
-        task_ids = tuple(item.data_id for item in request.data)
-        subset_engine = self._engine.for_task_ids(task_ids)
+        task_hashes = tuple(item.task_hash for item in request.data)
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.slot.context.run_id,
             # The harness step that is actually executing this evaluation.
@@ -543,17 +556,41 @@ class CanonicalGepaEvalAuthority:
                     f"{request.identity_hash()}"
                 ),
                 candidate=candidate.record,
-                metadata=metadata_with_purpose("gepa_metric"),
+                metadata=ImmutableJsonObject(
+                    {PURPOSE_METADATA_KEY: "gepa_metric"}
+                ),
             ),
             expected_reward_policy_hash=self._control.reward_policy_hash,
+            task_hashes=task_hashes,
         )
-        resolution = EvalEngineService(
-            store=self._store,
-            engine=subset_engine,
-        ).resolve_optim_eval_request(
-            optim_eval_request,
-            context=EvalExecutionContext(),
+        alias_key = (
+            f"{GEPA_EVAL_INTENT_ALIAS_PREFIX}"
+            f"{request.slot.context.run_id}:{request.identity_hash()}"
         )
+        aliased = self._store.resolve(alias_key)
+        if aliased is not None:
+            optim_eval_request = OptimEvalRequest.model_validate(
+                self._store.get(aliased)
+            )
+        service = self._evaluation_service
+        if service is None:
+            service = EvalEngineService(
+                store=self._store,
+                engine=self._engine,
+            )
+        try:
+            resolution = service.resolve_optim_eval_request(
+                optim_eval_request,
+                context=self._eval_context,
+            )
+        except EvalPlatformDeferred as deferred:
+            intent = deferred.intent or optim_eval_request
+            if deferred.intent is None:
+                deferred = EvalPlatformDeferred(str(deferred), intent=intent)
+            bound = self._store.resolve(service.platform_intent_key(intent))
+            if bound is not None:
+                self._store.bind(alias_key, bound)
+            raise deferred
         self._resolutions.append(resolution)
         self._replayed.append(False)
         if resolution.outcome is not IntentOutcome.COMPLETED:

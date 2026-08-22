@@ -144,6 +144,7 @@ class CoproStepContractProvider:
         prior_results: tuple[OptimStepResult, ...],
         control: CoproControl,
         mutation_field: str,
+        extra_pools: dict[str, Any] | None,
     ) -> OptimStepRequest:
         del store
         step_index = prior.step_index + 1
@@ -160,6 +161,9 @@ class CoproStepContractProvider:
             item.model_dump(mode="json") for item in attempt_history
         ]
         finalizing = completed_rounds >= control.depth
+        pools: dict[str, Any] = {"attempt_history": history_payload}
+        if extra_pools:
+            pools.update(extra_pools)
         return OptimStepRequest(
             run=prior.request.record.run,
             step_id=f"{prior.run_id}:copro:{step_index}",
@@ -172,7 +176,7 @@ class CoproStepContractProvider:
             prior_state_ref=prior.state_ref,
             prior_history_ref=prior.history_ref,
             candidates=(prior.request.record.candidates[0],),
-            pools=ImmutableJsonObject({"attempt_history": history_payload}),
+            pools=ImmutableJsonObject(pools),
             hyperparameters=ImmutableJsonObject(
                 control.step_hyperparameters(
                     iteration=(

@@ -17,6 +17,12 @@ from whetstone.core.leasing import EffectLeaseAuthority
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
+from whetstone.optim.gepa.control import GepaControl
+from whetstone.optim.gepa.factory import (
+    build_gepa_harness_adapter,
+    default_gepa_prompt_services,
+)
+from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
     ProposerConfig,
@@ -54,6 +60,48 @@ def _live_transport_call(execution_policy: ProviderExecutionPolicy):
     from dr_providers import HttpProvider
 
     return HttpProvider(policy=execution_policy.transport_policy).invoke
+
+
+class ToyExperimentOnlyError(typer.BadParameter):
+    """A stored launch was not bound against the CLI's toy experiment.
+
+    The CLI rebuilds its evaluation engine from
+    :class:`ReferenceEvalRuntimeConfig`, whose experiment is the in-memory toy
+    experiment. A launch's persisted record cannot supply a different one: an
+    :class:`~whetstone.experiment.env.Experiment` owns a live ``rollout_graph``
+    (graph config, provider call config, evaluation procedure), and the launch
+    persists only identity hashes over the eval config, not the graph itself.
+
+    Rather than fan a non-toy run out over toy tasks, the CLI refuses.
+    """
+
+
+def _require_launch_matches_engine(
+    launch,
+    engine,
+    *,
+    eval_config_ref,
+) -> None:
+    """Refuse a launch the CLI's toy-experiment engine cannot honestly run.
+
+    ``eval_config_ref`` is the launch's own bound eval config -- COPRO's
+    ``control.eval_config_ref`` or GEPA's ``control.metric``. When it does not
+    address the rebuilt engine's eval config, the launch was bound against a
+    different experiment and the engine's tasks are not the launch's tasks.
+    """
+    if eval_config_ref == engine.eval_config_ref:
+        return
+    raise ToyExperimentOnlyError(
+        f"launch {launch.run.run_id!r} was bound against an experiment this "
+        "command cannot rebuild: its eval config "
+        f"{eval_config_ref!r} does not match the toy experiment engine's "
+        f"{engine.eval_config_ref!r}. `whetstone-optim run` reconstructs its "
+        "evaluation engine from the built-in toy experiment, and a launch "
+        "does not persist the rollout graph needed to rebuild any other one, "
+        "so running this launch here would evaluate it over toy tasks. Drive "
+        "a non-toy experiment through a runtime built with that experiment "
+        "instead."
+    )
 
 
 def _copro_adapter_from_control(
@@ -126,6 +174,94 @@ def _copro_adapter_from_control(
     )
 
 
+def _gepa_adapter_from_launch(
+    launch,
+    engine,
+    store,
+    *,
+    proposer: str,
+    execution_policy: ProviderExecutionPolicy,
+):
+    control = launch.control
+    if not isinstance(control, GepaControl):
+        raise typer.BadParameter("launch GEPA control is not a GepaControl")
+    prompt_adapter = PlainPromptAdapter()
+    adapter_hash = prompt_adapter_identity_hash(prompt_adapter)
+    if control.proposal_prompt_adapter_identity_hash != adapter_hash:
+        raise typer.BadParameter(
+            "launch GEPA control prompt adapter does not match "
+            "the CLI PlainPromptAdapter"
+        )
+    if control.reward_policy_hash != engine.reward_policy_identity_hash():
+        raise typer.BadParameter(
+            "launch control reward policy does not match the rebuilt engine"
+        )
+    if control.metric != engine.eval_config_ref:
+        raise typer.BadParameter(
+            "launch control metric does not match the rebuilt engine"
+        )
+    services = default_gepa_prompt_services(
+        component_names=control.component_names,
+        mutation_field=launch.run.mutation_field,
+    )
+    if (
+        services.descriptor.identity_hash()
+        != control.prompt_format_identity_hash
+        or services.binding.identity_hash()
+        != control.prompt_binding_identity_hash
+    ):
+        raise typer.BadParameter(
+            "launch GEPA prompt services do not match the CLI defaults; "
+            "pass a GEPA adapter to build_runtime"
+        )
+    if proposer == PROPOSER_FAKE:
+        transport: (
+            FakeProposerTransport | ProviderProposerTransport
+        ) = FakeProposerTransport(
+            {},
+            default=(
+                "Reply briefly to: {prompt} with a concise greeting.",
+                "Answer {prompt} in one short friendly sentence.",
+            ),
+            execution_policy_hash=execution_policy.identity_hash,
+            prompt_adapter_identity_hash=adapter_hash,
+        )
+    elif proposer == PROPOSER_PROVIDER:
+        if not isinstance(control.reflection_model, ProposerConfig):
+            raise typer.BadParameter(
+                "provider proposer requires a stored ProviderCallConfig"
+            )
+        from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA, ProviderCallConfig
+
+        transport = ProviderProposerTransport(
+            resolve_provider_call_config=store_config_resolver(
+                store,
+                PROVIDER_CALL_CONFIG_SCHEMA,
+                ProviderCallConfig,
+            ),
+            transport=_live_transport_call(execution_policy),
+            execution_policy=execution_policy,
+            prompt_adapter=prompt_adapter,
+        )
+    else:
+        raise typer.BadParameter("proposer must be provider or fake")
+    return build_gepa_harness_adapter(
+        store=store,
+        engine=engine,
+        control=control,
+        run_id=launch.run.run_id,
+        initial_candidate=launch.initial_candidate,
+        mutation_field=launch.run.mutation_field,
+        prompt_services=services,
+        transport=transport,
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=(
+                control.proposal_durability_policy_identity_hash
+            ),
+        ),
+    )
+
+
 def _receipt_payload(receipt) -> dict[str, object]:
     return {
         "run_key": receipt.run_key.value,
@@ -151,7 +287,7 @@ def run_command(
         Literal["provider", "fake"],
         typer.Option(
             "--proposer",
-            help="COPRO proposer transport: live provider or scripted fake",
+            help="Proposer transport for COPRO or GEPA: live provider or fake",
         ),
     ] = PROPOSER_PROVIDER,
     work_key: Annotated[str | None, typer.Option("--work-key")] = None,
@@ -206,11 +342,6 @@ def run_command(
                     f"launch adapter {launch.run.adapter_key!r} does not "
                     f"match --adapter {adapter!r}"
                 )
-            if adapter == ADAPTER_GEPA:
-                raise typer.BadParameter(
-                    "GEPA reconstruction from a stored launch is not "
-                    "supported; pass a GEPA adapter to build_runtime"
-                )
             if launch.control is None:
                 raise typer.BadParameter("launch is missing optimizer control")
             runtime_config = ReferenceEvalRuntimeConfig()
@@ -219,13 +350,41 @@ def run_command(
                 mutation_field=launch.run.mutation_field,
                 render_contract=launch.run.template_render_contract,
             )
-            copro_adapter = _copro_adapter_from_control(
-                launch.control,
-                engine,
-                store=store,
-                proposer=proposer,
-                execution_policy=runtime_config.execution_policy,
-            )
+            if adapter == ADAPTER_GEPA:
+                gepa_control = launch.control
+                if not isinstance(gepa_control, GepaControl):
+                    raise typer.BadParameter(
+                        "launch GEPA control is not a GepaControl"
+                    )
+                _require_launch_matches_engine(
+                    launch,
+                    engine,
+                    eval_config_ref=gepa_control.metric,
+                )
+                adapters = {
+                    GEPA_ADAPTER_KEY: _gepa_adapter_from_launch(
+                        launch,
+                        engine,
+                        store,
+                        proposer=proposer,
+                        execution_policy=runtime_config.execution_policy,
+                    )
+                }
+            else:
+                _require_launch_matches_engine(
+                    launch,
+                    engine,
+                    eval_config_ref=launch.control.eval_config_ref,
+                )
+                adapters = {
+                    COPRO_ADAPTER_KEY: _copro_adapter_from_control(
+                        launch.control,
+                        engine,
+                        store=store,
+                        proposer=proposer,
+                        execution_policy=runtime_config.execution_policy,
+                    )
+                }
             resolved_owner_id = owner_id or _stable_owner_id(
                 application_version=application_version,
                 executor_id=executor_id,
@@ -233,9 +392,7 @@ def run_command(
             runtime = build_runtime(
                 store=store,
                 engine=engine,
-                adapter_registry=MappingAdapterRegistry(
-                    {COPRO_ADAPTER_KEY: copro_adapter}
-                ),
+                adapter_registry=MappingAdapterRegistry(adapters),
                 effect_authority=EffectLeaseAuthority.sqlite(store_path),
                 ledger_engine=ledger,
                 platform=True,

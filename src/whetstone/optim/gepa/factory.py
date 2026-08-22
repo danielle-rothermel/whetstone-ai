@@ -6,11 +6,33 @@ from whetstone.core.identity import (
     TypedRef,
     compute_identity_hash,
 )
+from whetstone.coordination.eval_service import (
+    EvalEngineService,
+    EvalExecutionContext,
+)
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.gepa.authorities import (
+    CanonicalGepaCandidateAssembler,
     CanonicalGepaEvalAuthority,
     CanonicalGepaProposalAuthority,
+    GepaCandidateFieldBinding,
+    GepaDataRegistry,
+)
+from whetstone.optim.gepa.harness_adapter import (
+    GepaHarnessAdapter,
+    GepaHarnessAdapterFactory,
+    gepa_candidate_field_name,
+    seed_components_from_candidate,
+)
+from whetstone.optim.gepa.prompts import (
+    GepaComponentFormat,
+    GepaPromptFormatDescriptor,
+    GepaPromptServices,
+    NativeGepaReflectionPromptBuilder,
+    NativeGepaReflectionResponseParser,
 )
 from whetstone.optim.gepa.contracts import (
+    GepaDataInstance,
     GepaEffectContext,
     GepaEffectRecorder,
     GepaSkippedMutation,
@@ -18,7 +40,6 @@ from whetstone.optim.gepa.contracts import (
 from whetstone.optim.contracts import SearchEvidence
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaDetailedResult
-from whetstone.optim.gepa.prompts import GepaPromptServices
 from whetstone.optim.gepa.result_artifact import (
     GepaResultArtifactStore,
 )
@@ -118,6 +139,18 @@ class CanonicalGepaAdapterFactory:
         self._step_index = step_index
         self._evaluation_authority.begin_step(step_index=step_index)
         self._adapters.clear()
+
+    def bind_eval_context(self, context: EvalExecutionContext) -> None:
+        binder = getattr(self._evaluation_authority, "bind_eval_context", None)
+        if callable(binder):
+            binder(context)
+
+    def bind_evaluation_service(self, service: EvalEngineService) -> None:
+        binder = getattr(
+            self._evaluation_authority, "bind_evaluation_service", None
+        )
+        if callable(binder):
+            binder(service)
 
     def _require_step(self) -> int:
         if self._step_index is None:
@@ -243,8 +276,162 @@ class CanonicalGepaAdapterFactory:
             )
 
 
+def default_gepa_prompt_services(
+    *,
+    component_names: tuple[str, ...],
+    mutation_field: str,
+) -> GepaPromptServices:
+    """Native reflection prompts bound to one field per component."""
+    components = tuple(
+        GepaComponentFormat(
+            component_name=name,
+            component_schema_identity_hash=compute_identity_hash(
+                schema="whetstone.gepa.component_schema",
+                schema_version=1,
+                payload={"field": mutation_field, "component": name},
+            ),
+            allowed_placeholders=("prompt",),
+            required_placeholders=("prompt",),
+        )
+        for name in component_names
+    )
+    return GepaPromptServices(
+        descriptor=GepaPromptFormatDescriptor(
+            format_name="gepa_prompt_template",
+            components=components,
+        ),
+        reflection_builder=NativeGepaReflectionPromptBuilder(),
+        reflection_parser=NativeGepaReflectionResponseParser(),
+    )
+
+
+def _split_registry_entries(
+    *,
+    control: GepaControl,
+    registry: GepaDataRegistry,
+) -> tuple[
+    tuple[GepaDataInstance, ...],
+    tuple[GepaDataInstance, ...] | None,
+]:
+    """Partition the registry into the control's train and validation splits.
+
+    The registry holds the ordered union of both splits, because one eval
+    engine serves them. Upstream GEPA reflects on the trainset and selects on
+    the valset, so handing it the union as a trainset would both train on
+    validation instances and let selection see training instances. Return the
+    two ordered splits instead, and keep upstream's ``valset=None`` default
+    for the controls that bind validation back to the trainset.
+    """
+    by_task_hash = {entry.task_hash: entry for entry in registry.entries}
+
+    def ordered(task_hashes: tuple[str, ...], *, field: str):
+        try:
+            return tuple(by_task_hash[identity] for identity in task_hashes)
+        except KeyError as exc:
+            raise ValueError(
+                f"GEPA data registry has no task with hash {exc.args[0]!r} "
+                f"for {field}"
+            ) from None
+
+    trainset = ordered(control.trainset_task_hashes, field="trainset")
+    if control.source_valset_task_hashes is None:
+        if tuple(entry.task_hash for entry in trainset) != registry.task_hashes:
+            raise ValueError(
+                "GEPA registry conflicts with a control that binds validation "
+                "to the trainset"
+            )
+        return trainset, None
+
+    valset = ordered(control.valset_task_hashes, field="valset")
+    train_hashes = {entry.task_hash for entry in trainset}
+    val_hashes = {entry.task_hash for entry in valset}
+    overlap = train_hashes & val_hashes
+    if overlap:
+        raise ValueError(
+            "GEPA trainset and valset share tasks: "
+            f"{sorted(overlap)}"
+        )
+    if train_hashes | val_hashes != set(registry.task_hashes):
+        raise ValueError(
+            "GEPA trainset and valset do not cover the data registry"
+        )
+    return trainset, valset
+
+
+def build_gepa_harness_adapter(
+    *,
+    store: ObjectStore,
+    engine,
+    control: GepaControl,
+    run_id: str,
+    initial_candidate: Candidate,
+    mutation_field: str,
+    prompt_services: GepaPromptServices,
+    transport,
+    proposal_executor,
+    evaluation_service=None,
+) -> GepaHarnessAdapter:
+    """Assemble the production GEPA harness adapter for one run."""
+    seed = seed_components_from_candidate(
+        initial_candidate,
+        component_names=control.component_names,
+        mutation_field=mutation_field,
+    )
+    registry = GepaDataRegistry.from_engine(store=store, engine=engine)
+    assembler = CanonicalGepaCandidateAssembler(
+        base_candidate=candidate_reference(initial_candidate),
+        fields=tuple(
+            GepaCandidateFieldBinding(
+                component_name=name,
+                candidate_field=gepa_candidate_field_name(
+                    component_name=name,
+                    component_names=control.component_names,
+                    mutation_field=mutation_field,
+                ),
+            )
+            for name in control.component_names
+        ),
+    )
+    eval_authority = CanonicalGepaEvalAuthority(
+        store=store,
+        engine=engine,
+        control=control,
+        candidate_assembler=assembler,
+        data_registry=registry,
+        evaluation_service=evaluation_service,
+    )
+    proposal_authority = CanonicalGepaProposalAuthority(
+        store=store,
+        control=control,
+        prompt_services=prompt_services,
+        transport=transport,
+        proposal_executor=proposal_executor,
+    )
+    factory = CanonicalGepaAdapterFactory(
+        store=store,
+        run_id=run_id,
+        control=control,
+        evaluation_authority=eval_authority,
+        proposal_authority=proposal_authority,
+        prompt_services=prompt_services,
+    )
+    trainset, valset = _split_registry_entries(
+        control=control,
+        registry=registry,
+    )
+    return GepaHarnessAdapter(
+        control=control,
+        seed_candidate=seed,
+        trainset=trainset,
+        valset=valset,
+        adapter_factory=GepaHarnessAdapterFactory(factory=factory),
+    )
+
+
 __all__ = [
     "GEPA_ADAPTER_FACTORY_SCHEMA",
     "GEPA_ADAPTER_FACTORY_SCHEMA_VERSION",
     "CanonicalGepaAdapterFactory",
+    "build_gepa_harness_adapter",
+    "default_gepa_prompt_services",
 ]

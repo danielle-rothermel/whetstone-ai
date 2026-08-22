@@ -278,6 +278,11 @@ class OptimHarness(OptimRunStore):
             if request.mode is StepMode.TOOL_USING
             else ()
         )
+        bind_eval_context = getattr(
+            resolved_adapter.adapter, "bind_eval_context", None
+        )
+        if callable(bind_eval_context):
+            bind_eval_context(effective_eval_context)
         if request.mode is StepMode.PURE:
             output = self._invoke_pure(request, resolved_adapter.adapter)
         else:
@@ -797,6 +802,116 @@ class OptimHarness(OptimRunStore):
                     f"{item.schema_name}"
                 ) from error
 
+    def _require_eval_request_on_step(
+        self,
+        request: OptimStepRequest,
+        optim_eval_request: OptimEvalRequest,
+        allowed: dict[str, CandidateRef],
+    ) -> None:
+        if optim_eval_request.optim_run_id != request.run_id:
+            raise ValueError(
+                "Optim Eval Request belongs to another optimization run"
+            )
+        if optim_eval_request.optim_step_index != request.step_index:
+            raise ValueError(
+                "Optim Eval Request belongs to another optimization step"
+            )
+        from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+
+        if request.adapter_key == GEPA_ADAPTER_KEY:
+            self._require_gepa_assembled_eval_candidate(
+                request,
+                optim_eval_request,
+            )
+            return
+        candidate_ref = candidate_reference(
+            optim_eval_request.eval_request.candidate
+        )
+        exact_candidate = allowed.get(str(candidate_ref.identity_hash))
+        if exact_candidate is None or exact_candidate != candidate_ref:
+            raise ValueError(
+                "Optim Eval Request candidate is not an exact Step output "
+                "candidate"
+            )
+
+    def _require_gepa_assembled_eval_candidate(
+        self,
+        request: OptimStepRequest,
+        optim_eval_request: OptimEvalRequest,
+    ) -> None:
+        """Require the run's assembler lineage on a GEPA search-eval candidate.
+
+        Search evals are minted inside ``optimize()`` for candidates the step
+        has not proposed yet, so require the same assembler binding the run
+        used: seed candidate + control ``component_names``.
+
+        Known limitation: this check only runs once the adapter surfaces the
+        deferred intent. In PLATFORM mode
+        ``EvalEngineService._evaluate_and_bind`` already persisted the
+        ``OptimEvalRequest`` and bound its platform intent key before raising
+        ``EvalPlatformDeferred``, so rejecting here spends no budget and
+        executes no row but leaves an orphan intent record in the store.
+        Fixing that means moving this lineage check into the GEPA eval
+        authority, ahead of ``resolve_optim_eval_request``.
+        """
+        from whetstone.optim.gepa.authorities import (
+            CanonicalGepaCandidateAssembler,
+            GepaCandidateFieldBinding,
+        )
+        from whetstone.optim.gepa.contracts import GepaCandidateComponent
+        from whetstone.optim.gepa.control import GepaControl
+        from whetstone.optim.gepa.harness_adapter import (
+            gepa_candidate_field_name,
+        )
+
+        if not request.candidates:
+            raise ValueError("GEPA step must carry the run seed candidate")
+        control = GepaControl.model_validate(
+            self._store.get(
+                request.run.record.optimizer_config.record_ref.reference
+            )
+        )
+        control.require_identity_hash(
+            request.run.record.optimizer_config.record_hash
+        )
+        mutation_field = request.run.record.mutation_field
+        fields = tuple(
+            GepaCandidateFieldBinding(
+                component_name=name,
+                candidate_field=gepa_candidate_field_name(
+                    component_name=name,
+                    component_names=control.component_names,
+                    mutation_field=mutation_field,
+                ),
+            )
+            for name in control.component_names
+        )
+        assembler = CanonicalGepaCandidateAssembler(
+            base_candidate=candidate_reference(request.candidates[0]),
+            fields=fields,
+        )
+        candidate = optim_eval_request.eval_request.candidate
+        try:
+            components = tuple(
+                GepaCandidateComponent(
+                    name=name,
+                    text=candidate.payload[field.candidate_field],
+                )
+                for name, field in zip(
+                    control.component_names, fields, strict=True
+                )
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "Optim Eval Request candidate is not assembled from the run "
+                "base and control component_names"
+            ) from exc
+        if candidate_reference(candidate) != assembler.assemble(components):
+            raise ValueError(
+                "Optim Eval Request candidate is not assembled from the run "
+                "base and control component_names"
+            )
+
     def _validate_output_intents(
         self,
         request: OptimStepRequest,
@@ -828,26 +943,11 @@ class OptimHarness(OptimRunStore):
                 )
             self._require_resolvable_evidence(evidence)
         for optim_eval_request in output.optim_eval_requests:
-            if optim_eval_request.optim_run_id != request.run_id:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization run"
-                )
-            if optim_eval_request.optim_step_index != request.step_index:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization step"
-                )
-            candidate_ref = candidate_reference(
-                optim_eval_request.eval_request.candidate
+            self._require_eval_request_on_step(
+                request,
+                optim_eval_request,
+                allowed,
             )
-            exact_candidate = allowed.get(str(candidate_ref.identity_hash))
-            if (
-                exact_candidate is None
-                or exact_candidate != candidate_ref
-            ):
-                raise ValueError(
-                    "Optim Eval Request candidate is not an exact Step output "
-                    "candidate"
-                )
             if optim_eval_request.expected_reward_policy_hash is not None:
                 if (
                     reward_policy is None
@@ -897,26 +997,11 @@ class OptimHarness(OptimRunStore):
         )
         deferred: list[OptimEvalRequest] = []
         for optim_eval_request in output.optim_eval_requests:
-            if optim_eval_request.optim_run_id != request.run_id:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization run"
-                )
-            if optim_eval_request.optim_step_index != request.step_index:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization step"
-                )
-            candidate_ref = candidate_reference(
-                optim_eval_request.eval_request.candidate
+            self._require_eval_request_on_step(
+                request,
+                optim_eval_request,
+                allowed,
             )
-            exact_candidate = allowed.get(str(candidate_ref.identity_hash))
-            if (
-                exact_candidate is None
-                or exact_candidate != candidate_ref
-            ):
-                raise ValueError(
-                    "Optim Eval Request candidate is not an exact Step output "
-                    "candidate"
-                )
             self._persist_intent_records(optim_eval_request)
             if platform_mode:
                 assert isinstance(self._evaluation_service, EvalEngineService)

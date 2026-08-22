@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from whetstone.core.identity import ImmutableJsonObject, canonical_json
 from whetstone.core.leasing import ReplayPolicy
-from whetstone.core.identity import ImmutableJsonObject
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import (
@@ -24,8 +24,14 @@ from whetstone.optim.gepa.contracts import (
 )
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaEngineAdapter
+from whetstone.coordination.eval_service import (
+    EvalEngineService,
+    EvalExecutionContext,
+    EvalPlatformDeferred,
+)
 from whetstone.optim.gepa.step_engine import (
     GEPA_STATE_KEY,
+    GepaStepCheckpoint,
     load_gepa_checkpoint,
     run_one_gepa_iteration,
 )
@@ -36,6 +42,54 @@ GEPA_TERMINAL_ARTIFACT_KEY = "terminal_artifact_ref"
 #: rejected. Present on every Step, terminal or not, so a skip is durable on
 #: the Step it happened rather than only in the terminal transcript.
 GEPA_SKIPPED_MUTATIONS_KEY = "skipped_mutations"
+
+
+def _prefix_skipped_mutations(
+    request: OptimStepRequest,
+) -> tuple[GepaSkippedMutation, ...]:
+    raw = dict(request.pools).get(GEPA_SKIPPED_MUTATIONS_KEY, [])
+    if not isinstance(raw, (list, tuple)):
+        return ()
+    return tuple(
+        GepaSkippedMutation.model_validate(
+            item.to_json() if hasattr(item, "to_json") else item
+        )
+        for item in raw
+    )
+
+
+def _state_delta(
+    *,
+    checkpoint: GepaStepCheckpoint,
+    skipped: tuple[GepaSkippedMutation, ...],
+) -> ImmutableJsonObject:
+    return ImmutableJsonObject(
+        {
+            GEPA_STATE_KEY: checkpoint.model_dump(mode="json"),
+            # Durable on this Step, not only on the terminal transcript:
+            # a process death after a non-terminal skip must not lose it.
+            GEPA_SKIPPED_MUTATIONS_KEY: [
+                item.model_dump(mode="json") for item in skipped
+            ],
+        }
+    )
+
+
+def _union_skipped_mutations(
+    prefix: tuple[GepaSkippedMutation, ...],
+    produced: tuple[GepaSkippedMutation, ...],
+) -> tuple[GepaSkippedMutation, ...]:
+    seen = {
+        canonical_json(item.model_dump(mode="json")) for item in prefix
+    }
+    merged = list(prefix)
+    for item in produced:
+        key = canonical_json(item.model_dump(mode="json"))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return tuple(merged)
 
 
 def gepa_candidate_field_name(
@@ -107,6 +161,16 @@ class GepaHarnessAdapterFactory:
         """Reflection responses this Step's search rejected, in order."""
         return tuple(self._factory.skipped_mutations())
 
+    def bind_eval_context(self, context: EvalExecutionContext) -> None:
+        binder = getattr(self._factory, "bind_eval_context", None)
+        if callable(binder):
+            binder(context)
+
+    def bind_evaluation_service(self, service: EvalEngineService) -> None:
+        binder = getattr(self._factory, "bind_evaluation_service", None)
+        if callable(binder):
+            binder(service)
+
     def persist_result(
         self,
         *,
@@ -163,6 +227,12 @@ class GepaHarnessAdapter:
     def seed_candidate(self) -> dict[str, str]:
         return dict(self._seed_candidate)
 
+    def bind_eval_context(self, context: EvalExecutionContext) -> None:
+        self._adapter_factory.bind_eval_context(context)
+
+    def bind_evaluation_service(self, service: EvalEngineService) -> None:
+        self._adapter_factory.bind_evaluation_service(service)
+
     def invoke(
         self,
         request: OptimStepRequest,
@@ -178,26 +248,34 @@ class GepaHarnessAdapter:
         if iteration != request.step_index:
             raise ValueError("GEPA round_index must equal step_index")
         checkpoint = load_gepa_checkpoint(request)
+        prefix_skipped = _prefix_skipped_mutations(request)
         self._adapter_factory.begin_step(step_index=int(request.step_index))
         engine_adapter = self._adapter_factory.create(control=self._control)
-        detailed, checkpoint = run_one_gepa_iteration(
-            control=self._control,
-            seed_candidate=self._seed_candidate,
-            trainset=self._trainset,
-            valset=self._valset,
-            adapter=engine_adapter,
+        try:
+            detailed, checkpoint = run_one_gepa_iteration(
+                control=self._control,
+                seed_candidate=self._seed_candidate,
+                trainset=self._trainset,
+                valset=self._valset,
+                adapter=engine_adapter,
+                checkpoint=checkpoint,
+            )
+        except EvalPlatformDeferred as deferred:
+            intent = deferred.intent
+            return AdapterOutput(
+                proposed_status=StepStatus.CONTINUE,
+                optim_eval_requests=() if intent is None else (intent,),
+                state_delta=_state_delta(
+                    checkpoint=load_gepa_checkpoint(request),
+                    skipped=prefix_skipped,
+                ),
+            )
+        state_delta = _state_delta(
             checkpoint=checkpoint,
-        )
-        state_delta = ImmutableJsonObject(
-            {
-                GEPA_STATE_KEY: checkpoint.model_dump(mode="json"),
-                # Durable on this Step, not only on the terminal transcript:
-                # a process death after a non-terminal skip must not lose it.
-                GEPA_SKIPPED_MUTATIONS_KEY: [
-                    skipped.model_dump(mode="json")
-                    for skipped in self._adapter_factory.skipped_mutations()
-                ],
-            }
+            skipped=_union_skipped_mutations(
+                prefix_skipped,
+                self._adapter_factory.skipped_mutations(),
+            ),
         )
         search_evidence = self._adapter_factory.search_evidence(
             run_id=str(request.run_id),

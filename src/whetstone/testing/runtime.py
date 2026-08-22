@@ -40,9 +40,21 @@ if TYPE_CHECKING:
     from whetstone.experiment.env import Experiment
     from whetstone.optim.adapters import OptimizerAdapter
     from whetstone.optim.copro.control import CoproControl
+    from whetstone.optim.gepa.control import GepaControl
+    from whetstone.optim.gepa.harness_adapter import GepaHarnessAdapter
     from whetstone.optim.miprov2.control import Miprov2Control
     from whetstone.optim.miprov2.runtime import Miprov2State
     from whetstone.optim.proposal.proposer import ProposerTransport
+
+TOY_GEPA_COMPONENT = "generate"
+TOY_GEPA_INLINE_POLICY_HASH = compute_identity_hash(
+    schema="whetstone.testing.inline_proposal_executor",
+    schema_version=1,
+    payload={"mode": "inline"},
+)
+TOY_GEPA_REFLECTION_BODIES = (
+    "Answer {prompt} in one short friendly sentence.",
+)
 
 
 def build_toy_copro_control(
@@ -202,6 +214,7 @@ def prepare_toy_copro_run(
     )
 
 
+
 def build_miprov2_adapter(
     *,
     store: BlockingObjectStore,
@@ -327,10 +340,143 @@ def prepare_toy_miprov2_run(
     )
 
 
+def build_toy_gepa_control(
+    *,
+    engine: EvalEngine,
+    max_metric_calls: int = 4,
+    mutation_field: str = TOY_MUTATION_FIELD,
+    reflection_minibatch_size: int = 1,
+    use_merge: bool = False,
+    trainset_task_hashes: tuple[str, ...] | None = None,
+    valset_task_hashes: tuple[str, ...] | None = None,
+) -> GepaControl:
+    """A toy GEPA control over the engine's tasks.
+
+    By default the whole sampling plan is the trainset and validation binds
+    back to it. Pass both ``trainset_task_hashes`` and ``valset_task_hashes``
+    to exercise a real split; together they must be the engine's task order.
+    """
+    from whetstone.optim.gepa.control import configure_gepa
+    from whetstone.optim.gepa.factory import default_gepa_prompt_services
+
+    if valset_task_hashes is not None and trainset_task_hashes is None:
+        raise ValueError(
+            "a toy GEPA valset requires an explicit trainset"
+        )
+    resolved_trainset = (
+        engine.sampling.task_hashes
+        if trainset_task_hashes is None
+        else trainset_task_hashes
+    )
+
+    prompt_adapter = PlainPromptAdapter()
+    services = default_gepa_prompt_services(
+        component_names=(TOY_GEPA_COMPONENT,),
+        mutation_field=mutation_field,
+    )
+    return configure_gepa(
+        reflection_model=ProposerConfig(
+            provider_call_config=engine.provider_execution_policy_ref,
+        ),
+        metric=engine.eval_config_ref,
+        reward_policy_hash=engine.reward_policy_identity_hash(),
+        evaluation_execution_policy_hash=engine.execution_policy_identity_hash(),
+        proposal_execution_policy_hash=engine.execution_policy_identity_hash(),
+        proposal_prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+            prompt_adapter
+        ),
+        proposal_durability_policy_identity_hash=TOY_GEPA_INLINE_POLICY_HASH,
+        task_model_identity_hash=engine.task_model_identity_hash(),
+        prompt_format_identity_hash=services.descriptor.identity_hash(),
+        prompt_binding_identity_hash=services.binding.identity_hash(),
+        trainset_task_hashes=resolved_trainset,
+        valset_task_hashes=valset_task_hashes,
+        component_names=(TOY_GEPA_COMPONENT,),
+        num_predictors=1,
+        max_metric_calls=max_metric_calls,
+        reflection_minibatch_size=reflection_minibatch_size,
+        use_merge=use_merge,
+    )
+
+
+def build_toy_gepa_adapter(
+    *,
+    store: BlockingObjectStore,
+    engine: EvalEngine,
+    control: GepaControl,
+    run_id: str,
+    initial_candidate: Candidate,
+    mutation_field: str = TOY_MUTATION_FIELD,
+    evaluation_service=None,
+    reflection_bodies: tuple[str, ...] = TOY_GEPA_REFLECTION_BODIES,
+) -> GepaHarnessAdapter:
+    from whetstone.optim.gepa.factory import (
+        build_gepa_harness_adapter,
+        default_gepa_prompt_services,
+    )
+    from whetstone.optim.proposal.proposer import FakeProposerTransport
+
+    prompt_adapter = PlainPromptAdapter()
+    services = default_gepa_prompt_services(
+        component_names=control.component_names,
+        mutation_field=mutation_field,
+    )
+    return build_gepa_harness_adapter(
+        store=store,
+        engine=engine,
+        control=control,
+        run_id=run_id,
+        initial_candidate=initial_candidate,
+        mutation_field=mutation_field,
+        prompt_services=services,
+        transport=FakeProposerTransport(
+            {("gepa_reflection", 0): reflection_bodies},
+            default=reflection_bodies,
+            execution_policy_hash=engine.execution_policy_identity_hash(),
+            prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+                prompt_adapter
+            ),
+        ),
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=TOY_GEPA_INLINE_POLICY_HASH,
+        ),
+        evaluation_service=evaluation_service,
+    )
+
+
+def prepare_toy_gepa_run(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    control: GepaControl,
+    initial_candidate: Candidate | None = None,
+    experiment: Experiment | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
+) -> OptimRunLaunch:
+    from whetstone.coordination.runtime_bootstrap import prepare_gepa_run
+
+    return prepare_gepa_run(
+        runtime,
+        run_id=run_id,
+        control=control,
+        experiment=experiment or build_toy_experiment(num_seeds=1),
+        render_contract=render_contract or toy_template_render_contract(),
+        mutation_field=mutation_field or TOY_MUTATION_FIELD,
+        initial_candidate=initial_candidate,
+    )
+
+
 __all__ = [
+    "TOY_GEPA_COMPONENT",
+    "TOY_GEPA_INLINE_POLICY_HASH",
+    "TOY_GEPA_REFLECTION_BODIES",
     "build_miprov2_adapter",
     "build_toy_copro_control",
+    "build_toy_gepa_adapter",
+    "build_toy_gepa_control",
     "prepare_toy_copro_run",
+    "prepare_toy_gepa_run",
     "prepare_toy_miprov2_run",
     "register_toy_runtime",
 ]

@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.5 - 2026-08-22
+
+### Added
+
+- GEPA is platform-wired: `submit_optim_run` runs a GEPA adapter inline or
+  with PLATFORM deferral. Search evals raise `EvalPlatformDeferred` and
+  fan-in resumes the same `step_index` so every completed step still
+  carries resolvable `search_evidence`.
+- `build_gepa_harness_adapter` is the shared production constructor used
+  by the CLI and tests. `whetstone-optim run --adapter gepa` reconstructs
+  the adapter from a stored launch and honors `--proposer` (provider or
+  fake).
+- Continuation pools re-supply both the GEPA checkpoint and accumulated
+  skipped mutations from the last completed `prior.state_ref`.
+- GEPA search-eval candidates must round-trip the run's canonical
+  assembler: the run base candidate plus the control `component_names`.
+  An intent that does not is rejected with "not assembled from the run
+  base and control component_names", and a GEPA step without the run
+  seed candidate is rejected with "GEPA step must carry the run seed
+  candidate". Known limitation: in PLATFORM mode the eval authority
+  persists the `OptimEvalRequest` and binds its intent key before
+  deferring, so a rejected candidate spends no budget and executes no
+  row but leaves an orphan intent record in the store.
+
+### Changed
+
+- Per-intent `task_hashes` on `OptimEvalRequest` scopes GEPA minibatch
+  fan-out through the same engine-narrowing path MIPROv2 uses.
+  `load_terminal_optim_result` accepts a seed-retained result with no
+  proposals.
+- GEPA fan-in is safe to retry, guarded by the head's monotone
+  `platform_stage_index` watermark rather than `step_index` or pending
+  deferral fields alone. Because GEPA resumes the same `step_index` after
+  every deferral, one step can own several episodes, and the pending
+  deferral fields that identify an episode are cleared as soon as that
+  episode's own fan-in resumes the head. `platform_stage_index` survives
+  that clearing and only ever increases, so it orders a replayed fan-in
+  against the head in every case. A retry of the fan-in the head last
+  resumed — the head standing at exactly that fan-in's resume stage —
+  stays idempotent and re-reports the same successor. Any replay the head
+  has moved beyond, whether a newer episode has merely resumed or has
+  since completed the step, is inert: it leaves the live head, that
+  head's pending fan-out and step-keyed deferred intents, and its
+  `platform_stage_index` untouched, performs no persist, and enqueues no
+  `optim_step` that would duplicate the successor already queued.
+- `whetstone-optim run` refuses a launch it cannot honestly evaluate.
+  Both the `--adapter gepa` and `--adapter copro` paths rebuild their
+  evaluation engine from `ReferenceEvalRuntimeConfig`, whose experiment is
+  the built-in toy experiment, and a launch persists only eval-config
+  identity hashes -- not the live `rollout_graph` needed to rebuild any
+  other experiment. A launch whose bound eval config (GEPA
+  `control.metric`, COPRO `control.eval_config_ref`) does not address the
+  rebuilt engine's now raises `ToyExperimentOnlyError` naming both refs and
+  the limitation, instead of fanning the run out over toy tasks. Known
+  limitation: the command runs only launches bound against the toy
+  experiment; drive any other experiment through a runtime built with it.
+
+### Fixed
+
+- `build_gepa_harness_adapter` partitions the GEPA data registry into the
+  control's `trainset_task_hashes` and `valset_task_hashes` instead of
+  passing the registry's train/val union as the trainset with no valset.
+  One eval engine serves both splits, so the registry holds their ordered
+  union; handing that union to upstream GEPA reflected on validation
+  instances and let Pareto selection score training instances, which
+  contradicted the split `run_gepa_engine` enforces and corrupted
+  selection. The seam now rejects a registry whose splits overlap or do
+  not cover it, and a control that binds validation back to the trainset
+  still passes upstream's `valset=None` default unchanged.
+
 ## 0.1.4 - 2026-08-22
 
 ### Added
