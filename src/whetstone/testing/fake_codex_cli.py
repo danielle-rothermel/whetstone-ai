@@ -11,7 +11,9 @@ It ships in :mod:`whetstone.testing` rather than under ``tests/`` because
 import from another distribution's test tree.
 
 Run it as ``python -m whetstone.testing.fake_codex_cli exec ...``. The
-transcript path comes from :data:`FAKE_CODEX_TRANSCRIPT_ENV`.
+transcript JSON comes from :data:`FAKE_CODEX_TRANSCRIPT_ENV` -- inline,
+not as a path, because the sandbox grants no read access to a caller's
+temporary directory.
 
 Transcript format -- a JSON list of steps::
 
@@ -53,9 +55,8 @@ _EVENT_FINAL = "final"
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     parsed = _parse_args(args)
-    transcript = _load_transcript()
-
     mcp_env = _mcp_env_from_args(args)
+    transcript = _load_transcript(mcp_env)
     evaluated: list[str] = []
     final_overrides: dict[str, Any] = {}
     exit_code = 0
@@ -195,14 +196,24 @@ def _inherited_env() -> dict[str, str]:
     return {key: os.environ[key] for key in keys if key in os.environ}
 
 
-def _load_transcript() -> list[dict[str, Any]]:
-    raw = os.environ.get(FAKE_CODEX_TRANSCRIPT_ENV)
+def _load_transcript(mcp_env: dict[str, str]) -> list[dict[str, Any]]:
+    """Read the transcript the runner granted this process.
+
+    The value is the transcript JSON itself, not a path. The Codex
+    process runs under a sandbox profile whose only readable roots are
+    the scratch directory and the run's own state paths, so a path into
+    a test's temporary directory would be denied; passing the document
+    inline keeps the containment profile untouched.
+    """
+    raw = mcp_env.get(FAKE_CODEX_TRANSCRIPT_ENV) or os.environ.get(
+        FAKE_CODEX_TRANSCRIPT_ENV
+    )
     if not raw:
         raise ValueError(
-            f"fake Codex requires {FAKE_CODEX_TRANSCRIPT_ENV} to name a "
-            "transcript file"
+            f"fake Codex requires {FAKE_CODEX_TRANSCRIPT_ENV} to carry its "
+            "transcript JSON"
         )
-    loaded = json.loads(Path(raw).read_text(encoding="utf-8"))
+    loaded = json.loads(raw)
     if not isinstance(loaded, list):
         raise ValueError("fake Codex transcript must be a JSON list")
     return loaded

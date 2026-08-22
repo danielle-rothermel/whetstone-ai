@@ -376,6 +376,7 @@ class SubprocessCodexRunner:
         timeout_seconds: float = 600.0,
         max_output_bytes: int = CODEX_DEFAULT_MAX_OUTPUT_BYTES,
         environment: Mapping[str, str] | None = None,
+        extra_environment_keys: frozenset[str] = frozenset(),
         prompt_builder: (
             Callable[[OptimStepRequest], str] | None
         ) = None,
@@ -455,6 +456,10 @@ class SubprocessCodexRunner:
             allowed.add(
                 self._runtime.execution_policy.transport_policy.api_key_env
             )
+        # The allowlist is deliberately narrow: the Codex process is
+        # untrusted and inherits nothing by default. A caller that must
+        # grant one more variable names it explicitly.
+        allowed.update(extra_environment_keys)
         self._environment = {
             key: value
             for key, value in source_environment.items()

@@ -5,6 +5,12 @@ MCP evaluation endpoint bound to the run's internal split -- and every
 evaluation it performs is admitted, leased, persisted, and ledgered before
 it sees a score.
 
+A ``TOOL_USING`` Step Result carries Tool Evidence, never intent or
+search evidence -- the two are mutually exclusive by contract. The
+Issued Tool Call ledger produces one Tool Evidence entry per admitted
+call, so every paid Codex evaluation is reachable from the Step Result
+without the adapter attesting anything.
+
 The final candidate is resolved *from the ledger*, not from the artifact.
 The artifact names a ``selected_call_id``; the adapter reconstructs the
 candidate from that call's recorded, content-addressed ``args``. A
@@ -29,9 +35,7 @@ from whetstone.core.identity import TerminalFailure, TypedRef
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import (
-    IntentOutcome,
     OptimStepRequest,
-    SearchEvidence,
     StepMode,
     StepStatus,
 )
@@ -198,26 +202,10 @@ class CodexAdapter:
         except _UnevaluatedSelectionError as exc:
             return self._failed(state_delta, exc.failure)
 
-        mutation_field = str(request.run.record.mutation_field)
-        search_evidence = tuple(
-            entry
-            for entry in (
-                _search_evidence(
-                    call,
-                    mutation_field=mutation_field,
-                    run_id=request.run_id,
-                    step_index=request.step_index,
-                )
-                for call in admitted
-            )
-            if entry is not None
-        )
-
         if artifact.selected_call_id is None:
             return AdapterOutput(
                 proposed_candidates=(),
                 accepted_candidates=(),
-                search_evidence=search_evidence,
                 proposed_status=StepStatus.COMPLETE,
                 seed_retained=True,
                 retained_candidate=self._seed_candidate(request),
@@ -258,7 +246,6 @@ class CodexAdapter:
         return AdapterOutput(
             proposed_candidates=(candidate,),
             accepted_candidates=(candidate,),
-            search_evidence=search_evidence,
             proposed_status=StepStatus.COMPLETE,
             state_delta=state_delta,
         )
@@ -356,8 +343,9 @@ class CodexAdapter:
             # ledger reads the durable terminal instead of executing, so
             # this is a durable read, not a second paid evaluation.
             result = handle(call)
-            template = call.args.get("template")
-            raw_base = call.args.get("base_ref")
+            recorded_args = call.args.to_json()
+            template = recorded_args.get("template")
+            raw_base = recorded_args.get("base_ref")
             if not isinstance(template, str) or not isinstance(raw_base, dict):
                 raise _UnevaluatedSelectionError(
                     TerminalFailure(
@@ -436,52 +424,6 @@ class _SelectionContractError(Exception):
     def __init__(self, failure: TerminalFailure) -> None:
         self.failure = failure
         super().__init__(failure.message)
-
-
-def _search_evidence(
-    call: _AdmittedCall,
-    *,
-    mutation_field: str,
-    run_id: str,
-    step_index: int,
-) -> SearchEvidence | None:
-    """Project one admitted Tool Call onto this Step's search evidence.
-
-    A ``TOOL_USING`` Step never populates ``resolved_intents``, so this is
-    the only field that keeps every paid Codex evaluation reachable from
-    the Step Result.
-
-    A call whose Tool Result is a terminal failure produced no Eval
-    Evidence record, so it has nothing this model can cite; it stays
-    reachable through the Tool Evidence the harness records instead.
-    """
-    result = call.result
-    evidence_ref = _single_evidence_ref(result)
-    if evidence_ref is None:
-        return None
-    return SearchEvidence(
-        eval_request_id=f"tool:{call.call_id}",
-        optim_run_id=run_id,
-        optim_step_index=step_index,
-        candidate=candidate_reference(
-            Candidate(
-                candidate_id=call.call_id,
-                base_ref=call.base_ref,
-                payload={mutation_field: call.template},
-            )
-        ),
-        outcome=IntentOutcome.COMPLETED,
-        eval_result_ref=evidence_ref,
-        reward_ref=result.reward,
-        reward_evidence_refs=(
-            () if result.reward is None else result.evaluation_evidence_refs
-        ),
-    )
-
-
-def _single_evidence_ref(result: ToolResult) -> TypedRef | None:
-    refs = result.evaluation_evidence_refs
-    return refs[0] if refs else None
 
 
 def _mint_lease_token() -> str:

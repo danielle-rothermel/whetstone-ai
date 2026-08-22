@@ -8,7 +8,6 @@ about the behavior it names.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from whetstone.coordination.runtime_bootstrap import (
@@ -150,8 +149,8 @@ def toy_tool_args(
     return args
 
 
-def write_transcript(path: Path, steps: list[dict[str, Any]]) -> Path:
+def transcript_json(steps: list[dict[str, Any]]) -> str:
+    """Serialize a fake-Codex transcript for inline environment passing."""
     import json
 
-    path.write_text(json.dumps(steps), encoding="utf-8")
-    return path
+    return json.dumps(steps)
