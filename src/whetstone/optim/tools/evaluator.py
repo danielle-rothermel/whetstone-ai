@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from whetstone.core.identity import ImmutableJsonObject, TypedRef
+from whetstone.core.identity import (
+    ImmutableJsonObject,
+    TerminalFailure,
+    TypedRef,
+)
 from whetstone.eval.metadata import metadata_with_purpose
 from whetstone.eval.protocol import (
     EvalEvidenceWithRef,
@@ -11,12 +15,20 @@ from whetstone.eval.protocol import (
     eval_is_rejected,
     eval_is_success,
 )
+from whetstone.eval.schema import EvalEvidence, EvalFailureEvidence
+from whetstone.experiment.candidate import Candidate
 from whetstone.optim.tools.contracts import ToolCall, ToolConfig
 from whetstone.optim.tools.execution import (
     ToolEvaluation,
     ToolEvaluationError,
     ToolValidationError,
 )
+
+#: Terminal failure codes this evaluator owns. They are persisted on the
+#: Tool Result and read back by the adapter, so they are named constants
+#: rather than call-site literals.
+TOOL_EVAL_FAILURE_EVIDENCE_CODE = "tool_eval_failure_evidence"
+TOOL_EVAL_UNEXPECTED_RESULT_CODE = "tool_eval_unexpected_result"
 
 
 class EngineToolEvaluator:
@@ -84,13 +96,42 @@ class EngineToolEvaluator:
             raise ToolValidationError(result.detail.message)
         if not isinstance(result, EvalEvidenceWithRef):
             raise ToolEvaluationError(
-                f"unexpected evaluation result: {result!r}"
+                TerminalFailure(
+                    code=TOOL_EVAL_UNEXPECTED_RESULT_CODE,
+                    message=(
+                        "Tool evaluation produced an unrecognized Eval Result"
+                    ),
+                    details={"result_type": type(result).__name__},
+                )
             )
         if isinstance(result.evidence, EvalFailureEvidence):
-            raise ToolEvaluationError(result.evidence.message)
+            raise ToolEvaluationError(
+                TerminalFailure(
+                    code=TOOL_EVAL_FAILURE_EVIDENCE_CODE,
+                    message=(
+                        "Tool evaluation started but produced terminal "
+                        "failure evidence"
+                    ),
+                    details={
+                        "exception_type": result.evidence.exception_type,
+                        "message": result.evidence.message,
+                        "evidence_ref": result.evidence_ref.model_dump(
+                            mode="json"
+                        ),
+                    },
+                )
+            )
         if not eval_is_success(result):
             raise ToolEvaluationError(
-                f"unexpected evaluation result: {result!r}"
+                TerminalFailure(
+                    code=TOOL_EVAL_UNEXPECTED_RESULT_CODE,
+                    message=(
+                        "Tool evaluation produced an unrecognized Eval Result"
+                    ),
+                    details={
+                        "evidence_type": type(result.evidence).__name__,
+                    },
+                )
             )
         evidence = result.evidence
         assert isinstance(evidence, EvalEvidence)
@@ -128,4 +169,8 @@ class EngineToolEvaluator:
         )
 
 
-__all__ = ["EngineToolEvaluator"]
+__all__ = [
+    "TOOL_EVAL_FAILURE_EVIDENCE_CODE",
+    "TOOL_EVAL_UNEXPECTED_RESULT_CODE",
+    "EngineToolEvaluator",
+]

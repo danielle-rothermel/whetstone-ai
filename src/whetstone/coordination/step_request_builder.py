@@ -17,6 +17,7 @@ from whetstone.optim.contracts import (
 
 if TYPE_CHECKING:
     from whetstone.core.identity import TypedRef
+    from whetstone.optim.codex.control import CodexControl
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
     from whetstone.optim.miprov2.control import Miprov2Control
@@ -38,7 +39,9 @@ class StepRequestBuilder:
         run: OptimRunRef,
         adapter_key: str,
         initial_candidate: Candidate,
-        control: CoproControl | GepaControl | Miprov2Control | None = None,
+        control: (
+            CodexControl | CoproControl | GepaControl | Miprov2Control | None
+        ) = None,
         extra_pools: dict[str, Any] | None = None,
     ) -> OptimStepRequest:
         provider = resolve_step_contract_provider(adapter_key)
@@ -56,7 +59,9 @@ class StepRequestBuilder:
         prior: OptimStepResult,
         prior_ref: TypedRef,
         prior_results: tuple[OptimStepResult, ...],
-        control: CoproControl | GepaControl | Miprov2Control,
+        control: (
+            CodexControl | CoproControl | GepaControl | Miprov2Control
+        ),
         mutation_field: str,
         extra_pools: dict[str, Any] | None = None,
     ) -> OptimStepRequest:

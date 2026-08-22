@@ -8,7 +8,6 @@ import sys
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from enum import UNIQUE, StrEnum, verify
 from pathlib import Path
 from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Any, Final
@@ -25,11 +24,15 @@ from dr_exec import (
     ExecutorFailure,
     ExitedOutcome,
     FiniteDurationLimit,
+    FiniteOutput,
     JobId,
+    OutputOverflowPolicy,
+    PayloadRetentionBudget,
     RetainedPayloadStream,
     SignaledOutcome,
     SpawnAbsentOutcome,
     SpawnFailedOutcome,
+    StreamRetentionBudget,
     UnbudgetedLimit,
     UntrustedCommandTarget,
     WorkingDirectoryGrant,
@@ -42,6 +45,14 @@ from whetstone.optim.codex.adapter import (
     CodexOutputArtifact,
     CodexRunResult,
     OpaqueStepError,
+    codex_lease_token_hash,
+)
+from whetstone.optim.codex.containment import (
+    CODEX_CONTAINMENT_PROFILE,
+    CODEX_DEFAULT_MAX_OUTPUT_BYTES,
+    CODEX_DENIED_FEATURES,
+    CODEX_FILESYSTEM_POLICY,
+    CODEX_NETWORK_POLICY,
 )
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.contracts import OptimStepRequest
@@ -54,76 +65,20 @@ _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
 
 _MCP_TOOLS_APPROVAL_MODE = "auto"
+
+#: dr-exec v1 rejects a finite limit on these axes, so the artifact records
+#: them as unbudgeted rather than claiming containment it cannot enforce.
+_CODEX_UNBUDGETED_AXES = (
+    BudgetAxis.INPUT_BYTES.value,
+    BudgetAxis.MEMORY_BYTES.value,
+    BudgetAxis.CPU_TIME.value,
+    BudgetAxis.PROCESS_COUNT.value,
+    BudgetAxis.FILE_SIZE_BYTES.value,
+    BudgetAxis.OPEN_FILE_COUNT.value,
+    BudgetAxis.DISK_BYTES.value,
+)
 _DIRECT_EXEC_SOURCE: Final = (
     "import os,sys;os.execv(sys.argv[1],sys.argv[1:])"
-)
-
-
-@verify(UNIQUE)
-class _CodexDeniedFeature(StrEnum):
-    APPS = "apps"
-    BROWSER_USE = "browser_use"
-    BROWSER_USE_EXTERNAL = "browser_use_external"
-    CODE_MODE = "code_mode"
-    CODE_MODE_HOST = "code_mode_host"
-    CODE_MODE_ONLY = "code_mode_only"
-    COLLABORATION_MODES = "collaboration_modes"
-    COMPUTER_USE = "computer_use"
-    DEFAULT_MODE_REQUEST_USER_INPUT = "default_mode_request_user_input"
-    GOALS = "goals"
-    HOOKS = "hooks"
-    IMAGE_GENERATION = "image_generation"
-    IN_APP_BROWSER = "in_app_browser"
-    MEMORIES = "memories"
-    MULTI_AGENT = "multi_agent"
-    MULTI_AGENT_V2 = "multi_agent_v2"
-    PLUGINS = "plugins"
-    REMOTE_PLUGIN = "remote_plugin"
-    REQUEST_PERMISSIONS_TOOL = "request_permissions_tool"
-    SHELL_SNAPSHOT = "shell_snapshot"
-    SHELL_TOOL = "shell_tool"
-    SKILL_MCP_DEPENDENCY_INSTALL = "skill_mcp_dependency_install"
-    SKILL_SEARCH = "skill_search"
-    STANDALONE_WEB_SEARCH = "standalone_web_search"
-    TOOL_CALL_MCP_ELICITATION = "tool_call_mcp_elicitation"
-    TOOL_SUGGEST = "tool_suggest"
-    UNIFIED_EXEC = "unified_exec"
-    WEB_SEARCH_CACHED = "web_search_cached"
-    WEB_SEARCH_REQUEST = "web_search_request"
-    WORKSPACE_DEPENDENCIES = "workspace_dependencies"
-
-
-_CODEX_DENIED_FEATURES = (
-    _CodexDeniedFeature.APPS,
-    _CodexDeniedFeature.BROWSER_USE,
-    _CodexDeniedFeature.BROWSER_USE_EXTERNAL,
-    _CodexDeniedFeature.CODE_MODE,
-    _CodexDeniedFeature.CODE_MODE_HOST,
-    _CodexDeniedFeature.CODE_MODE_ONLY,
-    _CodexDeniedFeature.COLLABORATION_MODES,
-    _CodexDeniedFeature.COMPUTER_USE,
-    _CodexDeniedFeature.DEFAULT_MODE_REQUEST_USER_INPUT,
-    _CodexDeniedFeature.GOALS,
-    _CodexDeniedFeature.HOOKS,
-    _CodexDeniedFeature.IMAGE_GENERATION,
-    _CodexDeniedFeature.IN_APP_BROWSER,
-    _CodexDeniedFeature.MEMORIES,
-    _CodexDeniedFeature.MULTI_AGENT,
-    _CodexDeniedFeature.MULTI_AGENT_V2,
-    _CodexDeniedFeature.PLUGINS,
-    _CodexDeniedFeature.REMOTE_PLUGIN,
-    _CodexDeniedFeature.REQUEST_PERMISSIONS_TOOL,
-    _CodexDeniedFeature.SHELL_SNAPSHOT,
-    _CodexDeniedFeature.SHELL_TOOL,
-    _CodexDeniedFeature.SKILL_MCP_DEPENDENCY_INSTALL,
-    _CodexDeniedFeature.SKILL_SEARCH,
-    _CodexDeniedFeature.STANDALONE_WEB_SEARCH,
-    _CodexDeniedFeature.TOOL_CALL_MCP_ELICITATION,
-    _CodexDeniedFeature.TOOL_SUGGEST,
-    _CodexDeniedFeature.UNIFIED_EXEC,
-    _CodexDeniedFeature.WEB_SEARCH_CACHED,
-    _CodexDeniedFeature.WEB_SEARCH_REQUEST,
-    _CodexDeniedFeature.WORKSPACE_DEPENDENCIES,
 )
 
 
@@ -269,7 +224,7 @@ def build_codex_command(
         "-c",
         'shell_environment_policy.inherit="none"',
     ]
-    for feature in _CODEX_DENIED_FEATURES:
+    for feature in CODEX_DENIED_FEATURES:
         argv.extend(["--disable", feature])
     if model:
         argv.extend(["--model", model])
@@ -311,12 +266,39 @@ def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
         )
 
 
-def _codex_budgets(timeout_seconds: float) -> Budgets:
+def _codex_budgets(
+    *,
+    wall_seconds: float,
+    max_output_bytes: int,
+) -> Budgets:
+    """Bound the Codex job on every axis dr-exec v1 can enforce.
+
+    ``wall_time`` is the hard stop and ``payload_output`` bounds retention.
+    ``process_count`` and the resource axes stay unbudgeted because dr-exec
+    v1 rejects a finite limit on them; the process boundary and the macOS
+    sandbox profile are the containment, and the wall budget terminates a
+    run that spawns without bound.
+    """
     unbudgeted = UnbudgetedLimit()
+    half = max_output_bytes // 4
+    remainder = max_output_bytes - 3 * half
     return Budgets(
-        wall_time=FiniteDurationLimit.from_seconds(timeout_seconds),
+        wall_time=FiniteDurationLimit.from_seconds(wall_seconds),
         input_bytes=unbudgeted,
-        payload_output=unbudgeted,
+        payload_output=FiniteOutput(
+            max_bytes=max_output_bytes,
+            overflow_policy=OutputOverflowPolicy.MARKED_TRUNCATION,
+            retention=PayloadRetentionBudget(
+                stdout=StreamRetentionBudget(
+                    head_bytes=half + remainder,
+                    tail_bytes=half,
+                ),
+                stderr=StreamRetentionBudget(
+                    head_bytes=half,
+                    tail_bytes=half,
+                ),
+            ),
+        ),
         memory_bytes=unbudgeted,
         cpu_time=unbudgeted,
         process_count=unbudgeted,
@@ -326,16 +308,29 @@ def _codex_budgets(timeout_seconds: float) -> Budgets:
     )
 
 
-def _retained_bytes(
-    stream: RetainedPayloadStream,
-    *,
-    stream_name: str,
-) -> bytes:
-    if stream.dropped_bytes:
-        raise OpaqueStepError(
-            f"Codex {stream_name} was truncated despite unbudgeted output"
-        )
-    return stream.head + stream.tail
+@dataclass(frozen=True, slots=True)
+class _RetainedStream:
+    """One captured stream plus whether the output budget truncated it."""
+
+    data: bytes
+    dropped_bytes: int
+
+    @property
+    def truncated(self) -> bool:
+        return self.dropped_bytes > 0
+
+
+def _retained_bytes(stream: RetainedPayloadStream) -> _RetainedStream:
+    """Read a retained stream, reporting truncation instead of raising.
+
+    Under a finite ``payload_output`` budget truncation is an expected
+    outcome, not a contract violation: the retained head and tail are still
+    exact, and the artifact records how many bytes the budget dropped.
+    """
+    return _RetainedStream(
+        data=stream.head + stream.tail,
+        dropped_bytes=stream.dropped_bytes,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +371,7 @@ class SubprocessCodexRunner:
         model: str = "",
         mcp_server_module: str = "whetstone.optim.codex.mcp_server",
         timeout_seconds: float = 600.0,
+        max_output_bytes: int = CODEX_DEFAULT_MAX_OUTPUT_BYTES,
         environment: Mapping[str, str] | None = None,
         prompt_builder: (
             Callable[[OptimStepRequest], str] | None
@@ -423,6 +419,9 @@ class SubprocessCodexRunner:
         self._binary = codex_binary
         self._model = model
         self._timeout = timeout_seconds
+        if max_output_bytes < 4:
+            raise ValueError("max_output_bytes must leave room for retention")
+        self._max_output_bytes = max_output_bytes
         self._prompt_builder = prompt_builder
         if environment is None:
             source_environment = dict(os.environ)
@@ -461,7 +460,11 @@ class SubprocessCodexRunner:
         self._auth_source = auth_source
 
     def run(
-        self, request: OptimStepRequest, handle: RuntimeToolHandle
+        self,
+        request: OptimStepRequest,
+        handle: RuntimeToolHandle,
+        *,
+        lease_token: str,
     ) -> CodexRunResult:
         if (
             self._sqlite_path is None
@@ -472,12 +475,25 @@ class SubprocessCodexRunner:
             raise OpaqueStepError(
                 "Codex optimizer run requires its MCP runtime configuration"
             )
+        token_hash = codex_lease_token_hash(lease_token)
         schema = CodexOutputArtifact.model_json_schema()
-        run_id_schema = schema["properties"]["run_id"]
-        assert isinstance(run_id_schema, dict)
-        run_id_schema["const"] = request.run_id
+        # Pin the two fields the adapter checks before it reads anything
+        # else, so a non-conforming artifact fails at the CLI boundary
+        # rather than as a Step terminal failure.
+        for field, constant in (
+            ("run_id", request.run_id),
+            ("lease_token_hash", token_hash),
+        ):
+            field_schema = schema["properties"][field]
+            assert isinstance(field_schema, dict)
+            field_schema["const"] = constant
         prompt = (
-            _default_prompt(request, tool_name=handle.config.tool_name)
+            _default_prompt(
+                request,
+                tool_name=handle.config.tool_name,
+                lease_token_hash=token_hash,
+                max_tool_calls=handle.config.capacity.max_accepted_calls,
+            )
             if self._prompt_builder is None
             else self._prompt_builder(request)
         )
@@ -499,6 +515,7 @@ class SubprocessCodexRunner:
                 McpEnvironmentKey.REWARD_POLICY: (
                     self._reward_policy.model_dump_json()
                 ),
+                McpEnvironmentKey.RUN_LEASE_TOKEN: lease_token,
             },
             stage_runtime=True,
         )
@@ -600,6 +617,10 @@ class SubprocessCodexRunner:
                     else (root.resolve(),)
                 ),
             )
+            budgets = _codex_budgets(
+                wall_seconds=self._timeout,
+                max_output_bytes=self._max_output_bytes,
+            )
             job = ExecutionJob(
                 job_id=JobId(uuid4()),
                 target=UntrustedCommandTarget(
@@ -611,24 +632,38 @@ class SubprocessCodexRunner:
                 ),
                 env=EnvGrant.fixed(isolated_environment),
                 workspace=WorkingDirectoryGrant.caller(root),
-                budgets=_codex_budgets(self._timeout),
+                budgets=budgets,
             )
             try:
                 completed = self._executor.run(job)
             except ExecutorFailure as exc:
                 raise OpaqueStepError("Codex execution failed") from exc
-            stdout = _retained_bytes(
-                completed.result.payload_outputs.stdout,
-                stream_name="stdout",
+            stdout_stream = _retained_bytes(
+                completed.result.payload_outputs.stdout
             )
-            stderr_bytes = _retained_bytes(
-                completed.result.payload_outputs.stderr,
-                stream_name="stderr",
+            stderr_stream = _retained_bytes(
+                completed.result.payload_outputs.stderr
             )
+            stdout = stdout_stream.data
+            stderr_bytes = stderr_stream.data
             isolation = {
                 "strategy": "macos_sandbox_exec",
                 "profile": profile_path.read_text(encoding="utf-8"),
-                "denied_features": list(_CODEX_DENIED_FEATURES),
+                "denied_features": list(CODEX_DENIED_FEATURES),
+                "network_policy": CODEX_NETWORK_POLICY,
+                "filesystem_policy": CODEX_FILESYSTEM_POLICY,
+                "containment_profile": CODEX_CONTAINMENT_PROFILE,
+                "budgets": {
+                    "wall_seconds": self._timeout,
+                    "max_output_bytes": self._max_output_bytes,
+                    # dr-exec v1 accepts no finite limit on these axes; the
+                    # wall budget and the process boundary are the stop.
+                    "unbudgeted_axes": list(_CODEX_UNBUDGETED_AXES),
+                },
+                "output_truncation": {
+                    "stdout_dropped_bytes": stdout_stream.dropped_bytes,
+                    "stderr_dropped_bytes": stderr_stream.dropped_bytes,
+                },
             }
             outcome = completed.result.outcome
             if isinstance(outcome, BudgetExceededOutcome):
@@ -811,8 +846,18 @@ class SubprocessCodexRunner:
 
 
 def _default_prompt(
-    request: OptimStepRequest, *, tool_name: str
+    request: OptimStepRequest,
+    *,
+    tool_name: str,
+    lease_token_hash: str,
+    max_tool_calls: int,
 ) -> str:
+    """The instruction Codex receives.
+
+    Evaluating through the Tool is mandatory, not guidance: the artifact
+    carries no candidate body, so the only way to return a candidate is to
+    name the ``call_id`` of a call that was actually admitted and scored.
+    """
     context = json.dumps(
         request.model_dump(mode="json"),
         sort_keys=True,
@@ -820,14 +865,23 @@ def _default_prompt(
     )
     return (
         f"Use only the external {tool_name} MCP tool for measurements. "
-        "Do not call any built-in tool. Build proposals from the exact "
-        "candidate base_ref, model route, payload template, Tool Config, "
-        "capacity, budget, pools, hyperparameters, and output contract in "
-        "the serialized request below. Guidance, not a checked requirement: "
-        "evaluating candidate drafts through MCP before selecting them "
-        "produces better proposals, but the artifact is accepted on its "
-        "proposal contract alone. Write the schema-conforming final "
-        "artifact with exactly the requested proposal count.\n"
+        "Do not call any built-in tool. Build candidate templates from the "
+        "exact candidate base_ref, model route, payload template, Tool "
+        "Config, capacity, budget, pools, hyperparameters, and output "
+        "contract in the serialized request below.\n"
+        "Evaluating through the MCP tool is mandatory. Every candidate you "
+        "consider must be submitted to the tool with a call_id you choose; "
+        f"you may make at most {max_tool_calls} calls, and every further "
+        "call is refused with refused=true and refusal_class=capacity. A "
+        "refusal does not end the run: stop evaluating and write your "
+        "artifact.\n"
+        "Write a schema-conforming final artifact naming every call_id you "
+        "evaluated in evaluated_call_ids, and selected_call_id set to the "
+        "call_id whose candidate you chose. The artifact carries no "
+        "candidate body: a template that was never evaluated through the "
+        "tool cannot be returned. Set selected_call_id to null to keep the "
+        "run's seed candidate. Copy lease_token_hash verbatim as "
+        f"{lease_token_hash!r}.\n"
         f"OPTIM_STEP_REQUEST_JSON={context}"
     )
 
@@ -853,31 +907,6 @@ def _parse_jsonl_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
             )
         events.append(value)
     return tuple(events)
-
-
-def _parse_output_artifact(
-    path: Path,
-    *,
-    stdout: bytes,
-    stderr: str,
-    run_id: str,
-    isolation: dict[str, Any] | None = None,
-) -> CodexOutputArtifact:
-    if not path.is_file():
-        raise OpaqueStepError("Codex produced no final output artifact")
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise OpaqueStepError(
-            "Codex final output artifact failed schema validation"
-        ) from exc
-    return _parse_output_artifact_bytes(
-        raw,
-        stdout=stdout,
-        stderr=stderr,
-        run_id=run_id,
-        isolation=isolation,
-    )
 
 
 def _parse_output_artifact_bytes(

@@ -214,6 +214,21 @@ class ToolCallStore:
             )
         return existing
 
+    def find_entry(
+        self,
+        *,
+        store_namespace_key: str,
+        call_id: str,
+    ) -> ToolCallStoreEntry | None:
+        """Look up one durable admission entry by its call id.
+
+        :meth:`get` needs the full ``ToolCall``. An adapter that only learns
+        a ``call_id`` -- because the call was issued by an out-of-process
+        agent against the same durable store -- resolves the recorded call
+        through this read-only projection instead.
+        """
+        return self._admission.get(store_namespace_key, call_id)
+
     def admit(self, call: ToolCall, config: ToolConfig) -> ToolCallStoreEntry:
         call_ref = self._persist_call_chain(call, config)
         config_ref = tool_config_reference(config)

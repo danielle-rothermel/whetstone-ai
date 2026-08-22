@@ -46,6 +46,11 @@ def build_server_from_env(
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")
+    # The token itself is never echoed anywhere; the adapter compares its
+    # hash against the token it minted, so a stale or foreign server
+    # process cannot serve this run's artifact.
+    if not env.get(McpEnvironmentKey.RUN_LEASE_TOKEN):
+        raise ValueError("MCP server requires the run lease token")
     effect_authority = EffectLeaseAuthority.sqlite(sqlite_path)
     tool_store = ToolCallStore(
         store,

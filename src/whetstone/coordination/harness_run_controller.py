@@ -27,6 +27,7 @@ from whetstone.optim.contracts import (
 from whetstone.optim.harness import OptimHarness
 
 if TYPE_CHECKING:
+    from whetstone.optim.codex.control import CodexControl
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
     from whetstone.optim.miprov2.control import Miprov2Control
@@ -73,7 +74,9 @@ class RunRequest(BaseModel):
 class OptimRunLaunch:
     run: OptimRun
     initial_candidate: Candidate
-    control: CoproControl | GepaControl | Miprov2Control | None = None
+    control: (
+        CodexControl | CoproControl | GepaControl | Miprov2Control | None
+    ) = None
     #: Extra opening pools this optimizer's first Step Request needs.
     #: An optimizer whose search starts from durable state larger than its
     #: control -- MIPROv2 opens with a labeled trainset, rendered proposal
