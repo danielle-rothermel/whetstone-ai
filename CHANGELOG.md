@@ -64,6 +64,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   limitation: the command runs only launches bound against the toy
   experiment; drive any other experiment through a runtime built with it.
 
+### Fixed
+
+- `build_gepa_harness_adapter` partitions the GEPA data registry into the
+  control's `trainset_task_hashes` and `valset_task_hashes` instead of
+  passing the registry's train/val union as the trainset with no valset.
+  One eval engine serves both splits, so the registry holds their ordered
+  union; handing that union to upstream GEPA reflected on validation
+  instances and let Pareto selection score training instances, which
+  contradicted the split `run_gepa_engine` enforces and corrupted
+  selection. The seam now rejects a registry whose splits overlap or do
+  not cover it, and a control that binds validation back to the trainset
+  still passes upstream's `valset=None` default unchanged.
+
 ## 0.1.4 - 2026-08-22
 
 ### Added

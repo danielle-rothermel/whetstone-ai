@@ -347,9 +347,27 @@ def build_toy_gepa_control(
     mutation_field: str = TOY_MUTATION_FIELD,
     reflection_minibatch_size: int = 1,
     use_merge: bool = False,
+    trainset_task_hashes: tuple[str, ...] | None = None,
+    valset_task_hashes: tuple[str, ...] | None = None,
 ) -> GepaControl:
+    """A toy GEPA control over the engine's tasks.
+
+    By default the whole sampling plan is the trainset and validation binds
+    back to it. Pass both ``trainset_task_hashes`` and ``valset_task_hashes``
+    to exercise a real split; together they must be the engine's task order.
+    """
     from whetstone.optim.gepa.control import configure_gepa
     from whetstone.optim.gepa.factory import default_gepa_prompt_services
+
+    if valset_task_hashes is not None and trainset_task_hashes is None:
+        raise ValueError(
+            "a toy GEPA valset requires an explicit trainset"
+        )
+    resolved_trainset = (
+        engine.sampling.task_hashes
+        if trainset_task_hashes is None
+        else trainset_task_hashes
+    )
 
     prompt_adapter = PlainPromptAdapter()
     services = default_gepa_prompt_services(
@@ -371,8 +389,8 @@ def build_toy_gepa_control(
         task_model_identity_hash=engine.task_model_identity_hash(),
         prompt_format_identity_hash=services.descriptor.identity_hash(),
         prompt_binding_identity_hash=services.binding.identity_hash(),
-        trainset_task_hashes=engine.sampling.task_hashes,
-        valset_task_hashes=None,
+        trainset_task_hashes=resolved_trainset,
+        valset_task_hashes=valset_task_hashes,
         component_names=(TOY_GEPA_COMPONENT,),
         num_predictors=1,
         max_metric_calls=max_metric_calls,

@@ -32,6 +32,7 @@ from whetstone.optim.gepa.prompts import (
     NativeGepaReflectionResponseParser,
 )
 from whetstone.optim.gepa.contracts import (
+    GepaDataInstance,
     GepaEffectContext,
     GepaEffectRecorder,
     GepaSkippedMutation,
@@ -304,6 +305,59 @@ def default_gepa_prompt_services(
     )
 
 
+def _split_registry_entries(
+    *,
+    control: GepaControl,
+    registry: GepaDataRegistry,
+) -> tuple[
+    tuple[GepaDataInstance, ...],
+    tuple[GepaDataInstance, ...] | None,
+]:
+    """Partition the registry into the control's train and validation splits.
+
+    The registry holds the ordered union of both splits, because one eval
+    engine serves them. Upstream GEPA reflects on the trainset and selects on
+    the valset, so handing it the union as a trainset would both train on
+    validation instances and let selection see training instances. Return the
+    two ordered splits instead, and keep upstream's ``valset=None`` default
+    for the controls that bind validation back to the trainset.
+    """
+    by_task_hash = {entry.task_hash: entry for entry in registry.entries}
+
+    def ordered(task_hashes: tuple[str, ...], *, field: str):
+        try:
+            return tuple(by_task_hash[identity] for identity in task_hashes)
+        except KeyError as exc:
+            raise ValueError(
+                f"GEPA data registry has no task with hash {exc.args[0]!r} "
+                f"for {field}"
+            ) from None
+
+    trainset = ordered(control.trainset_task_hashes, field="trainset")
+    if control.source_valset_task_hashes is None:
+        if tuple(entry.task_hash for entry in trainset) != registry.task_hashes:
+            raise ValueError(
+                "GEPA registry conflicts with a control that binds validation "
+                "to the trainset"
+            )
+        return trainset, None
+
+    valset = ordered(control.valset_task_hashes, field="valset")
+    train_hashes = {entry.task_hash for entry in trainset}
+    val_hashes = {entry.task_hash for entry in valset}
+    overlap = train_hashes & val_hashes
+    if overlap:
+        raise ValueError(
+            "GEPA trainset and valset share tasks: "
+            f"{sorted(overlap)}"
+        )
+    if train_hashes | val_hashes != set(registry.task_hashes):
+        raise ValueError(
+            "GEPA trainset and valset do not cover the data registry"
+        )
+    return trainset, valset
+
+
 def build_gepa_harness_adapter(
     *,
     store: ObjectStore,
@@ -361,11 +415,15 @@ def build_gepa_harness_adapter(
         proposal_authority=proposal_authority,
         prompt_services=prompt_services,
     )
+    trainset, valset = _split_registry_entries(
+        control=control,
+        registry=registry,
+    )
     return GepaHarnessAdapter(
         control=control,
         seed_candidate=seed,
-        trainset=registry.entries,
-        valset=None,
+        trainset=trainset,
+        valset=valset,
         adapter_factory=GepaHarnessAdapterFactory(factory=factory),
     )
 
