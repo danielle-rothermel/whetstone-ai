@@ -152,7 +152,11 @@ def run_command(
                 )
             if launch.control is None:
                 raise typer.BadParameter("launch is missing optimizer control")
-            engine = ReferenceEvalRuntimeConfig().build_engine(store)
+            engine = ReferenceEvalRuntimeConfig().build_engine(
+                store,
+                mutation_field=launch.run.mutation_field,
+                render_contract=launch.run.template_render_contract,
+            )
             copro_adapter = _copro_adapter_from_control(launch.control, engine)
             runtime = build_runtime(
                 store=store,
@@ -198,6 +202,7 @@ def run_command(
                     registry=deployment.registry,
                     registration=deployment.registration,
                     now=now,
+                    run_key=run_key,
                 )
                 await_run_completion(
                     run_key=run_key,

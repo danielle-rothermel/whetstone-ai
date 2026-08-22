@@ -179,6 +179,7 @@ def run_until_quiescent(
     now: datetime,
     deadline_seconds: float = 120,
     work_item_id: int | None = None,
+    run_key: str | None = None,
 ) -> None:
     drive_until_quiescent(
         engine=pg_engine,
@@ -186,6 +187,7 @@ def run_until_quiescent(
         registration=registration,
         now=now,
         deadline_seconds=deadline_seconds,
+        run_key=run_key,
     )
     if work_item_id is not None:
         assert_no_failed_stages(pg_engine, work_item_id)

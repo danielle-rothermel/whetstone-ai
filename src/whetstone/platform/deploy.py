@@ -178,18 +178,33 @@ def wait_for_run_released(
     raise TimeoutError(f"run {run_key!r} was not released before deadline")
 
 
-def _stage_workflow_ids(engine: Engine) -> tuple[str, ...]:
+def _stage_workflow_ids(
+    engine: Engine,
+    *,
+    run_key: str | None = None,
+) -> tuple[str, ...]:
     from dr_platform._core.ledger.schema import LedgerSchema
 
     schema = LedgerSchema()
-    with engine.connect() as connection:
-        return tuple(
-            connection.execute(
-                select(schema.stage_attempts.c.workflow_id).order_by(
-                    schema.stage_attempts.c.stage_attempt_id
+    statement = select(schema.stage_attempts.c.workflow_id).order_by(
+        schema.stage_attempts.c.stage_attempt_id
+    )
+    if run_key is not None:
+        statement = (
+            statement.select_from(
+                schema.stage_attempts.join(
+                    schema.stage_executions,
+                    schema.stage_attempts.c.stage_execution_id
+                    == schema.stage_executions.c.stage_execution_id,
+                ).join(
+                    schema.work_items,
+                    schema.stage_executions.c.work_item_id
+                    == schema.work_items.c.work_item_id,
                 )
-            ).scalars()
+            ).where(schema.work_items.c.origin_run_key == run_key)
         )
+    with engine.connect() as connection:
+        return tuple(connection.execute(statement).scalars())
 
 
 def _await_dbos_result(workflow_id: str, *, registration, timeout: float = 60):
@@ -208,19 +223,25 @@ def drive_until_quiescent(
     registration,
     now: datetime,
     deadline_seconds: float = 120,
+    run_key: str | None = None,
 ) -> None:
     _require_platform_extra()
     from dr_platform._core.ledger.schema import LedgerSchema
+    from dr_platform._core.ledger.states import StageExecutionState
     from dr_platform.admission.runner import run_admission_pass
 
     seen: set[str] = set()
     deadline = time.monotonic() + deadline_seconds
     schema = LedgerSchema()
     idle_passes = 0
+    pending_states = (
+        StageExecutionState.READY.value,
+        StageExecutionState.ADMITTED.value,
+    )
     while time.monotonic() < deadline:
         registration.workflow(now, now)
         processed_new = False
-        for workflow_id in _stage_workflow_ids(engine):
+        for workflow_id in _stage_workflow_ids(engine, run_key=run_key):
             if workflow_id in seen:
                 continue
             seen.add(workflow_id)
@@ -232,14 +253,17 @@ def drive_until_quiescent(
             registry=registry,
             clock=lambda: now,
         )
+        pending = select(schema.stage_executions.c.stage_execution_id).where(
+            schema.stage_executions.c.state.in_(pending_states)
+        )
+        if run_key is not None:
+            pending = pending.join(
+                schema.work_items,
+                schema.stage_executions.c.work_item_id
+                == schema.work_items.c.work_item_id,
+            ).where(schema.work_items.c.origin_run_key == run_key)
         with engine.connect() as connection:
-            pending_stage = connection.execute(
-                select(schema.stage_executions.c.stage_execution_id).where(
-                    schema.stage_executions.c.state.in_(
-                        ("READY", "ADMITTED", "ENQUEUED")
-                    )
-                )
-            ).first()
+            pending_stage = connection.execute(pending).first()
         if pending_stage is not None:
             idle_passes = 0
             continue
@@ -276,7 +300,7 @@ def await_run_completion(
             registry=registry,
             clock=lambda: now,
         )
-        for workflow_id in _stage_workflow_ids(engine):
+        for workflow_id in _stage_workflow_ids(engine, run_key=run_key):
             _await_dbos_result(workflow_id, registration=registration)
         try:
             wait_for_run_released(
