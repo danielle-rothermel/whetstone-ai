@@ -24,10 +24,7 @@ from whetstone.core.identity import (
     typed_ref_for_record,
 )
 from whetstone.core.roles import EvalRole
-from whetstone.eval.metadata import (
-    PURPOSE_METADATA_KEY,
-    TASK_IDS_METADATA_KEY,
-)
+from whetstone.eval.metadata import PURPOSE_METADATA_KEY
 from whetstone.eval.protocol import EvalRequest, EvalEngine
 from whetstone.eval.schema import (
     EVAL_TRACES_SCHEMA,
@@ -543,8 +540,7 @@ class CanonicalGepaEvalAuthority:
             self._data_registry.require_exact(item)
             self._store.get(item.data_ref.reference)
         candidate = self._candidate_assembler.assemble(request.candidate)
-        # data_id is the engine-resolvable task id; no translation needed.
-        task_ids = tuple(item.data_id for item in request.data)
+        task_hashes = tuple(item.task_hash for item in request.data)
         optim_eval_request = OptimEvalRequest(
             optim_run_id=request.slot.context.run_id,
             # The harness step that is actually executing this evaluation.
@@ -561,13 +557,11 @@ class CanonicalGepaEvalAuthority:
                 ),
                 candidate=candidate.record,
                 metadata=ImmutableJsonObject(
-                    {
-                        PURPOSE_METADATA_KEY: "gepa_metric",
-                        TASK_IDS_METADATA_KEY: list(task_ids),
-                    }
+                    {PURPOSE_METADATA_KEY: "gepa_metric"}
                 ),
             ),
             expected_reward_policy_hash=self._control.reward_policy_hash,
+            task_hashes=task_hashes,
         )
         alias_key = (
             f"{GEPA_EVAL_INTENT_ALIAS_PREFIX}"
@@ -582,7 +576,7 @@ class CanonicalGepaEvalAuthority:
         if service is None:
             service = EvalEngineService(
                 store=self._store,
-                engine=self._engine.for_task_ids(task_ids),
+                engine=self._engine,
             )
         try:
             resolution = service.resolve_optim_eval_request(

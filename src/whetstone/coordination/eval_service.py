@@ -113,11 +113,11 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         """The engine that evaluates this intent's declared task subset.
 
         Most optimizers evaluate the full task set and leave the subset
-        unset, so this returns the bound engine unchanged. MIPROv2 declares
-        a subset per intent, and the evidence it records names the Eval
-        Config derived from that subset -- so the evaluation must run under
-        the same narrowing, or the recorded config would describe sampling
-        that never happened.
+        unset, so this returns the bound engine unchanged. GEPA and MIPROv2
+        declare a subset per intent, and the evidence they record names the
+        Eval Config derived from that subset -- so the evaluation must run
+        under the same narrowing, or the recorded config would describe
+        sampling that never happened.
         """
 
         task_hashes = optim_eval_request.task_hashes

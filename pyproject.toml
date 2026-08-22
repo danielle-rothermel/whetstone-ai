@@ -1,6 +1,6 @@
 [project]
 name = "whetstone-ai"
-version = "0.1.4"
+version = "0.1.5"
 description = "Generic toolkit for evaluating and optimizing LLM prompts and programs."
 readme = "README.md"
 authors = [

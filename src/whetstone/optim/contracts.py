@@ -301,12 +301,13 @@ class OptimEvalRequest(BaseModel):
     #: The ordered task subset this intent evaluates, when the optimizer
     #: evaluates less than the full task set.
     #:
-    #: An optimizer that always evaluates the whole set -- COPRO, GEPA --
-    #: leaves this unset. MIPROv2 does not: it evaluates one task for a
-    #: bootstrap generation and a minibatch for a sampled trial, and the
-    #: Eval Config it records names that exact subset. Declaring the subset
-    #: on the intent is what lets the evaluating side reproduce the same
-    #: sampling rather than silently evaluating everything.
+    #: An optimizer that always evaluates the whole set -- COPRO -- leaves
+    #: this unset. GEPA and MIPROv2 do not: GEPA evaluates a reflection
+    #: minibatch, and MIPROv2 evaluates one task for a bootstrap generation
+    #: and a minibatch for a sampled trial. The Eval Config each records
+    #: names that exact subset. Declaring the subset on the intent is what
+    #: lets the evaluating side reproduce the same sampling rather than
+    #: silently evaluating everything.
     task_hashes: tuple[IdentityHash, ...] | None = None
 
     @field_validator("task_hashes", mode="before")

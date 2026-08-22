@@ -19,8 +19,8 @@ from whetstone.coordination.harness_run_controller import (
 from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef
-from whetstone.eval.metadata import eval_task_ids
 from whetstone.eval.runtime_engine import _task_id
+from whetstone.optim.miprov2.engine_binding import engine_for_task_hashes
 from whetstone.platform.deferred_intents import (
     evict_deferred_intents,
     load_persisted_deferred_intents,
@@ -414,11 +414,11 @@ def _task_ids_for_intent(
     runtime: RegisteredRuntime,
     intent: OptimEvalRequest,
 ) -> tuple[str, ...]:
-    scoped = eval_task_ids(intent.eval_request.metadata)
-    if scoped is not None:
-        return scoped
     engine = runtime.eval_service._engine  # noqa: SLF001
-    return tuple(_task_id(task) for task in engine.sampling.tasks)
+    if intent.task_hashes is None:
+        return tuple(_task_id(task) for task in engine.sampling.tasks)
+    subset = engine_for_task_hashes(engine, intent.task_hashes)
+    return tuple(_task_id(task) for task in subset.sampling.tasks)
 
 
 def _expand_eval_rows(

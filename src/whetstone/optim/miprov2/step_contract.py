@@ -214,8 +214,9 @@ class Miprov2StepContractProvider:
         prior_results: tuple[OptimStepResult, ...],
         control: Miprov2Control,
         mutation_field: str,
+        extra_pools: dict[str, Any] | None,
     ) -> OptimStepRequest:
-        del prior_results, mutation_field
+        del prior_results, mutation_field, extra_pools
         from whetstone.optim.miprov2.control import Miprov2Control
 
         if not isinstance(control, Miprov2Control):

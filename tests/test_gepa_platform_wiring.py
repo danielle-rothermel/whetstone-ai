@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 from uuid import uuid4
 
 from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.eval.metadata import PURPOSE_METADATA_KEY, TASK_IDS_METADATA_KEY
+from whetstone.eval.metadata import PURPOSE_METADATA_KEY
 from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import (
@@ -39,6 +39,7 @@ from whetstone.testing.runtime import (
 from whetstone.testing.toy.experiment import (
     DEFAULT_TOY_TEMPLATE,
     TOY_MUTATION_FIELD,
+    ToyTask,
     build_toy_experiment,
 )
 
@@ -213,36 +214,41 @@ def test_seed_retained_completes_a_platform_run(sqlite_store) -> None:
         assert step_ref.record.search_evidence
 
 
-def test_gepa_two_intents_expand_per_intent_task_sets() -> None:
-    """Fan-out uses each GEPA intent's task set; COPRO-shaped intents stay full."""
-    experiment = build_toy_experiment(num_seeds=1)
-    engine = MagicMock()
-    engine.sampling.num_seeds = 1
-    engine.sampling.tasks = [
-        MagicMock(task_id="engine-a"),
-        MagicMock(task_id="engine-b"),
-    ]
-    runtime = MagicMock()
-    runtime.eval_service._engine = engine
+def test_gepa_two_intents_expand_per_intent_task_sets(sqlite_store) -> None:
+    """Fan-out uses each GEPA intent's task hashes; COPRO-shaped intents stay full."""
+    experiment = build_toy_experiment(
+        num_seeds=1,
+        internal_tasks=(
+            ToyTask(task_id="task-a", prompt_inputs={"prompt": "hello A"}, gold="A"),
+            ToyTask(task_id="task-b", prompt_inputs={"prompt": "hello B"}, gold="B"),
+            ToyTask(task_id="task-c", prompt_inputs={"prompt": "hello C"}, gold="C"),
+        ),
+    )
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store, experiment=experiment
+    )
+    runtime = SimpleNamespace(eval_service=SimpleNamespace(_engine=engine))
+    hashes = engine.sampling.task_hashes
+    assert len(hashes) == 3
 
-    def make_intent(*, request_id: str, task_ids: list[str] | None):
-        metadata = {PURPOSE_METADATA_KEY: "gepa_metric"}
-        if task_ids is not None:
-            metadata[TASK_IDS_METADATA_KEY] = task_ids
+    def make_intent(*, request_id: str, task_hashes: tuple[str, ...] | None):
         return OptimEvalRequest(
             optim_run_id="gepa-fanout",
             optim_step_index=0,
             eval_request=EvalRequest(
                 request_id=request_id,
                 candidate=experiment.initial_candidate,
-                metadata=ImmutableJsonObject(metadata),
+                metadata=ImmutableJsonObject(
+                    {PURPOSE_METADATA_KEY: "gepa_metric"}
+                ),
             ),
             expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
+            task_hashes=task_hashes,
         )
 
     scoped = (
-        make_intent(request_id="gepa-a", task_ids=["task-a"]),
-        make_intent(request_id="gepa-bc", task_ids=["task-b", "task-c"]),
+        make_intent(request_id="gepa-a", task_hashes=(hashes[0],)),
+        make_intent(request_id="gepa-bc", task_hashes=hashes[1:]),
     )
     assert _deferred_row_count(runtime, scoped) == 3
     rows = _expand_eval_rows(
@@ -254,9 +260,9 @@ def test_gepa_two_intents_expand_per_intent_task_sets() -> None:
     assert [row.task_id for row in rows] == ["task-a", "task-b", "task-c"]
     assert [row.row_ordinal for row in rows] == [0, 1, 2]
 
-    full = make_intent(request_id="copro-full", task_ids=None)
-    assert _task_ids_for_intent(runtime, full) == ("engine-a", "engine-b")
-    assert _deferred_row_count(runtime, (full,)) == 2
+    full = make_intent(request_id="copro-full", task_hashes=None)
+    assert _task_ids_for_intent(runtime, full) == ("task-a", "task-b", "task-c")
+    assert _deferred_row_count(runtime, (full,)) == 3
 
 
 def test_gepa_platform_deferral_same_step_resume(sqlite_store) -> None:
