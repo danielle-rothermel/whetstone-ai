@@ -41,6 +41,12 @@ def test_platform_helpers_has_no_dbos_queue_assembly() -> None:
         assert token not in helper, token
 
 
+def test_cli_persists_effect_leases_on_the_store_path() -> None:
+    cli = (REPO_ROOT / "src" / "whetstone" / "platform" / "cli.py").read_text()
+    assert "EffectLeaseAuthority.memory()" not in cli
+    assert "EffectLeaseAuthority.sqlite(store_path)" in cli
+
+
 def test_register_runtime_is_gone() -> None:
     bootstrap = (
         REPO_ROOT

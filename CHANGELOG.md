@@ -71,7 +71,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity is pinned by `--owner-id`, or derived from
   `--application-version` + `--executor-id`. The CLI always closes the
   runtime if `build_runtime` succeeded, including when `deploy_platform`
-  fails.
+  fails. Effect leases persist on `--store-path` so a restarted CLI can
+  replay a completed proposal or eval instead of charging again.
 
 ### Changed
 

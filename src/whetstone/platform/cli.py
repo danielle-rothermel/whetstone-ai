@@ -236,7 +236,7 @@ def run_command(
                 adapter_registry=MappingAdapterRegistry(
                     {COPRO_ADAPTER_KEY: copro_adapter}
                 ),
-                effect_authority=EffectLeaseAuthority.memory(),
+                effect_authority=EffectLeaseAuthority.sqlite(store_path),
                 ledger_engine=ledger,
                 platform=True,
                 owner_id=resolved_owner_id,
