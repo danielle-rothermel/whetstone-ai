@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from whetstone.experiment.candidate import TemplateRenderContract
     from whetstone.experiment.env import Experiment
     from whetstone.optim.adapters import OptimizerAdapter
+    from whetstone.optim.codex.adapter import CodexRunner
+    from whetstone.optim.codex.control import CodexControl
     from whetstone.optim.copro.control import CoproControl
     from whetstone.optim.gepa.control import GepaControl
     from whetstone.optim.gepa.harness_adapter import GepaHarnessAdapter
@@ -467,14 +469,100 @@ def prepare_toy_gepa_run(
     )
 
 
+TOY_CODEX_MODEL = "toy-codex-model"
+
+
+def build_toy_codex_control(
+    *,
+    engine: EvalEngine,
+    max_tool_calls: int = 3,
+    mutation_field: str = TOY_MUTATION_FIELD,
+    wall_seconds: float = 120.0,
+    codex_binary: str = "codex",
+) -> CodexControl:
+    from whetstone.optim.codex.control import configure_codex
+
+    return configure_codex(
+        model=TOY_CODEX_MODEL,
+        max_tool_calls=max_tool_calls,
+        eval_config_ref=engine.eval_config_ref,
+        reward_policy_hash=engine.reward_policy_identity_hash(),
+        evaluation_execution_policy_hash=(
+            engine.execution_policy_identity_hash()
+        ),
+        task_model_identity_hash=engine.task_model_identity_hash(),
+        internal_task_hashes=engine.sampling.task_hashes,
+        wall_seconds=wall_seconds,
+        codex_binary=codex_binary,
+        mutation_field=mutation_field,
+    )
+
+
+def build_toy_codex_adapter(
+    *,
+    store: BlockingObjectStore,
+    runner: CodexRunner,
+) -> OptimizerAdapter:
+    """Wrap ``runner`` in a Codex adapter awaiting its Tool Call Store.
+
+    Bind the runtime's exact store with ``bind_tool_store`` once
+    ``build_runtime`` has produced it.
+    """
+    from whetstone.optim.codex.adapter import CodexAdapter
+
+    return CodexAdapter(runner, store=store)
+
+
+def scripted_codex_preflight() -> None:
+    """The preflight a scripted Codex stand-in satisfies.
+
+    ``prepare_codex_run`` requires proof of a usable Codex session before
+    it commits capacity or eval budget. A test driving the scripted fake
+    CLI has no real session to prove and no spend to protect, so it names
+    this explicitly. It lives in ``whetstone.testing`` and is not a
+    default anywhere, so no production path can reach it: the CLI must
+    pass the real :func:`codex_auth_preflight`.
+    """
+
+
+def prepare_toy_codex_run(
+    runtime: RegisteredRuntime,
+    *,
+    run_id: str,
+    control: CodexControl,
+    initial_candidate: Candidate | None = None,
+    experiment: Experiment | None = None,
+    render_contract: TemplateRenderContract | None = None,
+    mutation_field: str | None = None,
+    preflight: Callable[[], None] = scripted_codex_preflight,
+) -> OptimRunLaunch:
+    from whetstone.coordination.runtime_bootstrap import prepare_codex_run
+
+    return prepare_codex_run(
+        runtime,
+        run_id=run_id,
+        control=control,
+        experiment=experiment or build_toy_experiment(num_seeds=1),
+        render_contract=render_contract or toy_template_render_contract(),
+        mutation_field=mutation_field or TOY_MUTATION_FIELD,
+        initial_candidate=initial_candidate,
+        preflight=preflight,
+    )
+
+
 __all__ = [
+    "TOY_CODEX_MODEL",
     "TOY_GEPA_COMPONENT",
     "TOY_GEPA_INLINE_POLICY_HASH",
     "TOY_GEPA_REFLECTION_BODIES",
     "build_miprov2_adapter",
+    "build_toy_codex_adapter",
+    "build_toy_codex_control",
     "build_toy_copro_control",
     "build_toy_gepa_adapter",
     "build_toy_gepa_control",
+    "prepare_toy_codex_run",
+    "scripted_codex_preflight",
     "prepare_toy_copro_run",
     "prepare_toy_gepa_run",
     "prepare_toy_miprov2_run",

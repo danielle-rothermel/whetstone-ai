@@ -18,11 +18,11 @@ from pydantic import (
 )
 
 from whetstone.core.identity import compute_identity_hash
-from whetstone.optim.codex.adapter import OpaqueStepError
-from whetstone.optim.codex.runner import (
+from whetstone.optim.codex.adapter import (
     CodexStructuredExecutionFailure,
-    SubprocessCodexRunner,
+    OpaqueStepError,
 )
+from whetstone.optim.codex.runner import SubprocessCodexRunner
 from whetstone.optim.proposal.proposer import (
     ProposalDraft,
     ProposalRequest,

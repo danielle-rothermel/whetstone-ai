@@ -745,3 +745,107 @@ def test_prepare_miprov2_run_rejects_a_differing_mutation_field(
             initial_state=opened,
             mutation_field="other_prompt_field",
         )
+
+
+def _codex_runtime(store):
+    """A runtime whose registered Codex adapter never runs."""
+    from whetstone.core.leasing import EffectLeaseAuthority
+    from whetstone.coordination.runtime_bootstrap import build_runtime
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.adapters import MappingAdapterRegistry
+    from whetstone.optim.codex.adapter import CODEX_ADAPTER_KEY, CodexAdapter
+
+    class _NeverRunner:
+        def run(self, request, handle, *, lease_token):
+            raise AssertionError("prepare_codex_run must not run the agent")
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    runtime = build_runtime(
+        store=store,
+        engine=engine,
+        adapter_registry=MappingAdapterRegistry(
+            {CODEX_ADAPTER_KEY: CodexAdapter(_NeverRunner(), store=store)}
+        ),
+        effect_authority=EffectLeaseAuthority.memory(),
+    )
+    return runtime, engine
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("evaluation_execution_policy_hash", "a" * 64),
+        ("task_model_identity_hash", "b" * 64),
+    ],
+)
+def test_prepare_codex_run_rejects_a_stale_engine_binding(
+    sqlite_store, field, value
+) -> None:
+    """A control may not claim bindings the runtime will not evaluate under.
+
+    The Tool is built from ``runtime.engine``, so a control carrying a
+    different execution policy or task-model route would have its
+    evaluations run against the engine's while the persisted optimizer
+    identity claimed its own. That is silent provenance corruption, so
+    every engine-derived binding is attested, not just the reward policy
+    and eval config.
+    """
+    from whetstone.coordination.runtime_bootstrap import prepare_codex_run
+    from whetstone.testing.runtime import scripted_codex_preflight
+    from tests.codex_support import toy_codex_control
+
+    runtime, engine = _codex_runtime(sqlite_store)
+    control = toy_codex_control(engine=engine).model_copy(
+        update={field: value}
+    )
+
+    with pytest.raises(ValueError, match=field):
+        prepare_codex_run(
+            runtime,
+            run_id="codex-stale-binding",
+            control=control,
+            preflight=scripted_codex_preflight,
+            **_toy_launch_kwargs(),
+        )
+
+
+def test_prepare_codex_run_rejects_a_stale_task_split(sqlite_store) -> None:
+    """The control's internal split must be the split the Tool evaluates."""
+    from whetstone.coordination.runtime_bootstrap import prepare_codex_run
+    from whetstone.testing.runtime import scripted_codex_preflight
+    from tests.codex_support import toy_codex_control
+
+    runtime, engine = _codex_runtime(sqlite_store)
+    control = toy_codex_control(engine=engine).model_copy(
+        update={"internal_task_hashes": engine.sampling.task_hashes[:1]}
+    )
+
+    with pytest.raises(ValueError, match="internal_task_hashes"):
+        prepare_codex_run(
+            runtime,
+            run_id="codex-stale-split",
+            control=control,
+            preflight=scripted_codex_preflight,
+            **_toy_launch_kwargs(),
+        )
+
+
+def test_prepare_codex_run_binds_a_matching_control(sqlite_store) -> None:
+    """Every binding agreeing with the engine still binds the launch."""
+    from whetstone.coordination.runtime_bootstrap import prepare_codex_run
+    from whetstone.testing.runtime import scripted_codex_preflight
+    from tests.codex_support import toy_codex_control
+
+    runtime, engine = _codex_runtime(sqlite_store)
+    control = toy_codex_control(engine=engine)
+
+    launch = prepare_codex_run(
+        runtime,
+        run_id="codex-bindings-ok",
+        control=control,
+        preflight=scripted_codex_preflight,
+        **_toy_launch_kwargs(),
+    )
+
+    assert launch.control == control
+    assert len(launch.run.tool_configs) == 1

@@ -65,6 +65,7 @@ __all__ = [
     "STEP_REQUEST_SCHEMA_VERSION",
     "STEP_RESULT_SCHEMA",
     "STEP_RESULT_SCHEMA_VERSION",
+    "SUPERSEDED_FAILURE_CODES_KEY",
     "BudgetDelta",
     "BudgetState",
     "OptimEvalRequest",
@@ -916,6 +917,68 @@ class ToolEvidence(BaseModel):
         return self
 
 
+#: Key on a superseding Step failure's ``details`` naming the nested
+#: failure codes it stands for. A Step Result carries exactly one
+#: terminal failure, so a Step whose tool evidence failed in a way its
+#: own failure does not adopt cannot claim any single nested failure as
+#: its own; it fails under an adapter-owned code that accounts for all
+#: of them instead. This literal is persisted inside a Step failure's
+#: ``details``, so it is pinned by a golden test.
+SUPERSEDED_FAILURE_CODES_KEY = "superseded_failure_codes"
+
+
+def _validate_shared_terminal_failure(
+    *,
+    outer: TerminalFailure | None,
+    nested: tuple[TerminalFailure, ...],
+    supersession_allowed: bool,
+) -> None:
+    """A failed Step's own failure must account for its evidence.
+
+    The base rule is adoption: a Step that failed because its evaluation
+    failed must not report some unrelated code, so every nested terminal
+    failure must equal the Step's own. Steps whose nested failures come
+    only from ``resolved_intents`` -- the PROPOSAL_ONLY path the COPRO,
+    GEPA, and MIPROv2 adapters take -- get nothing but this rule. The
+    optimizer owns both the intent and the Step failure there, so a
+    disagreement between them is a defect rather than a verdict it needs
+    to express.
+
+    Supersession is the exception, and only a Step carrying tool
+    evidence may claim it. There the Step's failure can be about the
+    agent's contract rather than about any one evaluation -- it
+    under-reported paid calls, or blew its wall budget -- and no nested
+    failure is the right thing to adopt even when exactly one evaluation
+    failed. Such a Step must say so, naming every code it stands for,
+    rather than silently disagreeing with its own evidence.
+    """
+    if outer is None or not nested:
+        return
+    if all(failure == outer for failure in nested):
+        return
+    if not supersession_allowed:
+        raise ValueError(
+            "a Step Result whose nested terminal failures carry no tool "
+            "evidence must adopt the exact nested terminal failure"
+        )
+    superseded = outer.details.to_json().get(SUPERSEDED_FAILURE_CODES_KEY)
+    if not isinstance(superseded, list) or not all(
+        isinstance(code, str) for code in superseded
+    ):
+        raise ValueError(
+            "a Step Result whose nested terminal failures differ from its "
+            "own must record them as a list of string codes under "
+            f"{SUPERSEDED_FAILURE_CODES_KEY!r}"
+        )
+    if sorted(superseded) != sorted(
+        str(failure.code) for failure in nested
+    ):
+        raise ValueError(
+            "a superseding Step failure must name the exact set of nested "
+            "terminal failure codes it stands for"
+        )
+
+
 class OptimStepResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -1168,13 +1231,14 @@ class OptimStepResult(BaseModel):
                 for evidence in self.tool_evidence
                 if evidence.result.record.terminal_failure is not None
             )
-            if any(
-                failure != self.terminal_failure for failure in nested_failures
-            ):
-                raise ValueError(
-                    "every nested terminal failure must equal the exact "
-                    "outer Step failure"
-                )
+            _validate_shared_terminal_failure(
+                outer=self.terminal_failure,
+                nested=nested_failures,
+                # Only a Step that drove tools can outrank its evidence:
+                # its failure may be about the agent's contract rather
+                # than about any one evaluation.
+                supersession_allowed=bool(self.tool_evidence),
+            )
         if self.seed_retained:
             if self.status is not StepStatus.COMPLETE:
                 raise ValueError(

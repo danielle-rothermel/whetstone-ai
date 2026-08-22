@@ -1467,6 +1467,7 @@ dependencies = [
     { name = "optuna" },
     { name = "rich" },
     { name = "typer" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -1506,6 +1507,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.3.4" },
     { name = "rich", specifier = ">=15.0.0" },
     { name = "typer", specifier = ">=0.26.8" },
+    { name = "uvicorn", specifier = ">=0.52.0" },
 ]
 provides-extras = ["dbos", "postgres", "platform"]
 

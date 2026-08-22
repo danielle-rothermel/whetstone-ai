@@ -372,3 +372,276 @@ def test_run_refuses_copro_launch_from_a_non_toy_experiment(
             eval_config_ref=launch.control.eval_config_ref,
         )
     assert "copro-cli-non-toy" in str(excinfo.value)
+
+
+def _codex_launch(store):
+    """A bound Codex launch, exactly as the CLI's run command loads one."""
+    from whetstone.optim.adapters import MappingAdapterRegistry
+    from whetstone.optim.codex.adapter import CODEX_ADAPTER_KEY, CodexAdapter
+    from whetstone.core.leasing import EffectLeaseAuthority
+    from whetstone.coordination.runtime_bootstrap import build_runtime
+    from whetstone.testing.runtime import (
+        build_toy_codex_control,
+        prepare_toy_codex_run,
+    )
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    control = build_toy_codex_control(engine=engine, max_tool_calls=2)
+    runtime = build_runtime(
+        store=store,
+        engine=engine,
+        adapter_registry=MappingAdapterRegistry(
+            {CODEX_ADAPTER_KEY: CodexAdapter(_NeverRunsCodex(), store=store)}
+        ),
+        effect_authority=EffectLeaseAuthority.memory(),
+    )
+    return prepare_toy_codex_run(
+        runtime, run_id="cli-codex-run", control=control
+    )
+
+
+
+class _NeverRunsCodex:
+    def run(self, request, handle, *, lease_token):
+        raise AssertionError("the CLI test must not spawn a Codex process")
+
+
+def test_the_cli_codex_path_proves_the_session_before_it_builds_an_adapter(
+    sqlite_store,
+    tmp_path,
+) -> None:
+    """The preflight is the CLI's, not an optional caller courtesy.
+
+    A Codex run commits real eval capacity on its first admitted Tool
+    Call, so the one production construction site must prove the session
+    first. This asserts the call happens and carries the run's own
+    control and the exact environment the run will see.
+    """
+    from whetstone.platform.cli import _codex_adapter_from_launch
+
+    launch = _codex_launch(sqlite_store)
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    seen: list[dict] = []
+
+    adapter = _codex_adapter_from_launch(
+        launch,
+        engine,
+        sqlite_store,
+        store_path=str(tmp_path / "cli-codex.sqlite"),
+        run_root=tmp_path / "runs",
+        runtime_config=ReferenceEvalRuntimeConfig(),
+        preflight=lambda **kwargs: seen.append(kwargs),
+    )
+
+    assert adapter is not None
+    assert len(seen) == 1
+    assert seen[0]["codex_binary"] == launch.control.codex_binary
+    assert seen[0]["model"] == launch.control.model
+    # The preflight inspects exactly the environment the run will pass
+    # through, so the task-model key must be absent there too.
+    assert isinstance(seen[0]["environment"], dict)
+
+
+def test_the_cli_codex_path_refuses_to_build_when_the_session_is_broken(
+    sqlite_store,
+    tmp_path,
+) -> None:
+    """A broken login must not reach the harness and start spending."""
+    import pytest
+
+    from whetstone.optim.codex.preflight import CodexPreflightError
+    from whetstone.platform.cli import _codex_adapter_from_launch
+
+    launch = _codex_launch(sqlite_store)
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+
+    def _broken(**_kwargs):
+        raise CodexPreflightError("Codex has no usable auth source")
+
+    with pytest.raises(CodexPreflightError):
+        _codex_adapter_from_launch(
+            launch,
+            engine,
+            sqlite_store,
+            store_path=str(tmp_path / "cli-codex.sqlite"),
+            run_root=tmp_path / "runs",
+            runtime_config=ReferenceEvalRuntimeConfig(),
+            preflight=_broken,
+        )
+
+
+def test_the_cli_codex_path_defaults_to_the_real_auth_preflight(
+    sqlite_store,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """No preflight argument means the real check, never a no-op.
+
+    The ``preflight`` parameter exists so a test can name a stand-in; if
+    it silently defaulted to nothing, the documented guarantee would be
+    only as good as each caller remembering.
+    """
+    from whetstone.optim.codex import preflight as preflight_module
+    from whetstone.platform.cli import _codex_adapter_from_launch
+
+    launch = _codex_launch(sqlite_store)
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    called: list[int] = []
+
+    monkeypatch.setattr(
+        preflight_module,
+        "codex_auth_preflight",
+        lambda **_kwargs: called.append(1),
+    )
+
+    _codex_adapter_from_launch(
+        launch,
+        engine,
+        sqlite_store,
+        store_path=str(tmp_path / "cli-codex.sqlite"),
+        run_root=tmp_path / "runs",
+        runtime_config=ReferenceEvalRuntimeConfig(),
+    )
+
+    assert called == [1]
+
+
+def test_the_mcp_runtime_config_carries_the_launch_mutation_field() -> None:
+    """A non-default mutation field must reach the out-of-process server.
+
+    ``run --adapter codex`` hosts its evaluation endpoint in a separate
+    process that rebuilds the engine from the serialized runtime config
+    alone. A config that did not carry the launch's rendering settings
+    would rebuild the *toy* defaults there while the harness used the
+    launch's: every call would fail preflight on a different mutation
+    field, and a different render contract would score a prompt the
+    harness never declared.
+    """
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    runtime_config = ReferenceEvalRuntimeConfig(
+        mutation_field="system_prompt_template"
+    )
+
+    # The setting survives the trip through the environment variable the
+    # server reads it back from.
+    restored = ReferenceEvalRuntimeConfig.model_validate_json(
+        runtime_config.model_dump_json()
+    )
+
+    assert restored.mutation_field == "system_prompt_template"
+
+
+def test_the_mcp_server_refuses_a_runtime_config_without_the_field(
+    tmp_path, sqlite_store
+) -> None:
+    """Never silently default: a bare config is refused, not assumed.
+
+    The Tool Config pins the field the run's candidates are written to,
+    so the server has an independent value to check the rebuilt engine
+    against. A runtime config that cannot supply one cannot rebuild the
+    launch's engine, and evaluating anyway would score the wrong prompt.
+    """
+    from tests.codex_support import (
+        toy_capacity_binding,
+        toy_codex_control,
+        toy_codex_run,
+    )
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.codex.adapter import codex_run_lease_binding
+    from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+    from whetstone.optim.codex.runner import _capacity_subject_key
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    control = toy_codex_control(engine=engine, max_tool_calls=2)
+    run, config, _candidate = toy_codex_run(
+        control=control, engine=engine, run_id="codex-bare-runtime"
+    )
+    binding = toy_capacity_binding(run)
+    token = "token-for-codex-bare-runtime"
+    bare = ReferenceEvalRuntimeConfig()
+    environment = {
+        McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),
+        McpEnvironmentKey.TOOL_CONFIG: config.model_dump_json(),
+        McpEnvironmentKey.CAPACITY_BINDING: binding.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG: bare.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+            "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
+        ),
+        McpEnvironmentKey.REWARD_POLICY: (
+            engine.reward_policy.model_dump_json()
+        ),
+        McpEnvironmentKey.RUN_LEASE_TOKEN: token,
+        McpEnvironmentKey.RUN_LEASE_BINDING: codex_run_lease_binding(
+            token=token,
+            store_namespace_key=str(config.store_namespace_key),
+            tool_config_hash=str(config.identity_hash()),
+            capacity_scope=binding.scope.value,
+            capacity_subject=_capacity_subject_key(binding),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="mutation field"):
+        build_server_from_env(environment)
+
+
+def test_the_mcp_server_refuses_a_runtime_config_without_the_contract(
+    tmp_path, sqlite_store
+) -> None:
+    """The render contract defaults as silently as the mutation field.
+
+    A config carrying the launch's mutation field but no render contract
+    passes the field check and then falls through to the *toy* contract,
+    so the server renders the agent's candidate under different rules
+    than the harness scored the baseline with. Both renders succeed, so
+    nothing downstream catches it; the server refuses to start instead.
+    """
+    from tests.codex_support import (
+        toy_capacity_binding,
+        toy_codex_control,
+        toy_codex_run,
+    )
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.codex.adapter import codex_run_lease_binding
+    from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+    from whetstone.optim.codex.runner import _capacity_subject_key
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    control = toy_codex_control(engine=engine, max_tool_calls=2)
+    run, config, _candidate = toy_codex_run(
+        control=control, engine=engine, run_id="codex-no-contract"
+    )
+    binding = toy_capacity_binding(run)
+    token = "token-for-codex-no-contract"
+    # The field the Tool Config pins, so the mutation-field guard passes
+    # and the render contract is the only thing missing.
+    without_contract = ReferenceEvalRuntimeConfig(
+        mutation_field=config.candidate_template_field
+    )
+    environment = {
+        McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),
+        McpEnvironmentKey.TOOL_CONFIG: config.model_dump_json(),
+        McpEnvironmentKey.CAPACITY_BINDING: binding.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG: (
+            without_contract.model_dump_json()
+        ),
+        McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+            "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
+        ),
+        McpEnvironmentKey.REWARD_POLICY: (
+            engine.reward_policy.model_dump_json()
+        ),
+        McpEnvironmentKey.RUN_LEASE_TOKEN: token,
+        McpEnvironmentKey.RUN_LEASE_BINDING: codex_run_lease_binding(
+            token=token,
+            store_namespace_key=str(config.store_namespace_key),
+            tool_config_hash=str(config.identity_hash()),
+            capacity_scope=binding.scope.value,
+            capacity_subject=_capacity_subject_key(binding),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="render contract"):
+        build_server_from_env(environment)

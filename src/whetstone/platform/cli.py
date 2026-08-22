@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -16,6 +18,8 @@ from whetstone.core.identity import compute_identity_hash, store_config_resolver
 from whetstone.core.leasing import EffectLeaseAuthority
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry
+from whetstone.optim.codex.adapter import CODEX_ADAPTER_KEY, CodexAdapter
+from whetstone.optim.codex.control import CodexControl
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.factory import (
@@ -32,13 +36,16 @@ from whetstone.optim.proposal.proposer import (
 )
 from whetstone.platform.contracts import load_run_manifest, load_run_result
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
+from whetstone.optim.tools.facade import ToolAdmissionAuthority
 from whetstone.provider.language_model import PlainPromptAdapter
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
+ADAPTER_CODEX = "codex"
 ADAPTER_COPRO = "copro"
 ADAPTER_GEPA = "gepa"
+ADAPTER_KEYS = (ADAPTER_CODEX, ADAPTER_COPRO, ADAPTER_GEPA)
 PROPOSER_PROVIDER = "provider"
 PROPOSER_FAKE = "fake"
 
@@ -262,6 +269,99 @@ def _gepa_adapter_from_launch(
     )
 
 
+def _codex_tool_executor(
+    *,
+    engine,
+    reward_policy,
+    effect_authority,
+    owner_id: str,
+):
+    """The in-harness executor that re-issues Codex's out-of-process calls.
+
+    Codex evaluates through its own MCP server, which admits and persists
+    each call against the same durable store. The harness still needs an
+    executor so the Step's Issued Tool Call ledger can record every call;
+    for an already-terminal call it reads the durable result rather than
+    evaluating again.
+    """
+    from whetstone.core.leasing import ReplayPolicy
+    from whetstone.optim.tools.evaluator import EngineToolEvaluator
+    from whetstone.optim.tools.execution import EvaluatingToolExecutor
+
+    if reward_policy is None:
+        raise typer.BadParameter("a Codex run requires a run Reward Policy")
+    return EvaluatingToolExecutor(
+        EngineToolEvaluator(engine),
+        reward_policy,
+        effect_authority,
+        owner_id=owner_id,
+        replay_policy=ReplayPolicy.IDEMPOTENT,
+    )
+
+
+def _codex_adapter_from_launch(
+    launch,
+    engine,
+    store,
+    *,
+    store_path: str,
+    run_root: Path,
+    runtime_config,
+    preflight: Callable[..., None] | None = None,
+) -> CodexAdapter:
+    """Build the one production Codex adapter, session proven first.
+
+    A Codex run commits real eval capacity the moment its first Tool Call
+    is admitted, and a broken session burns the whole wall budget for
+    nothing. So this refuses to hand back an adapter until the preflight
+    has proven the binary, an auth source, and one cheap structured probe.
+    ``preflight`` exists only so a test can name the scripted stand-in;
+    production takes the real check.
+    """
+    from whetstone.optim.codex.executor import build_codex_executor
+    from whetstone.optim.codex.preflight import codex_auth_preflight
+    from whetstone.optim.codex.runner import SubprocessCodexRunner
+
+    resolved_preflight = (
+        codex_auth_preflight if preflight is None else preflight
+    )
+    control = launch.control
+    if not isinstance(control, CodexControl):
+        raise typer.BadParameter("launch Codex control is not a CodexControl")
+    if control.reward_policy_hash != engine.reward_policy_identity_hash():
+        raise typer.BadParameter(
+            "launch control reward policy does not match the rebuilt engine"
+        )
+    if control.eval_config_ref != engine.eval_config_ref:
+        raise typer.BadParameter(
+            "launch control eval_config_ref does not match the rebuilt engine"
+        )
+    executor = build_codex_executor(run_root=run_root)
+    runner = SubprocessCodexRunner(
+        executor=executor,
+        sqlite_path=str(Path(store_path).resolve()),
+        runtime_config=runtime_config,
+        runtime_config_class=(
+            f"{type(runtime_config).__module__}:{type(runtime_config).__name__}"
+        ),
+        reward_policy=engine.reward_policy,
+        codex_binary=control.codex_binary,
+        model=control.model,
+        reasoning_effort=control.reasoning_effort.value,
+        timeout_seconds=control.wall_seconds,
+        max_output_bytes=control.max_output_bytes,
+    )
+    # Prove the session before the adapter exists, so a broken login
+    # cannot reach the harness and start spending the run's capacity.
+    resolved_preflight(
+        executor=executor,
+        codex_binary=control.codex_binary,
+        environment=runner.codex_process_environment(),
+        model=control.model,
+    )
+    return CodexAdapter(runner, store=store)
+
+
 def _receipt_payload(receipt) -> dict[str, object]:
     return {
         "run_key": receipt.run_key.value,
@@ -328,8 +428,10 @@ def run_command(
         drive_until_quiescent,
     )
 
-    if adapter not in {ADAPTER_COPRO, ADAPTER_GEPA}:
-        raise typer.BadParameter("adapter must be copro or gepa")
+    if adapter not in set(ADAPTER_KEYS):
+        raise typer.BadParameter(
+            "adapter must be one of " + ", ".join(ADAPTER_KEYS)
+        )
     resolved_database_url = _require_database_url(database_url)
     resolved_work_key = work_key or run_id
     resolved_exec_ref = execution_config_ref or f"exec-config-{uuid4().hex[:10]}"
@@ -344,13 +446,42 @@ def run_command(
                 )
             if launch.control is None:
                 raise typer.BadParameter("launch is missing optimizer control")
-            runtime_config = ReferenceEvalRuntimeConfig()
-            engine = runtime_config.build_engine(
-                store,
+            # The launch's own rendering settings, carried on the runtime
+            # config rather than only passed here. The Codex MCP server
+            # runs out of process and rebuilds its engine from this
+            # config alone, so settings left off it would silently become
+            # the toy defaults there while the harness used the launch's.
+            runtime_config = ReferenceEvalRuntimeConfig(
                 mutation_field=launch.run.mutation_field,
                 render_contract=launch.run.template_render_contract,
             )
-            if adapter == ADAPTER_GEPA:
+            engine = runtime_config.build_engine(store)
+            codex_run_root: Path | None = None
+            if adapter == ADAPTER_CODEX:
+                codex_control = launch.control
+                if not isinstance(codex_control, CodexControl):
+                    raise typer.BadParameter(
+                        "launch Codex control is not a CodexControl"
+                    )
+                _require_launch_matches_engine(
+                    launch,
+                    engine,
+                    eval_config_ref=codex_control.eval_config_ref,
+                )
+                codex_run_root = Path(store_path).resolve().parent / (
+                    f"codex-runs-{run_id}"
+                )
+                adapters = {
+                    CODEX_ADAPTER_KEY: _codex_adapter_from_launch(
+                        launch,
+                        engine,
+                        store,
+                        store_path=store_path,
+                        run_root=codex_run_root,
+                        runtime_config=runtime_config,
+                    )
+                }
+            elif adapter == ADAPTER_GEPA:
                 gepa_control = launch.control
                 if not isinstance(gepa_control, GepaControl):
                     raise typer.BadParameter(
@@ -389,15 +520,39 @@ def run_command(
                 application_version=application_version,
                 executor_id=executor_id,
             )
+            effect_authority = EffectLeaseAuthority.sqlite(store_path)
             runtime = build_runtime(
                 store=store,
                 engine=engine,
                 adapter_registry=MappingAdapterRegistry(adapters),
-                effect_authority=EffectLeaseAuthority.sqlite(store_path),
+                effect_authority=effect_authority,
                 ledger_engine=ledger,
                 platform=True,
                 owner_id=resolved_owner_id,
+                # A Codex run admits Tool Calls from an out-of-process MCP
+                # server, so its per-run capacity must be durable.
+                admission=(
+                    ToolAdmissionAuthority.sqlite(store_path)
+                    if adapter == ADAPTER_CODEX
+                    else None
+                ),
+                tool_executor=(
+                    _codex_tool_executor(
+                        engine=engine,
+                        reward_policy=engine.reward_policy,
+                        effect_authority=effect_authority,
+                        owner_id=resolved_owner_id,
+                    )
+                    if adapter == ADAPTER_CODEX
+                    else None
+                ),
             )
+            if adapter == ADAPTER_CODEX:
+                # The adapter reads durable Tool Call entries from the exact
+                # store the harness admits through.
+                adapters[CODEX_ADAPTER_KEY].bind_tool_store(
+                    runtime.tool_store
+                )
             with runtime:
                 now = datetime.now(UTC)
                 deployment = deploy_platform(

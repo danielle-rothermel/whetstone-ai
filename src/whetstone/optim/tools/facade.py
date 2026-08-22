@@ -136,6 +136,21 @@ class ToolAdmissionAuthority:
             capacity_scope_id=capacity_scope_id,
         )
 
+    def admitted_entries(
+        self,
+        *,
+        store_namespace_key: str,
+        tool_config_hash: str,
+        capacity_scope: ToolCapacityScope,
+        capacity_scope_id: str,
+    ) -> tuple[ToolCallStoreEntry, ...]:
+        return self._backend.admitted_entries(
+            store_namespace_key=store_namespace_key,
+            tool_config_hash=tool_config_hash,
+            capacity_scope=capacity_scope,
+            capacity_scope_id=capacity_scope_id,
+        )
+
     def close(self) -> None:
         self._backend.close()
 
@@ -213,6 +228,21 @@ class ToolCallStore:
                 detail="the existing key cites a different exact Tool Call",
             )
         return existing
+
+    def find_entry(
+        self,
+        *,
+        store_namespace_key: str,
+        call_id: str,
+    ) -> ToolCallStoreEntry | None:
+        """Look up one durable admission entry by its call id.
+
+        :meth:`get` needs the full ``ToolCall``. An adapter that only learns
+        a ``call_id`` -- because the call was issued by an out-of-process
+        agent against the same durable store -- resolves the recorded call
+        through this read-only projection instead.
+        """
+        return self._admission.get(store_namespace_key, call_id)
 
     def admit(self, call: ToolCall, config: ToolConfig) -> ToolCallStoreEntry:
         call_ref = self._persist_call_chain(call, config)
@@ -485,6 +515,34 @@ class ToolCallStore:
                 "Tool Capacity binding scope must match the exact Tool Config"
             )
         return self._admission.accepted_count(
+            store_namespace_key=str(validated.store_namespace_key),
+            tool_config_hash=str(validated.identity_hash()),
+            capacity_scope=capacity_scope,
+            capacity_scope_id=capacity_scope_id,
+        )
+
+    def admitted_entries(
+        self,
+        config: ToolConfig,
+        binding: ToolCapacityBinding,
+    ) -> tuple[ToolCallStoreEntry, ...]:
+        """Every durable entry this exact scope debited capacity for.
+
+        :meth:`accepted_count` says how many evaluations were paid for;
+        this says which ones, so a caller reconciling an agent's report
+        against the durable ledger can name the calls that are missing
+        from it and read the state each one reached.
+        """
+        validated = ToolConfig.model_validate(config.model_dump(mode="json"))
+        exact_binding = ToolCapacityBinding.model_validate(
+            binding.model_dump(mode="json")
+        )
+        capacity_scope, capacity_scope_id = _capacity_scope_key(exact_binding)
+        if capacity_scope is not validated.capacity.scope:
+            raise ValueError(
+                "Tool Capacity binding scope must match the exact Tool Config"
+            )
+        return self._admission.admitted_entries(
             store_namespace_key=str(validated.store_namespace_key),
             tool_config_hash=str(validated.identity_hash()),
             capacity_scope=capacity_scope,

@@ -10,7 +10,7 @@ memory:
 
 * task-model usage comes from the ``EvalOutputRow`` entries inside each
   ``EvalEvidence`` record a Step cites, reached through the Step's
-  ``resolved_intents`` and ``search_evidence``;
+  ``resolved_intents``, ``search_evidence``, and ``tool_evidence``;
 * proposer usage comes from ``OptimStepResult.proposer_usage``, which the
   optimizer's adapter records as it drives each proposer call.
 
@@ -24,9 +24,16 @@ already paid for, so without both keys a replayed call would be billed again.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+)
 
 from whetstone.core.identity import TypedRef
 from whetstone.eval.schema_names import (
@@ -41,6 +48,9 @@ from whetstone.optim.cost import (
     RunCostReport,
     UsageObservation,
     aggregate_role_cost,
+)
+from whetstone.optim.tools.evaluator import (
+    TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY as _TOOL_FAILURE_EVIDENCE_REF_KEY,
 )
 
 if TYPE_CHECKING:
@@ -96,13 +106,23 @@ class EvalOutputRowUsage(BaseModel):
 #: evaluation-level failure interrupted.
 _COSTED_EVIDENCE_SCHEMAS = frozenset({EVAL_EVIDENCE_SCHEMA, EVAL_FAILURE_SCHEMA})
 
-#: Tool-mediated evaluations (``EngineToolEvaluator``) store their evidence
-#: refs under ``OptimStepResult.tool_evidence`` instead, and are aggregated by
-#: the Codex tool wiring on branch ``08-22-codex``.
 
 
 def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
-    """Every evaluation-evidence ref one Step paid for, in order."""
+    """Every evaluation-evidence ref one Step paid for, in order.
+
+    A Step cites the evaluations it paid for through whichever channel its
+    mode uses, and all three are spend. A PROPOSAL_ONLY Step resolves
+    intents; a searching Step adds search evidence; a TOOL_USING Step --
+    the Codex arm -- drives every one of its evaluations through a tool and
+    cites them only from ``tool_evidence``. The Codex arm has no proposer
+    at all, since the agent does the proposing, so reading only the first
+    two channels would report an entire Codex run as free.
+
+    The three are unioned rather than treated as alternatives: the caller
+    de-duplicates by ref, so a Step that somehow cited one evaluation
+    through two channels is still paid for once.
+    """
     refs: list[TypedRef] = []
     for resolution in result.resolved_intents:
         ref = resolution.eval_result_ref
@@ -112,7 +132,54 @@ def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
         ref = evidence.eval_result_ref
         if ref is not None and ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
             refs.append(ref)
+    for tool_evidence in result.tool_evidence:
+        # A refused Tool Call carries no evaluation refs by construction,
+        # and a *failed* one may still carry them: the provider work done
+        # before the tool failed was billed exactly like any other
+        # interrupted evaluation, which is why failure evidence is costed.
+        record = tool_evidence.result.record
+        for ref in record.evaluation_evidence_refs:
+            if ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
+                refs.append(ref)
+        failure_ref = _tool_failure_evidence_ref(record)
+        if failure_ref is not None:
+            refs.append(failure_ref)
     return tuple(refs)
+
+
+def _tool_failure_evidence_ref(record: Any) -> TypedRef | None:
+    """The failure evidence ref a terminally failed Tool Result cites.
+
+    A tool-mediated evaluation that produced ``EvalFailureEvidence``
+    reaches its rows by a different route than a successful one. The
+    executor builds the failed ``ToolResult`` from the evaluator's
+    ``TerminalFailure`` alone, so ``evaluation_evidence_refs`` is empty
+    and the only citation of the persisted evidence is the typed ref the
+    evaluator put in ``details``. When that evaluation failed *after*
+    provider rows were produced and persisted, those rows were billed --
+    reading only the success channel drops them from task-model spend
+    while the intent path counts the identical failure.
+
+    The ref is validated rather than trusted: ``details`` is an
+    open-ended JSON body, so a value that is not a well-formed
+    ``TypedRef`` under the failure schema contributes nothing instead of
+    raising inside cost aggregation. It is read as a ``Mapping`` rather
+    than a ``dict`` because ``details`` is an ``ImmutableJsonObject``,
+    whose nested objects are mappings and not dicts.
+    """
+    failure = getattr(record, "terminal_failure", None)
+    if failure is None:
+        return None
+    raw = failure.details.get(_TOOL_FAILURE_EVIDENCE_REF_KEY)
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        ref = TypedRef.model_validate(dict(raw))
+    except ValidationError:
+        return None
+    if ref.schema_name != EVAL_FAILURE_SCHEMA:
+        return None
+    return ref
 
 
 def _task_model_observations(

@@ -41,6 +41,7 @@ from whetstone.optim.tools.contracts import (
 from whetstone.optim.tools.facade import ToolCallStore
 
 __all__ = [
+    "TOOL_EVALUATION_REJECTED_CODE",
     "EvaluatingToolExecutor",
     "ToolEvaluation",
     "ToolEvaluationError",
@@ -50,6 +51,16 @@ __all__ = [
     "ToolExecutionRecoveryRequiredError",
     "ToolValidationError",
 ]
+
+#: An admitted evaluation the evaluator rejected once it was already
+#: under way. Validation before admission refuses the call outright and
+#: never reaches this, but an evaluator can only decide some rejections
+#: -- a render-contract violation, an output field the engine cannot
+#: supply -- from inside ``evaluate``. The capacity is spent and the
+#: effect lease is held by then, so the rejection is a terminal Tool
+#: Result rather than a refusal. It is persisted and read back by the
+#: adapter, so it is a named constant rather than a call-site literal.
+TOOL_EVALUATION_REJECTED_CODE = "tool_evaluation_rejected"
 
 
 class ToolValidationError(ValueError):
@@ -279,14 +290,37 @@ class EvaluatingToolExecutor:
                         evaluation=evaluation,
                         config=validated_config,
                     )
-                except ToolEvaluationError as exc:
+                except (ToolEvaluationError, ToolValidationError) as exc:
+                    # A rejection raised from ``evaluate`` arrives after
+                    # admission, so the entry is ACCEPTED, its capacity
+                    # is debited, and its effect lease is held. Letting
+                    # it propagate would strand all three: the entry
+                    # never reaches a terminal, the lease runs to
+                    # expiry, and reconciliation later reads the
+                    # admission as an interrupted evaluation and fails
+                    # the whole Step. The rejection is this call's
+                    # outcome, not the Step's, so it terminalizes here
+                    # on the same path an evaluation failure takes --
+                    # totality holds and the agent can move on.
+                    failure = (
+                        exc.failure
+                        if isinstance(exc, ToolEvaluationError)
+                        else TerminalFailure(
+                            code=TOOL_EVALUATION_REJECTED_CODE,
+                            message=(
+                                "Tool evaluation was rejected after the "
+                                "call was admitted"
+                            ),
+                            details={"reason": str(exc)},
+                        )
+                    )
                     result = ToolResult(
                         call=tool_call_reference(call),
-                        terminal_failure=exc.failure,
+                        terminal_failure=failure,
                         provenance_ordinal=exact_ordinal,
                     )
                     result_ref = store.persist_result(result)
-                    terminal_failure = exc.failure
+                    terminal_failure = failure
                 else:
                     result_ref = store.persist_result(result)
                     terminal_failure = None

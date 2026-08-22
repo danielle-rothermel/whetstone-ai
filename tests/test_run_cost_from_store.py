@@ -8,12 +8,13 @@ memory, so a resumed or platform run reports the same total.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from dr_store.sync import open_sqlite
 
-from whetstone.core.identity import TypedRef
+from whetstone.core.identity import TerminalFailure, TypedRef
 from whetstone.eval.schema import EVAL_OUTPUTS_SCHEMA
 from whetstone.eval.schema_names import (
     EVAL_EVIDENCE_SCHEMA,
@@ -21,6 +22,10 @@ from whetstone.eval.schema_names import (
 )
 from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.cost_aggregation import aggregate_run_cost
+from whetstone.optim.tools.evaluator import (
+    TOOL_EVAL_FAILURE_EVIDENCE_CODE,
+    TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY,
+)
 
 
 class _FakeStepResult:
@@ -31,10 +36,12 @@ class _FakeStepResult:
         *,
         resolved_intents: tuple[Any, ...] = (),
         search_evidence: tuple[Any, ...] = (),
+        tool_evidence: tuple[Any, ...] = (),
         proposer_usage: tuple[ProposerCallUsage, ...] = (),
     ) -> None:
         self.resolved_intents = resolved_intents
         self.search_evidence = search_evidence
+        self.tool_evidence = tool_evidence
         self.proposer_usage = proposer_usage
 
 
@@ -929,3 +936,232 @@ def test_a_proposer_call_without_a_token_breakdown_is_flagged(
     assert report.proposer.rows_missing_token_breakdown == 1
     assert report.proposer.input_tokens == 12
     assert report.proposer.usd == pytest.approx(0.7)
+
+
+class _FakeToolEvidence:
+    """A Tool Evidence entry's citation path, and nothing else.
+
+    The real one reaches its refs through
+    ``result.record.evaluation_evidence_refs``; that nesting is the part
+    the aggregator walks, so the double reproduces it exactly.
+    """
+
+    def __init__(self, refs: tuple[TypedRef, ...]) -> None:
+        self.result = SimpleNamespace(
+            record=SimpleNamespace(evaluation_evidence_refs=refs)
+        )
+
+
+def test_tool_evidence_rows_are_task_model_spend(tmp_path) -> None:
+    """A tool-mediated evaluation is paid for like any other.
+
+    The Codex arm cites every evaluation it drove from ``tool_evidence``
+    alone, so a Step with no resolved intents still has task-model spend.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(tool_evidence=(_FakeToolEvidence((ref,)),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+    assert report.task_model.output_tokens == 4
+
+
+def test_one_evaluation_cited_from_two_channels_is_paid_for_once(
+    tmp_path,
+) -> None:
+    """De-duplication spans the channels, not just each one.
+
+    The ref key is what makes a replay free, so an evaluation reachable
+    both as a resolved intent and as tool evidence must not be billed
+    twice.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    resolved_intents=(_FakeCitation(ref),),
+                    tool_evidence=(_FakeToolEvidence((ref,)),),
+                ),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+
+
+def _failed_tool_evidence(failure_ref: TypedRef | None, **details: Any):
+    """A Tool Evidence entry whose evaluation failed terminally.
+
+    ``EvaluatingToolExecutor`` builds a failed ``ToolResult`` from the
+    evaluator's ``TerminalFailure`` alone, so ``evaluation_evidence_refs``
+    is empty and the failure's ``details`` carry the only citation of the
+    persisted evidence. The double reproduces exactly that shape.
+    """
+    body: dict[str, Any] = dict(details)
+    if failure_ref is not None:
+        body[TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY] = failure_ref.model_dump(
+            mode="json"
+        )
+    return SimpleNamespace(
+        result=SimpleNamespace(
+            record=SimpleNamespace(
+                evaluation_evidence_refs=(),
+                terminal_failure=TerminalFailure(
+                    code=TOOL_EVAL_FAILURE_EVIDENCE_CODE,
+                    message="the evaluation failed after provider work",
+                    details=body,
+                ),
+            )
+        )
+    )
+
+
+def test_rows_paid_for_before_a_tool_evaluation_failed_are_counted(
+    tmp_path,
+) -> None:
+    """A tool-mediated failure is spend exactly like an intent-mediated one.
+
+    Scoring or persistence can fail after paid provider rows were already
+    produced; the failure evidence references those rows. A failed
+    ``ToolResult`` carries no ``evaluation_evidence_refs``, so walking
+    only the success channel drops that billed work from the Codex arm's
+    task-model spend while the identical failure on the intent path is
+    counted.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        outputs_reference, _ = store.put(
+            EVAL_OUTPUTS_SCHEMA,
+            {
+                "outputs": [
+                    _row(
+                        task_index=0,
+                        prompt_tokens=10,
+                        completion_tokens=4,
+                        provider_cost=0.2,
+                    )
+                ]
+            },
+        )
+        failure_reference, _ = store.put(
+            EVAL_FAILURE_SCHEMA,
+            {
+                "exception_type": "RuntimeError",
+                "message": "scoring died after generation",
+                "outputs_ref": _typed_ref(outputs_reference).model_dump(
+                    mode="json"
+                ),
+            },
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    tool_evidence=(
+                        _failed_tool_evidence(_typed_ref(failure_reference)),
+                    )
+                ),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+    assert report.task_model.usd == pytest.approx(0.2)
+
+
+def test_a_tool_failure_ref_is_paid_for_once_across_channels(
+    tmp_path,
+) -> None:
+    """De-duplication covers the failure channel too.
+
+    The same failure evidence reachable as a resolved intent and from a
+    failed Tool Result is one evaluation, so it is billed once.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        outputs_reference, _ = store.put(
+            EVAL_OUTPUTS_SCHEMA,
+            {
+                "outputs": [
+                    _row(
+                        task_index=0,
+                        prompt_tokens=10,
+                        completion_tokens=4,
+                        provider_cost=0.2,
+                    )
+                ]
+            },
+        )
+        failure_reference, _ = store.put(
+            EVAL_FAILURE_SCHEMA,
+            {
+                "exception_type": "RuntimeError",
+                "message": "scoring died after generation",
+                "outputs_ref": _typed_ref(outputs_reference).model_dump(
+                    mode="json"
+                ),
+            },
+        )
+        failure_ref = _typed_ref(failure_reference)
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    resolved_intents=(_FakeCitation(failure_ref),),
+                    tool_evidence=(_failed_tool_evidence(failure_ref),),
+                ),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+
+
+def test_a_tool_failure_with_no_evidence_ref_contributes_nothing(
+    tmp_path,
+) -> None:
+    """Only a well-formed typed ref under the failure schema is followed.
+
+    ``TerminalFailure.details`` is an open-ended JSON body: other tool
+    failure codes put unrelated values there, and a validation failure
+    never persisted evidence at all. Neither may raise inside cost
+    aggregation, and neither is spend.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    tool_evidence=(
+                        _failed_tool_evidence(None),
+                        _failed_tool_evidence(None, evidence_ref="not-a-ref"),
+                        _failed_tool_evidence(
+                            None, evidence_ref={"schema_name": "x"}
+                        ),
+                    )
+                ),
+            ),
+        )
+    assert report.task_model.calls == 0
