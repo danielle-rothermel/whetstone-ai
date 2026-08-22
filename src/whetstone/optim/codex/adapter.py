@@ -44,6 +44,18 @@ carry a real score -- a refusal or a terminally failed evaluation is
 rejected, because the agent would be claiming a candidate it never
 successfully measured.
 
+Retaining the seed has two spellings, and they mean the same thing. The
+agent may name no selection at all, or it may select an evaluated call
+whose candidate content *is* the seed's -- the seed as its base and the
+seed's own template. Both reach the ``seed_retained`` terminal, and both
+keep every evaluation the Step admitted on the ledger and debited. Only
+the first is what the prompt asks for; reading the second for what it
+means is what stops a Step's paid evaluations from being discarded over
+a spelling. Seed identity is read off the recorded call, never off the
+artifact, so it narrows nothing: a selection still has to be a
+reported, admitted, completed, scored call bound to a Step Request
+candidate before the question is even asked.
+
 Every reconciled call is checked against the Step Request, not just the
 selected one, because every one of them is paid Tool Evidence on the
 Step Result. Its recorded ``template`` and ``base_ref`` must be usable,
@@ -101,6 +113,11 @@ CODEX_SELECTION_CONTRACT_CODE = "codex_selection_contract"
 CODEX_UNREPORTED_EVALUATION_CODE = "codex_unreported_evaluation"
 #: The selected call reached a terminal state carrying no score.
 CODEX_SELECTION_UNSCORED_CODE = "codex_selection_unscored"
+#: Set on the Step state when a seed-retaining terminal was reached by
+#: *selecting* a seed-identical evaluated call rather than by naming no
+#: selection at all. The two say the same thing, so the terminal is the
+#: same; this keeps the call the agent cited readable off the Step.
+CODEX_SEED_RETAINED_CALL_ID_KEY = "codex_seed_retained_call_id"
 #: whetstone's own evaluation server admitted a call and never reached a
 #: terminal for it. The agent had no result to report, so this is a
 #: harness failure rather than the agent hiding paid work.
@@ -612,6 +629,46 @@ class CodexAdapter:
                 adoptable=True,
             )
 
+        # Resolved lazily. ``initial_candidate_ref`` is optional on a
+        # run, and ``_seed_candidate`` raises when it is absent -- so
+        # resolving it eagerly here would turn a perfectly good non-seed
+        # selection on a seedless run into a raise. A selection can only
+        # *be* the seed if there is one.
+        seed = self._seed_content_candidate(request, selected)
+        if seed is not None:
+            # The agent has two ways to say the seed is still best:
+            # ``selected_call_id=null``, and naming an evaluated call
+            # whose candidate content *is* the seed's. They assert the
+            # same thing, so they reach the same terminal.
+            #
+            # Only the null form used to. The other reached
+            # ``_candidate_from_call``, where ``diff_check`` refuses a
+            # mutation equal to its base -- correctly, as a *proposal*
+            # -- and the Step failed under ``codex_selection_contract``,
+            # taking down evaluations the run had already admitted, paid
+            # for, and debited. Reading the selection for what it means
+            # keeps that spend and reports the outcome the agent
+            # actually reached.
+            #
+            # This narrows nothing else. The selection has already been
+            # matched to a reported, admitted, COMPLETED, scored call
+            # whose base is a Step Request candidate; an unknown id, a
+            # refused call, or an unevaluated one never gets here. The
+            # cited call id is recorded so the seed-retaining claim stays
+            # auditable against the ledger rather than resting on the
+            # artifact alone.
+            return AdapterOutput(
+                proposed_candidates=(),
+                accepted_candidates=(),
+                proposed_status=StepStatus.COMPLETE,
+                seed_retained=True,
+                retained_candidate=seed,
+                state_delta={
+                    **state_delta,
+                    CODEX_SEED_RETAINED_CALL_ID_KEY: selected.call_id,
+                },
+            )
+
         try:
             candidate = self._candidate_from_call(request, selected)
         except _SelectionContractError as exc:
@@ -932,6 +989,46 @@ class CodexAdapter:
                 )
             )
         return tuple(admitted)
+
+    @staticmethod
+    def _seed_content_candidate(
+        request: OptimStepRequest,
+        selected: _AdmittedCall,
+    ) -> Candidate | None:
+        """The seed, when the selected call names the seed's own content.
+
+        ``None`` when it does not, including when the run names no seed
+        at all -- a selection cannot be the seed if there is not one.
+
+        Content, not identity. ``_candidate_from_call`` rebuilds the
+        candidate from the base payload with the mutation field
+        replaced, so the reconstruction equals the seed's payload
+        exactly when the call's base *is* the seed and its recorded
+        template is the seed's. Comparing the reconstructed payload
+        rather than the mutation field alone keeps that true for a
+        multi-field candidate, where an equal template on some other
+        base is a real mutation and must stay one.
+
+        The rebuilt candidate's own record ref can never equal the
+        seed's -- it carries the call id and the seed as its base -- so
+        ref equality is not the question a seed-identical selection
+        asks.
+
+        Both values come off the ledger: ``selected`` carries the
+        *recorded* args of an admitted call, and ``seed`` is the run's
+        own initial candidate. Nothing here is read from the artifact.
+        """
+        seed_ref = request.run.record.initial_candidate_ref
+        if seed_ref is None or selected.base_ref != seed_ref.record_ref:
+            return None
+        field = request.run.record.mutation_field
+        # ``_seed_candidate`` owns "which Step Request candidate is the
+        # seed"; the base_ref match above is already that answer, so
+        # this is the same resolution the null-selection terminal makes.
+        seed = CodexAdapter._seed_candidate(request)
+        if seed.payload.to_json().get(field) != selected.template:
+            return None
+        return seed
 
     def _candidate_from_call(
         self,

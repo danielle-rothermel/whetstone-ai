@@ -14,7 +14,8 @@ Rungs are ordered by cost and by what they presuppose:
 1. config the runner writes is accepted by the real binary (no session)
 2. the real auth preflight proves a session
 3. one real Step through the hosted MCP server
-4. edge paths: capacity refusal, wall budget, no-tool-call
+4. edge paths: capacity refusal, wall budget, no-tool-call,
+   seed-identical selection
 5. a real multi-evaluation selection loop
 6. reasoning-effort variants the real binary accepts
 7. output retention against a real, truncated transcript
@@ -503,6 +504,85 @@ def test_rung4c_an_agent_that_never_calls_the_tool_retains_the_seed(
     )
     assert result.accepted_candidates == ()
     assert result.tool_evidence == ()
+
+
+# --------------------------------------------------------------- rung 4d
+
+
+def test_rung4d_a_real_seed_identical_selection_retains_the_seed(
+    real_codex_world,
+) -> None:
+    """The seed's own template, evaluated and then *selected*.
+
+    A real agent that decides the seed is best has two ways to say so:
+    ``selected_call_id=null``, and selecting an evaluated call whose
+    template is the seed's. This ladder observed the second three times
+    on real runs, and it was a hard ``codex_selection_contract`` failure
+    -- ``diff_check`` refuses a mutation equal to its base -- which threw
+    away a Step whose evaluations the run had already admitted, paid for,
+    and debited.
+
+    The two forms assert the same thing, so both must reach
+    ``seed_retained``. The rung is deliberately driven against the
+    *production* prompt, which now tells the agent to use null instead:
+    this asserts the adapter's tolerance, not the prompt's, so the extra
+    instruction has to overrule that clause explicitly. A rung that let
+    the agent choose the form would observe whichever one it picked.
+
+    The seed's template is read off the world's own candidate rather
+    than spelled here, so the rung cannot drift from what the run
+    actually seeded.
+    """
+    world = real_codex_world(max_tool_calls=2)
+    seed_template = world.candidate.payload.to_json()[TOY_MUTATION_FIELD]
+
+    def seed_selecting_prompt(context):
+        return world.production_prompt(
+            context,
+            extra=(
+                "For this run specifically, override the instruction "
+                "above about returning null for the seed. Evaluate "
+                f"exactly this one template: {seed_template!r}, with a "
+                "call_id you choose. Then write the final artifact with "
+                "selected_call_id set to THAT call_id -- not null -- and "
+                "evaluated_call_ids naming it."
+            ),
+        )
+
+    adapter = world.adapter(world.runner(prompt_builder=seed_selecting_prompt))
+    result, _ref = world.harness(adapter).run_step(world.step_request())
+
+    assert result.terminal_failure is None, (
+        "a seed-identical selection failed instead of retaining the seed: "
+        f"{result.terminal_failure}"
+    )
+    assert result.status is StepStatus.COMPLETE
+    assert result.seed_retained is True, (
+        "the real agent selected the seed's own template, which is the "
+        "seed being retained"
+    )
+    assert result.accepted_candidates == ()
+
+    # The evaluation the agent paid for stays on the ledger and stays
+    # debited: reading the selection for what it means must not change
+    # what the run spent.
+    assert result.tool_evidence, (
+        "the agent retained the seed without evaluating anything, which is "
+        "rung 4c's path, not this one -- this rung needs a real admitted "
+        "evaluation to have been selected and kept"
+    )
+    assert result.budget_delta.consumed["tool_calls"] == len(
+        result.tool_evidence
+    )
+    scored_templates = {
+        entry.store_entry.tool_call.record.args["template"]
+        for entry in result.tool_evidence
+    }
+    assert seed_template in scored_templates, (
+        "the agent evaluated something other than the seed template, so a "
+        "seed-identical selection was never the thing that retained the "
+        f"seed: {scored_templates}"
+    )
 
 
 # ---------------------------------------------------------------- rung 5

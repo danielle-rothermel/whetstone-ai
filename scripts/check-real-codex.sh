@@ -59,8 +59,8 @@ set -e
     echo "commit:        $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo
     printf '%-8s %-6s %s\n' RUNG RESULT TEST
-    grep -oE 'test_rung[0-9a-c]+[a-z0-9_]*(\[[^]]*\])? (PASSED|FAILED|ERROR|SKIPPED)' "$log" \
-        | sed -E 's/^test_(rung[0-9a-c]+)([a-z0-9_]*(\[[^]]*\])?) (.*)$/\1|\4|test_\1\2/' \
+    grep -oE 'test_rung[0-9a-z]+[a-z0-9_]*(\[[^]]*\])? (PASSED|FAILED|ERROR|SKIPPED)' "$log" \
+        | sed -E 's/^test_(rung[0-9]+[a-z]?)([a-z0-9_]*(\[[^]]*\])?) (.*)$/\1|\4|test_\1\2/' \
         | awk -F'|' '{printf "%-8s %-6s %s\n", $1, $2, $3}' \
         || echo "(no rung results parsed; see pytest.log)"
     echo

@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_program_with_highest_avg_score`, which returns the last-ranked entry in
   the same state instead of failing.
 
+- A Codex Step that concludes the seed is best now completes as
+  `seed_retained` whichever way the agent says so. The artifact accepts
+  two statements of it — `selected_call_id: null`, and selecting an
+  evaluated call whose candidate content is the seed's — but only the
+  first was a terminal. The second reached the mutation diff check, which
+  refuses a mutation equal to its base, and failed the whole Step under
+  `codex_selection_contract`, discarding a Step whose evaluations the run
+  had already admitted, paid for, and debited. Observed three times on
+  real-Codex runs. The evidence and the `tool_calls` debit are unchanged;
+  the cited call id is recorded on the Step state as
+  `codex_seed_retained_call_id`. Genuinely invalid selections — an unknown
+  call id, a refused or unscored call, a base outside the Step Request —
+  still fail as before. The production prompt now also tells the agent to
+  return `selected_call_id: null` rather than re-selecting the seed.
+
 ## 0.1.8 - 2026-08-22
 
 ### Added
