@@ -269,6 +269,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   traverse; that wiring lands with the Codex tool work on branch
   `08-22-codex`.
 
+### Fixed
+
+- MIPROv2 bootstrap reads the instruction from the control's declared
+  `mutation_field` instead of a hardcoded `"user_prompt_template"` key.
+  Every demo mode bootstraps, so any experiment whose mutated field carried
+  another name raised `KeyError` on the first bootstrap teacher, before any
+  provider spend could produce a result. The toy MIPROv2 fixtures now accept
+  a `mutation_field`, and a parametrized harness test drives one bootstrap
+  per demo mode under a non-default field name.
+- Public entrypoints import cleanly as the first `whetstone` import, so
+  import order is no longer load-bearing for consumers. `provider.llm_call`
+  reached into the `eval.drivers` package for two metadata codecs, and
+  `eval.schema`/`eval.protocol` reached back into `experiment.binding`;
+  either edge, taken first, hit a partially initialized module. The shared
+  call-metadata wire keys and codecs now live in
+  `whetstone.execution.call_metadata`, and `EvalConfigRef` lives in
+  `whetstone.eval.config_ref` beside `EvalConfig`, with
+  `whetstone.experiment.binding` re-exporting it for existing call sites.
+
 ## 0.1.5 - 2026-08-22
 
 ### Added

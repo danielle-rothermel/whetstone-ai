@@ -11,7 +11,7 @@ from dr_providers import (
     ProviderCallRequest,
 )
 
-from whetstone.eval.drivers.graph_execution import (
+from whetstone.execution.call_metadata import (
     cache_marks_metadata,
     telemetry_metadata,
 )

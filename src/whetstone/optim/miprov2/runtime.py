@@ -2000,7 +2000,7 @@ def _materialize_bootstrap_teacher(
                         "outputs": item.outputs_for(spec.component_id),
                     }
                 )
-        instruction = source.record.payload["user_prompt_template"]
+        instruction = source.record.payload[state.control.mutation_field]
         assert isinstance(instruction, str)
         components.append(
             {

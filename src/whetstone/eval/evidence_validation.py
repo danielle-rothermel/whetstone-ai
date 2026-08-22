@@ -25,7 +25,7 @@ from whetstone.eval.schema_names import (
     EVAL_EVIDENCE_SCHEMA,
     EVAL_FAILURE_SCHEMA,
 )
-from whetstone.experiment.binding import EVAL_CONFIG_RECORD_SCHEMA
+from whetstone.eval.config_ref import EVAL_CONFIG_RECORD_SCHEMA
 from whetstone.experiment.candidate import CANDIDATE_RECORD_SCHEMA
 from whetstone.experiment.reward import REWARD_SCHEMA, Reward, RewardRef
 from whetstone.experiment.candidate import candidate_reference

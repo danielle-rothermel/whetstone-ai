@@ -25,7 +25,7 @@ from whetstone.eval.schema import (
     EvalEvidence,
     EvalOutputsRecord,
 )
-from whetstone.experiment.binding import EvalConfigRef
+from whetstone.eval.config_ref import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.task_selection import TaskRoleSelection
 
