@@ -134,3 +134,45 @@ Set `WHETSTONE_TEST_DATABASE_URL` when not using the default
 `postgresql+psycopg:///whetstone_platform_test`. Locally, tests skip when
 Postgres is unavailable; in CI they fail hard. Default `uv run pytest` excludes
 integration tests via the pytest marker.
+
+## Real-Codex ladder
+
+The Codex-direct optimizer's CI suites drive a scripted fake CLI
+(`whetstone.testing.fake_codex_cli`), which speaks real MCP to the real
+evaluation server but never validates the output schema, consults an
+approval policy, or guesses a tool argument. The ladder in
+`tests/real_codex/` closes that gap by driving the **real** Codex CLI:
+
+```bash
+scripts/check-real-codex.sh              # every rung, stopping at the first break
+scripts/check-real-codex.sh -k rung3     # one rung
+```
+
+It is a manual check. It spends real Codex agent turns on a logged-in
+subscription session, so it is excluded from the default suite by the
+`real_codex` marker and runs only when `WHETSTONE_REAL_CODEX=1` is set,
+which the script does for you. The task model stays fake throughout —
+evaluations use the reference transport — so the ladder costs Codex turns
+and no eval-provider credit. Nothing reads credential material: the
+runner's own auth staging copies the existing session into each run's
+scratch `CODEX_HOME`.
+
+Requirements: macOS (the sandbox is `sandbox-exec` only), the Codex CLI
+(`/opt/homebrew/bin/codex`, or set `WHETSTONE_REAL_CODEX_BINARY`), and a
+session from `codex login`. Transcripts and a per-rung result table are
+written outside the repository, under
+`~/drotherm/data/whetstone-ai/real-codex/<timestamp>/` by default
+(override with `WHETSTONE_REAL_CODEX_OUTPUT_DIR`).
+
+The rungs run cheapest-first, each presupposing the ones below it: config
+the runner writes is accepted by the real binary (no session), the auth
+preflight proves a session, one real Step through the hosted MCP server,
+the capacity/wall-budget/no-tool-call edge paths, a real multi-evaluation
+selection loop, reasoning-effort variants, output retention against a
+truncated real transcript, the sandbox denying the store, and a foreign
+bearer token being refused.
+
+The `Real Codex ladder` GitHub Actions workflow runs the same script but
+is **`workflow_dispatch`-only** and never triggers automatically. It needs
+a self-hosted macOS runner with its own logged-in Codex session; a
+GitHub-hosted runner cannot satisfy that.

@@ -14,6 +14,7 @@ the test process.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -183,6 +184,39 @@ class RealCodexWorld:
         )
         harness.bind_run(self.run)
         return harness
+
+    def production_prompt(self, request, *, extra: str, max_tool_calls: int):
+        """The production prompt, plus one rung-specific instruction.
+
+        Rungs that need to steer the agent must extend the real prompt
+        rather than replace it: the prompt is where the agent learns the
+        fixed ``model_route`` and ``base_ref`` values, and a builder that
+        drops them makes every call refused after admission -- which looks
+        exactly like the behavior some rungs are trying to assert.
+        """
+        from whetstone.experiment.candidate import candidate_reference
+        from whetstone.optim.codex.adapter import codex_lease_token_hash
+        from whetstone.optim.codex.runner import _default_prompt
+
+        base_ref = candidate_reference(self.candidate).record_ref
+        return (
+            _default_prompt(
+                request,
+                tool_name=self.config.tool_name,
+                lease_token_hash=codex_lease_token_hash(_FIXED_LEASE_TOKEN),
+                max_tool_calls=max_tool_calls,
+                model_route=self.engine.expected_model_route(),
+                base_ref=json.dumps(
+                    {
+                        "schema_name": base_ref.schema_name,
+                        "content_hash": base_ref.content_hash,
+                    },
+                    sort_keys=True,
+                ),
+            )
+            + "\n\n"
+            + extra
+        )
 
     def runner(
         self,

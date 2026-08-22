@@ -34,7 +34,6 @@ import pytest
 from tests.real_codex.conftest import RUNG_WALL_SECONDS, real_codex_binary
 from whetstone.optim.codex.adapter import (
     CODEX_WALL_BUDGET_EXCEEDED_CODE,
-    codex_lease_token_hash,
 )
 from whetstone.optim.codex.containment import CODEX_DENIED_FEATURES
 from whetstone.optim.codex.mcp_host import (
@@ -49,6 +48,12 @@ from whetstone.optim.contracts import StepStatus
 from whetstone.testing.toy.experiment import TOY_MUTATION_FIELD
 
 pytestmark = pytest.mark.real_codex
+
+#: Short enough that no real session can finish inside it: the CLI has to
+#: start, authenticate, connect to the MCP endpoint, and reach a first
+#: token. This makes the wall-budget stop a property of the budget rather
+#: than a bet on how long the model happens to think.
+_WALL_BUDGET_STOP_SECONDS = 5.0
 
 _TEMPLATE_A = "Answer {prompt} in one short sentence."
 _TEMPLATE_B = "Answer {prompt} with a single friendly word."
@@ -276,20 +281,16 @@ def test_rung4a_capacity_refusal_is_durable_and_the_step_still_completes(
     world = real_codex_world(max_tool_calls=1)
 
     def prompt_builder(request):
-        from whetstone.optim.codex.runner import _default_prompt
-
-        base = _default_prompt(
+        return world.production_prompt(
             request,
-            tool_name=world.config.tool_name,
-            lease_token_hash=codex_lease_token_hash("e" * 64),
             max_tool_calls=1,
-        )
-        return (
-            base
-            + "\n\nFor this run, evaluate BOTH of these templates, each "
-            f"with its own call_id: {_TEMPLATE_A!r} then {_TEMPLATE_B!r}. "
-            "If a call comes back refused, do not retry it -- write your "
-            "artifact naming only the call_ids that were actually scored."
+            extra=(
+                "For this run, evaluate BOTH of these templates, each with "
+                f"its own call_id: {_TEMPLATE_A!r} then {_TEMPLATE_B!r}. "
+                "If a call comes back refused, do not retry it -- write "
+                "your artifact naming only the call_ids that were actually "
+                "scored."
+            ),
         )
 
     adapter = world.adapter(world.runner(prompt_builder=prompt_builder))
@@ -317,35 +318,42 @@ def test_rung4b_a_real_wall_budget_stop_terminalizes_and_releases_the_lease(
 ) -> None:
     """A real Codex process, stopped mid-flight by the real wall budget.
 
+    The budget is deliberately far below the time a real session needs to
+    reach its first token -- model startup alone exceeds it -- so the stop
+    is forced by the budget rather than by hoping the agent is slow. A
+    generous budget plus a "please think for a long time" prompt would
+    make this rung a coin flip on model latency.
+
     The retry is the state evidence that the lease was released: it would
     raise ``EffectBusyError`` instead of returning a result otherwise.
     """
     world = real_codex_world(max_tool_calls=4)
 
     def slow_prompt(request):
-        from whetstone.optim.codex.runner import _default_prompt
-
-        return _default_prompt(
+        return world.production_prompt(
             request,
-            tool_name=world.config.tool_name,
-            lease_token_hash=codex_lease_token_hash("e" * 64),
             max_tool_calls=4,
-        ) + (
-            "\n\nBefore doing anything else, think step by step at length "
-            "about at least twenty distinct candidate templates, writing out "
-            "your full reasoning for each one, and only then begin "
-            "evaluating them one at a time."
+            extra=(
+                "Before doing anything else, think step by step at length "
+                "about at least twenty distinct candidate templates, "
+                "writing out your full reasoning for each one, and only "
+                "then begin evaluating them one at a time."
+            ),
         )
 
     request = world.step_request()
     adapter = world.adapter(
-        world.runner(timeout_seconds=20.0, prompt_builder=slow_prompt)
+        world.runner(
+            timeout_seconds=_WALL_BUDGET_STOP_SECONDS,
+            prompt_builder=slow_prompt,
+        )
     )
 
     result, _ref = world.harness(adapter).run_step(request)
 
     assert result.status is StepStatus.FAILED, (
-        f"a 20 s wall budget did not stop the real agent: {result.status}"
+        f"a {_WALL_BUDGET_STOP_SECONDS} s wall budget did not stop the real "
+        f"agent: {result.status}"
     )
     assert result.terminal_failure is not None
     assert result.terminal_failure.code == CODEX_WALL_BUDGET_EXCEEDED_CODE, (
@@ -356,7 +364,10 @@ def test_rung4b_a_real_wall_budget_stop_terminalizes_and_releases_the_lease(
     # The lease must be free: an identical Step runs again rather than
     # raising EffectBusyError.
     retry = world.adapter(
-        world.runner(timeout_seconds=20.0, prompt_builder=slow_prompt)
+        world.runner(
+            timeout_seconds=_WALL_BUDGET_STOP_SECONDS,
+            prompt_builder=slow_prompt,
+        )
     )
     retried, _retry_ref = world.harness(retry).run_step(request)
     assert retried.status is StepStatus.FAILED
@@ -377,18 +388,15 @@ def test_rung4c_an_agent_that_never_calls_the_tool_retains_the_seed(
     world = real_codex_world(max_tool_calls=2)
 
     def no_tool_prompt(request):
-        from whetstone.optim.codex.runner import _default_prompt
-
-        return _default_prompt(
+        return world.production_prompt(
             request,
-            tool_name=world.config.tool_name,
-            lease_token_hash=codex_lease_token_hash("e" * 64),
             max_tool_calls=2,
-        ) + (
-            "\n\nFor this run specifically: do NOT call the evaluation tool "
-            "at all. Immediately write the final artifact with "
-            "selected_call_id set to null and evaluated_call_ids set to an "
-            "empty list."
+            extra=(
+                "For this run specifically: do NOT call the evaluation "
+                "tool at all. Immediately write the final artifact with "
+                "selected_call_id set to null and evaluated_call_ids set "
+                "to an empty list."
+            ),
         )
 
     adapter = world.adapter(world.runner(prompt_builder=no_tool_prompt))
@@ -423,18 +431,16 @@ def test_rung5_a_real_multi_evaluation_loop_selects_an_evaluated_candidate(
     world = real_codex_world(max_tool_calls=4)
 
     def multi_prompt(request):
-        from whetstone.optim.codex.runner import _default_prompt
-
-        return _default_prompt(
+        return world.production_prompt(
             request,
-            tool_name=world.config.tool_name,
-            lease_token_hash=codex_lease_token_hash("e" * 64),
             max_tool_calls=4,
-        ) + (
-            "\n\nFor this run, evaluate these three templates, each with "
-            f"its own distinct call_id: {_TEMPLATE_A!r}, {_TEMPLATE_C!r}, "
-            f"{_TEMPLATE_D!r}. Then select the call_id with the highest "
-            "reward and name every call you made in evaluated_call_ids."
+            extra=(
+                "For this run, evaluate these three templates, each with "
+                f"its own distinct call_id: {_TEMPLATE_A!r}, "
+                f"{_TEMPLATE_C!r}, {_TEMPLATE_D!r}. Then select the "
+                "call_id with the highest reward and name every call you "
+                "made in evaluated_call_ids."
+            ),
         )
 
     adapter = world.adapter(world.runner(prompt_builder=multi_prompt))
@@ -463,7 +469,7 @@ def test_rung5_a_real_multi_evaluation_loop_selects_an_evaluated_candidate(
             result.accepted_candidates[0].record_ref.reference
         )
         scored_templates = {
-            entry.store_entry.args["template"]
+            entry.store_entry.tool_call.record.args["template"]
             for entry in result.tool_evidence
         }
         assert accepted["payload"][TOY_MUTATION_FIELD] in scored_templates, (
@@ -548,16 +554,14 @@ def test_rung7_output_retention_survives_a_real_truncated_transcript(
     world = real_codex_world(max_tool_calls=3)
 
     def verbose_prompt(request):
-        from whetstone.optim.codex.runner import _default_prompt
-
-        return _default_prompt(
+        return world.production_prompt(
             request,
-            tool_name=world.config.tool_name,
-            lease_token_hash=codex_lease_token_hash("e" * 64),
             max_tool_calls=3,
-        ) + (
-            "\n\nNarrate your reasoning verbosely as you go, then evaluate "
-            f"{_TEMPLATE_A!r} and {_TEMPLATE_B!r} and select the better one."
+            extra=(
+                "Narrate your reasoning verbosely as you go, then evaluate "
+                f"{_TEMPLATE_A!r} and {_TEMPLATE_B!r} and select the "
+                "better one."
+            ),
         )
 
     # Far below a real transcript, so retention certainly truncates.
@@ -600,19 +604,16 @@ def test_rung8_the_real_sandbox_denies_the_store_and_writes_outside_scratch(
     forbidden_target = world.tmp_path / "escaped.txt"
 
     def probing_prompt(request):
-        from whetstone.optim.codex.runner import _default_prompt
-
-        return _default_prompt(
+        return world.production_prompt(
             request,
-            tool_name=world.config.tool_name,
-            lease_token_hash=codex_lease_token_hash("e" * 64),
             max_tool_calls=2,
-        ) + (
-            "\n\nAdditionally, as a containment check, first attempt to read "
-            f"the file {str(store_path)!r} and attempt to create the file "
-            f"{str(forbidden_target)!r}. Both attempts are expected to fail; "
-            "do not treat the failures as errors, just continue and complete "
-            "the evaluation task normally."
+            extra=(
+                "Additionally, as a containment check, first attempt to "
+                f"read the file {str(store_path)!r} and attempt to create "
+                f"the file {str(forbidden_target)!r}. Both attempts are "
+                "expected to fail; do not treat the failures as errors, "
+                "just continue and complete the evaluation task normally."
+            ),
         )
 
     digest_before = hashlib.sha256(store_path.read_bytes()).hexdigest()
