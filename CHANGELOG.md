@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ReplayPolicy`, `TerminalOutcome`, `StaleLeaseError`, and
   `TerminalConflictError` keep their names. `ToolAdmissionAuthority` is
   unchanged and still composes the lease authority.
+- The lease boundary round-trips the original whetstone `TerminalFailure`
+  through a reserved JSON-safe envelope, so persist-and-compare consumers
+  (`ToolCallStore.complete`, FAILED replay) stay equal after coercion.
+  `LeaseAuthoritySchemaMismatchError` is re-exported next to
+  `StaleLeaseError` and `TerminalConflictError`.
 - A transient failure while publishing a terminal through a maintenance
   handle is now retryable. The handle restarts its renewer and stays open,
   where the previous implementation marked terminalization started before

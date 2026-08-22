@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import make_url
+from sqlalchemy import create_engine, make_url, text
 
 from whetstone.core.identity import (
     ImmutableJsonObject,
@@ -27,6 +27,7 @@ from whetstone.core.identity import (
 from whetstone.core.leasing import (
     AcquireOutcome,
     EffectLeaseAuthority,
+    LeaseAuthoritySchemaMismatchError,
     ReplayPolicy,
     TerminalOutcome,
     effect_request,
@@ -161,3 +162,46 @@ def test_postgres_busy_lease_refuses_a_second_holder(clean_pg: str) -> None:
         assert contender.busy_expires_at == acquired.lease.expires_at
     finally:
         authority.close()
+
+
+_LEASE_TABLE = "dr_store_lease_authority"
+_LEASE_METADATA_TABLE = "dr_store_lease_authority_metadata"
+
+
+def _execute(database_url: str, *statements: str) -> None:
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+    finally:
+        engine.dispose()
+
+
+def test_postgres_drifted_lease_table_raises_at_construction(
+    clean_pg: str,
+) -> None:
+    """A mis-shaped lease table fails EffectLeaseAuthority.postgresql eagerly."""
+    _execute(
+        clean_pg,
+        f"""
+        CREATE TABLE {_LEASE_TABLE} (
+            semantic_key TEXT COLLATE "C" PRIMARY KEY,
+            unexpected_column TEXT COLLATE "C" NOT NULL
+        )
+        """,
+        f"""
+        CREATE TABLE {_LEASE_METADATA_TABLE} (
+            component TEXT COLLATE "C" PRIMARY KEY,
+            version INTEGER NOT NULL
+        )
+        """,
+    )
+
+    with pytest.raises(LeaseAuthoritySchemaMismatchError) as caught:
+        EffectLeaseAuthority.postgresql(_libpq_dsn(clean_pg))
+
+    error = caught.value
+    assert error.table == _LEASE_TABLE
+    assert error.aspect == "columns"
+    assert error.expected != error.actual

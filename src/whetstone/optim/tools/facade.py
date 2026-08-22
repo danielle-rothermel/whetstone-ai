@@ -311,9 +311,10 @@ class ToolCallStore:
                 "completion requires an exact authoritative "
                 "EffectTerminal proof"
             )
-        exact_terminal = EffectTerminal.model_validate_json(
-            terminal.model_dump_json()
-        )
+        # Revalidate in place. A JSON hop cannot carry unpaired surrogates
+        # (Pydantic dumps UTF-8), and strict EffectTerminal rejects enum
+        # strings from model_dump(mode="json").
+        exact_terminal = EffectTerminal.model_validate(terminal)
         expected_request = tool_effect_request(validated.call.record)
         if exact_terminal.request != expected_request:
             raise ValueError(

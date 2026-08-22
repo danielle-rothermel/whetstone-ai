@@ -271,6 +271,69 @@ def test_a_failed_effect_replays_its_whetstone_terminal_failure(
     assert replay.terminal.failure == failure
 
 
+def test_a_default_failure_details_round_trips_as_empty_immutable_object(
+    authority: tuple[EffectLeaseAuthority, FakeClock],
+) -> None:
+    """Omitted details stay an empty ImmutableJsonObject through the lease."""
+    lease_authority, _clock = authority
+    request = _request()
+    lease = _acquire(lease_authority, request)
+    failure = TerminalFailure(
+        code="leasing_test_failure", message="the effect failed"
+    )
+
+    terminal = lease_authority.fail(
+        lease, result_ref=_result_ref(), failure=failure
+    )
+    replay = lease_authority.acquire(
+        request,
+        owner_id="owner-b",
+        attempt_id="attempt-b",
+        lease_duration=_LEASE,
+    )
+
+    assert isinstance(terminal.failure.details, ImmutableJsonObject)
+    assert dict(terminal.failure.details) == {}
+    assert terminal.failure == failure
+    assert lease_authority.verify_terminal(terminal) == terminal
+    assert replay.terminal is not None
+    assert replay.terminal.failure == failure
+
+
+def test_nested_failure_details_round_trip_with_immutability_restored(
+    authority: tuple[EffectLeaseAuthority, FakeClock],
+) -> None:
+    """Nested JSON details stay equal and frozen at every mapping level."""
+    lease_authority, _clock = authority
+    request = _request()
+    lease = _acquire(lease_authority, request)
+    nested = {"a": {"b": [1, 2, {"c": None}]}}
+    failure = TerminalFailure(
+        code="leasing_test_failure",
+        message="the effect failed",
+        details=ImmutableJsonObject(nested),
+    )
+
+    terminal = lease_authority.fail(
+        lease, result_ref=_result_ref(), failure=failure
+    )
+    replay = lease_authority.acquire(
+        request,
+        owner_id="owner-b",
+        attempt_id="attempt-b",
+        lease_duration=_LEASE,
+    )
+
+    assert terminal.failure == failure
+    assert lease_authority.verify_terminal(terminal) == terminal
+    assert replay.terminal is not None
+    assert replay.terminal.failure == failure
+    details = terminal.failure.details
+    assert isinstance(details, ImmutableJsonObject)
+    assert isinstance(details["a"], ImmutableJsonObject)
+    assert isinstance(details["a"]["b"][2], ImmutableJsonObject)
+
+
 @pytest.mark.parametrize(
     "message",
     [
