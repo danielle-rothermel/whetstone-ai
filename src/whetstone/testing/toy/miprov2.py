@@ -76,6 +76,7 @@ def build_toy_miprov2_control(
     seed: int = 9,
     minibatch: bool = False,
     minibatch_full_eval_steps: int = 1,
+    mutation_field: str = TOY_MUTATION_FIELD,
 ) -> Miprov2Control:
     """Resolve a toy MIPROv2 control bound to ``engine``'s exact authorities.
 
@@ -112,7 +113,7 @@ def build_toy_miprov2_control(
         task_model_identity_hash=engine.task_model_identity_hash(),
         prompt_adapter=prompt_adapter,
         template_render_contract=toy_template_render_contract(),
-        mutation_field=TOY_MUTATION_FIELD,
+        mutation_field=mutation_field,
         max_errors=4,
         validation_eval_source_is_metric_authority=True,
     )

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from whetstone.core.identity import IdentityRef, ImmutableJsonObject, NonEmptyId, TypedRef
 from whetstone.eval.schema import EvalEvidence, EvalFailureEvidence
-from whetstone.experiment.binding import EvalConfigRef
+from whetstone.eval.config_ref import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.provider.policy import ProviderExecutionPolicy
 

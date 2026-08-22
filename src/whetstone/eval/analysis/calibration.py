@@ -24,7 +24,7 @@ from whetstone.eval.protocol import (
     eval_is_success,
 )
 from whetstone.eval.schema import EvalEvidence, EvalFailureEvidence
-from whetstone.experiment.binding import EvalConfigRef
+from whetstone.eval.config_ref import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.sampling import evaluation_role_for_split
 

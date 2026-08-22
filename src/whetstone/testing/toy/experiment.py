@@ -180,12 +180,13 @@ def _toy_candidate(
     *,
     candidate_id: str,
     template: str,
+    mutation_field: str = TOY_MUTATION_FIELD,
 ) -> Candidate:
     root_ref = typed_ref_for_record(TOY_ROOT_BASE_SCHEMA, {"kind": "root"})
     candidate = Candidate(
         candidate_id=candidate_id,
         base_ref=root_ref,
-        payload={TOY_MUTATION_FIELD: template},
+        payload={mutation_field: template},
     )
     return candidate_reference(candidate).record
 
@@ -198,6 +199,7 @@ def build_toy_experiment(
     num_seeds: int = 1,
     initial_template: str = DEFAULT_TOY_TEMPLATE,
     ceiling_template: str | None = None,
+    mutation_field: str = TOY_MUTATION_FIELD,
 ) -> Experiment:
     """Build an in-memory toy Experiment wired to the single-node eval graph."""
     if num_seeds < 1:
@@ -272,10 +274,12 @@ def build_toy_experiment(
         initial_candidate=_toy_candidate(
             candidate_id="toy-initial",
             template=initial_template,
+            mutation_field=mutation_field,
         ),
         ceiling_candidate=_toy_candidate(
             candidate_id="toy-ceiling",
             template=ceiling,
+            mutation_field=mutation_field,
         ),
         eval_configs=eval_configs,
         reward_policy=reward_policy,

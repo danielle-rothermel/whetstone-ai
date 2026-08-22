@@ -33,7 +33,7 @@ from whetstone.eval.schema_names import (
     EVAL_FAILURE_SCHEMA as _EVAL_FAILURE_SCHEMA,
 )
 from whetstone.eval.traces import ExecutedComponentTracePayload
-from whetstone.experiment.binding import EvalConfigRef
+from whetstone.eval.config_ref import EvalConfigRef
 from whetstone.experiment.candidate import CandidateRef
 from whetstone.experiment.reward import RewardRef
 

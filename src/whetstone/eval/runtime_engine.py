@@ -55,7 +55,7 @@ from whetstone.optim.contracts import ResolutionClass, ResolutionDetail
 from whetstone.eval.traces import ExecutedComponentStep, ExecutedComponentTracePayload, ExecutedRowState
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
-from whetstone.experiment.binding import (
+from whetstone.eval.config_ref import (
     EVAL_CONFIG_RECORD_SCHEMA,
     EvalConfigRef,
     eval_config_reference,
