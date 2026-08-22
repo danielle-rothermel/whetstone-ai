@@ -135,6 +135,14 @@ class EvalConfigs:
     same terms as the other two and can be intersected against them by
     :func:`assert_split_disjointness`, which construction runs so a leaking
     set of splits can never be assembled into an ``EvalConfigs`` at all.
+
+    ``procedure_config_hash`` is the one evaluation procedure the experiment
+    executes. Construction requires every present split to carry exactly that
+    procedure in *both* the procedure it was derived with
+    (``procedure_config``) and the procedure recorded in the Eval Config it
+    persists (``eval_config.evaluation_procedure_config_hash``), and raises
+    :class:`SplitProcedureMismatchError` otherwise, so no split can persist
+    an Eval Config claiming a procedure identity the runtime never ran.
     """
 
     env_name: str
@@ -154,6 +162,35 @@ class EvalConfigs:
                     f"eval configs field for {expected!r} carries split "
                     f"role {split.split_role!r}"
                 )
+        # Every split must be measured by the experiment's one shared
+        # procedure. The runtime executes the experiment's rollout graph,
+        # which carries ``procedure_config_hash``, but persists each split's
+        # own ``eval_config_ref``; a split derived with a different procedure
+        # would therefore publish evidence claiming a procedure identity that
+        # was never executed. ``EvalSplit`` is a plain dataclass whose
+        # ``procedure_config`` and ``eval_config`` are not cross-validated
+        # against each other, so the persisted Eval Config is checked on its
+        # own terms rather than trusted to agree with the derived-with field.
+        for role, split in (
+            (INTERNAL_EVAL, self.internal),
+            (OFFICIAL, self.official),
+            (HELD_OUT, self.held_out),
+        ):
+            if split is None:
+                continue
+            for source, actual in (
+                ("derived with", split.procedure_config.config_hash),
+                (
+                    "persists an Eval Config recording",
+                    split.eval_config.evaluation_procedure_config_hash,
+                ),
+            ):
+                if actual != self.procedure_config_hash:
+                    raise SplitProcedureMismatchError(
+                        f"split {role!r} {source} evaluation procedure "
+                        f"{actual!r}, not the experiment's shared procedure "
+                        f"{self.procedure_config_hash!r}"
+                    )
         # Leakage is a construction-time invariant, not a check a caller may
         # forget to run: an experiment whose splits share a task identity
         # cannot be built.
@@ -245,6 +282,10 @@ class HeldOutReferencedError(AssertionError):
     """A sampling config referenced a held-out task identity."""
 
 
+class SplitProcedureMismatchError(ValueError):
+    """A split's evaluation procedure is not the experiment's shared one."""
+
+
 class SplitOverlapError(AssertionError):
     """Two eval splits share a task identity."""
 
@@ -301,6 +342,7 @@ __all__ = [
     "HeldOutReferencedError",
     "SamplingTaskLike",
     "SplitOverlapError",
+    "SplitProcedureMismatchError",
     "assert_split_disjointness",
     "derive_eval_split",
     "evaluation_role_for_split",

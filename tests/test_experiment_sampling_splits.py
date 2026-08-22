@@ -8,6 +8,7 @@ split's identity depends only on the tasks it was given.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 
@@ -15,6 +16,13 @@ import pytest
 from pydantic import ValidationError
 
 from whetstone.core.roles import EvalRole
+from whetstone.eval import (
+    EvalProcedureConfig,
+    EvalProcedureDefinition,
+    MetricExtractionDefinition,
+    MetricQuestionBinding,
+    PreprocessingDefinition,
+)
 from whetstone.experiment.sampling import (
     HELD_OUT,
     INTERNAL_EVAL,
@@ -24,6 +32,7 @@ from whetstone.experiment.sampling import (
     EvalSplit,
     HeldOutReferencedError,
     SplitOverlapError,
+    SplitProcedureMismatchError,
     assert_split_disjointness,
     derive_eval_split,
     evaluation_role_for_split,
@@ -73,10 +82,16 @@ def _task_hash(task: ToyTask) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _procedure_and_aggregation() -> tuple[object, object]:
+def _procedure_and_aggregation() -> tuple[EvalProcedureConfig, object]:
     experiment = build_toy_experiment()
     internal = experiment.eval_configs.internal
     return internal.procedure_config, internal.aggregation_config
+
+
+def _procedure_hash() -> str:
+    """The shared procedure identity every split below is derived with."""
+    procedure, _ = _procedure_and_aggregation()
+    return procedure.config_hash
 
 
 def _split(
@@ -115,7 +130,7 @@ def _configs(
         )
     return EvalConfigs(
         env_name=NAMESPACE,
-        procedure_config_hash="procedure-hash",
+        procedure_config_hash=_procedure_hash(),
         internal=_split(
             pool[:cut_a], split_role=INTERNAL_EVAL, num_seeds=num_seeds
         ),
@@ -256,7 +271,7 @@ def test_a_held_out_task_reaching_the_internal_split_is_a_leak() -> None:
     with pytest.raises(HeldOutReferencedError, match="share 1 held-out"):
         EvalConfigs(
             env_name=NAMESPACE,
-            procedure_config_hash="procedure-hash",
+            procedure_config_hash=_procedure_hash(),
             internal=_split(pool[:8], split_role=INTERNAL_EVAL),
             official=_split(pool[8:20], split_role=OFFICIAL),
             # Overlaps the internal split by one task.
@@ -270,7 +285,7 @@ def test_a_held_out_task_reaching_the_official_split_is_a_leak() -> None:
     with pytest.raises(HeldOutReferencedError, match="held_out"):
         EvalConfigs(
             env_name=NAMESPACE,
-            procedure_config_hash="procedure-hash",
+            procedure_config_hash=_procedure_hash(),
             internal=_split(pool[:8], split_role=INTERNAL_EVAL),
             official=_split(pool[8:20], split_role=OFFICIAL),
             held_out=_split(pool[19:30], split_role=HELD_OUT),
@@ -283,7 +298,7 @@ def test_internal_and_official_overlap_is_a_plain_split_overlap() -> None:
     with pytest.raises(SplitOverlapError, match="share 2 task identities"):
         EvalConfigs(
             env_name=NAMESPACE,
-            procedure_config_hash="procedure-hash",
+            procedure_config_hash=_procedure_hash(),
             internal=_split(pool[:8], split_role=INTERNAL_EVAL),
             official=_split(pool[6:20], split_role=OFFICIAL),
         )
@@ -318,13 +333,128 @@ def test_a_split_cannot_be_derived_with_a_repeated_task() -> None:
         _split((pool[0], pool[1], pool[0]), split_role=INTERNAL_EVAL)
 
 
+def _other_procedure() -> EvalProcedureConfig:
+    """A second, genuinely different evaluation procedure config."""
+    procedure, _ = _procedure_and_aggregation()
+    definition = EvalProcedureDefinition(
+        definition_id=f"{NAMESPACE}.other_evaluation_procedure",
+        version="1",
+    )
+    preprocessing = PreprocessingDefinition(
+        definition_id=f"{NAMESPACE}.preprocessing",
+        version="1",
+        steps=(),
+    ).materialize()
+    metric_extraction = MetricExtractionDefinition(
+        definition_id=f"{NAMESPACE}.metric_extraction",
+        version="1",
+        questions=(MetricQuestionBinding(metric="score", on="submission"),),
+    ).materialize(resolved_operators=(("score", "1"),))
+    other = definition.materialize(
+        preprocessing=preprocessing,
+        metric_extraction=metric_extraction,
+        assignment={"zero_denominator": "not_applicable"},
+    )
+    assert other.config_hash != procedure.config_hash
+    return other
+
+
+def _split_with(
+    tasks: tuple[ToyTask, ...],
+    *,
+    split_role: str,
+    procedure: EvalProcedureConfig,
+) -> EvalSplit:
+    _, aggregation = _procedure_and_aggregation()
+    return derive_eval_split(
+        namespace=NAMESPACE,
+        dataset_revision=DATASET_REVISION,
+        split_role=split_role,
+        tasks=tasks,
+        task_hash_of=_task_hash,
+        procedure=procedure,
+        aggregation=aggregation,
+        num_seeds=3,
+    )
+
+
+def test_a_held_out_split_on_a_foreign_procedure_is_rejected() -> None:
+    # The runtime executes the experiment's shared rollout graph but persists
+    # the held-out split's own eval_config_ref, so a held-out split derived
+    # with a different procedure would publish a procedure identity that was
+    # never run. Construction refuses it.
+    pool = _pool()
+
+    with pytest.raises(SplitProcedureMismatchError, match="'held_out'"):
+        EvalConfigs(
+            env_name=NAMESPACE,
+            procedure_config_hash=_procedure_hash(),
+            internal=_split(pool[:8], split_role=INTERNAL_EVAL),
+            official=_split(pool[8:20], split_role=OFFICIAL),
+            held_out=_split_with(
+                pool[20:30],
+                split_role=HELD_OUT,
+                procedure=_other_procedure(),
+            ),
+        )
+
+
+def test_an_internal_split_on_a_foreign_procedure_is_rejected() -> None:
+    # The same rule for the split the optimizer searches against.
+    pool = _pool()
+
+    with pytest.raises(SplitProcedureMismatchError, match="'internal_eval'"):
+        EvalConfigs(
+            env_name=NAMESPACE,
+            procedure_config_hash=_procedure_hash(),
+            internal=_split_with(
+                pool[:8],
+                split_role=INTERNAL_EVAL,
+                procedure=_other_procedure(),
+            ),
+            official=_split(pool[8:20], split_role=OFFICIAL),
+        )
+
+
+def test_a_split_whose_persisted_eval_config_names_a_foreign_procedure(
+) -> None:
+    # ``EvalSplit`` is a plain dataclass, so its ``procedure_config`` and the
+    # procedure recorded in the Eval Config it persists are not validated
+    # against each other. A split carrying the shared procedure in the
+    # redundant field while persisting an Eval Config built for another
+    # procedure would run the experiment graph and then record the foreign
+    # procedure identity, so construction checks the persisted config too.
+    pool = _pool()
+    foreign = _split_with(
+        pool[20:30], split_role=HELD_OUT, procedure=_other_procedure()
+    )
+    procedure, _ = _procedure_and_aggregation()
+    tampered = dataclasses.replace(foreign, procedure_config=procedure)
+    assert tampered.procedure_config.config_hash == _procedure_hash()
+    assert (
+        tampered.eval_config.evaluation_procedure_config_hash
+        != _procedure_hash()
+    )
+
+    with pytest.raises(
+        SplitProcedureMismatchError, match="persists an Eval Config recording"
+    ):
+        EvalConfigs(
+            env_name=NAMESPACE,
+            procedure_config_hash=_procedure_hash(),
+            internal=_split(pool[:8], split_role=INTERNAL_EVAL),
+            official=_split(pool[8:20], split_role=OFFICIAL),
+            held_out=tampered,
+        )
+
+
 def test_a_split_filed_under_the_wrong_role_is_rejected() -> None:
     pool = _pool()
 
     with pytest.raises(ValueError, match="carries split role"):
         EvalConfigs(
             env_name=NAMESPACE,
-            procedure_config_hash="procedure-hash",
+            procedure_config_hash=_procedure_hash(),
             internal=_split(pool[:8], split_role=INTERNAL_EVAL),
             official=_split(pool[8:20], split_role=OFFICIAL),
             # An official split filed in the held-out slot.

@@ -29,10 +29,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   union or for checking splits before assembly. Enlarging the held-out split
   leaves the internal and official splits byte-identical, which a test now
   encodes.
+- `EvalConfigs` construction also requires every present split to carry the
+  experiment's shared `procedure_config_hash` in both the procedure it was
+  derived with (`procedure_config`) and the procedure its persisted Eval
+  Config records (`eval_config.evaluation_procedure_config_hash`), raising
+  the new `SplitProcedureMismatchError` otherwise. The runtime executes the
+  experiment's rollout graph but persists each split's own `eval_config_ref`,
+  so a split carrying a foreign procedure could publish evidence claiming a
+  procedure identity that was never run; `EvalSplit` does not cross-validate
+  those two fields, so each is checked on its own terms.
 - `BootstrapCI.p_value` carries the two-sided bootstrap p-value
   `2 * min(P(stat* <= 0), P(stat* >= 0))`, computed from the same resample
   vector as the interval and clamped into `[1 / resamples, 1]` so an
-  all-one-sided bootstrap cannot report an exact zero.
+  all-one-sided bootstrap cannot report an exact zero. The p-value is
+  percentile-based rather than null-centered, so it is the interval read as a
+  tail area and carries no evidence beyond it; same-signed deltas always land
+  the `1 / resamples` floor, which Step 10 must read as "below this
+  bootstrap's resolution" and not as significance. This is documented on
+  `BootstrapCI` as a known limitation of the estimator.
 - `BootstrapCI.degenerate` marks an interval built from fewer than two paired
   observations (`n < 2`), where every resample is the same point and the
   bootstrap carries no information about sampling uncertainty. A degenerate

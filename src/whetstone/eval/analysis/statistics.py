@@ -41,6 +41,19 @@ class BootstrapCI:
     Only ``n < 2`` is degenerate: at ``n >= 2`` the resampler genuinely varies
     its draws, so a vector with a single nonzero delta still produces a
     real -- and appropriately unimpressive -- p-value.
+
+    The p-value is *percentile-based*, not null-centered: the resamples are
+    drawn from the observed data, so they describe the estimator's confidence
+    distribution rather than a null distribution built by centering or sign
+    flipping. It is therefore exactly the interval read as a tail area, and
+    it carries no evidence the interval does not already carry. In
+    particular, when every paired delta shares a sign, every resample mean
+    shares that sign too, so ``raw`` is 0 and the reported value is the
+    clamp floor ``1 / resamples`` -- at any ``n``, including ``n == 2``,
+    where no sign-flip test could approach that significance. Step 10 must
+    read a p-value at or near the floor as "smaller than this bootstrap can
+    resolve" and must not treat it as evidence beyond what the interval
+    shows.
     """
 
     point: float
