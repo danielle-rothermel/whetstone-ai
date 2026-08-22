@@ -10,7 +10,7 @@ memory:
 
 * task-model usage comes from the ``EvalOutputRow`` entries inside each
   ``EvalEvidence`` record a Step cites, reached through the Step's
-  ``resolved_intents`` and ``search_evidence``;
+  ``resolved_intents``, ``search_evidence``, and ``tool_evidence``;
 * proposer usage comes from ``OptimStepResult.proposer_usage``, which the
   optimizer's adapter records as it drives each proposer call.
 
@@ -96,13 +96,23 @@ class EvalOutputRowUsage(BaseModel):
 #: evaluation-level failure interrupted.
 _COSTED_EVIDENCE_SCHEMAS = frozenset({EVAL_EVIDENCE_SCHEMA, EVAL_FAILURE_SCHEMA})
 
-#: Tool-mediated evaluations (``EngineToolEvaluator``) store their evidence
-#: refs under ``OptimStepResult.tool_evidence`` instead, and are aggregated by
-#: the Codex tool wiring on branch ``08-22-codex``.
 
 
 def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
-    """Every evaluation-evidence ref one Step paid for, in order."""
+    """Every evaluation-evidence ref one Step paid for, in order.
+
+    A Step cites the evaluations it paid for through whichever channel its
+    mode uses, and all three are spend. A PROPOSAL_ONLY Step resolves
+    intents; a searching Step adds search evidence; a TOOL_USING Step --
+    the Codex arm -- drives every one of its evaluations through a tool and
+    cites them only from ``tool_evidence``. The Codex arm has no proposer
+    at all, since the agent does the proposing, so reading only the first
+    two channels would report an entire Codex run as free.
+
+    The three are unioned rather than treated as alternatives: the caller
+    de-duplicates by ref, so a Step that somehow cited one evaluation
+    through two channels is still paid for once.
+    """
     refs: list[TypedRef] = []
     for resolution in result.resolved_intents:
         ref = resolution.eval_result_ref
@@ -112,6 +122,14 @@ def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
         ref = evidence.eval_result_ref
         if ref is not None and ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
             refs.append(ref)
+    for tool_evidence in result.tool_evidence:
+        # A refused Tool Call carries no evaluation refs by construction,
+        # and a *failed* one may still carry them: the provider work done
+        # before the tool failed was billed exactly like any other
+        # interrupted evaluation, which is why failure evidence is costed.
+        for ref in tool_evidence.result.record.evaluation_evidence_refs:
+            if ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
+                refs.append(ref)
     return tuple(refs)
 
 

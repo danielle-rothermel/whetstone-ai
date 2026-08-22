@@ -126,6 +126,7 @@ class _StepResult:
     def __init__(self, *, refs=(), proposer_usage=()) -> None:
         self.resolved_intents = tuple(_Citation(ref) for ref in refs)
         self.search_evidence = ()
+        self.tool_evidence = ()
         self.proposer_usage = proposer_usage
 
 

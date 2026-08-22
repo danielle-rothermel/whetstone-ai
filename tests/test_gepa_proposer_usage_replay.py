@@ -86,6 +86,7 @@ class _StepResult:
     def __init__(self, usage: tuple[ProposerCallUsage, ...]) -> None:
         self.resolved_intents = ()
         self.search_evidence = ()
+        self.tool_evidence = ()
         self.proposer_usage = usage
 
 

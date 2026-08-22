@@ -8,6 +8,7 @@ memory, so a resumed or platform run reports the same total.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -31,10 +32,12 @@ class _FakeStepResult:
         *,
         resolved_intents: tuple[Any, ...] = (),
         search_evidence: tuple[Any, ...] = (),
+        tool_evidence: tuple[Any, ...] = (),
         proposer_usage: tuple[ProposerCallUsage, ...] = (),
     ) -> None:
         self.resolved_intents = resolved_intents
         self.search_evidence = search_evidence
+        self.tool_evidence = tool_evidence
         self.proposer_usage = proposer_usage
 
 
@@ -929,3 +932,80 @@ def test_a_proposer_call_without_a_token_breakdown_is_flagged(
     assert report.proposer.rows_missing_token_breakdown == 1
     assert report.proposer.input_tokens == 12
     assert report.proposer.usd == pytest.approx(0.7)
+
+
+class _FakeToolEvidence:
+    """A Tool Evidence entry's citation path, and nothing else.
+
+    The real one reaches its refs through
+    ``result.record.evaluation_evidence_refs``; that nesting is the part
+    the aggregator walks, so the double reproduces it exactly.
+    """
+
+    def __init__(self, refs: tuple[TypedRef, ...]) -> None:
+        self.result = SimpleNamespace(
+            record=SimpleNamespace(evaluation_evidence_refs=refs)
+        )
+
+
+def test_tool_evidence_rows_are_task_model_spend(tmp_path) -> None:
+    """A tool-mediated evaluation is paid for like any other.
+
+    The Codex arm cites every evaluation it drove from ``tool_evidence``
+    alone, so a Step with no resolved intents still has task-model spend.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(tool_evidence=(_FakeToolEvidence((ref,)),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10
+    assert report.task_model.output_tokens == 4
+
+
+def test_one_evaluation_cited_from_two_channels_is_paid_for_once(
+    tmp_path,
+) -> None:
+    """De-duplication spans the channels, not just each one.
+
+    The ref key is what makes a replay free, so an evaluation reachable
+    both as a resolved intent and as tool evidence must not be billed
+    twice.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    resolved_intents=(_FakeCitation(ref),),
+                    tool_evidence=(_FakeToolEvidence((ref,)),),
+                ),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 10

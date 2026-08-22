@@ -29,6 +29,7 @@ from tests.codex_support import (
     toy_tool_args,
     transcript_json,
 )
+from whetstone.core.identity import TypedRef
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry
@@ -42,6 +43,7 @@ from whetstone.optim.codex.adapter import (
     codex_lease_token_hash,
 )
 from whetstone.optim.codex.executor import build_codex_executor
+from whetstone.optim.cost_aggregation import aggregate_run_cost
 from whetstone.optim.codex.runner import SubprocessCodexRunner
 from whetstone.optim.contracts import (
     OptimRun,
@@ -516,3 +518,59 @@ def test_a_wall_budget_stop_terminalizes_the_real_spawned_step(
     retry = world.adapter([{"hang": True}], timeout_seconds=2.0)
     retried, _retry_ref = world.harness(retry).run_step(request)
     assert retried.status is StepStatus.FAILED
+
+
+def test_tool_mediated_evaluations_reach_task_model_spend(
+    codex_world,
+) -> None:
+    """The Codex arm's paid evaluations must appear in run cost.
+
+    The Codex arm has no proposer -- the agent proposes -- so its entire
+    spend is task-model spend, and every bit of it is driven through the
+    tools. Those evaluations are cited from ``tool_evidence`` rather than
+    from ``resolved_intents``, so an aggregator reading only the intent
+    path would report a Codex run as having cost nothing at all.
+
+    The count is derived from the persisted rows rather than asserted as a
+    literal, so it tracks the evidence the run actually wrote.
+    """
+    world = codex_world()
+    adapter = world.adapter(
+        [
+            world.tool_step(_TEMPLATE_A, "c1"),
+            world.tool_step(_TEMPLATE_B, "c2"),
+            {"final": {"selected_call_id": "c2"}},
+        ]
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.terminal_failure is None, result.terminal_failure
+    assert result.resolved_intents == ()
+    assert len(result.tool_evidence) == 2
+
+    expected_rows = _admitted_evaluation_row_count(world, result)
+    assert expected_rows > 0
+
+    report = aggregate_run_cost(store=world.store, step_results=(result,))
+
+    assert report.task_model.calls == expected_rows
+
+
+def _admitted_evaluation_row_count(world, result) -> int:
+    """Output rows across every evaluation the admitted tool calls drove."""
+    total = 0
+    for evidence in result.tool_evidence:
+        for ref in evidence.result.record.evaluation_evidence_refs:
+            record = world.store.get(ref.reference)
+            outputs_ref = record.get("outputs_ref")
+            if not isinstance(outputs_ref, dict):
+                continue
+            outputs = world.store.get(
+                TypedRef.model_validate(outputs_ref).reference
+            )
+            total += len(outputs["outputs"])
+    return total

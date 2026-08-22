@@ -375,6 +375,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so a dropped or forged entry is still rejected.
 - Pinned dependencies moved in lockstep: dr-exec 0.1.14, dr-store 0.2.6, and
   dr-platform 0.2.7.
+- Run cost reads tool-mediated evaluations. `aggregate_run_cost` now walks
+  `OptimStepResult.tool_evidence` alongside `resolved_intents` and
+  `search_evidence`, following each Tool Result's
+  `evaluation_evidence_refs` to the output rows behind it. The Codex arm
+  has no proposer -- the agent proposes -- and drives every evaluation
+  through a tool, so it cited all of its spend from a channel run cost did
+  not read and an entire Codex run reported `task_model.calls == 0`. The
+  three channels are unioned and still de-duplicated by evidence ref, so an
+  evaluation reachable through more than one is paid for once.
 - The subprocess rollout driver reads `CancelledOutcome.started` to tell a row
   the batch deadline killed inside a worker from one that never left the queue.
   dr-exec now publishes that flag, so the driver no longer infers the
