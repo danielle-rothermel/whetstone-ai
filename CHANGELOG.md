@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `prepare_miprov2_run` wires MIPROv2 through the in-process harness: a
+  step-contract provider registered by adapter key, opening state under
+  `MIPROV2_STATE_KEY`, and an explicit `experiment` plus `initial_state`.
+  Toy callers use `register_toy_runtime(..., extra_adapters={...})` with
+  `build_miprov2_adapter` / `prepare_toy_miprov2_run`. MIPROv2 is not on
+  the platform pipeline.
+- `Miprov2DemoMode` (`fewshot`, `zeroshot`, `ground_only`) is the persisted
+  demo decision. `zeroshot_opt` is derived from it. `ground_only` bootstraps
+  demos to ground instruction proposals, keeps the demo dimension out of the
+  study, and never attaches a demo set to a candidate; the study transcript
+  marks it as a Whetstone deviation.
+
 ### Removed
 
 - `whetstone.core.effects`. The package was a rename-level duplicate of the
@@ -16,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- MIPROv2 control schema version 6 → 7; GEPA control schema version 1 → 2.
+  `num_threads` is removed from both controls (concurrency belongs to the
+  eval engine).
+- MIPROv2 evaluations go through harness intents and land on
+  `resolved_intents`. `search_evidence` stays empty: that field is for
+  in-search evals the run never proposes (GEPA).
 - Effect leasing runs on `dr_store.lease.LeaseAuthority`.
   `whetstone.core.leasing` is the boundary: `EffectLeaseAuthority` composes
   dr-store's authority and owns only the translation between whetstone's

@@ -89,7 +89,7 @@ MIPROV2_PHASE_SCHEMA_MANIFEST: tuple[tuple[str, int], ...] = (
     ("whetstone.miprov2_eval_binding_request", 1),
     ("whetstone.miprov2_eval_binding", 1),
     ("whetstone.miprov2_intent_context", 2),
-    ("whetstone.miprov2_study_transcript", 5),
+    ("whetstone.miprov2_study_transcript", 6),
 )
 
 Miprov2AutoMode = Literal["light", "medium", "heavy"]

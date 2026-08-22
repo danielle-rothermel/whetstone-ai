@@ -68,7 +68,9 @@ def build_toy_miprov2_control(
     experiment: Experiment | None = None,
     demo_mode: Miprov2DemoMode = Miprov2DemoMode.FEWSHOT,
     num_trials: int = 2,
-    num_candidates: int = 2,
+    # Seeds -3/-2 are RESET/LABELS_ONLY; 3 admits seed -1, the first
+    # bootstrap candidate. Two candidates never reach that seed.
+    num_candidates: int = 3,
     max_bootstrapped_demos: int | None = None,
     max_labeled_demos: int | None = None,
     seed: int = 9,

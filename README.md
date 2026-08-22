@@ -15,7 +15,7 @@ stepping through runs to inspect behavior. Optimizers are not co-equal:
 |-----------|-----------------|-------------------|---------|
 | **COPRO** | Live; pass a COPRO adapter in the `build_runtime` registry | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
 | **GEPA** | Live harness adapter + step engine; pass via the `build_runtime` registry | Not registered | `whetstone-sandbox gepa` |
-| **MIPROv2** | Adapter/control exist | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
+| **MIPROv2** | Live via `register_toy_runtime(..., extra_adapters=...)` + `prepare_miprov2_run` | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
 
 **Out of scope here:** particular benchmarks or envs (those live in separate
 packages or repos), one-off experiment scripts, and product-facing runners.
@@ -34,8 +34,11 @@ packages or repos), one-off experiment scripts, and product-facing runners.
    anchor calibration over persisted evaluation evidence (`eval/analysis/`).
 3. **Optimization** — shared harness and adapters that propose candidates and
    drive evaluation intents in a loop. COPRO is the platform-wired optimizer;
-   GEPA and MIPROv2 exist as adapters (GEPA also has a step engine) but are
-   not registered in the default runtime.
+   GEPA and MIPROv2 plug into the shared harness when present in the
+   `build_runtime` registry (GEPA also has a step engine). Neither GEPA nor
+   MIPROv2 is on the platform pipeline. Toy MIPROv2 runs use
+   `register_toy_runtime(..., extra_adapters=...)` plus
+   `prepare_toy_miprov2_run`.
 4. **Sandbox & interpretation** — dry-run previews and toy-graph helpers to step
    through optimizer behavior before spending full eval budget
    (`whetstone-sandbox`).
@@ -63,9 +66,9 @@ Optimization  →  Sandbox / interpretation
 
 - **Experiment** — generation graph, initial/ceiling candidates, eval configs, reward policy
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
-- **OptimizerAdapter** — COPRO and GEPA plug into the shared harness when present in the `build_runtime` registry; MIPROv2 exists as an adapter but is not platform-wired. Adding or removing an adapter changes controller identity.
+- **OptimizerAdapter** — COPRO, GEPA, and MIPROv2 plug into the shared harness when present in the `build_runtime` registry. Adding or removing an adapter changes controller identity. MIPROv2 is not platform-wired.
 - **StepContractProvider** — each optimizer declares its first-step and continuation contracts and parses its own launch control, registered by adapter key; `StepRequestBuilder` and `HarnessRunController` dispatch through it
-- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents`, and evaluations its own search drove in `search_evidence`, each bound to its run and step index and verified by the harness; a terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
+- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents` (COPRO, MIPROv2), and evaluations its own search drove in `search_evidence` (GEPA), each bound to its run and step index and verified by the harness; a terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
 
 ## Platform pipeline

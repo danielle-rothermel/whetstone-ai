@@ -278,13 +278,13 @@ def _opening_budget(state: Miprov2State) -> BudgetState:
     """The run's opening budget, taken from the control's effect ceilings."""
 
     budget = state.budget
+    dimensions = {
+        "bootstrap_generations": budget.bootstrap_generations,
+        "proposal_calls": budget.proposal_calls,
+        "evaluations": budget.evaluations,
+        "task_rows": budget.task_rows,
+    }
     return BudgetState(
-        remaining=ImmutableJsonObject(
-            {
-                "bootstrap_generations": budget.bootstrap_generations,
-                "proposal_calls": budget.proposal_calls,
-                "evaluations": budget.evaluations,
-                "task_rows": budget.task_rows,
-            }
-        ),
+        remaining=ImmutableJsonObject(dimensions),
+        consumed=ImmutableJsonObject({label: 0 for label in dimensions}),
     )
