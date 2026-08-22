@@ -65,7 +65,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by integration tests and the CLI. `PlatformDbosConfig` is constructed
   with explicit `application_version` and `executor_id`.
 - `whetstone-optim run`, `status`, and `result` submit a bound launch
-  and read the run manifest / `OptimPlatformRunResult`.
+  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
+  to a live `ProviderProposerTransport` (`--proposer provider`);
+  `--proposer fake` keeps the scripted transport for tests. Controller
+  identity is pinned by `--owner-id`, or derived from
+  `--application-version` + `--executor-id`. The CLI always closes the
+  runtime if `build_runtime` succeeded, including when `deploy_platform`
+  fails.
 
 ### Changed
 

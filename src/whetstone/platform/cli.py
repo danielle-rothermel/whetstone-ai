@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import uuid4
 
 import typer
@@ -12,24 +12,29 @@ from sqlalchemy import create_engine
 from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.coordination.harness_run_controller import load_launch
 from whetstone.coordination.runtime_bootstrap import build_runtime
+from whetstone.core.identity import compute_identity_hash, store_config_resolver
 from whetstone.core.leasing import EffectLeaseAuthority
-from whetstone.core.identity import compute_identity_hash
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
 from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
+    ProposerConfig,
+    ProviderProposerTransport,
     build_inline_proposal_executor,
     prompt_adapter_identity_hash,
 )
 from whetstone.platform.contracts import load_run_manifest, load_run_result
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
 from whetstone.provider.language_model import PlainPromptAdapter
+from whetstone.provider.policy import ProviderExecutionPolicy
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 ADAPTER_COPRO = "copro"
 ADAPTER_GEPA = "gepa"
+PROPOSER_PROVIDER = "provider"
+PROPOSER_FAKE = "fake"
 
 
 def _require_database_url(database_url: str | None) -> str:
@@ -41,7 +46,24 @@ def _require_database_url(database_url: str | None) -> str:
     return resolved
 
 
-def _copro_adapter_from_control(control, engine) -> CoproAdapter:
+def _stable_owner_id(*, application_version: str, executor_id: str) -> str:
+    return f"{application_version}:{executor_id}"
+
+
+def _live_transport_call(execution_policy: ProviderExecutionPolicy):
+    from dr_providers import HttpProvider
+
+    return HttpProvider(policy=execution_policy.transport_policy).invoke
+
+
+def _copro_adapter_from_control(
+    control,
+    engine,
+    *,
+    store,
+    proposer: str,
+    execution_policy: ProviderExecutionPolicy,
+) -> CoproAdapter:
     prompt_adapter = PlainPromptAdapter()
     adapter_hash = prompt_adapter_identity_hash(prompt_adapter)
     if control.prompt_adapter_identity_hash != adapter_hash:
@@ -60,15 +82,37 @@ def _copro_adapter_from_control(control, engine) -> CoproAdapter:
         raise typer.BadParameter(
             "launch control eval_config_ref does not match the rebuilt engine"
         )
-    transport = FakeProposerTransport(
-        {},
-        default=(
-            "Reply briefly to: {prompt} with a concise greeting.",
-            "Answer {prompt} in one short friendly sentence.",
-        ),
-        execution_policy_hash=engine.execution_policy_identity_hash(),
-        prompt_adapter_identity_hash=adapter_hash,
-    )
+    if proposer == PROPOSER_FAKE:
+        transport: (
+            FakeProposerTransport | ProviderProposerTransport
+        ) = FakeProposerTransport(
+            {},
+            default=(
+                "Reply briefly to: {prompt} with a concise greeting.",
+                "Answer {prompt} in one short friendly sentence.",
+            ),
+            execution_policy_hash=execution_policy.identity_hash,
+            prompt_adapter_identity_hash=adapter_hash,
+        )
+    elif proposer == PROPOSER_PROVIDER:
+        if not isinstance(control.prompt_model, ProposerConfig):
+            raise typer.BadParameter(
+                "provider proposer requires a stored ProviderCallConfig"
+            )
+        from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA, ProviderCallConfig
+
+        transport = ProviderProposerTransport(
+            resolve_provider_call_config=store_config_resolver(
+                store,
+                PROVIDER_CALL_CONFIG_SCHEMA,
+                ProviderCallConfig,
+            ),
+            transport=_live_transport_call(execution_policy),
+            execution_policy=execution_policy,
+            prompt_adapter=prompt_adapter,
+        )
+    else:
+        raise typer.BadParameter("proposer must be provider or fake")
     return CoproAdapter(
         control=control,
         transport=transport,
@@ -103,6 +147,13 @@ def run_command(
         str,
         typer.Option("--adapter", help="Adapter to reconstruct from the launch"),
     ] = ADAPTER_COPRO,
+    proposer: Annotated[
+        Literal["provider", "fake"],
+        typer.Option(
+            "--proposer",
+            help="COPRO proposer transport: live provider or scripted fake",
+        ),
+    ] = PROPOSER_PROVIDER,
     work_key: Annotated[str | None, typer.Option("--work-key")] = None,
     database_url: Annotated[
         str | None,
@@ -117,6 +168,16 @@ def run_command(
         typer.Option("--application-version"),
     ] = "whetstone-optim",
     executor_id: Annotated[str, typer.Option("--executor-id")] = "whetstone-optim-cli",
+    owner_id: Annotated[
+        str | None,
+        typer.Option(
+            "--owner-id",
+            help=(
+                "Stable controller owner id; defaults to "
+                "application-version:executor-id"
+            ),
+        ),
+    ] = None,
     execution_config_ref: Annotated[
         str | None,
         typer.Option("--execution-config-ref"),
@@ -152,12 +213,23 @@ def run_command(
                 )
             if launch.control is None:
                 raise typer.BadParameter("launch is missing optimizer control")
-            engine = ReferenceEvalRuntimeConfig().build_engine(
+            runtime_config = ReferenceEvalRuntimeConfig()
+            engine = runtime_config.build_engine(
                 store,
                 mutation_field=launch.run.mutation_field,
                 render_contract=launch.run.template_render_contract,
             )
-            copro_adapter = _copro_adapter_from_control(launch.control, engine)
+            copro_adapter = _copro_adapter_from_control(
+                launch.control,
+                engine,
+                store=store,
+                proposer=proposer,
+                execution_policy=runtime_config.execution_policy,
+            )
+            resolved_owner_id = owner_id or _stable_owner_id(
+                application_version=application_version,
+                executor_id=executor_id,
+            )
             runtime = build_runtime(
                 store=store,
                 engine=engine,
@@ -167,53 +239,54 @@ def run_command(
                 effect_authority=EffectLeaseAuthority.memory(),
                 ledger_engine=ledger,
                 platform=True,
+                owner_id=resolved_owner_id,
             )
-            now = datetime.now(UTC)
-            deployment = deploy_platform(
-                runtime=runtime,
-                engine=ledger,
-                database_url=resolved_database_url,
-                application_version=application_version,
-                executor_id=executor_id,
-                now=now,
-                app_name="whetstone-optim",
-                sweep_cron=None,
-            )
-            try:
-                receipt = submit_optim_run(
+            with runtime:
+                now = datetime.now(UTC)
+                deployment = deploy_platform(
                     runtime=runtime,
-                    registry=deployment.registry,
                     engine=ledger,
-                    campaign_key=campaign_key,
-                    run_key=run_key,
-                    members=(
-                        OptimRunMemberSpec(
-                            work_key=resolved_work_key,
-                            launch=launch,
+                    database_url=resolved_database_url,
+                    application_version=application_version,
+                    executor_id=executor_id,
+                    now=now,
+                    app_name="whetstone-optim",
+                    sweep_cron=None,
+                )
+                try:
+                    receipt = submit_optim_run(
+                        runtime=runtime,
+                        registry=deployment.registry,
+                        engine=ledger,
+                        campaign_key=campaign_key,
+                        run_key=run_key,
+                        members=(
+                            OptimRunMemberSpec(
+                                work_key=resolved_work_key,
+                                launch=launch,
+                            ),
                         ),
-                    ),
-                    controller_identity_hash=runtime.controller.runtime_hash,
-                    execution_config_reference=resolved_exec_ref,
-                    dispatch_mode=dispatch_mode,
-                )
-                typer.echo(json.dumps(_receipt_payload(receipt), indent=2))
-                drive_until_quiescent(
-                    engine=ledger,
-                    registry=deployment.registry,
-                    registration=deployment.registration,
-                    now=now,
-                    run_key=run_key,
-                )
-                await_run_completion(
-                    run_key=run_key,
-                    engine=ledger,
-                    registration=deployment.registration,
-                    registry=deployment.registry,
-                    now=now,
-                )
-            finally:
-                deployment.shutdown()
-                runtime.close()
+                        controller_identity_hash=runtime.controller.runtime_hash,
+                        execution_config_reference=resolved_exec_ref,
+                        dispatch_mode=dispatch_mode,
+                    )
+                    typer.echo(json.dumps(_receipt_payload(receipt), indent=2))
+                    drive_until_quiescent(
+                        engine=ledger,
+                        registry=deployment.registry,
+                        registration=deployment.registration,
+                        now=now,
+                        run_key=run_key,
+                    )
+                    await_run_completion(
+                        run_key=run_key,
+                        engine=ledger,
+                        registration=deployment.registration,
+                        registry=deployment.registry,
+                        now=now,
+                    )
+                finally:
+                    deployment.shutdown()
     finally:
         ledger.dispose()
 

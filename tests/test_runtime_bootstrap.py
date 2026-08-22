@@ -573,6 +573,75 @@ def test_build_runtime_platform_mode_requires_ledger_engine(
         )
 
 
+def test_build_runtime_owner_id_is_part_of_controller_identity(
+    sqlite_store,
+) -> None:
+    from whetstone.coordination.runtime_bootstrap import build_runtime
+    from whetstone.core.identity import compute_identity_hash
+    from whetstone.core.leasing import EffectLeaseAuthority
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.adapters import MappingAdapterRegistry
+    from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
+    from whetstone.optim.proposal.proposer import (
+        build_inline_proposal_executor,
+        prompt_adapter_identity_hash,
+    )
+    from whetstone.provider.language_model import PlainPromptAdapter
+    from whetstone.testing.fakes.proposer import DummyProposerTransport
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    prompt_adapter = PlainPromptAdapter()
+    adapter = CoproAdapter(
+        control=control,
+        transport=DummyProposerTransport(
+            scripted_bodies=("body",),
+            execution_policy_hash=control.provider_execution_policy_hash,
+            prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+                prompt_adapter
+            ),
+        ),
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=compute_identity_hash(
+                schema="whetstone.testing.inline_proposal_executor",
+                schema_version=1,
+                payload={"mode": "inline"},
+            ),
+        ),
+    )
+    registry = MappingAdapterRegistry({COPRO_ADAPTER_KEY: adapter})
+    first = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=registry,
+        effect_authority=EffectLeaseAuthority.memory(),
+        owner_id="owner-a",
+    )
+    second = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=registry,
+        effect_authority=EffectLeaseAuthority.memory(),
+        owner_id="owner-a",
+    )
+    other = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=registry,
+        effect_authority=EffectLeaseAuthority.memory(),
+        owner_id="owner-b",
+    )
+    assert first.controller.runtime_hash == second.controller.runtime_hash
+    assert first.controller.runtime_hash != other.controller.runtime_hash
+    first.close()
+    second.close()
+    other.close()
+
+
 def test_registered_runtime_close_stops_child_workers(sqlite_store) -> None:
     import os
     import subprocess

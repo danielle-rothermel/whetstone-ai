@@ -80,6 +80,8 @@ def test_whetstone_optim_cli_run_status_result(
         campaign_key,
         "--adapter",
         "copro",
+        "--proposer",
+        "fake",
         "--application-version",
         "cli-test-v1",
         "--executor-id",

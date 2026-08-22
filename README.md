@@ -92,6 +92,7 @@ uv run whetstone-optim run \
   --campaign-key campaign-1 \
   --run-key run-1 \
   --adapter copro \
+  --proposer provider \
   --application-version 0.1.3 \
   --executor-id local-1
 uv run whetstone-optim status --run-key run-1 --store-path runtime.sqlite
