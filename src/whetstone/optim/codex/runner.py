@@ -1267,7 +1267,19 @@ def _default_prompt(
         "call_id whose candidate you chose. The artifact carries no "
         "candidate body: a template that was never evaluated through the "
         "tool cannot be returned. Set selected_call_id to null to keep the "
-        "run's seed candidate. Copy lease_token_hash verbatim as "
+        "run's seed candidate.\n"
+        # The artifact has two ways to say "the seed is still best", and
+        # a real agent that evaluated the seed's own template reached for
+        # the wrong one: it selected that call rather than nulling the
+        # selection. The adapter reads both as seed-retained, so neither
+        # loses the Step's paid evaluations -- but only one is the form
+        # this contract asks for, and the prompt documented only that one
+        # while never saying the other was the same statement.
+        + "If your evaluations leave the seed candidate best, set "
+        "selected_call_id to null. Do not re-select a call whose template "
+        "is the seed's own template; null is how this contract says the "
+        "seed was retained.\n"
+        + "Copy lease_token_hash verbatim as "
         f"{lease_token_hash!r}.\n"
         f"OPTIM_STEP_REQUEST_JSON={context}"
     )

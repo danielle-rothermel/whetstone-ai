@@ -551,6 +551,29 @@ def test_the_prompt_names_the_fixed_tool_arguments_the_agent_cannot_guess(
         assert base_ref.content_hash in prompt
         assert base_ref.schema_name in prompt
 
+        # The seed-retention clause, pinned literally.
+        #
+        # The artifact accepts two statements of "the seed is still
+        # best": a null selection, and selecting an evaluated call whose
+        # template is the seed's own. A real agent that evaluated the
+        # seed reached for the second, and the prompt documented only the
+        # first -- never saying the two were the same statement. The
+        # adapter now reads both as seed-retained, so the wrong one no
+        # longer discards the Step's paid evaluations; this clause is
+        # what stops the agent from picking it in the first place.
+        #
+        # Substring assertions on ``model_route`` and ``base_ref`` above
+        # cannot catch drift here: this clause names no value the test
+        # can rebuild, so only its literal text pins it.
+        assert (
+            "Set selected_call_id to null to keep the run's seed "
+            "candidate.\n"
+            "If your evaluations leave the seed candidate best, set "
+            "selected_call_id to null. Do not re-select a call whose "
+            "template is the seed's own template; null is how this "
+            "contract says the seed was retained.\n"
+        ) in prompt
+
 
 def test_the_advertised_tool_schema_pins_the_model_route(tmp_path) -> None:
     """The prompt says it and the tool contract enforces the shape.

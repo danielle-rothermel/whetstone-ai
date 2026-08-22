@@ -23,7 +23,10 @@ from tests.codex_support import (
     toy_tool_args,
 )
 from whetstone.experiment.candidate import Candidate, candidate_reference
-from whetstone.testing.toy.experiment import build_toy_experiment
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    build_toy_experiment,
+)
 from whetstone.core.identity import ImmutableJsonObject, TerminalFailure
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -1646,3 +1649,141 @@ def test_every_reported_call_must_bind_a_request_candidate_as_its_base(
     assert result.terminal_failure is not None
     assert result.terminal_failure.code == CODEX_RECORDED_CALL_CONTRACT_CODE
     assert result.terminal_failure.details["call_id"] == "c1"
+
+
+def test_a_seed_identical_selection_retains_the_seed(tmp_path) -> None:
+    """Re-selecting the seed's own content *is* retaining the seed.
+
+    The artifact gives the agent two ways to say the seed is still best:
+    ``selected_call_id=null``, and selecting an evaluated candidate whose
+    content is the seed's. Only the first was a terminal; the second
+    reached ``_candidate_from_call``, where ``diff_check`` refused a
+    mutation equal to its base and the whole Step failed under
+    ``codex_selection_contract`` -- discarding evaluations the run had
+    already admitted, paid for, and debited.
+
+    The two statements mean the same thing, so they reach the same
+    terminal. The evaluations stay on the ledger either way: the agent
+    really did measure them, and the seed really is what the Step kept.
+    """
+    with open_sqlite(str(tmp_path / "codex-seed-identical.sqlite")) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset())
+        seed_template = world.candidate.payload.to_json()[
+            TOY_MUTATION_FIELD
+        ]
+
+        result = world.run_step(
+            calls=[("c1", _TEMPLATE_A), ("c2", seed_template)],
+            artifact_fields={"selected_call_id": "c2"},
+        )
+        # The seed-retaining terminal still records the call the agent
+        # cited, so the artifact's claim stays auditable against the
+        # ledger rather than resting on the artifact alone.
+        snapshot = world.store.get(result.state_ref.reference)
+
+    assert result.terminal_failure is None, result.terminal_failure
+    assert result.status is StepStatus.COMPLETE
+    assert result.seed_retained is True
+    assert result.accepted_candidates == ()
+    assert result.retained_candidate_ref == (
+        candidate_reference(world.candidate)
+    )
+    # Every paid evaluation stays visible and stays debited: the seed
+    # identity changes which terminal the Step reaches, never what the
+    # run spent.
+    assert len(result.tool_evidence) == 2
+    assert result.budget_delta.consumed["tool_calls"] == 2
+    assert {
+        str(entry.store_entry.call_id) for entry in result.tool_evidence
+    } == {"c1", "c2"}
+    assert snapshot["codex_seed_retained_call_id"] == "c2"
+
+
+def test_a_seed_identical_selection_on_a_multi_field_candidate_retains(
+    tmp_path,
+) -> None:
+    """Seed identity is the whole payload, not just the mutation field.
+
+    ``_candidate_from_call`` rebuilds from the base payload, so a base
+    carrying extra fields is only seed-identical when the base *is* the
+    seed. Checking the mutation template alone would be right here by
+    accident; this pins that the check reads the reconstructed payload.
+    """
+    with open_sqlite(str(tmp_path / "codex-seed-multi.sqlite")) as store:
+        world = _SelectionWorld(
+            store,
+            failing_call_ids=frozenset(),
+            extra_payload={"system_prompt": "You are terse."},
+        )
+        seed_template = world.candidate.payload.to_json()[
+            TOY_MUTATION_FIELD
+        ]
+
+        result = world.run_step(
+            calls=[("c1", seed_template)],
+            artifact_fields={"selected_call_id": "c1"},
+        )
+
+    assert result.terminal_failure is None, result.terminal_failure
+    assert result.status is StepStatus.COMPLETE
+    assert result.seed_retained is True
+    assert result.retained_candidate_ref == (
+        candidate_reference(world.candidate)
+    )
+    assert len(result.tool_evidence) == 1
+    assert result.budget_delta.consumed["tool_calls"] == 1
+
+
+def test_a_seed_identical_selection_does_not_widen_the_unevaluated_check(
+    tmp_path,
+) -> None:
+    """Seed identity is read off the *ledger*, never off the artifact.
+
+    A call id the agent never evaluated has no recorded content to
+    compare against the seed, so it cannot become a seed-retaining
+    terminal by claiming to be one. This stays
+    ``codex_selection_unevaluated``.
+    """
+    with open_sqlite(str(tmp_path / "codex-seed-unknown.sqlite")) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset())
+
+        result = world.run_step(
+            calls=[("c1", _TEMPLATE_A)],
+            artifact_fields={"selected_call_id": "c-never-made"},
+        )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_SELECTION_UNEVALUATED_CODE
+    assert result.seed_retained is False
+    assert len(result.tool_evidence) == 1
+    assert result.budget_delta.consumed["tool_calls"] == 1
+
+
+def test_a_refused_seed_identical_selection_still_fails_unscored(
+    tmp_path,
+) -> None:
+    """A seed-identical *template* on a failed evaluation is still unscored.
+
+    The agent would be claiming the seed is best on the strength of a
+    measurement that never produced one. Seed identity does not excuse
+    that: the evaluation carries no score, so the Step still fails under
+    ``codex_selection_unscored``.
+    """
+    with open_sqlite(str(tmp_path / "codex-seed-unscored.sqlite")) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset({"c1"}))
+        seed_template = world.candidate.payload.to_json()[
+            TOY_MUTATION_FIELD
+        ]
+
+        result = world.run_step(
+            calls=[("c1", seed_template)],
+            artifact_fields={"selected_call_id": "c1"},
+        )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == _FORCED_FAILURE_CODE
+    assert result.seed_retained is False
+    assert len(result.tool_evidence) == 1
+    assert result.budget_delta.consumed["tool_calls"] == 1

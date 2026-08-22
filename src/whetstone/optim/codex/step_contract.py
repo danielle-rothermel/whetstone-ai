@@ -6,6 +6,12 @@ contract therefore returns nothing while continuing -- which never happens
 -- and the run terminal cardinality when it completes, so a terminal step
 that keeps the seed may report ``seed_retained``.
 
+Those two outcomes are not disjoint in the artifact. Naming a ``call_id``
+whose evaluated content is the seed's own *is* keeping the seed, and the
+adapter terminalizes it as ``seed_retained`` -- so a Step that names a
+call may still accept no candidate. Search-dependent terminal cardinality
+is what makes that representable.
+
 ``build_next`` raises: "one step only" is encoded here, and the adapter's
 ``step_index != 0`` guard is the same rule seen from the other side.
 """
