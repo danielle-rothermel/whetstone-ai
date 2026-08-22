@@ -15,7 +15,9 @@ import pytest
 
 from whetstone.eval.analysis.power import (
     DEFAULT_ALPHA,
+    DEFAULT_INTERACTION_FLOOR_FRACTION,
     DEFAULT_SAMPLE_CAP,
+    DEFAULT_SIGNIFICANCE_ALPHA,
     DEFAULT_TARGET_PROB,
     PowerConfig,
     VarianceDecomposition,
@@ -66,9 +68,11 @@ def test_normal_ppf_matches_published_quantiles(
 def test_normal_ppf_rejects_probabilities_outside_its_contract(
     probability: float,
 ) -> None:
-    # The helper is a target-power quantile, documented as (0.5, 1); the
-    # median and both tails are outside that contract.
-    with pytest.raises(ValueError, match="target_prob must be in"):
+    # The helper is an upper-tail normal quantile, documented as (0.5, 1);
+    # the median and both tails are outside that contract.
+    with pytest.raises(
+        ValueError, match="normal quantile probability must be in"
+    ):
         _normal_ppf(probability)
 
 
@@ -82,8 +86,8 @@ def test_decompose_variance_recovers_known_components() -> None:
     #   within_obs = mean(p(1-p)) over both arms = 0.20
     #   midpoints equal the rates, so raw between = var(ddof=1) = 1/15
     #   between = 1/15 - 0.20 / (2 * 4) = 0.0416666...
-    #   diff is identically zero, so raw interaction = 0 and the floor
-    #   0.1 * within = 0.025 applies.
+    #   diff is identically zero, so raw interaction = 0 and, with the
+    #   default zero floor, the estimate stays at 0.
     naive = np.array([0.2, 0.4, 0.6, 0.8])
     ceiling = naive.copy()
 
@@ -92,9 +96,26 @@ def test_decompose_variance_recovers_known_components() -> None:
     assert decomposition.base_rate == pytest.approx(0.5)
     assert decomposition.within_sample_var == pytest.approx(0.25)
     assert decomposition.between_task_var == pytest.approx(1 / 15 - 0.20 / 8)
-    assert decomposition.interaction_var == pytest.approx(0.025)
+    assert decomposition.interaction_var == 0.0
     assert decomposition.anchor_samples == 4
     assert decomposition.n_tasks_observed == 4
+
+
+def test_decompose_variance_applies_an_explicit_interaction_floor() -> None:
+    # Same fixture, but with an explicit floor of 0.1 * within = 0.025. The
+    # floor is opt-in: it is not part of the estimator, so it must be asked
+    # for by name.
+    naive = np.array([0.2, 0.4, 0.6, 0.8])
+
+    floored = _decompose_variance(
+        naive,
+        naive.copy(),
+        anchor_samples=4,
+        interaction_floor_fraction=0.1,
+    )
+
+    assert floored.within_sample_var == pytest.approx(0.25)
+    assert floored.interaction_var == pytest.approx(0.025)
 
 
 def test_decompose_variance_reports_zero_between_variance_for_flat_tasks() -> None:
@@ -171,17 +192,49 @@ def test_repeats_cannot_reduce_the_irreducible_interaction_floor() -> None:
     ) == pytest.approx(floor, abs=1e-5)
 
 
-def test_mdd_is_the_target_quantile_times_the_standard_error() -> None:
+def test_mdd_is_the_two_sided_multiplier_times_the_standard_error() -> None:
+    # MDD = (z_{1 - alpha/2} + z_power) * se. Both quantiles are required:
+    # z_{1 - alpha/2} buys the significance level, z_power the detection
+    # probability.
     decomposition = _decomposition(within_sample_var=0.25, interaction_var=0.1)
 
     mdd = _mdd_at_target(
-        decomposition, n_tasks=10, num_seeds=2, target_prob=0.8
+        decomposition,
+        n_tasks=10,
+        num_seeds=2,
+        target_prob=0.8,
+        significance_alpha=0.05,
     )
-    expected = _normal_ppf(0.8) * _paired_diff_se(
+    expected = (_normal_ppf(0.975) + _normal_ppf(0.8)) * _paired_diff_se(
         decomposition, n_tasks=10, num_seeds=2
     )
 
     assert mdd == pytest.approx(expected)
+
+
+def test_mdd_grows_as_the_significance_level_tightens() -> None:
+    decomposition = _decomposition(within_sample_var=0.25, interaction_var=0.1)
+
+    at_05 = _mdd_at_target(
+        decomposition,
+        n_tasks=10,
+        num_seeds=2,
+        target_prob=0.8,
+        significance_alpha=0.05,
+    )
+    at_01 = _mdd_at_target(
+        decomposition,
+        n_tasks=10,
+        num_seeds=2,
+        target_prob=0.8,
+        significance_alpha=0.01,
+    )
+
+    assert at_01 > at_05
+    assert at_01 / at_05 == pytest.approx(
+        (_normal_ppf(0.995) + _normal_ppf(0.8))
+        / (_normal_ppf(0.975) + _normal_ppf(0.8))
+    )
 
 
 def test_mdd_scales_as_one_over_sqrt_task_count() -> None:
@@ -210,7 +263,10 @@ def test_mdd_grows_with_the_required_power() -> None:
     )
 
     assert at_95 > at_80
-    assert at_95 / at_80 == pytest.approx(_normal_ppf(0.95) / _normal_ppf(0.80))
+    assert at_95 / at_80 == pytest.approx(
+        (_normal_ppf(0.975) + _normal_ppf(0.95))
+        / (_normal_ppf(0.975) + _normal_ppf(0.80))
+    )
 
 
 @pytest.mark.parametrize(
@@ -223,6 +279,11 @@ def test_mdd_grows_with_the_required_power() -> None:
         {"target_prob": 1.0},
         {"target_prob": math.nan},
         {"sample_cap": 0},
+        {"significance_alpha": 0.0},
+        {"significance_alpha": 1.0},
+        {"significance_alpha": math.nan},
+        {"interaction_floor_fraction": -0.1},
+        {"interaction_floor_fraction": math.nan},
     ],
 )
 def test_power_config_rejects_out_of_contract_values(
@@ -238,6 +299,11 @@ def test_power_config_defaults_match_the_published_constants() -> None:
     assert config.alpha == DEFAULT_ALPHA
     assert config.target_prob == DEFAULT_TARGET_PROB
     assert config.sample_cap == DEFAULT_SAMPLE_CAP
+    assert config.significance_alpha == DEFAULT_SIGNIFICANCE_ALPHA
+    assert (
+        config.interaction_floor_fraction
+        == DEFAULT_INTERACTION_FLOOR_FRACTION
+    )
 
 
 def test_analyze_power_reports_headroom_and_the_alpha_scaled_target_gap() -> None:
@@ -378,3 +444,109 @@ def test_analyze_power_rejects_degenerate_budget_inputs(
             pool_ceiling=pool_ceiling,
             anchor_samples=anchor_samples,
         )
+
+
+#: The Step-10 protocol's pre-registered MDE table, recomputed by hand from
+#: `MDE(T, K) = (z_0.975 + z_0.80) * sqrt((tau^2 + 2 * sigma^2 / K) / T)` with
+#: the conservative binary worst case `sigma^2 = 0.25`. These are the numbers
+#: the Stage-0 gate is inverted against, so they are pinned as literals rather
+#: than recomputed from the module under test.
+#:
+#: (tau^2, K, T, expected MDE)
+PROTOCOL_MDE_TABLE = (
+    (0.05, 3, 220, 0.0879),
+    (0.10, 3, 220, 0.0975),
+    (0.15, 3, 220, 0.1063),
+    (0.05, 5, 220, 0.0732),
+    (0.05, 3, 440, 0.0622),
+    (0.10, 3, 440, 0.0690),
+    (0.05, 3, 132, 0.1135),
+    # c18's second family, at its own held-out size.
+    (0.05, 3, 48, 0.1882),
+)
+
+#: `z_{1 - 0.05/2} + z_{0.80}`, the two-sided multiplier at the defaults.
+TWO_SIDED_MULTIPLIER = 2.801585218112968
+
+#: `z_{0.80}` alone — the one-sided detection threshold the MDE is *not*.
+ONE_SIDED_MULTIPLIER = 0.8416212335729144
+
+
+@pytest.mark.parametrize(
+    ("interaction_var", "num_seeds", "n_tasks", "expected_mde"),
+    PROTOCOL_MDE_TABLE,
+)
+def test_mdd_matches_the_pre_registered_protocol_table(
+    interaction_var: float,
+    num_seeds: int,
+    n_tasks: int,
+    expected_mde: float,
+) -> None:
+    decomposition = _decomposition(
+        within_sample_var=0.25, interaction_var=interaction_var
+    )
+
+    mdd = _mdd_at_target(
+        decomposition,
+        n_tasks=n_tasks,
+        num_seeds=num_seeds,
+        target_prob=DEFAULT_TARGET_PROB,
+        significance_alpha=DEFAULT_SIGNIFICANCE_ALPHA,
+    )
+
+    assert mdd == pytest.approx(expected_mde, abs=5e-5)
+
+
+def test_the_default_multiplier_is_the_two_sided_closed_form() -> None:
+    config = PowerConfig()
+
+    assert config.mdd_multiplier == pytest.approx(TWO_SIDED_MULTIPLIER)
+    assert config.mdd_multiplier == pytest.approx(
+        _normal_ppf(0.975) + _normal_ppf(0.80)
+    )
+
+
+def test_the_two_sided_mde_is_3_33x_the_one_sided_detection_threshold() -> None:
+    # The pre-fix implementation used `z_power` alone, which is a one-sided
+    # 80% detection threshold and understates the detectable effect by this
+    # fixed factor at every grid point.
+    decomposition = _decomposition(within_sample_var=0.25, interaction_var=0.05)
+
+    two_sided = _mdd_at_target(
+        decomposition,
+        n_tasks=220,
+        num_seeds=3,
+        target_prob=DEFAULT_TARGET_PROB,
+        significance_alpha=DEFAULT_SIGNIFICANCE_ALPHA,
+    )
+    one_sided = ONE_SIDED_MULTIPLIER * _paired_diff_se(
+        decomposition, n_tasks=220, num_seeds=3
+    )
+
+    assert two_sided / one_sided == pytest.approx(3.328795788836583)
+    assert two_sided == pytest.approx(0.0879, abs=5e-5)
+    assert one_sided == pytest.approx(0.0264, abs=5e-5)
+
+
+def test_the_power_surface_uses_the_two_sided_multiplier() -> None:
+    # The surface must carry the same quantity the closed form does, so a
+    # study reading a grid point and a study computing the closed form by
+    # hand cannot disagree.
+    naive = tuple(0.1 * (index % 5) for index in range(20))
+    ceiling = tuple(min(1.0, value + 0.3) for value in naive)
+
+    result = analyze_power(
+        naive_per_task=naive,
+        ceiling_per_task=ceiling,
+        pool_ceiling=4,
+        anchor_samples=3,
+        config=PowerConfig(sample_cap=3),
+    )
+
+    for point in result.surface:
+        expected = result.config.mdd_multiplier * _paired_diff_se(
+            result.decomposition,
+            n_tasks=point.n_tasks,
+            num_seeds=point.num_seeds,
+        )
+        assert point.mdd_at_target == pytest.approx(expected)
