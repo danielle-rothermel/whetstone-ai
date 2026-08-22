@@ -80,26 +80,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   succeeded counts as a call even when the provider reported no usage and no
   price: it is counted as *unpriced*, which withholds `usd` rather than
   letting the remaining priced rows present a partial sum as a run total, and
-  it is recorded in `rows_missing_token_breakdown`. Only a failed or missing
-  row with no telemetry at all -- a failure before the provider answered, or
-  a row that never ran -- is excluded, along with cache hits.
+  it is recorded in `rows_missing_token_breakdown`. A *failed* row counts on
+  the same terms when its persisted `provider_error` carries a rejected
+  response: the provider generated it and charged for it, and only the
+  response classifier turned it down. Only a missing row, or a failed row
+  whose failure body shows nothing came back at all, is excluded -- along
+  with cache hits. `whetstone.execution.call_support` owns that
+  discriminator (`PROVIDER_ERROR_KEY`, `REJECTED_RESPONSE_KEY`,
+  `evidences_provider_response`), so both cost roles decide "did the provider
+  answer?" from one signal.
 - A call that was billed and then *failed* still counts, in both roles. A
   task-model row that failed but carried usage contributes its call, tokens,
   and price while staying failed for scoring; a proposer draft that reached a
   provider and came back empty does the same. A draft that made no provider
   call at all reports no usage and is recorded as nothing, so a scripted
-  underfill can no longer appear as a priced zero-dollar call.
+  underfill can no longer appear as a priced zero-dollar call. Nor can a
+  transport failure: it mints its logical call id before the request leaves
+  and comes back with no usage, no price, and no rejected response, so a
+  *failed* draft carrying none of the three is recorded as nothing rather
+  than as an unpriced call that withholds the role's `usd` for spend that
+  never happened. A failed draft whose response evidence *does* carry a
+  rejected response is counted even without telemetry, on the same rule the
+  task-model rows follow: `ProviderProposerTransport` now persists the
+  failure body from `call_telemetry` alongside its response evidence, which
+  is what makes a blank-but-billed proposer response legible. Conversely every
+  *successful* draft is a call even without telemetry --
+  `CodexCliProposerTransport` now mints a `logical_call_id` in the same shape
+  as the provider transport's, so a COPRO run using the Codex CLI proposer
+  reports its invocations as identified, unpriced calls with an unknown token
+  breakdown instead of reporting zero proposer calls for the whole run.
 - Retries are counted per billed attempt. When the execution policy retries a
   response-level failure, the rejected response was still generated and still
   charged, so `call_telemetry` sums tokens and price across every attempt
   that carried a response instead of reporting only the terminal generation.
   An attempt that failed at the transport carried no response and is not
-  billed.
+  billed. Aggregation is all-or-nothing per field: `provider_cost` is
+  reported only when *every* billed attempt carried a price, and a
+  directional token count only when every billed attempt reported it. A
+  partly priced retry therefore makes the row unpriced rather than
+  publishing an understated total that reads as complete, and a retry
+  missing a token breakdown makes the row a
+  `rows_missing_token_breakdown` row rather than presenting one attempt's
+  tokens as the call's. The proposer transport projects the same
+  `call_telemetry` aggregate onto its drafts, so proposer retries are billed
+  identically to task-model retries.
 - A GEPA Step that dies on a reflection failure no bounded retry can fix now
   fails through a terminal Adapter Output carrying the `proposer_usage` it
   accumulated, rather than raising it away. The durable effect cache marks
   those paid calls replayed, so a resumed Step would not have recorded them
-  either and the spend was lost for good.
+  either and the spend was lost for good. The same output also carries the
+  `search_evidence` for every evaluation the Step drove before reflection
+  failed: run cost reaches task-model rows only through a Step Result's
+  evidence refs, so a failed Step used to drop its whole task-model spend.
+- A GEPA Step that *defers* to platform row fan-out reports its spend on the
+  same terms. The `CONTINUE` Adapter Output the deferral path returns now
+  carries the `proposer_usage` and `search_evidence` accumulated before the
+  deferral, so a platform GEPA run costs what the in-process one does. On
+  resume `begin_step` clears the adapters while the durable effect cache
+  marks those calls replayed, so spend the `CONTINUE` output dropped was
+  never recorded at all.
+- GEPA reflection usage carries absent token counts through as `None` rather
+  than reading an omitted field as `0`, so a call the provider left without a
+  token breakdown becomes a `rows_missing_token_breakdown` row instead of
+  inventing a complete zero-token total. A reflection result carrying neither
+  usage, nor a price, nor a parser rejection evidences no billed call and is
+  no longer recorded -- the same rule `ProposalDraft.call_usage` applies on
+  the COPRO and MIPROv2 proposer side.
 - `usd` is reported only when every contributing call carried a
   provider-reported price, so a partial sum is never presented as a run
   total. When any call lacks a price the field is absent and the
@@ -125,7 +171,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spend re-derivable from the store. A cache hit replays the original call's
   tokens and price verbatim, so `cache_hit` is what keeps it from being
   billed a second time. `EVAL_OUTPUTS_SCHEMA_VERSION` and
-  `EVAL_EVIDENCE_SCHEMA_VERSION` are now 5.
+  `EVAL_EVIDENCE_SCHEMA_VERSION` are now 5. `cache_hit` is itself the
+  evidence that cached work was served, so a cache-hit row counts in
+  `cached_calls` even when the original response carried no usage telemetry
+  at all — a provider that omits usage should look cheap, not absent.
+- `EvalFailureEvidence` gains an optional `outputs_ref`. When
+  `RuntimeEvalEngine.evaluate` raises after the driver returned rows —
+  scoring or persistence failing after generation — those rows were already
+  paid for, so they are persisted and referenced from the failure evidence,
+  and `aggregate_run_cost` reads a failure ref exactly as it reads a success
+  ref. A failure inside `driver.run` itself leaves its rows unreachable (the
+  driver holds them in memory until it returns), so the ref is absent and
+  that spend stays unrecoverable. Persisting the partial rows is best effort
+  and never replaces the original exception.
+- `ProposerCallUsage.prompt_tokens` and `completion_tokens` are now optional.
+  A proposer response that omitted a directional count carries `None` rather
+  than a normalized `0`, and a call missing both counts toward
+  `rows_missing_token_breakdown`, so an incomplete proposer token total no
+  longer presents itself as complete.
 - Proposer-model usage is recorded uniformly on
   `OptimStepResult.proposer_usage` as `ProposerCallUsage`, reported by COPRO,
   GEPA, and MIPROv2 through `AdapterOutput.proposer_usage` rather than three
@@ -166,6 +229,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument asserts the engine is bound to the role the caller expects. Reward
   evidence is validated only on the internal role, which is the only role that
   mints it.
+
+### Known limitations
+
+- Run cost can under-report GEPA proposer spend after a crash *inside* a Step.
+  Counting a replayed reflection once relies on the original call's Step
+  Result existing. If a worker dies after `record_proposal_result` persists a
+  paid reflection but before that Step's `OptimStepResult` is stored, the
+  resumed Step loads the reflection from the durable effect cache, marks it
+  replayed, and suppresses its usage — while no Step Result carries the
+  original. A run that completes its Steps normally is unaffected.
+- Task-model spend from tool-mediated evaluations is not aggregated here.
+  `EngineToolEvaluator` stores its `EvalEvidence` refs under
+  `OptimStepResult.tool_evidence`, which `aggregate_run_cost` does not
+  traverse; that wiring lands with the Codex tool work on branch
+  `08-22-codex`.
 
 ## 0.1.5 - 2026-08-22
 

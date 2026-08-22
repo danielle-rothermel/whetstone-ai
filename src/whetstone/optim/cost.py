@@ -25,6 +25,16 @@ Third, a call is counted where it was paid for, and only once. A prompt-cache
 hit and a replayed GEPA reflection both come back carrying the original
 call's tokens and price; each is reported separately rather than billed
 again, so reuse shows up as a lower cost instead of a higher one.
+
+Known limitation. Counting a replay once relies on the original call's Step
+Result existing. If a GEPA worker dies after ``record_proposal_result``
+persists a paid reflection but before that Step's ``OptimStepResult`` is
+stored, the resumed Step loads the reflection from the durable effect cache,
+marks it replayed, and suppresses its usage -- while no Step Result carries
+the original. That reflection's spend is absent from the run report for good.
+The window is a crash between two writes of one Step, so a run that completes
+its Steps normally is unaffected; a run resumed from a mid-Step crash may
+understate proposer spend by the reflections that Step had already paid for.
 """
 
 from __future__ import annotations
@@ -82,25 +92,33 @@ class ProposerCallUsage(BaseModel):
     #: Empty only for a call whose source recorded no identity, which is then
     #: counted every time it appears.
     call_id: str = ""
-    prompt_tokens: StrictInt = 0
-    completion_tokens: StrictInt = 0
+    #: Directional token counts, absent when the provider reported no
+    #: breakdown. ``None`` is not zero: a call the provider priced without
+    #: splitting tokens by direction has unknown tokens, and normalizing that
+    #: to ``0`` would present an incomplete token total as complete. An
+    #: absent count makes the call a ``rows_missing_token_breakdown`` row.
+    prompt_tokens: StrictInt | None = None
+    completion_tokens: StrictInt | None = None
     #: Provider-reported price for this call, absent when none was reported.
     usd: float | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> ProposerCallUsage:
         for name in ("prompt_tokens", "completion_tokens"):
-            if getattr(self, name) < 0:
+            value = getattr(self, name)
+            if value is not None and value < 0:
                 raise ValueError(f"{name} must be non-negative")
         if self.usd is not None and self.usd < 0:
             raise ValueError("usd must be non-negative")
         return self
 
     def observation(self) -> UsageObservation:
+        missing = self.prompt_tokens is None and self.completion_tokens is None
         return UsageObservation(
-            input_tokens=self.prompt_tokens,
-            output_tokens=self.completion_tokens,
+            input_tokens=self.prompt_tokens or 0,
+            output_tokens=self.completion_tokens or 0,
             usd=self.usd,
+            missing_token_breakdown=missing,
         )
 
 

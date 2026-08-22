@@ -24,12 +24,19 @@ already paid for, so without both keys a replayed call would be billed again.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from whetstone.core.identity import TypedRef
-from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
+from whetstone.eval.schema_names import (
+    EVAL_EVIDENCE_SCHEMA,
+    EVAL_FAILURE_SCHEMA,
+)
+from whetstone.execution.call_support import (
+    PROVIDER_ERROR_KEY,
+    evidences_provider_response,
+)
 from whetstone.optim.cost import (
     RunCostReport,
     UsageObservation,
@@ -53,7 +60,9 @@ class EvalOutputRowUsage(BaseModel):
     spelling pinned by ``tests/test_eval_evidence_schema_golden.py``.
     """
 
-    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+    model_config = ConfigDict(
+        extra="ignore", allow_inf_nan=False, populate_by_name=True
+    )
 
     prompt_tokens: StrictInt | None = None
     completion_tokens: StrictInt | None = None
@@ -66,6 +75,30 @@ class EvalOutputRowUsage(BaseModel):
     #: not the provider reported any usage telemetry alongside it.
     failed: bool = False
     missing: bool = False
+    #: The failure body ``call_telemetry`` persists for a failed row. It
+    #: carries a rejected response exactly when the provider generated one
+    #: the classifier then turned down, which distinguishes a response-level
+    #: semantic failure from a transport failure that got nothing back.
+    provider_error: dict[str, Any] | None = Field(
+        default=None, alias=PROVIDER_ERROR_KEY
+    )
+
+    @property
+    def response_rejected(self) -> bool:
+        """The provider answered and the classifier rejected the answer."""
+        return evidences_provider_response(self.provider_error)
+
+
+#: Evidence records that can carry output rows run cost must read. A failed
+#: evaluation counts: work the provider was paid for before the failure is
+#: still spend, and the failure evidence references those rows when any
+#: survived. Excluding it would drop every already-billed call an
+#: evaluation-level failure interrupted.
+_COSTED_EVIDENCE_SCHEMAS = frozenset({EVAL_EVIDENCE_SCHEMA, EVAL_FAILURE_SCHEMA})
+
+#: Tool-mediated evaluations (``EngineToolEvaluator``) store their evidence
+#: refs under ``OptimStepResult.tool_evidence`` instead, and are aggregated by
+#: the Codex tool wiring on branch ``08-22-codex``.
 
 
 def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
@@ -73,11 +106,11 @@ def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
     refs: list[TypedRef] = []
     for resolution in result.resolved_intents:
         ref = resolution.eval_result_ref
-        if ref is not None and ref.schema_name == EVAL_EVIDENCE_SCHEMA:
+        if ref is not None and ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
             refs.append(ref)
     for evidence in result.search_evidence:
         ref = evidence.eval_result_ref
-        if ref is not None and ref.schema_name == EVAL_EVIDENCE_SCHEMA:
+        if ref is not None and ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
             refs.append(ref)
     return tuple(refs)
 
@@ -86,7 +119,12 @@ def _task_model_observations(
     store: ObjectStore,
     refs: tuple[TypedRef, ...],
 ) -> tuple[UsageObservation, ...]:
-    """Load the output rows behind each distinct evidence ref."""
+    """Load the output rows behind each distinct evidence ref.
+
+    Successful and failed evaluation evidence are read the same way: both
+    reference an outputs record when they have rows, and a failure that left
+    none simply contributes nothing.
+    """
     observations: list[UsageObservation] = []
     for ref in refs:
         evidence = store.get(ref.reference)
@@ -110,30 +148,40 @@ def _task_model_observations(
 def _row_observation(row: EvalOutputRowUsage) -> UsageObservation | None:
     """Classify one output row as billable, cached, or no call at all.
 
-    A row the prompt cache replayed carries the original call's usage
-    verbatim. It is reported as a cached call and contributes nothing
-    billable, which is what keeps a cache hit from being charged twice.
+    A row the prompt cache replayed is reported as a cached call and
+    contributes nothing billable, which is what keeps a cache hit from being
+    charged twice. ``cache_hit`` is itself the evidence that cached work was
+    served, so the row counts even when the original response carried no
+    usage telemetry at all -- a provider that omits usage should look cheap,
+    not absent.
 
-    Otherwise the row is billable when *either* the provider left usage
-    telemetry -- a token count or a provider-reported price -- or the row
-    itself succeeded. A row that is neither failed nor missing has an
-    answer from the provider, so the call happened and was paid for even
-    when no telemetry came back with it. Such a row counts as a call and as
-    an *unpriced* one, which withholds ``usd`` rather than letting a partial
-    sum present itself as a run total; ``rows_missing_token_breakdown``
-    records that its tokens are missing from the token totals.
+    Otherwise the row is billable when the provider left usage telemetry --
+    a token count or a provider-reported price -- or when the row otherwise
+    evidences that the provider answered. Two row states evidence that. A row
+    that is neither failed nor missing has an accepted generation. A *failed*
+    row whose ``provider_error`` carries a ``rejected_response`` also has a
+    generation: the provider produced it and charged for it, and only the
+    classifier rejected it, which is a response-level semantic failure rather
+    than a transport failure. Either way the call happened and was paid for
+    even when no telemetry came back with it. Such a row counts as a call and
+    as an *unpriced* one, which withholds ``usd`` rather than letting a
+    partial sum present itself as a run total;
+    ``rows_missing_token_breakdown`` records that its tokens are missing from
+    the token totals.
 
-    Only a row with no telemetry that also failed or went missing evidences
-    no provider call -- a failure before the provider answered, or a row
-    that never ran -- and is dropped.
+    Only a row with no telemetry that went missing, or failed without any
+    provider response, evidences no provider call -- a failure before the
+    provider answered, or a row that never ran -- and is dropped.
     """
     has_tokens = (
         row.prompt_tokens is not None or row.completion_tokens is not None
     )
     has_telemetry = has_tokens or row.provider_cost is not None
     if row.cache_hit:
-        return UsageObservation(cached=True) if has_telemetry else None
-    if not has_telemetry and (row.failed or row.missing):
+        return UsageObservation(cached=True)
+    if not has_telemetry and row.missing:
+        return None
+    if not has_telemetry and row.failed and not row.response_rejected:
         return None
     return UsageObservation(
         input_tokens=row.prompt_tokens or 0,

@@ -757,6 +757,7 @@ class RuntimeEvalEngine:
         rejected = self._preflight(request)
         if rejected is not None:
             return rejected
+        result: InternalEvalResult | None = None
         try:
             result = self._driver.run(
                 experiment=self._experiment,
@@ -772,10 +773,23 @@ class RuntimeEvalEngine:
             evidence_with_ref, _ = self._persist_success(request, result)
             return evidence_with_ref
         except Exception as exc:
-            return self._persist_failure(request, exc)
+            # The rows the driver did return were paid for even though
+            # scoring or persistence then failed, so they are persisted here
+            # and referenced from the failure evidence. Run cost reaches
+            # task-model rows only through evidence refs, so without this the
+            # provider work already billed for this evaluation would vanish
+            # from the run report. A failure inside ``driver.run`` itself
+            # leaves ``result`` unset and its rows unreachable -- the driver
+            # holds them in memory until it returns -- so that spend stays
+            # unrecoverable and the ref is simply absent.
+            return self._persist_failure(request, exc, result=result)
 
     def _persist_failure(
-        self, request: EvalRequest, exc: BaseException
+        self,
+        request: EvalRequest,
+        exc: BaseException,
+        *,
+        result: InternalEvalResult | None = None,
     ) -> EvalEvidenceWithRef:
         failure = EvalFailureEvidence(
             candidate=candidate_reference(request.candidate),
@@ -785,11 +799,39 @@ class RuntimeEvalEngine:
             metadata=request.metadata,
             exception_type=type(exc).__name__,
             message=str(exc) or type(exc).__name__,
+            outputs_ref=self._partial_outputs_ref(request, result),
         )
         failure_ref = self._put(
             EVAL_FAILURE_SCHEMA, failure.record_content()
         )
         return EvalEvidenceWithRef(evidence=failure, evidence_ref=failure_ref)
+
+    def _partial_outputs_ref(
+        self, request: EvalRequest, result: InternalEvalResult | None
+    ) -> TypedRef | None:
+        """Persist the rows a failed evaluation had already paid for.
+
+        Best effort by design: this runs while handling another exception, so
+        a second failure here must not replace the original one. It returns
+        ``None`` and the failure evidence simply carries no rows.
+        """
+        if result is None:
+            return None
+        try:
+            component_traces, output_rows = self._evaluation_records(
+                request, result
+            )
+            if not output_rows:
+                return None
+            traces_ref = self._put(
+                EVAL_TRACES_SCHEMA, component_traces.record_content()
+            )
+            record = self._evaluation_outputs_record(
+                request, output_rows, traces_ref=traces_ref
+            )
+            return self._put(EVAL_OUTPUTS_SCHEMA, record.record_content())
+        except Exception:
+            return None
 
     def _validate_sampling_contract(self) -> None:
         expected = self._experiment.eval_configs.eval_config_for(

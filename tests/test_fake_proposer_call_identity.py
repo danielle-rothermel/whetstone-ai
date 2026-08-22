@@ -17,6 +17,7 @@ from whetstone.core.identity import IdentityRef, typed_ref_for_record
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
+    ProposalDraft,
     ProposalRequest,
     ProposerConfig,
 )
@@ -139,3 +140,71 @@ def test_a_successful_draft_keeps_its_usage() -> None:
     usage = draft.call_usage()
     assert usage is not None
     assert usage.call_id
+
+
+def test_a_transport_failure_draft_is_not_a_billed_call() -> None:
+    # The provider transport mints the logical call id before the request
+    # leaves, so a transport failure comes back identified but with no usage
+    # and no price -- nothing was generated, so nothing was billed. Counting
+    # it would add an unpriced call and withhold the role's usd for spend
+    # that never happened.
+    draft = ProposalDraft.failure(
+        detail="provider proposer failed with TRANSPORT_ERROR",
+        request_evidence={"logical_call_id": "proposer:abc:0"},
+        usage={},
+        cost=None,
+    )
+
+    assert draft.logical_call_id
+    assert draft.call_usage() is None
+
+
+def test_a_billed_failure_draft_still_reports_its_call() -> None:
+    # A blank generation the provider charged for: identified, billed, failed.
+    draft = ProposalDraft.failure(
+        detail="provider proposer failed with BLANK_PROVIDER_GENERATION",
+        request_evidence={"logical_call_id": "proposer:abc:0"},
+        usage={"prompt_tokens": 7},
+        cost=None,
+    )
+
+    usage = draft.call_usage()
+    assert usage is not None
+    assert usage.prompt_tokens == 7
+    assert usage.usd is None
+
+
+def test_a_successful_draft_without_telemetry_is_an_unpriced_call() -> None:
+    # A template came back, so the model ran. The Codex CLI transport reports
+    # no tokens and no price, and that must read as an identified unpriced
+    # call with an unknown token breakdown -- not as no call at all.
+    draft = ProposalDraft(
+        template="A proposal.",
+        request_evidence={"logical_call_id": "codex-proposer:abc:0"},
+        usage={},
+        cost=None,
+    )
+
+    usage = draft.call_usage()
+    assert usage is not None
+    assert usage.call_id == "codex-proposer:abc:0"
+    assert usage.prompt_tokens is None
+    assert usage.completion_tokens is None
+    assert usage.usd is None
+    assert usage.observation().missing_token_breakdown is True
+
+
+def test_a_missing_directional_count_stays_absent() -> None:
+    # Half a breakdown is not a complete one: a directional count the
+    # provider omitted stays None rather than reading as zero.
+    draft = ProposalDraft(
+        template="A proposal.",
+        request_evidence={"logical_call_id": "proposer:abc:0"},
+        usage={"prompt_tokens": 11},
+        cost=0.1,
+    )
+
+    usage = draft.call_usage()
+    assert usage is not None
+    assert usage.prompt_tokens == 11
+    assert usage.completion_tokens is None

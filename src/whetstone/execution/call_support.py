@@ -13,8 +13,11 @@ if TYPE_CHECKING:
 
 __all__ = [
     "GUARD_MARGIN_SECONDS",
+    "PROVIDER_ERROR_KEY",
+    "REJECTED_RESPONSE_KEY",
     "CallTelemetry",
     "call_telemetry",
+    "evidences_provider_response",
     "failure_code_of",
     "guard_deadline_seconds",
     "is_rate_limit_failure",
@@ -22,6 +25,29 @@ __all__ = [
 ]
 
 GUARD_MARGIN_SECONDS = 15.0
+
+#: Persisted key the failure body from :func:`call_telemetry` is stored
+#: under, on an ``EvalOutputRow`` and on a failed ``ProposalDraft``'s
+#: response evidence alike.
+PROVIDER_ERROR_KEY = "provider_error"
+
+#: Key inside that body carrying the generation the classifier rejected. It
+#: is present exactly when the provider produced -- and therefore billed for
+#: -- a response, which is what separates a response-level semantic failure
+#: from a transport failure that got nothing back.
+REJECTED_RESPONSE_KEY = "rejected_response"
+
+
+def evidences_provider_response(provider_error: object) -> bool:
+    """Whether a persisted failure body shows the provider answered.
+
+    Both cost roles ask this one question of the same persisted body, so a
+    rejected response that carried no usage telemetry is counted as the
+    billed provider call it was rather than dropped as a transport failure.
+    """
+    if not isinstance(provider_error, dict):
+        return False
+    return provider_error.get(REJECTED_RESPONSE_KEY) is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,26 +81,35 @@ def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
     failed for scoring. Only an attempt that never got a response back (a
     transport failure) contributes nothing, because nothing was billed.
 
+    Aggregation is all-or-nothing per field, because a partial sum presented
+    as a complete total is worse than an absent one. ``provider_cost`` is
+    reported only when *every* billed attempt carried a price; if any billed
+    attempt was unpriced the field is ``None`` and the row counts as unpriced,
+    which is the same honesty rule ``RoleCost.usd`` obeys one level up.
+    Tokens follow the same rule: a directional count is reported only when
+    every billed attempt reported it, so a row whose retry lacked a token
+    breakdown reports ``None`` -- and is counted in
+    ``rows_missing_token_breakdown`` -- rather than publishing one attempt's
+    tokens as the call's total.
+
     ``finish_reason`` describes the outcome the caller acts on, so it comes
     from the accepted generation alone and stays absent for a failed call.
     """
     if result is None:
         return CallTelemetry()
     responses = tuple(_billed_responses(result))
-    prompt_tokens, completion_tokens = None, None
-    total_tokens, reasoning_tokens = None, None
+    prompt_tokens = _sum_across(responses, "prompt_tokens")
+    completion_tokens = _sum_across(responses, "completion_tokens")
+    total_tokens = _sum_across(responses, "total_tokens")
+    reasoning_tokens = _sum_across(responses, "reasoning_tokens")
     provider_cost: float | None = None
-    for response in responses:
-        if response.cost is not None:
-            provider_cost = (provider_cost or 0.0) + response.cost.total_cost
-        usage = response.usage
-        if usage is None:
-            continue
-        prompt_tokens = _add(prompt_tokens, usage.prompt_tokens)
-        completion_tokens = _add(completion_tokens, usage.completion_tokens)
-        total_tokens = _add(total_tokens, usage.total_tokens)
-        reasoning_tokens = _add(
-            reasoning_tokens, getattr(usage, "reasoning_tokens", None)
+    if responses and all(
+        response.cost is not None for response in responses
+    ):
+        provider_cost = sum(
+            response.cost.total_cost
+            for response in responses
+            if response.cost is not None
         )
     accepted = result.provider_generation
     return CallTelemetry(
@@ -91,11 +126,25 @@ def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
     )
 
 
-def _add(running: int | None, value: int | None) -> int | None:
-    """Sum token counts, keeping ``None`` for "no attempt reported this"."""
-    if value is None:
-        return running
-    return value if running is None else running + value
+def _sum_across(
+    responses: tuple[ProviderTransportResponse, ...], field: str
+) -> int | None:
+    """Sum one token field, or ``None`` when any billed attempt omitted it.
+
+    Completeness is per field and per attempt: one attempt without the count
+    makes the call's total unknowable, so the field is withheld rather than
+    reported as the partial sum of the attempts that did have it.
+    """
+    if not responses:
+        return None
+    values: list[int] = []
+    for response in responses:
+        usage = response.usage
+        value = None if usage is None else getattr(usage, field, None)
+        if value is None:
+            return None
+        values.append(int(value))
+    return sum(values)
 
 
 def _billed_responses(
@@ -133,7 +182,7 @@ def _provider_error_of(
             mode="json"
         )
     if failure.rejected_response is not None:
-        body["rejected_response"] = failure.rejected_response.model_dump(
+        body[REJECTED_RESPONSE_KEY] = failure.rejected_response.model_dump(
             mode="json"
         )
     return body

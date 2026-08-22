@@ -469,6 +469,14 @@ class EvalFailureEvidence(BaseModel):
     )
     exception_type: StrictStr
     message: StrictStr
+    #: The output rows this evaluation had already produced when it failed,
+    #: when any survived the failure. The rows were paid for, so run cost
+    #: reads them through this ref exactly as it reads a successful
+    #: evaluation's; without it a failure after provider work began would
+    #: drop that spend from the run report entirely. Absent when the failure
+    #: left no rows reachable -- a failure inside the driver, which holds its
+    #: rows in memory until it returns.
+    outputs_ref: TypedRef | None = None
 
     def record_content(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

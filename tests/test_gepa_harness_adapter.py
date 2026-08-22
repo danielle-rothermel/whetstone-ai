@@ -7,7 +7,12 @@ import pytest
 from dr_store.sync import open_sqlite
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.experiment.candidate import Candidate
+from whetstone.coordination.eval_service import EvalPlatformDeferred
+from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.adapters import AdapterOutput
+from whetstone.optim.contracts import IntentOutcome, SearchEvidence
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.core.identity import ImmutableJsonObject, TypedRef
 from whetstone.optim.contracts import (
     BudgetState,
@@ -194,6 +199,89 @@ def test_gepa_harness_adapter_two_iterations(tmp_path) -> None:
         assert output1.proposed_status is StepStatus.COMPLETE
         assert len(output1.accepted_candidates) == 1
         assert run_iteration.call_count == 2
+
+
+def test_a_deferred_gepa_step_carries_the_spend_it_already_paid(
+    tmp_path,
+) -> None:
+    """Deferral continues the Step, but the Step already spent money.
+
+    Reflections and evaluations driven before the platform deferral were
+    billed. Run cost reaches proposer and task-model rows only through a Step
+    Result's ``proposer_usage`` and ``search_evidence``, and on resume
+    ``begin_step`` clears the adapters while the durable effect cache marks
+    those calls replayed -- so anything the CONTINUE output drops is never
+    recorded at all. The deferral output therefore reports spend on the same
+    terms the reflection-failure and success paths do.
+    """
+    control = _toy_gepa_control(
+        max_metric_calls=2,
+        sqlite_path=str(tmp_path / "gepa-deferred.sqlite"),
+    )
+    experiment = build_toy_experiment(num_seeds=1)
+    run = OptimRun(
+        run_id="gepa-run",
+        optimizer_config=control.reference(),
+        adapter_key=GEPA_ADAPTER_KEY,
+        mode=StepMode.PROPOSAL_ONLY,
+        terminal_output_contract=OutputContract(returned_proposal_count=1),
+        template_render_contract=toy_template_render_contract(),
+        mutation_field=TOY_MUTATION_FIELD,
+        reward_policy=experiment.reward_policy,
+    )
+    run_ref = optimization_run_reference(run)
+    paid_usage = (
+        ProposerCallUsage(
+            call_id="a" * 64, prompt_tokens=120, completion_tokens=40, usd=0.03
+        ),
+    )
+    paid_evidence = (
+        SearchEvidence(
+            eval_request_id="eval-request-1",
+            optim_run_id="gepa-run",
+            optim_step_index=0,
+            candidate=candidate_reference(experiment.initial_candidate),
+            outcome=IntentOutcome.COMPLETED,
+            eval_result_ref=TypedRef(
+                schema_name=EVAL_EVIDENCE_SCHEMA,
+                content_hash="b" * 64,
+            ),
+        ),
+    )
+    factory = MagicMock()
+    factory.create.return_value = MagicMock()
+    factory.proposer_usage.return_value = paid_usage
+    factory.search_evidence.return_value = paid_evidence
+    factory.skipped_mutations.return_value = ()
+    adapter = GepaHarnessAdapter(
+        control=control,
+        seed_candidate={"generate": "seed"},
+        trainset=(),
+        valset=None,
+        adapter_factory=GepaHarnessAdapterFactory(factory=factory),
+    )
+    request = OptimStepRequest(
+        run=run_ref,
+        step_id="gepa-run:gepa:0",
+        kind=StepKind.PROPOSAL,
+        step_index=0,
+        candidates=(experiment.initial_candidate,),
+        hyperparameters=ImmutableJsonObject(
+            control.step_hyperparameters(iteration=0)
+        ),
+        budget=BudgetState(remaining=ImmutableJsonObject({"metric_calls": 2})),
+        step_output_contract=OutputContract(returned_proposal_count=0),
+    )
+
+    with patch(
+        "whetstone.optim.gepa.harness_adapter.run_one_gepa_iteration",
+        side_effect=EvalPlatformDeferred("rows fanned out"),
+    ):
+        output = adapter.invoke(request, ())
+
+    assert output.proposed_status is StepStatus.CONTINUE
+    assert output.proposer_usage == paid_usage
+    assert output.search_evidence == paid_evidence
 
 
 def test_gepa_harness_adapter_terminal_assembles_all_components(tmp_path) -> None:

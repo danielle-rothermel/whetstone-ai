@@ -20,6 +20,11 @@ from whetstone.core.identity import (
     require_full_hash,
     typed_ref_for_record,
 )
+from whetstone.execution.call_support import (
+    PROVIDER_ERROR_KEY,
+    call_telemetry,
+    evidences_provider_response,
+)
 from whetstone.experiment.candidate import CandidateRef
 from whetstone.optim.cost import ProposerCallUsage
 from whetstone.provider.driver import (
@@ -45,6 +50,8 @@ if TYPE_CHECKING:
         PromptMessage,
         ProviderCallConfig,
     )
+
+    from whetstone.provider.attempt import ProviderCallResult
 
 __all__ = [
     "PROMPT_ADAPTER_SCHEMA",
@@ -194,10 +201,16 @@ def prompt_adapter_identity_hash(adapter: PlainPromptAdapter) -> str:
     )
 
 
-def _usage_tokens(usage: Mapping[str, Any], key: str) -> int:
+def _usage_tokens(usage: Mapping[str, Any], key: str) -> int | None:
+    """One directional token count, ``None`` when the provider omitted it.
+
+    Absence is preserved rather than normalized to zero, so a call the
+    provider priced without a token breakdown reports unknown tokens instead
+    of an incomplete total that reads as complete.
+    """
     value = usage.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
-        return 0
+        return None
     return max(0, value)
 
 
@@ -235,17 +248,36 @@ class ProposalDraft(BaseModel):
     def call_usage(self) -> ProposerCallUsage | None:
         """Project this draft's provider usage onto the run cost contract.
 
-        ``None`` when this draft made no provider call, which run cost then
-        records as nothing at all. A draft only reaches a provider through a
-        ``logical_call_id``, so a draft without one -- a batch slot the
-        proposer never filled -- was never billed and must not appear as a
-        priced zero-dollar call inflating ``calls`` or completing a ``usd``
-        total. A draft that called and *failed* still has its id and still
-        reports its usage: it was billed like any other call.
+        ``None`` when this draft was never billed, which run cost then records
+        as nothing at all. Two things have to be true for a draft to count.
+
+        It must carry a ``logical_call_id``: a batch slot the proposer never
+        filled has no call identity and must not appear as a zero-dollar call
+        inflating ``calls`` or completing a ``usd`` total.
+
+        It must also evidence work the provider actually did. A *failed*
+        draft carrying neither usage, nor a price, nor a rejected response is
+        a transport failure: the logical call id was minted before the
+        request left, and nothing came back, so nothing was billed. Counting
+        it would add an unpriced call and withhold the role's ``usd`` for
+        spend that never happened.
+
+        A failed draft that carries usage, a price, or a rejected response --
+        a blank or malformed generation the provider produced and charged
+        for -- is counted like any other call. The rejected response is what
+        makes a response-level semantic failure legible when the provider
+        reported no telemetry at all: it is the same signal, from the same
+        owner, that lets a rejected task-model row count. Every successful
+        draft counts too: a template came back, so the model ran, whether or
+        not the transport reported any telemetry alongside it. A counted
+        draft without telemetry (the Codex CLI transport reports none) is an
+        identified, unpriced call with an unknown token breakdown.
 
         ``usage`` is a dr-providers ``TokenUsage`` dump, so its keys are the
-        provider contract rather than local spelling. A field the provider
-        omitted counts as zero tokens; ``cost`` stays ``None`` when the
+        provider contract rather than local spelling. A directional count the
+        provider omitted stays absent rather than reading as zero, so the call
+        lands in ``rows_missing_token_breakdown`` instead of presenting an
+        incomplete token total as complete. ``cost`` stays ``None`` when the
         provider reported no price, which keeps the run total honest about
         what it does not know.
 
@@ -258,10 +290,23 @@ class ProposalDraft(BaseModel):
         if not call_id:
             return None
         usage = self.usage.to_json()
+        prompt_tokens = _usage_tokens(usage, "prompt_tokens")
+        completion_tokens = _usage_tokens(usage, "completion_tokens")
+        if (
+            self.failed
+            and prompt_tokens is None
+            and completion_tokens is None
+            and self.cost is None
+            and not self.response_rejected
+        ):
+            # A failure with no usage, no price, and no rejected response:
+            # nothing came back from the provider, so there is no billed
+            # call to report.
+            return None
         return ProposerCallUsage(
             call_id=call_id,
-            prompt_tokens=_usage_tokens(usage, "prompt_tokens"),
-            completion_tokens=_usage_tokens(usage, "completion_tokens"),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
             usd=self.cost,
         )
 
@@ -270,6 +315,18 @@ class ProposalDraft(BaseModel):
         """This draft's provider call identity, empty when unrecorded."""
         value = self.request_evidence.to_json().get("logical_call_id")
         return value if isinstance(value, str) else ""
+
+    @property
+    def response_rejected(self) -> bool:
+        """The provider answered and the classifier rejected the answer.
+
+        Reads the failure body the transport persisted on this draft's
+        response evidence, which is the same body an ``EvalOutputRow``
+        carries, so both cost roles decide "did the provider answer?" from
+        one signal.
+        """
+        error = self.response_evidence.to_json().get(PROVIDER_ERROR_KEY)
+        return evidences_provider_response(error)
 
     @classmethod
     def failure(
@@ -657,18 +714,36 @@ class ProviderProposerTransport:
             "provider_call_result": result.to_stable_dict(),
         }
 
+        # Accounting spans every attempt the provider was paid for, not just
+        # the terminal one. When the execution policy retries a rejected
+        # response, that rejected generation was produced and billed, and
+        # ``call_telemetry`` sums it in under the same partial-price rule the
+        # task-model rows obey: an unpriced billed attempt withholds the
+        # price entirely, and a billed attempt without a token breakdown
+        # withholds the tokens.
+        usage, cost, provider_error = _billed_accounting(result)
+
         if result.provider_generation is None:
             failure = result.semantic_failure
             assert failure is not None
-            response = failure.rejected_response
-            usage, cost = _response_accounting(response)
             return ProposalDraft.failure(
                 detail=(
                     "provider proposer failed with "
                     f"{failure.failure_class.value}: {failure.message}"
                 ),
                 request_evidence=request_evidence,
-                response_evidence=response_evidence,
+                response_evidence={
+                    **response_evidence,
+                    # The same failure body the task-model rows persist, and
+                    # from the same owner, so both roles decide "did the
+                    # provider answer?" on one signal: ``rejected_response``
+                    # is present exactly when a generation came back and only
+                    # the classifier turned it down. Without it a rejected
+                    # response the provider reported no usage for would be
+                    # indistinguishable from a transport failure and dropped
+                    # from run cost.
+                    PROVIDER_ERROR_KEY: provider_error,
+                },
                 usage=usage,
                 cost=cost,
             )
@@ -686,22 +761,41 @@ class ProviderProposerTransport:
                 "model": provider_result.model,
                 "finish_reason": provider_result.finish_reason,
             },
-            usage=provider_result.usage_metadata,
-            cost=provider_result.provider_cost,
+            usage=usage,
+            cost=cost,
         )
 
 
-def _response_accounting(response: Any) -> tuple[dict[str, Any], float | None]:
+def _billed_accounting(
+    result: ProviderCallResult,
+) -> tuple[dict[str, Any], float | None, dict[str, Any] | None]:
+    """One logical proposer call's accounting, over every billed attempt.
 
-    if response is None:
-        return {}, None
-    usage = (
-        response.usage.model_dump(mode="json", exclude_none=True)
-        if response.usage is not None
-        else {}
+    Delegates to :func:`call_telemetry`, the single owner of what a logical
+    call was billed for, so the proposer side and the task-model side account
+    for retries identically. A field the aggregate could not complete stays
+    out of the returned usage map rather than appearing as a partial total.
+
+    Returns the usage map, the summed price, and the failure body describing
+    what came back -- the third of which is what lets a failed draft say
+    whether the provider answered at all.
+    """
+    telemetry = call_telemetry(result)
+    usage: dict[str, Any] = {}
+    for key, value in (
+        ("prompt_tokens", telemetry.prompt_tokens),
+        ("completion_tokens", telemetry.completion_tokens),
+        ("total_tokens", telemetry.total_tokens),
+        ("reasoning_tokens", telemetry.reasoning_tokens),
+    ):
+        if value is not None:
+            usage[key] = value
+    provider_error = telemetry.provider_error
+    return (
+        usage,
+        telemetry.provider_cost,
+        None if provider_error is None else dict(provider_error),
     )
-    cost = response.cost.total_cost if response.cost is not None else None
-    return usage, cost
 
 
 class FakeProposerTransport:

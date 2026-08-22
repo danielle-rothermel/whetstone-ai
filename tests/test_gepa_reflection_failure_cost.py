@@ -14,7 +14,15 @@ from __future__ import annotations
 
 import pytest
 
-from whetstone.optim.contracts import StepStatus
+from whetstone.core.identity import TypedRef
+from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
+from whetstone.experiment.candidate import candidate_reference
+from whetstone.optim.contracts import (
+    IntentOutcome,
+    SearchEvidence,
+    StepStatus,
+)
+from whetstone.testing.toy.experiment import build_toy_experiment
 from whetstone.optim.gepa.contracts import (
     GepaProposalEffectRequest,
     GepaProposalEffectResult,
@@ -247,6 +255,82 @@ def test_the_paid_reflections_are_recorded_before_the_failure_raises() -> None:
     assert all(item.call_id for item in usage)
 
 
+class _TelemetryFreeBroker(ScriptedProposalBroker):
+    """A provider that reports no usage and no price on either outcome.
+
+    Attempt one is a response the parser rejected -- the provider generated
+    it and charged for it. Attempt two is a transport failure that got
+    nothing back. Neither carries telemetry, so only the outcome tells the
+    two apart.
+    """
+
+    def __init__(self, services, bodies) -> None:
+        super().__init__(services, bodies)
+        self.calls = 0
+
+    def propose(
+        self, request: GepaProposalEffectRequest
+    ) -> tuple[GepaProposalEffectResult, bool]:
+        self.prompts.append(request.rendered_prompt.text)
+        self.calls += 1
+        if self.calls == 1:
+            return (
+                GepaProposalEffectResult(
+                    request_hash=request.identity_hash(),
+                    raw_response=BAD,
+                    failed=True,
+                    rejected_by_parser=True,
+                    failure_detail="omitted required placeholders",
+                ),
+                False,
+            )
+        return (
+            GepaProposalEffectResult(
+                request_hash=request.identity_hash(),
+                failed=True,
+                failure_detail="provider transport exploded",
+            ),
+            False,
+        )
+
+
+def test_a_telemetry_free_reflection_reports_unknown_tokens_not_zero() -> None:
+    # The provider omitted every token field. Reading those as 0 would invent
+    # a complete zero-token total; carrying None through instead makes the
+    # call a rows_missing_token_breakdown row, so the run says it does not
+    # know rather than reporting a total that is wrong.
+    adapter, _ = _adapter([BAD])
+    adapter._broker = _TelemetryFreeBroker(_services(), [])  # noqa: SLF001
+
+    with pytest.raises(GepaReflectionFailedError):
+        adapter.propose_new_texts({COMPONENT: SEED}, _dataset(), [COMPONENT])
+
+    usage = adapter.proposer_usage
+    assert len(usage) == 1
+    assert usage[0].prompt_tokens is None
+    assert usage[0].completion_tokens is None
+    assert usage[0].usd is None
+    assert usage[0].observation().missing_token_breakdown
+
+
+def test_a_reflection_that_got_nothing_back_is_not_recorded_as_a_call(
+) -> None:
+    # The second attempt is a transport failure carrying neither usage nor a
+    # price: nothing came back, so nothing was billed. Recording it would add
+    # an unpriced proposer call for spend that never happened and withhold
+    # the role's usd on its account.
+    adapter, _ = _adapter([BAD])
+    broker = _TelemetryFreeBroker(_services(), [])
+    adapter._broker = broker  # noqa: SLF001
+
+    with pytest.raises(GepaReflectionFailedError):
+        adapter.propose_new_texts({COMPONENT: SEED}, _dataset(), [COMPONENT])
+
+    # Two calls were driven; only the one that got a response is recorded.
+    assert broker.calls == 2
+    assert len(adapter.proposer_usage) == 1
+
+
 def test_a_non_parser_failure_raises_the_typed_reflection_error() -> None:
     # Typed, not a bare RuntimeError: the Step boundary has to tell this
     # failure apart from a genuine programming error it must not swallow.
@@ -254,6 +338,23 @@ def test_a_non_parser_failure_raises_the_typed_reflection_error() -> None:
 
     with pytest.raises(GepaReflectionFailedError):
         adapter.propose_new_texts({COMPONENT: SEED}, _dataset(), [COMPONENT])
+
+
+def _search_evidence(eval_request_id: str) -> SearchEvidence:
+    """Evidence for one already-paid evaluation, as the factory records it."""
+    return SearchEvidence(
+        eval_request_id=eval_request_id,
+        optim_run_id="run-1",
+        optim_step_index=3,
+        candidate=candidate_reference(
+            build_toy_experiment(num_seeds=1).initial_candidate
+        ),
+        outcome=IntentOutcome.COMPLETED,
+        eval_result_ref=TypedRef(
+            schema_name=EVAL_EVIDENCE_SCHEMA,
+            content_hash="b" * 64,
+        ),
+    )
 
 
 def test_the_step_boundary_turns_the_failure_into_a_paid_terminal_output(
@@ -266,6 +367,11 @@ def test_the_step_boundary_turns_the_failure_into_a_paid_terminal_output(
         adapter.propose_new_texts({COMPONENT: SEED}, _dataset(), [COMPONENT])
     recorded = adapter.proposer_usage
 
+    # Evaluations this Step already drove and paid for, before reflection
+    # failed. Run cost reaches task-model rows only through a Step Result's
+    # evidence refs, so a terminal output that drops these loses their spend.
+    paid_evidence = (_search_evidence("eval-request-1"),)
+
     class _Factory:
         def proposer_usage(self):
             return recorded
@@ -273,12 +379,22 @@ def test_the_step_boundary_turns_the_failure_into_a_paid_terminal_output(
         def skipped_mutations(self):
             return ()
 
+        def search_evidence(self, *, run_id, step_index):
+            assert run_id == "run-1"
+            assert step_index == 3
+            return paid_evidence
+
     class _Boundary:
         _adapter_factory = _Factory()
+
+    class _Request:
+        run_id = "run-1"
+        step_index = 3
 
     output = GepaHarnessAdapter._reflection_failure_output(
         _Boundary(),
         GepaReflectionFailedError("provider transport exploded"),
+        request=_Request(),
     )
 
     assert output.proposed_status is StepStatus.FAILED
@@ -288,3 +404,5 @@ def test_the_step_boundary_turns_the_failure_into_a_paid_terminal_output(
     assert output.proposer_usage == recorded
     assert sum(item.prompt_tokens for item in output.proposer_usage) == 238
     assert output.accepted_candidates == ()
+    # The task-model spend of the failed Step survives into the Step Result.
+    assert output.search_evidence == paid_evidence

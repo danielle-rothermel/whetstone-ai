@@ -334,6 +334,16 @@ class CodexCliProposerTransport:
                 request_evidence={
                     **request_evidence,
                     "draft_index": index,
+                    # A Codex subprocess invocation is a proposer-model call
+                    # like any other, so it carries a logical call identity
+                    # even though the CLI reports no tokens and no price.
+                    # Without one, run cost would report zero proposer calls
+                    # for an entire COPRO-with-Codex run. Same shape and same
+                    # inputs as the provider transport's, so the identity is
+                    # stable across a re-drive and run cost de-duplicates it.
+                    "logical_call_id": self._logical_call_id(
+                        config=config, request=request, slot=index
+                    ),
                 },
                 response_evidence={
                     **process_evidence,
@@ -343,6 +353,21 @@ class CodexCliProposerTransport:
                 cost=None,
             )
             for index, body in enumerate(artifact.bodies)
+        )
+
+    def _logical_call_id(
+        self,
+        *,
+        config: CodexCliProposerConfig,
+        request: ProposalRequest,
+        slot: int,
+    ) -> str:
+        """This Codex invocation's stable provider call identity."""
+        return (
+            f"codex-proposer:{config.identity_hash()}:"
+            f"{self.execution_policy_hash}:"
+            f"{self.prompt_adapter_identity_hash}:"
+            f"{request.identity_hash()}:{slot}"
         )
 
 
