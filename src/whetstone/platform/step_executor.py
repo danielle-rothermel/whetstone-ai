@@ -670,6 +670,7 @@ def execute_optim_step_sync(
             prior_results=prior_results,
             control=control,
             mutation_field=str(bound.record.mutation_field),
+            extra_pools=extra_pools,
         )
 
     result, result_ref = runtime.harness.run_step(

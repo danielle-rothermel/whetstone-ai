@@ -58,6 +58,7 @@ class StepRequestBuilder:
         prior_results: tuple[OptimStepResult, ...],
         control: CoproControl | GepaControl | Miprov2Control,
         mutation_field: str,
+        extra_pools: dict[str, Any] | None = None,
     ) -> OptimStepRequest:
         if prior_ref != step_result_reference(prior).record_ref:
             raise ValueError("prior step result ref is not exact")
@@ -70,6 +71,7 @@ class StepRequestBuilder:
             prior_results=prior_results,
             control=control,
             mutation_field=mutation_field,
+            extra_pools=extra_pools,
         )
 
     def validate_copro_history(self, request: OptimStepRequest) -> None:

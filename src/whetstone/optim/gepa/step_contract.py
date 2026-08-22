@@ -137,6 +137,7 @@ class GepaStepContractProvider:
         prior_results: tuple[OptimStepResult, ...],
         control: GepaControl,
         mutation_field: str,
+        extra_pools: dict[str, Any] | None,
     ) -> OptimStepRequest:
         del prior_results, mutation_field
         from whetstone.optim.gepa.control import GepaControl
@@ -145,6 +146,9 @@ class GepaStepContractProvider:
             raise TypeError("GEPA continuation requires GepaControl")
         step_index = prior.step_index + 1
         run = prior.request.record.run
+        pools = _gepa_prior_state(store, prior)
+        if extra_pools:
+            pools.update(extra_pools)
         return OptimStepRequest(
             run=run,
             step_id=f"{prior.run_id}:gepa:{step_index}",
@@ -155,7 +159,7 @@ class GepaStepContractProvider:
             prior_state_ref=prior.state_ref,
             prior_history_ref=prior.history_ref,
             candidates=(prior.request.record.candidates[0],),
-            pools=ImmutableJsonObject(_gepa_prior_state(store, prior)),
+            pools=ImmutableJsonObject(pools),
             hyperparameters=ImmutableJsonObject(
                 control.step_hyperparameters(iteration=step_index)
             ),

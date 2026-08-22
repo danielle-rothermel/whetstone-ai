@@ -147,6 +147,19 @@ def test_persisted_build_next_matches_in_process_continuation_pools(
         == in_process_pools[GEPA_SKIPPED_MUTATIONS_KEY]
     )
 
+    resumed = builder.build_next(
+        prior=first,
+        prior_ref=first_ref,
+        prior_results=(first,),
+        control=control,
+        mutation_field=TOY_MUTATION_FIELD,
+        extra_pools={"platform_stage_index": 4},
+    )
+    resumed_pools = dict(resumed.pools)
+    assert resumed_pools[GEPA_STATE_KEY] == in_process_pools[GEPA_STATE_KEY]
+    assert resumed_pools["platform_stage_index"] == 4
+    assert dict(in_process.pools) != resumed_pools
+
     authority = adapter._adapter_factory._factory._evaluation_authority
     prefix_hits = len(first.search_evidence)
     second, _ = runtime.harness.run_step(reconstructed)
