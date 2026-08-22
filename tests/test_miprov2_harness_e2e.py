@@ -38,6 +38,7 @@ from whetstone.optim.miprov2.adapter import (
 )
 from whetstone.optim.miprov2.control import Miprov2DemoMode
 from whetstone.optim.miprov2.runtime import Miprov2State
+from whetstone.optim.miprov2.study import select_promotion
 from whetstone.testing.toy.miprov2 import build_toy_miprov2_control
 
 BOOTSTRAP_PURPOSE = "miprov2_bootstrap"
@@ -357,3 +358,137 @@ def test_a_step_labels_itself_by_the_phase_it_ran(tmp_path) -> None:
                 for intent in run.results[index].resolved_intents
             }
             assert purposes == {BOOTSTRAP_PURPOSE}
+
+
+def _minibatched_run(store, *, run_id: str, num_candidates: int) -> _Run:
+    """Drive a minibatched fewshot run at a given candidate count."""
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    control = build_toy_miprov2_control(
+        engine=engine,
+        demo_mode=Miprov2DemoMode.FEWSHOT,
+        num_candidates=num_candidates,
+        num_trials=2,
+        minibatch=True,
+    )
+    adapter = build_miprov2_adapter(
+        store=store, control=control, engine=engine
+    )
+    runtime = register_toy_runtime(
+        store=store,
+        engine=engine,
+        copro_control=build_toy_copro_control(engine=engine),
+        extra_adapters={MIPROV2_ADAPTER_KEY: adapter},
+    )
+    prepare_toy_miprov2_run(
+        runtime, run_id=run_id, control=control, engine=engine
+    )
+    terminal_ref = runtime.controller.drive(
+        RunRequest(
+            controller_identity_hash=runtime.controller.runtime_hash,
+            run_id=run_id,
+            control_identity_hash=control.identity_hash(),
+        )
+    )
+    return _Run(
+        store=store,
+        runtime=runtime,
+        control=control,
+        terminal_ref=terminal_ref,
+        run_id=run_id,
+    )
+
+
+def test_two_candidates_with_minibatching_still_terminalizes(
+    tmp_path,
+) -> None:
+    """A two-candidate minibatched run promotes instead of dying.
+
+    With ``num_candidates == 2`` and minibatching on, consecutive
+    full-eval steps can exhaust the observed combinations: every
+    combination the sampler has proposed so far has already been
+    promoted. DSPy's ``get_program_with_highest_avg_score`` falls back to
+    the last-ranked combination in exactly this state, so the run keeps
+    going. This pins that the fall-back reaches a terminal result rather
+    than raising "No valid program found in param_score_dict" inside the
+    durable run boundary.
+    """
+
+    with open_sqlite(str(tmp_path / "two-candidates.sqlite")) as store:
+        run = _minibatched_run(
+            store, run_id="two-candidate-minibatch", num_candidates=2
+        )
+
+        assert run.terminal_ref.schema_name == OPTIM_RESULT_SCHEMA
+        assert run.results[-1].status is StepStatus.COMPLETE
+        assert run.results[-1].request.record.kind_label == MIPROV2_COMPLETE
+        # The exhausted step still promoted: a repeated promotion is a
+        # real full evaluation, not a skipped one.
+        transcript = run.final_state.study_transcript
+        promotions = [
+            sample.promotion
+            for sample in transcript.samples
+            if sample.promotion is not None
+        ]
+        assert promotions, "a minibatched run must promote at least once"
+
+
+def test_exhausted_promotion_falls_back_to_the_last_ranked_combination(
+    tmp_path,
+) -> None:
+    """``select_promotion`` mirrors DSPy when every combination is spent.
+
+    Built from a real transcript so the observations carry real
+    identities. Marking every observed combination as promoted is the
+    state that used to raise; DSPy returns the last-ranked (lowest
+    mean) combination instead, and so must this.
+    """
+
+    with open_sqlite(str(tmp_path / "fallback.sqlite")) as store:
+        run = _minibatched_run(
+            store, run_id="fallback-run", num_candidates=3
+        )
+        samples = run.final_state.study_transcript.samples
+        promoted = [
+            sample for sample in samples if sample.promotion is not None
+        ]
+        assert promoted, "need a promoted sample to build the spent state"
+
+        # Every combination present is one that was already promoted.
+        spent = tuple(
+            sample.model_copy(
+                update={
+                    "promotion": promoted[0].promotion.model_copy(
+                        update={
+                            "candidate_combination_identity_hash": (
+                                sample.candidate_combination_identity_hash
+                            )
+                        }
+                    )
+                }
+            )
+            for sample in samples
+        )
+
+        # Used to raise; now returns the last-ranked combination.
+        selected = select_promotion(spent)
+
+        means: dict[str, list[float]] = {}
+        for sample in spent:
+            means.setdefault(
+                sample.candidate_combination_identity_hash, []
+            ).append(sample.score)
+        ranked = sorted(
+            means,
+            key=lambda key: sum(means[key]) / len(means[key]),
+            reverse=True,
+        )
+        assert selected.candidate_combination_identity_hash == ranked[-1]
+        # It is a combination that was genuinely observed, not invented,
+        # and it carries that combination's real observed mean.
+        assert selected.candidate_combination_identity_hash in means
+        observed = means[selected.candidate_combination_identity_hash]
+        assert selected.minibatch_mean == sum(observed) / len(observed)
+        assert selected.minibatch_mean == min(
+            sum(v) / len(v) for v in means.values()
+        )

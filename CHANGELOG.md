@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- MIPROv2 no longer aborts a durable run with `ValueError: No valid program
+  found in param_score_dict` when minibatching is on and every observed
+  parameter combination has already been promoted — reachable in practice at
+  `num_candidates == 2`, where consecutive full-eval steps exhaust the
+  combinations the sampler has proposed. `select_promotion` now falls back to
+  the last-ranked combination, matching DSPy's
+  `get_program_with_highest_avg_score`, which returns the last-ranked entry in
+  the same state instead of failing.
+
 ## 0.1.8 - 2026-08-22
 
 ### Added
