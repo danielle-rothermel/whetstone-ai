@@ -9,9 +9,19 @@ A ``TOOL_USING`` Step Result carries Tool Evidence, never intent or
 search evidence -- the two are mutually exclusive by contract. The
 Issued Tool Call ledger produces one Tool Evidence entry per reported
 call, and the adapter reconciles that count against the durable number
-of calls this run actually admitted: a shortfall is a terminal failure,
+of calls this run actually admitted. A shortfall is a terminal failure,
 so a Step never completes with paid evaluations invisible to the ledger
-and undebited from the ``tool_calls`` budget.
+and undebited from the ``tool_calls`` budget -- and before it fails, the
+adapter re-issues the durable completed entries the agent left out, so
+the failure does not take that spend down with it. The wall-budget stop
+takes the same path from the durable entries alone, because it
+terminalizes before any artifact exists.
+
+A shortfall has two causes, and the durable entries tell them apart. An
+omitted entry that ``COMPLETED`` is the agent under-reporting. An entry
+still ``ACCEPTED`` is one whetstone's own evaluation server admitted and
+never finished, which the agent could not have reported; that fails
+under a harness-attributed code instead.
 
 The final candidate is resolved *from the ledger*, not from the artifact.
 The artifact names a ``selected_call_id``; the adapter reconstructs the

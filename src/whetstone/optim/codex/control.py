@@ -6,9 +6,27 @@ returns the ``call_id`` of the call whose candidate it selected. The
 control pins everything that identity depends on: the model and its
 reasoning effort, the containment posture, the eval binding, and the
 per-run tool capacity that is simultaneously the Step's ``tool_calls``
-budget. Every field reaches the CLI invocation -- the Codex CLI accepts
-no turn cap and no sampling seed, so the control carries neither rather
-than recording identity the execution does not honor.
+budget.
+
+No field shapes identity without shaping execution. They reach it by
+different routes. ``codex_binary``, ``model``, ``reasoning_effort``, and
+``denied_features`` reach the CLI argv (``build_codex_command``).
+``wall_seconds`` and ``max_output_bytes`` bound the dr-exec job that runs
+it. ``max_tool_calls`` is the per-run ``ToolCapacity`` the evaluation
+server admits against, and ``mutation_field`` is the field the rebuilt
+candidate is written to. The remainder -- ``eval_config_ref``,
+``reward_policy_hash``, ``evaluation_execution_policy_hash``,
+``task_model_identity_hash``, and ``internal_task_hashes`` -- pin what
+each admitted evaluation is measured against, and the
+``containment_profile``, ``network_policy``, and ``filesystem_policy``
+literals record the posture the runner enforces. ``algorithm_version``
+and ``adapter_schema_version`` name the code that reads all of it.
+
+That is the standard a field must meet, which is why the control carries
+no turn cap and no sampling seed: the Codex CLI exposes neither, so
+either would have recorded a distinction the run never made. Evaluation
+seeding is unaffected -- it lives in the Eval Config's ``SeedPlan``, and
+every admitted Tool Call evaluates under the run's pinned seed plan.
 """
 
 from __future__ import annotations
@@ -63,9 +81,10 @@ class CodexControl(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: StrictStr
-    #: Passed to the CLI as ``-c model_reasoning_effort``. Every control
-    #: field reaches the invocation: a field that shaped identity without
-    #: changing execution would claim a distinction the run never made.
+    #: Passed to the CLI as ``-c model_reasoning_effort``. Like every
+    #: control field it shapes execution as well as identity; a field
+    #: that shaped identity alone would claim a distinction the run
+    #: never made. See the module docstring for each field's route.
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM
     wall_seconds: float = CODEX_DEFAULT_WALL_SECONDS
     max_output_bytes: StrictInt = CODEX_DEFAULT_MAX_OUTPUT_BYTES
