@@ -123,7 +123,8 @@ def build_server_from_env(
         ),
     )
     server = EvaluateCandidateServer(
-        handle=executor.runtime_handle(tool_config, tool_store, binding)
+        handle=executor.runtime_handle(tool_config, tool_store, binding),
+        expected_model_route=engine.expected_model_route(),
     )
     # The persistent session opened above is process-lifetime and keyed by
     # path, so nothing releases it on its own. whetstone now hosts the

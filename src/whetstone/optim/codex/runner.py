@@ -40,6 +40,7 @@ from dr_exec import (
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import ValidationError
 
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.optim.codex.adapter import (
     CodexMcpHostFailure,
@@ -49,6 +50,7 @@ from whetstone.optim.codex.adapter import (
     CodexWallBudgetExceeded,
     OpaqueStepError,
     codex_lease_token_hash,
+    codex_output_schema,
     codex_run_lease_binding,
 )
 from whetstone.optim.codex.containment import (
@@ -63,6 +65,7 @@ from whetstone.optim.codex.containment import (
 )
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.codex.mcp_host import CodexMcpEndpoint, CodexMcpHost
+from whetstone.optim.codex.mcp_bridge import EvaluateCandidateServer
 from whetstone.optim.codex.mcp_server import build_server_from_env
 from whetstone.optim.contracts import OptimStepRequest
 from whetstone.optim.tools.contracts import (
@@ -76,7 +79,16 @@ if TYPE_CHECKING:
 _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
 
-_MCP_TOOLS_APPROVAL_MODE = "auto"
+#: How the CLI treats this server's tools. ``codex exec`` runs with the
+#: session approval policy ``never``, and under ``auto`` an MCP tool call
+#: is still routed through approval -- so every call fails with "MCP tool
+#: call requires approval, but approval policy is never" and the agent
+#: cannot evaluate anything. ``approve`` pre-approves this server's tools,
+#: which is the whole point of a server whetstone hosts itself: the
+#: evaluation tool is admission-gated and capacity-capped on the server
+#: side, so the CLI's own approval prompt adds nothing but a deadlock.
+#: The accepted variants are auto, prompt, writes, and approve.
+_MCP_TOOLS_APPROVAL_MODE = "approve"
 
 #: The variable the Codex CLI reads the evaluation endpoint's bearer
 #: token from. It crosses into the CLI's configuration, so it is pinned.
@@ -655,27 +667,13 @@ class SubprocessCodexRunner:
                 "Codex optimizer run requires its MCP runtime configuration"
             )
         token_hash = codex_lease_token_hash(lease_token)
-        schema = CodexOutputArtifact.model_json_schema()
-        # Pin the two fields the adapter checks before it reads anything
-        # else, so a non-conforming artifact fails at the CLI boundary
-        # rather than as a Step terminal failure.
-        for field, constant in (
-            ("run_id", request.run_id),
-            ("lease_token_hash", token_hash),
-        ):
-            field_schema = schema["properties"][field]
-            assert isinstance(field_schema, dict)
-            field_schema["const"] = constant
-        prompt = (
-            _default_prompt(
-                request,
-                tool_name=handle.config.tool_name,
-                lease_token_hash=token_hash,
-                max_tool_calls=handle.config.capacity.max_accepted_calls,
-            )
-            if self._prompt_builder is None
-            else self._prompt_builder(request)
+        # The agent-facing schema is built explicitly: the structured
+        # output validator is stricter than JSON Schema, and the shape
+        # derived from the storage model does not satisfy it.
+        schema = codex_output_schema(
+            run_id=request.run_id, lease_token_hash=token_hash
         )
+
         # whetstone hosts the evaluation server itself, before the sandbox
         # exists, and hands the agent only a loopback URL and this run's
         # bearer token. The server is the sole writer of the whetstone
@@ -701,15 +699,42 @@ class SubprocessCodexRunner:
         # never started, and burying the real defect behind a host
         # diagnostic. Every failure still terminalizes; they differ only
         # in which code they carry.
-        host = _entered_mcp_host(
-            lambda: CodexMcpHost(
-                build_server_from_env(
-                    self._mcp_server_environment(handle, lease_token)
-                ),
-                auth_token=lease_token,
+        # The server is built inside the host builder on purpose: it opens
+        # a process-lifetime store session, and the host is what closes
+        # that session on teardown. Building it eagerly out here leaks the
+        # session past this Step.
+        #
+        # It is captured so the prompt can name the very route this server
+        # advertises as a const on its tool schema. An agent told one route
+        # and offered another burns a turn per refused guess, so the two
+        # are read off one object rather than derived twice.
+        built: list[EvaluateCandidateServer] = []
+
+        def _build_host() -> CodexMcpHost:
+            server = build_server_from_env(
+                self._mcp_server_environment(handle, lease_token)
             )
-        )
+            built.append(server)
+            return CodexMcpHost(server, auth_token=lease_token)
+
+        host = _entered_mcp_host(_build_host)
         with host as endpoint:
+            prompt = (
+                _default_prompt(
+                    request,
+                    tool_name=handle.config.tool_name,
+                    lease_token_hash=token_hash,
+                    max_tool_calls=(
+                        handle.config.capacity.max_accepted_calls
+                    ),
+                    model_route=(
+                        built[0].expected_model_route or "" if built else ""
+                    ),
+                    base_ref=_request_base_ref_json(request),
+                )
+                if self._prompt_builder is None
+                else self._prompt_builder(request)
+            )
             try:
                 execution = self._execute_structured(
                     prompt=prompt,
@@ -1058,12 +1083,35 @@ class SubprocessCodexRunner:
         return (root.resolve(),)
 
 
+def _request_base_ref_json(request: OptimStepRequest) -> str:
+    """The seed candidate's reference, as the tool argument spells it.
+
+    Every evaluation binds the run's seed as its base. The value is a
+    two-field object the agent must reproduce exactly, and it appears
+    nowhere in the serialized request, so an agent driving the tool for
+    real invents one and has the call refused *after* admission -- paying
+    capacity for a call that can never score.
+    """
+    if not request.candidates:
+        return ""
+    record_ref = candidate_reference(request.candidates[0]).record_ref
+    return json.dumps(
+        {
+            "schema_name": record_ref.schema_name,
+            "content_hash": record_ref.content_hash,
+        },
+        sort_keys=True,
+    )
+
+
 def _default_prompt(
     request: OptimStepRequest,
     *,
     tool_name: str,
     lease_token_hash: str,
     max_tool_calls: int,
+    model_route: str = "",
+    base_ref: str = "",
 ) -> str:
     """The instruction Codex receives.
 
@@ -1082,7 +1130,29 @@ def _default_prompt(
         "exact candidate base_ref, model route, payload template, Tool "
         "Config, capacity, budget, pools, hyperparameters, and output "
         "contract in the serialized request below.\n"
-        "Evaluating through the MCP tool is mandatory. Every candidate you "
+        + (
+            # The one value the agent cannot derive from anything it can
+            # see. It is a const on the tool schema too, but a real agent
+            # reads the prompt first and will otherwise assemble a route
+            # object out of the model and reasoning-effort fields in the
+            # serialized request -- which the evaluator refuses, burning a
+            # turn per guess.
+            "The model_route argument is a fixed string and must be "
+            f"exactly {model_route!r}. It is not an object and must not be "
+            "built from any other field.\n"
+            if model_route
+            else ""
+        )
+        + (
+            # Same class of problem as model_route: the seed candidate's
+            # reference is the base every call must bind, and an agent
+            # that invents one has its call refused after admission.
+            "The base_ref argument must be copied verbatim as "
+            f"{base_ref}. Do not construct or modify it.\n"
+            if base_ref
+            else ""
+        )
+        + "Evaluating through the MCP tool is mandatory. Every candidate you "
         "consider must be submitted to the tool with a call_id you choose; "
         f"you may make at most {max_tool_calls} calls, and every further "
         "call is refused with refused=true and refusal_class=capacity. A "

@@ -637,9 +637,7 @@ def test_rung8_the_real_sandbox_denies_the_store_and_writes_outside_scratch(
 # ---------------------------------------------------------------- rung 9
 
 
-def test_rung9_the_hosted_server_refuses_a_foreign_bearer_token(
-    real_codex_world,
-) -> None:
+def test_rung9_the_hosted_server_refuses_a_foreign_bearer_token() -> None:
     """Reachability is not authorization.
 
     The endpoint is on loopback, so any process on the machine can
@@ -650,7 +648,6 @@ def test_rung9_the_hosted_server_refuses_a_foreign_bearer_token(
     """
     pytest.importorskip("uvicorn")
 
-    world = real_codex_world(max_tool_calls=1)
     token = "a" * 64
 
     class _Echo:

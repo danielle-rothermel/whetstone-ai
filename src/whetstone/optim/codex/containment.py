@@ -25,6 +25,15 @@ CODEX_AUTH_FILENAMES = ("auth.json", ".credentials.json")
 #: The environment variable that is an auth source on its own.
 CODEX_AUTH_ENV_KEY = "OPENAI_API_KEY"
 
+#: ``code_mode_host`` is deliberately NOT denied. It reads like an agent
+#: capability, but from Codex 0.148 it is the host that *routes MCP tool
+#: calls*: with it disabled the agent is told "Code Mode is unavailable"
+#: and sees no server-specific MCP tools at all, so ``evaluate_candidate``
+#: is invisible and the agent can only return an empty artifact. Denying it
+#: did not contain the agent; it silently removed the one tool the run
+#: exists to drive. Code Mode itself stays denied through ``code_mode`` and
+#: ``code_mode_only``.
+
 #: Web search is enabled by default from Codex 0.148, and the
 #: ``web_search_cached`` / ``web_search_request`` feature flags that used to
 #: gate it are deprecated: passing them disables nothing and makes the real
@@ -46,7 +55,6 @@ class CodexDeniedFeature(StrEnum):
     BROWSER_USE = "browser_use"
     BROWSER_USE_EXTERNAL = "browser_use_external"
     CODE_MODE = "code_mode"
-    CODE_MODE_HOST = "code_mode_host"
     CODE_MODE_ONLY = "code_mode_only"
     COLLABORATION_MODES = "collaboration_modes"
     COMPUTER_USE = "computer_use"
