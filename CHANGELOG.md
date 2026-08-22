@@ -21,7 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tests/test_codex_wire_goldens.py` pins the structured-output schema and the
   config keys the runner writes for the real CLI as literals.
 
+### Changed
+- A custom `SubprocessCodexRunner(prompt_builder=...)` now receives a
+  `CodexPromptContext` instead of the bare `OptimStepRequest`. It carries
+  the Step's `model_route` and `base_ref` — the two values the agent can
+  derive from nothing it can see — alongside `tool_name`,
+  `lease_token_hash`, and `max_tool_calls`, so a builder no longer has to
+  rederive them from private runner helpers and risk disagreeing with the
+  route the Step's own evaluation server advertises. Breaking: builders
+  take one context argument.
+
 ### Fixed
+- `.github/workflows/real-codex.yml` passes the dispatch `selector` input
+  through the environment rather than interpolating it into the `run:`
+  script, so a dispatcher cannot inject shell onto the self-hosted macOS
+  runner that holds a logged-in Codex session. An empty selector still
+  runs the whole ladder.
 - The Codex-direct optimizer now produces evaluations against the real CLI.
   Four defects each made every real run yield zero evaluations and were
   unreachable by the scripted fake CLI: the output schema derived from

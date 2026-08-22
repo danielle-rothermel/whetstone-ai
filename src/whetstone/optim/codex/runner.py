@@ -528,7 +528,7 @@ class SubprocessCodexRunner:
         environment: Mapping[str, str] | None = None,
         extra_environment_keys: frozenset[str] = frozenset(),
         prompt_builder: (
-            Callable[[OptimStepRequest], str] | None
+            Callable[[CodexPromptContext], str] | None
         ) = None,
     ) -> None:
         mcp_values = (sqlite_path, runtime_config, reward_policy)
@@ -729,19 +729,31 @@ class SubprocessCodexRunner:
                 # this NO_REDRIVE effect nonterminal until its lease
                 # lapsed, so it is normalized like every other failure
                 # under an entered host.
+                # Resolved once, for either builder. The two protocol
+                # facts are mandatory whoever writes the prompt, so a
+                # custom builder receives them rather than rederiving
+                # them from private helpers.
+                context = CodexPromptContext(
+                    request=request,
+                    tool_name=handle.config.tool_name,
+                    lease_token_hash=token_hash,
+                    max_tool_calls=(
+                        handle.config.capacity.max_accepted_calls
+                    ),
+                    model_route=_expected_model_route(built),
+                    base_ref=_request_base_ref_json(request),
+                )
                 prompt = (
                     _default_prompt(
-                        request,
-                        tool_name=handle.config.tool_name,
-                        lease_token_hash=token_hash,
-                        max_tool_calls=(
-                            handle.config.capacity.max_accepted_calls
-                        ),
-                        model_route=_expected_model_route(built),
-                        base_ref=_request_base_ref_json(request),
+                        context.request,
+                        tool_name=context.tool_name,
+                        lease_token_hash=context.lease_token_hash,
+                        max_tool_calls=context.max_tool_calls,
+                        model_route=context.model_route,
+                        base_ref=context.base_ref,
                     )
                     if self._prompt_builder is None
-                    else self._prompt_builder(request)
+                    else self._prompt_builder(context)
                 )
                 execution = self._execute_structured(
                     prompt=prompt,
@@ -1165,6 +1177,34 @@ def _request_base_ref_json(request: OptimStepRequest) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class CodexPromptContext:
+    """Everything a prompt builder needs, resolved by the runner.
+
+    A custom builder replaces the whole prompt, so it inherits the
+    default's obligations: ``model_route`` and ``base_ref`` are the two
+    values the agent can derive from nothing it can see, and a prompt
+    missing either sends it back to guessing -- every guess admitted and
+    then refused, paying capacity for calls that can never score.
+
+    Both are handed over here because the runner is the only thing that
+    can resolve them correctly. ``model_route`` is read off the
+    evaluation server actually built for this Step, and ``base_ref`` off
+    the run's seed candidate; a builder that rederived them would be
+    reaching into private helpers and could drift from the route the
+    tool schema advertises as a const.
+    """
+
+    request: OptimStepRequest
+    tool_name: str
+    lease_token_hash: str
+    max_tool_calls: int
+    #: The exact fixed string the evaluation tool accepts.
+    model_route: str
+    #: The seed candidate's reference, JSON as the tool argument spells it.
+    base_ref: str
+
+
 def _default_prompt(
     request: OptimStepRequest,
     *,
@@ -1475,6 +1515,7 @@ def _decode_stderr(stderr: bytes) -> str:
 
 
 __all__ = [
+    "CodexPromptContext",
     "CodexStructuredExecution",
     "SubprocessCodexRunner",
     "build_codex_command",

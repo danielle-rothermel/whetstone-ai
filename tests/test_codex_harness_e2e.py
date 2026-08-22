@@ -13,6 +13,7 @@ wrong lease token is refused.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import timedelta
@@ -46,7 +47,10 @@ from whetstone.optim.codex.adapter import (
 )
 from whetstone.optim.codex.executor import build_codex_executor
 from whetstone.optim.cost_aggregation import aggregate_run_cost
-from whetstone.optim.codex.runner import SubprocessCodexRunner
+from whetstone.optim.codex.runner import (
+    SubprocessCodexRunner,
+    _default_prompt,
+)
 from whetstone.optim.contracts import (
     OptimRun,
     OutputContract,
@@ -647,6 +651,84 @@ def test_a_rejected_evaluation_completes_instead_of_stranding_its_admission(
     assert accepted["payload"][TOY_MUTATION_FIELD] == _TEMPLATE_B
 
 
+def test_a_custom_prompt_builder_receives_the_mandatory_protocol_facts(
+    codex_world,
+) -> None:
+    """A builder is handed ``model_route`` and ``base_ref``, not left to guess.
+
+    These two are the values the agent can derive from nothing it can
+    see, and a custom builder replaces the whole prompt -- so a builder
+    that cannot see them has to rederive them from private runner
+    helpers, or omit them and send the agent back to guessing. Every
+    guess is admitted and then refused, paying capacity for calls that
+    can never score.
+
+    The route in particular has one correct source: the evaluation
+    server actually built for this Step, which advertises it as a const
+    on the tool schema. A second derivation can silently disagree with
+    it, so this pins that the runner hands over its own value.
+    """
+    world = codex_world()
+    seen: list = []
+
+    def _recording_builder(context):
+        seen.append(context)
+        return _default_prompt(
+            context.request,
+            tool_name=context.tool_name,
+            lease_token_hash=context.lease_token_hash,
+            max_tool_calls=context.max_tool_calls,
+            model_route=context.model_route,
+            base_ref=context.base_ref,
+        )
+
+    adapter = world.adapter(
+        [
+            world.tool_step(_TEMPLATE_B, "c1"),
+            {"final": {"selected_call_id": "c1"}},
+        ],
+        prompt_builder=_recording_builder,
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.terminal_failure is None, result.terminal_failure
+    assert len(seen) == 1
+    context = seen[0]
+
+    # The route the Step's own evaluation server accepts.
+    assert context.model_route == world.engine.expected_model_route()
+    assert context.model_route
+
+    # The seed candidate's reference, spelled as the tool argument does.
+    seed_ref = candidate_reference(world.candidate).record_ref
+    assert json.loads(context.base_ref) == {
+        "schema_name": seed_ref.schema_name,
+        "content_hash": seed_ref.content_hash,
+    }
+
+    # The rest of the context, so a builder need not rebuild any of it.
+    assert context.request == request
+    assert context.tool_name == world.config.tool_name
+    assert context.max_tool_calls == world.config.capacity.max_accepted_calls
+    assert context.lease_token_hash == codex_lease_token_hash(
+        _FIXED_LEASE_TOKEN
+    )
+
+    # A builder given these facts produces exactly the default prompt.
+    assert context.model_route in _default_prompt(
+        context.request,
+        tool_name=context.tool_name,
+        lease_token_hash=context.lease_token_hash,
+        max_tool_calls=context.max_tool_calls,
+        model_route=context.model_route,
+        base_ref=context.base_ref,
+    )
+
+
 def test_a_failing_prompt_builder_terminalizes_instead_of_stranding(
     codex_world,
 ) -> None:
@@ -665,7 +747,7 @@ def test_a_failing_prompt_builder_terminalizes_instead_of_stranding(
     """
     world = codex_world()
 
-    def _raising_prompt_builder(request):
+    def _raising_prompt_builder(context):
         raise AttributeError("prompt builder blew up")
 
     adapter = world.adapter(

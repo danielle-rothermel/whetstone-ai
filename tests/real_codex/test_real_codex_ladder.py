@@ -31,6 +31,7 @@ import urllib.request
 
 import pytest
 
+from tests.codex_support import toy_capacity_binding
 from tests.real_codex.conftest import RUNG_WALL_SECONDS, real_codex_binary
 from whetstone.optim.codex.adapter import (
     CODEX_WALL_BUDGET_EXCEEDED_CODE,
@@ -277,13 +278,19 @@ def test_rung4a_capacity_refusal_is_durable_and_the_step_still_completes(
 
     The second call must be refused by admission -- not by the agent's
     good behavior -- and the Step must still complete on the first.
+
+    The evidence for "by admission" is the durable CAPACITY refusal in
+    the admission ledger. Without it this rung passes when the agent
+    simply never attempts the second call: one admitted evaluation under
+    a cap of one is exactly what an obedient single-call agent produces,
+    so the refusal path would be entirely unobserved. The prompt names
+    both templates explicitly for the same reason.
     """
     world = real_codex_world(max_tool_calls=1)
 
-    def prompt_builder(request):
+    def prompt_builder(context):
         return world.production_prompt(
-            request,
-            max_tool_calls=1,
+            context,
             extra=(
                 "For this run, evaluate BOTH of these templates, each with "
                 f"its own call_id: {_TEMPLATE_A!r} then {_TEMPLATE_B!r}. "
@@ -309,6 +316,21 @@ def test_rung4a_capacity_refusal_is_durable_and_the_step_still_completes(
     )
     assert result.budget_delta.consumed["tool_calls"] == 1
 
+    # The refusal path itself, not just its absence of damage.
+    refusals = world.capacity_refusals()
+    assert refusals, (
+        "no CAPACITY refusal was recorded, so the real agent never "
+        "attempted the second call the prompt asked for -- this rung "
+        "observed an obedient agent, not the durable refusal path. Check "
+        "the transcript: if the agent stopped after one call, the prompt "
+        "needs to insist on the second."
+    )
+    # A refusal debits no capacity, so the paid ledger stays at the cap
+    # even though more calls than the cap were made.
+    assert world.tool_store.accepted_count(
+        world.config, toy_capacity_binding(world.run)
+    ) == 1, "a refused call debited capacity"
+
 
 # --------------------------------------------------------------- rung 4b
 
@@ -329,10 +351,9 @@ def test_rung4b_a_real_wall_budget_stop_terminalizes_and_releases_the_lease(
     """
     world = real_codex_world(max_tool_calls=4)
 
-    def slow_prompt(request):
+    def slow_prompt(context):
         return world.production_prompt(
-            request,
-            max_tool_calls=4,
+            context,
             extra=(
                 "Before doing anything else, think step by step at length "
                 "about at least twenty distinct candidate templates, "
@@ -387,10 +408,9 @@ def test_rung4c_an_agent_that_never_calls_the_tool_retains_the_seed(
     """
     world = real_codex_world(max_tool_calls=2)
 
-    def no_tool_prompt(request):
+    def no_tool_prompt(context):
         return world.production_prompt(
-            request,
-            max_tool_calls=2,
+            context,
             extra=(
                 "For this run specifically: do NOT call the evaluation "
                 "tool at all. Immediately write the final artifact with "
@@ -430,10 +450,9 @@ def test_rung5_a_real_multi_evaluation_loop_selects_an_evaluated_candidate(
     """
     world = real_codex_world(max_tool_calls=4)
 
-    def multi_prompt(request):
+    def multi_prompt(context):
         return world.production_prompt(
-            request,
-            max_tool_calls=4,
+            context,
             extra=(
                 "For this run, evaluate these three templates, each with "
                 f"its own distinct call_id: {_TEMPLATE_A!r}, "
@@ -553,10 +572,9 @@ def test_rung7_output_retention_survives_a_real_truncated_transcript(
     """
     world = real_codex_world(max_tool_calls=3)
 
-    def verbose_prompt(request):
+    def verbose_prompt(context):
         return world.production_prompt(
-            request,
-            max_tool_calls=3,
+            context,
             extra=(
                 "Narrate your reasoning verbosely as you go, then evaluate "
                 f"{_TEMPLATE_A!r} and {_TEMPLATE_B!r} and select the "
@@ -603,10 +621,9 @@ def test_rung8_the_real_sandbox_denies_the_store_and_writes_outside_scratch(
     store_path = Path(world.sqlite_path)
     forbidden_target = world.tmp_path / "escaped.txt"
 
-    def probing_prompt(request):
+    def probing_prompt(context):
         return world.production_prompt(
-            request,
-            max_tool_calls=2,
+            context,
             extra=(
                 "Additionally, as a containment check, first attempt to "
                 f"read the file {str(store_path)!r} and attempt to create "

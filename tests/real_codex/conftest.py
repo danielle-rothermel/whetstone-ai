@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sqlite3
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -41,6 +42,8 @@ from whetstone.optim.codex.containment import (
 from whetstone.optim.codex.executor import build_codex_executor
 from whetstone.optim.codex.runner import SubprocessCodexRunner
 from whetstone.optim.harness import OptimHarness
+from whetstone.optim.tools.admission import _ENTRY_TABLE, ToolCallState
+from whetstone.optim.tools.contracts import RefusalClass
 from whetstone.optim.tools.evaluator import EngineToolEvaluator
 from whetstone.optim.tools.execution import EvaluatingToolExecutor
 from whetstone.optim.tools.facade import ToolAdmissionAuthority, ToolCallStore
@@ -91,26 +94,96 @@ def pytest_collection_modifyitems(config, items) -> None:
             item.add_marker(skip)
 
 
+#: Where macOS keeps the only process-isolation mechanism this ladder
+#: will run under. Mirrors ``runner._MACOS_SANDBOX_EXEC``: a real rung
+#: that reaches the runner without it raises ``OpaqueStepError``, so the
+#: precondition names the same file rather than trusting the platform tag.
+SANDBOX_EXEC_PATH = Path("/usr/bin/sandbox-exec")
+
+
+def real_codex_precondition_failure(
+    *,
+    opted_in: bool,
+    platform: str,
+    binary_found: bool,
+    binary: str,
+    sandbox_exec_found: bool,
+    auth_found: bool,
+    auth_home: Path,
+) -> str | None:
+    """Why this machine cannot host the ladder, or ``None`` if it can.
+
+    A pure function of the environment so the decision itself is
+    testable without a macOS host, a Codex binary, or a live session.
+
+    The opt-in is what makes an unmet precondition an *error*. Without
+    ``WHETSTONE_REAL_CODEX=1`` the ladder is simply not requested and the
+    collection hook skips it. With the opt-in, the operator asked for a
+    real run, and every one of these conditions means they will not get
+    one -- so the answer is a message the caller raises, never a skip.
+    Skipping here is what let a Linux host, a missing binary, or an
+    absent ``sandbox-exec`` produce an all-skipped session that
+    ``scripts/check-real-codex.sh`` reported as "all rungs passed":
+    pytest exits 0 on a fully skipped session.
+    """
+    if not opted_in:
+        return None
+    if platform != "darwin":
+        return (
+            f"{REAL_CODEX_ENV}=1 was set on {platform!r}, but the Codex "
+            "sandbox is macOS sandbox-exec only. Run the ladder on macOS "
+            f"or unset {REAL_CODEX_ENV}."
+        )
+    if not sandbox_exec_found:
+        return (
+            f"{REAL_CODEX_ENV}=1 was set but {SANDBOX_EXEC_PATH} is not "
+            "present; the ladder refuses to drive the real CLI without "
+            "kernel-enforced process isolation."
+        )
+    if not binary_found:
+        return (
+            f"{REAL_CODEX_ENV}=1 was set but the real Codex binary was "
+            f"not found at {binary!r}; set {REAL_CODEX_BINARY_ENV} to "
+            "its path."
+        )
+    if not auth_found:
+        return (
+            f"{REAL_CODEX_ENV}=1 was set but no Codex session was found "
+            f"under {auth_home} ({'/'.join(CODEX_AUTH_FILENAMES)}); "
+            "run `codex login` first."
+        )
+    return None
+
+
+def _observe_real_codex_preconditions() -> str | None:
+    """Read the machine, then let the pure function decide."""
+    binary = real_codex_binary()
+    home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    return real_codex_precondition_failure(
+        opted_in=os.environ.get(REAL_CODEX_ENV) == "1",
+        platform=sys.platform,
+        binary_found=(
+            shutil.which(binary) is not None or Path(binary).is_file()
+        ),
+        binary=binary,
+        sandbox_exec_found=SANDBOX_EXEC_PATH.is_file(),
+        # Existence only. The ladder never opens these files.
+        auth_found=any(
+            (home / name).is_file() for name in CODEX_AUTH_FILENAMES
+        ),
+        auth_home=home,
+    )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _real_codex_preconditions() -> None:
     """Fail loudly, before any rung runs, if the machine cannot host one."""
-    if os.environ.get(REAL_CODEX_ENV) != "1":
-        return
-    if sys.platform != "darwin":
-        pytest.skip("the Codex sandbox is macOS sandbox-exec only")
-    binary = real_codex_binary()
-    if shutil.which(binary) is None and not Path(binary).is_file():
-        pytest.fail(
-            f"real Codex binary not found at {binary!r}; "
-            f"set {REAL_CODEX_BINARY_ENV} to its path"
-        )
-    home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
-    # Existence only. The ladder never opens these files.
-    if not any((home / name).is_file() for name in CODEX_AUTH_FILENAMES):
-        pytest.fail(
-            f"no Codex session found under {home} "
-            f"({'/'.join(CODEX_AUTH_FILENAMES)}); run `codex login` first"
-        )
+    failure = _observe_real_codex_preconditions()
+    if failure is not None:
+        # exit, not fail: an unhostable machine makes every remaining
+        # rung meaningless, and a session-scoped fail would be reported
+        # once per rung as an error rather than once as a refusal.
+        pytest.exit(failure, returncode=1)
 
 
 class RealCodexWorld:
@@ -161,6 +234,41 @@ class RealCodexWorld:
             candidate=self.candidate, engine=self.engine, template=template
         )
 
+    def capacity_refusals(self) -> tuple[dict, ...]:
+        """Every durable CAPACITY refusal this world's namespace recorded.
+
+        A capacity refusal debits no capacity, so it is deliberately
+        absent from ``admitted_entries`` -- that absence is what makes
+        ``len(admitted_entries)`` agree with ``accepted_count``, and it is
+        pinned by ``tests/test_admitted_entries.py``. There is therefore
+        no public API that enumerates refusals, and ``find_entry`` needs a
+        ``call_id`` the real agent chose for itself and never reported.
+
+        So this reads the admission entry table directly. It is a
+        test-only assertion helper: a real rung has to distinguish "the
+        agent was refused" from "the agent never tried a second call",
+        and only the durable ledger can tell those apart. Widening the
+        production surface to enumerate refusals would add an API no
+        production caller wants.
+        """
+        connection = sqlite3.connect(self.sqlite_path)
+        try:
+            rows = connection.execute(
+                f"SELECT entry_json FROM {_ENTRY_TABLE} "
+                "WHERE store_namespace_key = ?",
+                (str(self.config.store_namespace_key),),
+            ).fetchall()
+        finally:
+            connection.close()
+        entries = [json.loads(row[0]) for row in rows]
+        return tuple(
+            entry
+            for entry in entries
+            if entry.get("state") == ToolCallState.REFUSED.value
+            and (entry.get("refusal") or {}).get("refusal_class")
+            == RefusalClass.CAPACITY.value
+        )
+
     def step_request(self, **kwargs):
         return toy_codex_step_request(
             control=self.control,
@@ -185,7 +293,7 @@ class RealCodexWorld:
         harness.bind_run(self.run)
         return harness
 
-    def production_prompt(self, request, *, extra: str, max_tool_calls: int):
+    def production_prompt(self, context, *, extra: str):
         """The production prompt, plus one rung-specific instruction.
 
         Rungs that need to steer the agent must extend the real prompt
@@ -193,26 +301,24 @@ class RealCodexWorld:
         fixed ``model_route`` and ``base_ref`` values, and a builder that
         drops them makes every call refused after admission -- which looks
         exactly like the behavior some rungs are trying to assert.
+
+        Every one of those facts now arrives on the runner's
+        ``CodexPromptContext``, so this passes them straight through. It
+        used to rebuild ``model_route``, ``base_ref``, and the tool name
+        from its own copies of the world -- a second derivation that
+        could silently disagree with the route the Step's evaluation
+        server actually advertises.
         """
-        from whetstone.experiment.candidate import candidate_reference
-        from whetstone.optim.codex.adapter import codex_lease_token_hash
         from whetstone.optim.codex.runner import _default_prompt
 
-        base_ref = candidate_reference(self.candidate).record_ref
         return (
             _default_prompt(
-                request,
-                tool_name=self.config.tool_name,
-                lease_token_hash=codex_lease_token_hash(_FIXED_LEASE_TOKEN),
-                max_tool_calls=max_tool_calls,
-                model_route=self.engine.expected_model_route(),
-                base_ref=json.dumps(
-                    {
-                        "schema_name": base_ref.schema_name,
-                        "content_hash": base_ref.content_hash,
-                    },
-                    sort_keys=True,
-                ),
+                context.request,
+                tool_name=context.tool_name,
+                lease_token_hash=context.lease_token_hash,
+                max_tool_calls=context.max_tool_calls,
+                model_route=context.model_route,
+                base_ref=context.base_ref,
             )
             + "\n\n"
             + extra
