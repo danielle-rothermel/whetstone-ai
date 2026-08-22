@@ -7,7 +7,6 @@ from dr_store import ObjectStore
 from whetstone.core.leasing import ReplayPolicy
 from whetstone.core.identity import (
     TerminalFailure,
-    TypedRef,
     require_full_hash,
 )
 from whetstone.eval.metadata import metadata_with_purpose
@@ -22,11 +21,8 @@ from whetstone.optim.contracts import (
     OptimEvalRequest,
     IntentOutcome,
     IntentResolution,
-    OptimRunRef,
     OptimStepRequest,
     OptimStepResult,
-    OutputContract,
-    StepKind,
     StepMode,
     StepStatus,
     step_result_reference,
@@ -241,115 +237,6 @@ class Miprov2Adapter:
         """The executor policy identity the opening state must bind."""
 
         return self._proposal_executor_policy_identity_hash
-
-    def build_step_request(
-        self,
-        *,
-        run: OptimRunRef | None = None,
-        step_index: int,
-        initial_state: Miprov2State | None = None,
-        initial_budget: BudgetState | None = None,
-        prior_result: OptimStepResult | None = None,
-        prior_result_ref: TypedRef | None = None,
-    ) -> OptimStepRequest:
-
-        if step_index == 0:
-            if (
-                initial_state is None
-                or initial_budget is None
-                or prior_result is not None
-                or prior_result_ref is not None
-            ):
-                raise ValueError(
-                    "initial request requires only state and budget"
-                )
-            if run is None:
-                raise ValueError("initial request requires the exact run")
-            state = initial_state
-            budget = initial_budget
-            pools = {MIPROV2_STATE_KEY: state.model_dump(mode="json")}
-            prior_state_ref = None
-            exact_run = run
-        else:
-            if (
-                initial_state is not None
-                or initial_budget is not None
-                or prior_result is None
-                or prior_result_ref is None
-            ):
-                raise ValueError(
-                    "continuation requires only exact prior result and ref"
-                )
-            if (
-                step_result_reference(prior_result).record_ref
-                != prior_result_ref
-            ):
-                raise ValueError("prior result ref is not its exact record")
-            state_ref = prior_result.state_ref
-            if state_ref is None:
-                raise ValueError("prior result has no state snapshot")
-            snapshot = self._store.get(state_ref.reference)
-            if not isinstance(snapshot, dict):
-                raise ValueError("prior state snapshot must be an object")
-            state = Miprov2State.model_validate(snapshot[MIPROV2_STATE_KEY])
-            state = self._fold_prior_resolutions(state, prior_result)
-            budget = prior_result.budget
-            pools = {}
-            prior_state_ref = state_ref
-            exact_run = prior_result.request.record.run
-        if exact_run.record.optimizer_config != state.control.reference():
-            raise ValueError(
-                "run optimizer config differs from MIPROv2 control"
-            )
-        if exact_run != state.run:
-            raise ValueError("run differs from the MIPROv2 state authority")
-        if (
-            exact_run.record.template_render_contract
-            != state.control.template_render_contract
-        ):
-            raise ValueError(
-                "run render contract differs from MIPROv2 control"
-            )
-        if (
-            exact_run.record.reward_policy is None
-            or exact_run.record.reward_policy != state.control.reward_policy
-        ):
-            raise ValueError("run Reward Policy differs from MIPROv2 control")
-        self._require_budget_agreement(budget, state)
-        if state.phase == MIPROV2_FAILED:
-            kind_label = MIPROV2_FAILED
-            returned_count = 0
-            terminal_contract = OutputContract(returned_proposal_count=0)
-        else:
-            preview = self._driver.plan(state)
-            kind_label = preview.kind
-            returned_count = 1 if preview.kind == MIPROV2_COMPLETE else 0
-            terminal_contract = (
-                exact_run.record.terminal_output_contract
-                if preview.kind == MIPROV2_COMPLETE
-                else OutputContract(returned_proposal_count=returned_count)
-            )
-        return OptimStepRequest(
-            run=exact_run,
-            step_id=f"{state.run_id}:miprov2:{step_index}",
-            kind=StepKind.PROPOSAL,
-            kind_label=kind_label,
-            step_index=step_index,
-            prior_step_result_ref=prior_result_ref,
-            prior_state_ref=prior_state_ref,
-            pools=pools,
-            candidates=(
-                (state.control.base_candidate.record,)
-                if state.control.teacher_candidate
-                == state.control.base_candidate
-                else (
-                    state.control.base_candidate.record,
-                    state.control.teacher_candidate.record,
-                )
-            ),
-            budget=budget,
-            step_output_contract=terminal_contract,
-        )
 
     def invoke(
         self,

@@ -2214,8 +2214,6 @@ class Miprov2Driver:
             ),
             budget=budget,
             bootstrap_plans=planned.plans,
-            # A run that plans no fewshot candidates -- a zero-shot run --
-            # has no bootstrap phase to enter, so it opens in proposal.
             phase=(
                 "bootstrap" if planned.plans else "proposal"
             ),
@@ -2611,9 +2609,8 @@ class Miprov2Driver:
                 state.demo_candidates,
                 demo_mode=state.control.demo_mode,
             )
-            # A zero-shot run bootstraps nothing, so it has no demos to
-            # ground proposals in. That is the absence of a demo dimension,
-            # not a dimension holding zero demo sets.
+            # An empty grounding context is the absence of demo sets, not a
+            # searched demo dimension of size zero.
             bridged = (
                 proposal_candidates_from_demo_sets(
                     context,

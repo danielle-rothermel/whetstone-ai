@@ -192,22 +192,18 @@ def test_continuations_cite_the_prior_step_exactly(tmp_path, demo_mode) -> None:
 # --- the three modes differ where the design says they differ -------------
 
 
-def test_bootstrap_intents_appear_only_when_the_mode_bootstraps(
+def test_every_mode_bootstraps_and_only_fewshot_keeps_demos(
     tmp_path, demo_mode
 ) -> None:
-    """zeroshot drives no bootstrap evaluation; the other two modes do."""
+    """zeroshot emits the 3/0 grounding bootstrap and no demo_set."""
     with open_sqlite(str(tmp_path / f"boot-{demo_mode.value}.sqlite")) as store:
         run = _completed(store, demo_mode, f"boot-{demo_mode.value}")
 
         bootstrap_intents = run.intents_for(BOOTSTRAP_PURPOSE)
-        if demo_mode is Miprov2DemoMode.ZEROSHOT:
-            assert bootstrap_intents == ()
-            assert run.final_state.bootstrap_plans == ()
-        else:
-            assert bootstrap_intents, (
-                f"{demo_mode.value} must bootstrap through the eval engine"
-            )
-            assert run.final_state.demo_candidates
+        assert bootstrap_intents, (
+            f"{demo_mode.value} must bootstrap through the eval engine"
+        )
+        assert run.final_state.bootstrap_plans
 
 
 def test_only_fewshot_searches_a_demo_dimension(tmp_path, demo_mode) -> None:

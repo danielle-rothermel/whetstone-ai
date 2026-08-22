@@ -47,6 +47,11 @@ MIPROV2_BOOTSTRAP_SCHEMA_VERSION = 1
 MIPROV2_TRACE_SELECTION_PROJECTION_VERSION = (
     "dspy_example_pickle_protocol4_cpython/v1"
 )
+#: DSPy zero-shot still bootstraps this many demos to ground GroundedProposer,
+#: then discards them. Control maxima stay 0/0; only proposal grounding uses
+#: these caps.
+ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL = 3
+ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL = 0
 class FewshotSeedKind(StrEnum):
     RESET = "reset"
     LABELS_ONLY = "labels_only"
@@ -284,17 +289,19 @@ class FewshotCandidatePlanningResult(BaseModel):
                 "demo projection conflicts with the resolved demo mode"
             )
         if self.demo_mode is Miprov2DemoMode.ZEROSHOT:
-            # A 0-shot run bootstraps nothing at all: it plans no fewshot
-            # candidates, so it also has no proposal grounding caps to set.
-            if self.plans:
+            if not self.plans:
                 raise ValueError(
-                    "zero-shot MIPROv2 plans no fewshot candidates"
+                    "zero-shot MIPROv2 plans the 3/0 grounding bootstrap"
                 )
             if (
-                self.proposal_max_bootstrapped_demos != 0
-                or self.proposal_max_labeled_demos != 0
+                self.proposal_max_bootstrapped_demos
+                != ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL
+                or self.proposal_max_labeled_demos
+                != ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL
             ):
-                raise ValueError("zero-shot MIPROv2 grounds no proposals")
+                raise ValueError(
+                    "zero-shot MIPROv2 grounds proposals with 3/0 demo caps"
+                )
         if self.demo_mode != self.inputs.demo_mode:
             raise ValueError(
                 "planning result demo mode conflicts with inputs"
@@ -427,9 +434,11 @@ def _build_fewshot_candidate_plans(
             raise ValueError(
                 "zero-shot MIPROv2 requires zero demonstration caps"
             )
-        # A 0-shot run plans no fewshot candidates and therefore draws no
-        # RNG: it neither bootstraps nor grounds proposals in demos.
-        return ((), initial_rng_checkpoint, 0, 0)
+        # Control maxima stay 0/0 so the study never searches demos. The
+        # planner still uses DSPy's 3/0 grounding caps so GroundedProposer
+        # sees the same bootstrap the reference would, then discards them.
+        max_bootstrapped_demos = ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL
+        max_labeled_demos = ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL
 
     upper_bound = inputs.num_candidate_sets - 3
     candidate_seeds = range(-3, upper_bound)

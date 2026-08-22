@@ -66,3 +66,55 @@ def test_load_launch_deserializes_gepa_control(tmp_path) -> None:
         runtime.controller.bind_launch(launch)
         loaded = runtime.controller.load_launch("gepa-platform-run")
         assert loaded.control.identity_hash() == control.identity_hash()
+
+
+def test_load_launch_deserializes_miprov2_control_and_extra_pools(
+    tmp_path,
+) -> None:
+    from dr_store.sync import open_sqlite
+
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.miprov2.adapter import (
+        MIPROV2_ADAPTER_KEY,
+        MIPROV2_STATE_KEY,
+    )
+    from whetstone.optim.miprov2.runtime import Miprov2State
+    from whetstone.testing.runtime import (
+        build_miprov2_adapter,
+        build_toy_copro_control,
+        prepare_toy_miprov2_run,
+        register_toy_runtime,
+    )
+    from whetstone.testing.toy.miprov2 import build_toy_miprov2_control
+
+    with open_sqlite(str(tmp_path / "miprov2-load.sqlite")) as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(store)
+        control = build_toy_miprov2_control(engine=engine)
+        adapter = build_miprov2_adapter(
+            store=store, control=control, engine=engine
+        )
+        runtime = register_toy_runtime(
+            store=store,
+            engine=engine,
+            copro_control=build_toy_copro_control(engine=engine),
+            extra_adapters={MIPROV2_ADAPTER_KEY: adapter},
+        )
+        launch = prepare_toy_miprov2_run(
+            runtime,
+            run_id="miprov2-platform-run",
+            control=control,
+            engine=engine,
+        )
+        loaded = runtime.controller.load_launch("miprov2-platform-run")
+        assert loaded.control is not None
+        assert loaded.control.identity_hash() == control.identity_hash()
+        assert loaded.extra_pools is not None
+        opened = Miprov2State.model_validate(
+            launch.extra_pools[MIPROV2_STATE_KEY]
+        )
+        restored = Miprov2State.model_validate(
+            loaded.extra_pools[MIPROV2_STATE_KEY]
+        )
+        assert restored == opened
+        assert restored.run_id == "miprov2-platform-run"
+        assert restored.bootstrap_plans == opened.bootstrap_plans

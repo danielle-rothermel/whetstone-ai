@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.4 - 2026-08-22
+
 ### Added
 
 - `prepare_miprov2_run` wires MIPROv2 through the in-process harness: a
@@ -16,10 +18,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build_miprov2_adapter` / `prepare_toy_miprov2_run`. MIPROv2 is not on
   the platform pipeline.
 - `Miprov2DemoMode` (`fewshot`, `zeroshot`, `ground_only`) is the persisted
-  demo decision. `zeroshot_opt` is derived from it. `ground_only` bootstraps
-  demos to ground instruction proposals, keeps the demo dimension out of the
-  study, and never attaches a demo set to a candidate; the study transcript
-  marks it as a Whetstone deviation.
+  demo decision. `zeroshot_opt` is derived from it. Faithful zeroshot keeps
+  control maxima at 0/0 and the demo dimension out of the study, but still
+  bootstraps 3/0 demos to ground instruction proposals and then discards
+  them (DSPy's zero-shot path). `ground_only` is the Whetstone extension:
+  it bootstraps fewshot-sized pools to ground proposals, never attaches a
+  demo set to a candidate, and marks the study transcript as a deviation.
+  Both non-searching modes share the zeroshot auto-mode trial/instruct
+  arm (`num_instruct_candidates = n`, one search variable per component).
+
+### Changed
+
+- MIPROv2 control schema version 6 → 7; GEPA control schema version 1 → 2.
+  `num_threads` is removed from both controls (concurrency belongs to the
+  eval engine).
+- MIPROv2 evaluations go through harness intents and land on
+  `resolved_intents`. `search_evidence` stays empty: that field is for
+  in-search evals the run never proposes (GEPA).
+
+## 0.1.3 - 2026-08-21
+
+### Added
+
+- `build_runtime` assembles a `RegisteredRuntime` from explicit
+  collaborators (store, engine, adapter registry, lease authority).
+  Platform mode requires a ledger engine so fan-in verification cannot
+  be silently off. `RegisteredRuntime.close()` forwards to the eval
+  engine (and any closeable authority).
+- `whetstone.testing.register_toy_runtime` holds the former toy
+  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
+- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
+  by integration tests and the CLI. `PlatformDbosConfig` is constructed
+  with explicit `application_version` and `executor_id`.
+- `whetstone-optim run`, `status`, and `result` submit a bound launch
+  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
+  to a live `ProviderProposerTransport` (`--proposer provider`);
+  `--proposer fake` keeps the scripted transport for tests. Controller
+  identity is pinned by `--owner-id`, or derived from
+  `--application-version` + `--executor-id`. The CLI always closes the
+  runtime if `build_runtime` succeeded, including when `deploy_platform`
+  fails. Effect leases persist on `--store-path` so a restarted CLI can
+  replay a completed proposal or eval instead of charging again.
 
 ### Removed
 
@@ -30,12 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- MIPROv2 control schema version 6 → 7; GEPA control schema version 1 → 2.
-  `num_threads` is removed from both controls (concurrency belongs to the
-  eval engine).
-- MIPROv2 evaluations go through harness intents and land on
-  `resolved_intents`. `search_evidence` stays empty: that field is for
-  in-search evals the run never proposes (GEPA).
+- `register_runtime` is gone. Callers pass an explicit adapter registry
+  into `build_runtime`. Adding or removing an adapter changes
+  controller identity.
+- `prepare_copro_run` / `prepare_gepa_run` require `experiment`,
+  `render_contract`, and `mutation_field`.
 - Effect leasing runs on `dr_store.lease.LeaseAuthority`.
   `whetstone.core.leasing` is the boundary: `EffectLeaseAuthority` composes
   dr-store's authority and owns only the translation between whetstone's
@@ -69,38 +107,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RowWorkerError` the subprocess graph-rollout driver raises, so a
   worker-side row failure no longer has to be reproduced in process to be
   named.
-
-## 0.1.3 - 2026-08-21
-
-### Added
-
-- `build_runtime` assembles a `RegisteredRuntime` from explicit
-  collaborators (store, engine, adapter registry, lease authority).
-  Platform mode requires a ledger engine so fan-in verification cannot
-  be silently off. `RegisteredRuntime.close()` forwards to the eval
-  engine (and any closeable authority).
-- `whetstone.testing.register_toy_runtime` holds the former toy
-  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
-- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
-  by integration tests and the CLI. `PlatformDbosConfig` is constructed
-  with explicit `application_version` and `executor_id`.
-- `whetstone-optim run`, `status`, and `result` submit a bound launch
-  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
-  to a live `ProviderProposerTransport` (`--proposer provider`);
-  `--proposer fake` keeps the scripted transport for tests. Controller
-  identity is pinned by `--owner-id`, or derived from
-  `--application-version` + `--executor-id`. The CLI always closes the
-  runtime if `build_runtime` succeeded, including when `deploy_platform`
-  fails. Effect leases persist on `--store-path` so a restarted CLI can
-  replay a completed proposal or eval instead of charging again.
-
-### Changed
-
-- `register_runtime` is gone. Callers pass an explicit adapter registry
-  into `build_runtime`. Adding or removing an adapter changes
-  controller identity.
-- `prepare_copro_run` / `prepare_gepa_run` require `experiment`,
-  `render_contract`, and `mutation_field`.
 
 ## 0.1.2 - 2026-08-21
 

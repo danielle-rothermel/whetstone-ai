@@ -1248,7 +1248,9 @@ def _require_candidate_assembly(
             )
         if space.demo_pool_identity_hashes is None:
             if component.demo_index is not None:
-                raise ValueError("zeroshot candidate cannot select a demo")
+                raise ValueError(
+                    "candidate without a demo dimension cannot select a demo"
+                )
         else:
             demo_index = values[f"{index}_predictor_demos"]
             if (

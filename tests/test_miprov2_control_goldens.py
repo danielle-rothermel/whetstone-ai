@@ -29,13 +29,31 @@ def test_identity_payload_stores_demo_mode_not_zeroshot_opt(tmp_path) -> None:
     assert control.zeroshot_opt is False
 
 
+_TOY_CONTROL_HASHES = {
+    Miprov2DemoMode.FEWSHOT: (
+        "9ded7dce4290fa46e69cbff8ed492b4f"
+        "585d047e09b18f8758681c9bfd1d37a1"
+    ),
+    Miprov2DemoMode.ZEROSHOT: (
+        "3ee6639103d4f7e6f94447ecfd35b0b2"
+        "b32b129b7fbf0b13c8fe1b2a2907a51c"
+    ),
+    Miprov2DemoMode.GROUND_ONLY: (
+        "68e65ed997b547a22b351721307a1dda"
+        "e11fbe56af9ea266146f9ea27255aca3"
+    ),
+}
+
+
 def test_the_three_demo_modes_mint_distinct_control_hashes(tmp_path) -> None:
-    hashes: dict[Miprov2DemoMode, str] = {}
     with open_sqlite(str(tmp_path / "modes.sqlite")) as store:
         engine = ReferenceEvalRuntimeConfig().build_engine(store)
-        for mode in Miprov2DemoMode:
-            hashes[mode] = build_toy_miprov2_control(
+        hashes = {
+            mode: build_toy_miprov2_control(
                 engine=engine, demo_mode=mode
             ).identity_hash()
+            for mode in Miprov2DemoMode
+        }
 
+    assert hashes == _TOY_CONTROL_HASHES
     assert len(set(hashes.values())) == len(Miprov2DemoMode)

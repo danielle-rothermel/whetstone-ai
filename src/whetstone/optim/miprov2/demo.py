@@ -455,8 +455,8 @@ def proposal_demo_context(
     """Demo sets that ground instruction proposals.
 
     Every mode that bootstraps grounds its proposals in what it bootstrapped,
-    including ``GROUND_ONLY``: grounding is precisely the point of that mode.
-    A ``ZEROSHOT`` run bootstraps nothing, so it has nothing to ground with.
+    including ``ZEROSHOT`` (the 3/0 grounding set, then discarded) and
+    ``GROUND_ONLY`` (fewshot-sized pools that never enter the study).
     """
 
     del demo_mode

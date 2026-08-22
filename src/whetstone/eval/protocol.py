@@ -13,6 +13,7 @@ from whetstone.experiment.candidate import Candidate
 from whetstone.provider.policy import ProviderExecutionPolicy
 
 if TYPE_CHECKING:
+    from whetstone.experiment.sampling import EvalSplit
     from whetstone.optim.contracts import ResolutionDetail
 
 
@@ -102,6 +103,9 @@ class EvalEngine(Protocol):
 
     @property
     def sampling(self) -> EvalSplitView: ...
+
+    @property
+    def sampling_split(self) -> EvalSplit: ...
 
     def task_model_identity_hash(self) -> str: ...
 

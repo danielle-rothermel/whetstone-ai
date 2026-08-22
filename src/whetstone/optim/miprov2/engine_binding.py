@@ -65,13 +65,7 @@ def engine_for_task_hashes(
 
 
 def _split_of(engine: EvalEngine) -> EvalSplit:
-    split = getattr(engine, "sampling_split", None)
-    if split is None:
-        raise TypeError(
-            "MIPROv2 Eval Config derivation requires an engine exposing "
-            "sampling_split"
-        )
-    return split
+    return engine.sampling_split
 
 
 class EngineEvalBindingResolver:

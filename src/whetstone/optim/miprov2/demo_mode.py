@@ -18,26 +18,29 @@ class Miprov2DemoMode(StrEnum):
 
     ``FEWSHOT`` and ``ZEROSHOT`` are the two faithful DSPy behaviors and keep
     ``algorithm_version`` at ``dspy_miprov2/v2``. ``GROUND_ONLY`` is a
-    Whetstone extension: it bootstraps demonstrations and grounds instruction
-    proposals in them exactly as ``FEWSHOT`` does, but excludes the demo
-    dimension from the parameter space and never attaches a demo set to a
-    candidate, so the study optimizes instructions alone over demo-grounded
-    proposals.
+    Whetstone extension: it bootstraps fewshot-sized demonstration pools and
+    grounds instruction proposals in them, but excludes the demo dimension
+    from the parameter space and never attaches a demo set to a candidate.
+    Both non-searching modes share the zeroshot auto-mode trial/instruct
+    arm.
     """
 
     #: DSPy's default: bootstrap demos, search instruction x demo-set, and
     #: render the selected demos into the candidate.
     FEWSHOT = auto()
-    #: DSPy's 0-shot mode: no bootstrapping, and both demo maxima are zero.
+    #: DSPy's 0-shot mode: control maxima stay 0/0 and demos stay out of
+    #: the study, but the run still bootstraps 3/0 demos to ground
+    #: instruction proposals and then discards them.
     ZEROSHOT = auto()
-    #: Whetstone extension: bootstrap to ground proposals, search
-    #: instructions only, and never render demos into a candidate.
+    #: Whetstone extension: bootstrap fewshot-sized pools to ground
+    #: proposals, search instructions only, and never render demos into a
+    #: candidate.
     GROUND_ONLY = auto()
 
     @property
     def bootstraps(self) -> bool:
         """Whether this mode runs bootstrap evaluations through the engine."""
-        return self is not Miprov2DemoMode.ZEROSHOT
+        return True
 
     @property
     def searches_demos(self) -> bool:

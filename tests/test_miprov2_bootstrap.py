@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from whetstone.core.identity import ImmutableJsonObject
 from whetstone.optim.miprov2.bootstrap import (
+    ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL,
+    ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL,
     BootstrapGenerationResult,
     FewshotSeedKind,
     create_fewshot_candidate_plans,
@@ -71,11 +73,21 @@ def test_fewshot_plans_bootstrap_candidates() -> None:
     )
 
 
-def test_zeroshot_plans_no_fewshot_candidates() -> None:
+def test_zeroshot_plans_the_grounding_bootstrap() -> None:
     planning = _planning(demo_mode=Miprov2DemoMode.ZEROSHOT)
-    assert planning.plans == ()
-    assert planning.proposal_max_bootstrapped_demos == 0
-    assert planning.proposal_max_labeled_demos == 0
+    assert planning.plans
+    assert any(
+        plan.kind is FewshotSeedKind.BOOTSTRAP for plan in planning.plans
+    )
+    assert (
+        planning.proposal_max_bootstrapped_demos
+        == ZERO_SHOT_BOOTSTRAPPED_DEMOS_IN_PROPOSAL
+    )
+    assert (
+        planning.proposal_max_labeled_demos
+        == ZERO_SHOT_LABELED_DEMOS_IN_PROPOSAL
+    )
+    assert planning.study_uses_demo_candidates is False
 
 
 def test_fold_and_resume_keep_the_next_attempt() -> None:
