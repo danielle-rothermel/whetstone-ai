@@ -13,6 +13,7 @@ from whetstone.core.identity import ImmutableJsonObject, TerminalFailure
 from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
     CODEX_LEASE_TOKEN_MISMATCH_CODE,
+    CODEX_MCP_HOST_FAILED_CODE,
     CODEX_OUTPUT_ARTIFACT_SCHEMA,
     CODEX_SELECTION_CONTRACT_CODE,
     CODEX_SELECTION_UNEVALUATED_CODE,
@@ -93,6 +94,7 @@ def test_the_persisted_schema_and_code_literals_are_pinned() -> None:
     assert CODEX_OUTPUT_ARTIFACT_SCHEMA == "whetstone.codex_output_artifact"
     assert CODEX_SELECTION_UNEVALUATED_CODE == "codex_selection_unevaluated"
     assert CODEX_LEASE_TOKEN_MISMATCH_CODE == "codex_lease_token_mismatch"
+    assert CODEX_MCP_HOST_FAILED_CODE == "codex_mcp_host_failed"
     assert CODEX_SELECTION_CONTRACT_CODE == "codex_selection_contract"
     assert CODEX_SELECTION_UNSCORED_CODE == "codex_selection_unscored"
     assert (

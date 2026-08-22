@@ -27,12 +27,17 @@ from whetstone.testing.toy.experiment import build_toy_experiment
 from whetstone.core.identity import ImmutableJsonObject, TerminalFailure
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.optim.codex.runner import SubprocessCodexRunner
+from whetstone.testing.toy.experiment import (
+    toy_template_render_contract,
+)
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
     CODEX_EVALUATION_INTERRUPTED_CODE,
     CODEX_EXECUTION_FAILED_CODE,
     CODEX_LEASE_TOKEN_MISMATCH_CODE,
+    CODEX_MCP_HOST_FAILED_CODE,
     CODEX_RECORDED_CALL_CONTRACT_CODE,
     CODEX_SELECTION_UNEVALUATED_CODE,
     CODEX_SELECTION_UNSCORED_CODE,
@@ -159,8 +164,10 @@ class _SelectionWorld:
         *,
         failing_call_ids: frozenset[str],
         extra_payload: dict[str, str] | None = None,
+        sqlite_path: str = "",
     ) -> None:
         self.store = store
+        self.sqlite_path = sqlite_path
         self.engine = ReferenceEvalRuntimeConfig().build_engine(store)
         self.control = toy_codex_control(engine=self.engine, max_tool_calls=4)
         experiment = build_toy_experiment(num_seeds=1)
@@ -300,11 +307,14 @@ class _SelectionWorld:
 
 @pytest.fixture
 def selection_world(tmp_path):
-    with open_sqlite(str(tmp_path / "codex-selection.sqlite")) as store:
+    sqlite_path = str(tmp_path / "codex-selection.sqlite")
+    with open_sqlite(sqlite_path) as store:
 
         def build(failing_call_ids: frozenset[str] = frozenset()):
             return _SelectionWorld(
-                store, failing_call_ids=failing_call_ids
+                store,
+                failing_call_ids=failing_call_ids,
+                sqlite_path=sqlite_path,
             )
 
         yield build
@@ -1149,3 +1159,113 @@ def test_the_selected_candidate_keeps_every_non_mutation_field(
 
     assert accepted["payload"]["user_prompt_template"] == _TEMPLATE_A
     assert accepted["payload"]["system_prompt"] == "You are terse."
+
+
+
+class _RealRunnerWithFailingHost:
+    """The production runner, with its evaluation endpoint squatted.
+
+    This is the real ``SubprocessCodexRunner.run``: it builds the server
+    environment, constructs the host, and enters it. Only the port the
+    host binds is forced to one a foreign listener already owns, which
+    is exactly how a squatted port, a bind failure, and a startup that
+    misses its deadline reach the runner -- as ``CodexMcpHostError``
+    from ``__enter__``, before the Codex process exists.
+
+    Nothing here synthesizes the failure or the normalization; the
+    runner's own boundary is what turns it into a terminal Step failure.
+    """
+
+    def __init__(self, world, *, port: int, monkeypatch) -> None:
+        self._port = port
+        self._monkeypatch = monkeypatch
+        self._inner = SubprocessCodexRunner(
+            executor=_UnreachableExecutor(),
+            sqlite_path=world.sqlite_path,
+            runtime_config=ReferenceEvalRuntimeConfig(
+                mutation_field=world.config.candidate_template_field,
+                render_contract=toy_template_render_contract(),
+            ),
+            runtime_config_class=(
+                "whetstone.eval.reference_runtime:"
+                "ReferenceEvalRuntimeConfig"
+            ),
+            reward_policy=world.engine.reward_policy,
+        )
+
+    def run(self, request, handle, *, lease_token):
+        from whetstone.optim.codex import runner as runner_module
+        from whetstone.optim.codex.mcp_host import CodexMcpHost
+
+        port = self._port
+
+        def _squatted_host(server, **kwargs):
+            kwargs.pop("port", None)
+            return CodexMcpHost(
+                server, port=port, startup_seconds=5.0, **kwargs
+            )
+
+        self._monkeypatch.setattr(
+            runner_module, "CodexMcpHost", _squatted_host
+        )
+        return self._inner.run(request, handle, lease_token=lease_token)
+
+
+class _UnreachableExecutor:
+    """The Codex process must never be reached in these tests."""
+
+    def run_blocking(self, job):  # pragma: no cover - must not run
+        raise AssertionError(
+            "the Codex process must not run when the host failed"
+        )
+
+
+def test_an_mcp_host_that_never_starts_terminalizes_the_step(
+    selection_world, monkeypatch
+) -> None:
+    """A host failure is whetstone's failure, and it still ends the Step.
+
+    ``CodexMcpHostError`` is not an ``OpaqueStepError``, so before the
+    runner normalized it, it unwound past the adapter checkpoint: the
+    harness runs its effect-lease maintenance only once the adapter
+    returns an ``AdapterOutput``, leaving this ``NO_REDRIVE`` effect
+    nonterminal until the lease lapsed. The proof that the lease was
+    released is a state fact -- the identical Step runs again
+    immediately instead of raising ``EffectBusyError``.
+    """
+    import socket
+
+    squatter = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    squatter.bind(("127.0.0.1", 0))
+    squatter.listen(8)
+    port = int(squatter.getsockname()[1])
+    try:
+        world = selection_world()
+
+        result = world.run_step_with_runner(
+            _RealRunnerWithFailingHost(
+                world, port=port, monkeypatch=monkeypatch
+            )
+        )
+
+        assert result.status is StepStatus.FAILED
+        assert result.terminal_failure is not None
+        assert result.terminal_failure.code == CODEX_MCP_HOST_FAILED_CODE
+        # The agent never ran, so the Step paid for nothing.
+        assert result.tool_evidence == ()
+
+        # The lease came back: the identical Step is runnable again.
+        retried = world.run_step_with_runner(
+            _RealRunnerWithFailingHost(
+                world, port=port, monkeypatch=monkeypatch
+            )
+        )
+        assert retried.status is StepStatus.FAILED
+        assert (
+            retried.terminal_failure is not None
+            and retried.terminal_failure.code
+            == CODEX_MCP_HOST_FAILED_CODE
+        )
+    finally:
+        squatter.close()
+

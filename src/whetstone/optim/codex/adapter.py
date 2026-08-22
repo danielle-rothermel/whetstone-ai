@@ -103,6 +103,12 @@ CODEX_EXECUTION_FAILED_CODE = "codex_execution_failed"
 #: recorded ``template`` and ``base_ref`` the adapter rebuilds from, so
 #: it cannot be represented as Tool Evidence.
 CODEX_RECORDED_CALL_CONTRACT_CODE = "codex_recorded_call_contract"
+#: whetstone's own evaluation server could not be built or brought up --
+#: a mismatched runtime config, a squatted port, a bind or lifespan
+#: failure, a startup that missed its deadline. The agent never ran, so
+#: nothing was paid for; the Step still terminalizes so the harness
+#: releases the effect lease.
+CODEX_MCP_HOST_FAILED_CODE = "codex_mcp_host_failed"
 
 
 class OpaqueStepError(RuntimeError):
@@ -159,6 +165,26 @@ class CodexWallBudgetExceeded(CodexStructuredExecutionFailure):
             isolation=isolation,
         )
         self.wall_seconds = wall_seconds
+
+
+class CodexMcpHostFailure(OpaqueStepError):
+    """whetstone's own evaluation server never came up, or never came down.
+
+    This is a whetstone-side failure, not the agent's: the Codex process
+    either never started or never got a usable endpoint, so nothing was
+    paid for. It is an ``OpaqueStepError`` so it leaves through the
+    adapter's single terminalizing path -- otherwise it would unwind past
+    the adapter checkpoint and leave this ``NO_REDRIVE`` effect
+    nonterminal until the lease lapsed.
+
+    It carries no isolation evidence because there is no sandboxed
+    process to have evidence about; ``cause`` preserves the underlying
+    diagnostic for the terminal failure's message.
+    """
+
+    def __init__(self, message: str, *, cause: BaseException) -> None:
+        super().__init__(f"{message}: {cause}")
+        self.cause = cause
 
 
 class CodexOutputArtifact(BaseModel):
@@ -291,6 +317,24 @@ class CodexAdapter:
                         "run_id": request.run_id,
                         "wall_seconds": exc.wall_seconds,
                     },
+                ),
+            )
+        except CodexMcpHostFailure as exc:
+            # whetstone's own evaluation server, not the agent: the Codex
+            # process never got a usable endpoint, so this Step paid for
+            # nothing. It still terminalizes, under its own code so the
+            # ledger tells a host that never came up apart from an agent
+            # that failed.
+            return self._terminalize(
+                handle,
+                state_delta={
+                    "tool_namespace": str(config.store_namespace_key),
+                    "codex_isolation": {},
+                },
+                fallback=TerminalFailure(
+                    code=CODEX_MCP_HOST_FAILED_CODE,
+                    message=str(exc),
+                    details={"run_id": request.run_id},
                 ),
             )
         except OpaqueStepError as exc:

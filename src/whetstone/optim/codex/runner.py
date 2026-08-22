@@ -40,6 +40,7 @@ from pydantic import ValidationError
 
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.optim.codex.adapter import (
+    CodexMcpHostFailure,
     CodexOutputArtifact,
     CodexRunResult,
     CodexStructuredExecutionFailure,
@@ -602,17 +603,38 @@ class SubprocessCodexRunner:
         # store, and SQLite needs real write access to that file: running
         # it under the agent's profile would hand the agent the ledger and
         # the admission-capacity rows that cap paid evaluations.
-        with CodexMcpHost(
-            build_server_from_env(
-                self._mcp_server_environment(handle, lease_token)
-            ),
-            auth_token=lease_token,
-        ) as endpoint:
-            execution = self._execute_structured(
-                prompt=prompt,
-                output_schema=schema,
-                mcp_endpoint=endpoint,
-            )
+        #
+        # Building the server and bringing the host up are the two ways
+        # this Step fails *before* the agent ever runs: a malformed or
+        # mismatched runtime config, a squatted port, a bind or lifespan
+        # failure, a startup that misses its deadline. None of those are
+        # OpaqueStepError, so they would unwind past the adapter's
+        # checkpoint and leave this NO_REDRIVE effect nonterminal until
+        # the lease lapsed. Terminalizing is about releasing the lease,
+        # not about which thing broke, so they leave through the same
+        # path as every other runner failure. The host closes its own
+        # thread and socket before raising, so normalizing here strands
+        # nothing.
+        try:
+            with CodexMcpHost(
+                build_server_from_env(
+                    self._mcp_server_environment(handle, lease_token)
+                ),
+                auth_token=lease_token,
+            ) as endpoint:
+                execution = self._execute_structured(
+                    prompt=prompt,
+                    output_schema=schema,
+                    mcp_endpoint=endpoint,
+                )
+        except OpaqueStepError:
+            # The agent's own failures already carry their taxonomy and
+            # their isolation evidence; re-wrapping would lose both.
+            raise
+        except Exception as exc:
+            raise CodexMcpHostFailure(
+                "Codex MCP evaluation host failed", cause=exc
+            ) from exc
         artifact = _parse_output_artifact_bytes(
             execution.artifact_bytes,
             stdout=execution.stdout,
