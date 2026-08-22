@@ -30,6 +30,14 @@ from whetstone.optim.cost_aggregation import aggregate_run_cost
 
 PROMPT_TOKENS = 17
 COMPLETION_TOKENS = 5
+USD_PER_CALL = 0.125
+
+__all__ = [
+    "COMPLETION_TOKENS",
+    "PROMPT_TOKENS",
+    "USD_PER_CALL",
+    "usage_reporting_transport_factory",
+]
 
 
 def _usage_reporting_transport(
@@ -68,7 +76,14 @@ def _usage_reporting_transport(
     return _transport
 
 
-def _transport_factory(usd: float | None):
+def usage_reporting_transport_factory(usd: float | None):
+    """A transport factory reporting fixed per-call usage, and maybe a price.
+
+    Shared with the platform cross-path test so both paths are driven by the
+    identical provider behaviour, which is what makes their cost reports
+    comparable at all.
+    """
+
     def factory(policy):
         return _usage_reporting_transport(
             transport_policy=policy.transport_policy,
@@ -76,6 +91,9 @@ def _transport_factory(usd: float | None):
         )
 
     return factory
+
+
+_transport_factory = usage_reporting_transport_factory
 
 
 def _evaluate_one_row(store, *, usd: float | None) -> EvalEvidence:
@@ -183,6 +201,60 @@ def _evidence_ref(store, evidence: EvalEvidence):
     return ref
 
 
+@pytest.fixture
+def toy_copro_run(sqlite_store):
+    """Drive a real in-process COPRO run over the usage-reporting transport.
+
+    Returns the run's ``RunCostReport`` together with the engine and control
+    that determine how many calls it should have made, so a test can derive
+    the expected totals rather than read them back off the report.
+    """
+    from uuid import uuid4
+
+    from whetstone.coordination.runtime_bootstrap import copro_run_request
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.cost import RunCostReport
+    from whetstone.testing.runtime import (
+        build_toy_copro_control,
+        prepare_toy_copro_run,
+        register_toy_runtime,
+    )
+
+    def _run(*, usd: float | None, breadth: int = 2, depth: int = 1):
+        engine = ReferenceEvalRuntimeConfig().build_engine(
+            sqlite_store,
+            transport_factory=usage_reporting_transport_factory(usd),
+        )
+        control = build_toy_copro_control(
+            breadth=breadth, depth=depth, engine=engine
+        )
+        runtime = register_toy_runtime(
+            store=sqlite_store, engine=engine, copro_control=control
+        )
+        launch = prepare_toy_copro_run(
+            runtime,
+            run_id=f"cost-e2e-{uuid4().hex[:8]}",
+            control=control,
+            terminal_top_k=1,
+        )
+        result_ref = runtime.controller.drive(
+            copro_run_request(
+                launch,
+                controller_identity_hash=runtime.controller.runtime_hash,
+            )
+        )
+        result = OptimResult.model_validate(
+            sqlite_store.get(result_ref.reference)
+        )
+        return (
+            RunCostReport.model_validate(result.cost.to_json()),
+            engine,
+            control,
+        )
+
+    return _run
+
+
 def test_optim_result_cost_is_populated_by_the_harness(
     copro_launch,
 ) -> None:
@@ -205,3 +277,57 @@ def test_optim_result_cost_is_populated_by_the_harness(
     # The toy run drives a real proposer call, so its call count is real.
     assert cost["proposer"]["calls"] >= 1
     assert set(cost) == {"schema_version", "task_model", "proposer"}
+
+
+def test_run_totals_equal_the_usage_the_transport_reported(
+    toy_copro_run,
+) -> None:
+    """Totals are checked against arithmetic, not against the report itself.
+
+    The transport reports a fixed number of tokens and a fixed price per
+    call, and the toy control's shape fixes how many calls the run makes, so
+    the expected totals are computable in advance. Asserting exact equality
+    against that arithmetic is what makes this a check of the plumbing --
+    provider response, output row, stored evidence, aggregate -- rather than
+    a check that the report agrees with itself.
+    """
+    report, engine, control = toy_copro_run(usd=USD_PER_CALL)
+
+    # COPRO evaluates each of the ``breadth`` candidates it drafts in its
+    # single round, one row per task per seed. Verified to scale with
+    # breadth rather than assumed: breadth=3 drives six calls, not four.
+    rows_per_candidate = len(engine.sampling.tasks) * engine.sampling.num_seeds
+    expected_calls = control.breadth * rows_per_candidate
+
+    assert report.task_model.calls == expected_calls
+    assert report.task_model.input_tokens == expected_calls * PROMPT_TOKENS
+    assert (
+        report.task_model.output_tokens == expected_calls * COMPLETION_TOKENS
+    )
+    assert report.task_model.usd == pytest.approx(
+        expected_calls * USD_PER_CALL
+    )
+    assert report.task_model.cached_calls == 0
+    assert report.task_model.rows_missing_token_breakdown == 0
+
+
+def test_run_totals_track_the_number_of_calls_the_run_makes(
+    toy_copro_run,
+) -> None:
+    """A wider round costs proportionally more, so the count is not a constant.
+
+    Pinning one run's totals would pass against a report that hard-coded
+    them. Driving a second, wider run and asserting the totals move with the
+    call count is what makes the arithmetic above load-bearing.
+    """
+    report, engine, control = toy_copro_run(usd=USD_PER_CALL, breadth=3)
+
+    rows_per_candidate = len(engine.sampling.tasks) * engine.sampling.num_seeds
+    expected_calls = control.breadth * rows_per_candidate
+
+    assert control.breadth == 3
+    assert report.task_model.calls == expected_calls
+    assert report.task_model.input_tokens == expected_calls * PROMPT_TOKENS
+    assert report.task_model.usd == pytest.approx(
+        expected_calls * USD_PER_CALL
+    )

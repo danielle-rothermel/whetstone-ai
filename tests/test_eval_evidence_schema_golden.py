@@ -116,6 +116,7 @@ EXPECTED_OUTPUT_ROW_FIELDS = (
     "prompt_tokens",
     "completion_tokens",
     "provider_cost",
+    "cache_hit",
 )
 
 

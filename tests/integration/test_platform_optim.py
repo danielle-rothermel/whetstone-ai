@@ -255,3 +255,115 @@ def test_episode_predecessor_read_scopes_to_the_second_deferral_episode(
         stage_key=STAGE_EVAL_ROW,
     )
     assert tuple(row.stage_index for row in unscoped) == (1, 2, 5, 6)
+
+
+def test_platform_and_in_process_runs_report_the_identical_cost(
+    pg_engine: Engine,
+    clean_pg: str,
+    tmp_path,
+) -> None:
+    """The central design claim: a run reports the same spend however it ran.
+
+    Both paths drive the same toy COPRO control over the same fake transport,
+    which reports fixed per-call usage, and both reach ``OptimResult.cost``
+    through ``OptimHarness.terminalize`` and the one shared aggregator. The
+    reports are therefore equal object-for-object, not merely equal in
+    aggregate: the platform path splits its evaluation rows across worker
+    payloads and reassembles them, but cost is re-derived from the persisted
+    evidence afterwards, so the split leaves no trace in the total.
+
+    Comparing the whole report -- rather than asserting each side is
+    individually well-formed -- is what makes this a cross-path check.
+    """
+    from uuid import uuid4
+
+    from whetstone.coordination.runtime_bootstrap import copro_run_request
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.contracts import OptimResult
+    from whetstone.optim.cost import RunCostReport
+    from whetstone.testing.runtime import (
+        build_toy_copro_control,
+        prepare_toy_copro_run,
+        register_toy_runtime,
+    )
+
+    from ..test_run_cost_e2e import (
+        USD_PER_CALL,
+        usage_reporting_transport_factory,
+    )
+
+    breadth, depth = 2, 1
+
+    in_process_path = tmp_path / "in-process.sqlite"
+    with open_sqlite(str(in_process_path)) as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(
+            store,
+            transport_factory=usage_reporting_transport_factory(USD_PER_CALL),
+        )
+        control = build_toy_copro_control(
+            breadth=breadth, depth=depth, engine=engine
+        )
+        runtime = register_toy_runtime(
+            store=store, engine=engine, copro_control=control
+        )
+        launch = prepare_toy_copro_run(
+            runtime,
+            run_id=f"in-process-{uuid4().hex[:8]}",
+            control=control,
+            terminal_top_k=1,
+        )
+        result_ref = runtime.controller.drive(
+            copro_run_request(
+                launch,
+                controller_identity_hash=runtime.controller.runtime_hash,
+            )
+        )
+        in_process = RunCostReport.model_validate(
+            OptimResult.model_validate(
+                store.get(result_ref.reference)
+            ).cost.to_json()
+        )
+
+    platform_path = tmp_path / "platform.sqlite"
+    with open_sqlite(str(platform_path)) as store:
+        context = bootstrap_platform_runtime(
+            store=store,
+            pg_engine=pg_engine,
+            clean_pg=clean_pg,
+            now=NOW,
+            dispatch_mode=EvalDispatchMode.PLATFORM,
+            breadth=breadth,
+            depth=depth,
+            transport_factory=usage_reporting_transport_factory(USD_PER_CALL),
+        )
+        try:
+            work_item_id = lookup_work_item_id(
+                pg_engine,
+                campaign_key=context.campaign_key,
+                work_key=context.work_key,
+            )
+            run_until_quiescent(
+                pg_engine=pg_engine,
+                registry=context.registry,
+                registration=context.registration,
+                now=NOW,
+                deadline_seconds=180,
+                work_item_id=work_item_id,
+                run_key=context.run_key,
+            )
+            terminal_result_ref = await_run_completion(
+                run_key=context.run_key,
+                pg_engine=pg_engine,
+                registration=context.registration,
+                registry=context.registry,
+                now=NOW,
+            )
+            result = load_terminal_optim_result(context, terminal_result_ref)
+            platform = RunCostReport.model_validate(result.cost.to_json())
+        finally:
+            shutdown_platform_runtime(context)
+
+    # A real run, not an empty one: the equality below must have content.
+    assert in_process.task_model.calls > 0
+    assert in_process.task_model.usd is not None
+    assert platform == in_process

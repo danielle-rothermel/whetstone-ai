@@ -34,12 +34,15 @@ GOLDEN_ROLE_COST_KEYS = frozenset(
         "output_tokens",
         "priced_calls",
         "unpriced_calls",
+        "cached_calls",
+        "rows_missing_token_breakdown",
         "usd",
     }
 )
 
 GOLDEN_PROPOSER_CALL_USAGE_KEYS = frozenset(
     {
+        "call_id",
         "prompt_tokens",
         "completion_tokens",
         "usd",

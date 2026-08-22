@@ -53,6 +53,7 @@ def _row(
     prompt_tokens: int | None,
     completion_tokens: int | None,
     provider_cost: float | None,
+    cache_hit: bool = False,
 ) -> dict[str, Any]:
     """A minimal output row in its persisted shape."""
     return {
@@ -76,6 +77,7 @@ def _row(
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
         "provider_cost": provider_cost,
+        "cache_hit": cache_hit,
     }
 
 
@@ -187,8 +189,8 @@ def test_one_unpriced_row_withholds_the_task_model_usd_total(
     assert report.task_model.usd is None
 
 
-def test_rows_without_usage_are_not_counted_as_calls(tmp_path) -> None:
-    """A cache hit or unexecuted row is not a billable call."""
+def test_a_row_with_no_usage_evidence_is_not_a_call(tmp_path) -> None:
+    """No tokens and no price evidences no provider call: a missing row."""
     with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
         ref = _persist_evidence(
             store,
@@ -215,6 +217,201 @@ def test_rows_without_usage_are_not_counted_as_calls(tmp_path) -> None:
         )
     assert report.task_model.calls == 1
     assert report.task_model.input_tokens == 10
+    assert report.task_model.cached_calls == 0
+
+
+def test_a_cache_hit_row_is_reported_but_never_billed(tmp_path) -> None:
+    """The headline replay case, with the tokens a real cache hit carries.
+
+    A prompt-cache hit replays the original call's response verbatim, so its
+    row carries that call's real tokens and price. Billing it again would
+    charge the run twice for one provider call, so the row counts only in
+    ``cached_calls``.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.2,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.2,
+                    cache_hit=True,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.cached_calls == 1
+    assert report.task_model.input_tokens == 10
+    assert report.task_model.output_tokens == 4
+    # One provider call was paid for, so the total is that call's price.
+    assert report.task_model.usd == pytest.approx(0.2)
+
+
+def test_a_cache_hit_does_not_make_the_usd_total_incomplete(tmp_path) -> None:
+    """A replayed call is not an unpriced call: it is not a call at all."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.2,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=8,
+                    completion_tokens=3,
+                    provider_cost=None,
+                    cache_hit=True,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.unpriced_calls == 0
+    assert report.task_model.cached_calls == 1
+    assert report.task_model.usd == pytest.approx(0.2)
+
+
+def test_a_priced_row_without_a_token_breakdown_keeps_its_price(
+    tmp_path,
+) -> None:
+    """A price is positive evidence a call happened, so it is never dropped.
+
+    Some providers omit the usage block while still returning a price. The
+    call must count and its price must reach ``usd``; only its tokens are
+    unknown, which ``rows_missing_token_breakdown`` records so the token
+    totals are not read as complete.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.1,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    provider_cost=0.42,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 2
+    assert report.task_model.priced_calls == 2
+    assert report.task_model.unpriced_calls == 0
+    assert report.task_model.rows_missing_token_breakdown == 1
+    assert report.task_model.input_tokens == 10
+    assert report.task_model.usd == pytest.approx(0.52)
+
+
+def test_a_row_with_only_one_token_field_is_a_full_call(tmp_path) -> None:
+    """A partial token split still evidences one call with a known side."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=5,
+                    completion_tokens=None,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+    assert report.task_model.input_tokens == 5
+    assert report.task_model.output_tokens == 0
+    assert report.task_model.rows_missing_token_breakdown == 0
+    assert report.task_model.usd is None
+
+
+def test_a_proposer_call_reported_twice_is_counted_once(tmp_path) -> None:
+    """Two Step Results reporting one call must not bill it twice.
+
+    This is the proposer-side counterpart of evidence-ref de-duplication: a
+    Step re-driven after a crash re-reports the calls its predecessor already
+    paid for, and only the call identity can tell that from real spend.
+    """
+    call = ProposerCallUsage(
+        call_id="reflection-1",
+        prompt_tokens=30,
+        completion_tokens=9,
+        usd=0.4,
+    )
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(proposer_usage=(call,)),
+                _FakeStepResult(proposer_usage=(call,)),
+            ),
+        )
+    assert report.proposer.calls == 1
+    assert report.proposer.input_tokens == 30
+    assert report.proposer.usd == pytest.approx(0.4)
+
+
+def test_distinct_proposer_calls_are_each_counted(tmp_path) -> None:
+    """De-duplication keys on identity, so it never merges real calls."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(
+                    proposer_usage=(
+                        ProposerCallUsage(
+                            call_id="reflection-1",
+                            prompt_tokens=30,
+                            completion_tokens=9,
+                        ),
+                        ProposerCallUsage(
+                            call_id="reflection-2",
+                            prompt_tokens=30,
+                            completion_tokens=9,
+                        ),
+                    )
+                ),
+            ),
+        )
+    assert report.proposer.calls == 2
+    assert report.proposer.input_tokens == 60
 
 
 def test_evidence_cited_twice_is_counted_once(tmp_path) -> None:

@@ -232,6 +232,7 @@ def bootstrap_platform_runtime(
     depth: int = 1,
     optimizer: Literal["copro", "gepa"] = "copro",
     max_metric_calls: int = 2,
+    transport_factory=None,
 ) -> PlatformIntegrationContext:
     migrate_platform_schema(pg_engine)
     suffix = uuid4().hex[:10]
@@ -239,7 +240,9 @@ def bootstrap_platform_runtime(
     run_key = f"run-{suffix}"
     work_key = f"work-{suffix}"
 
-    eval_engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    eval_engine = ReferenceEvalRuntimeConfig().build_engine(
+        store, transport_factory=transport_factory
+    )
     run_id = f"integration-run-{suffix}"
     if optimizer == "gepa":
         experiment = build_toy_experiment(num_seeds=1)
