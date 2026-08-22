@@ -13,8 +13,8 @@ stepping through runs to inspect behavior. Optimizers are not co-equal:
 
 | Optimizer | Harness adapter | Platform pipeline | Sandbox |
 |-----------|-----------------|-------------------|---------|
-| **COPRO** | Live; the only adapter `register_runtime` wires | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
-| **GEPA** | Live harness adapter + step engine; pass via `register_runtime(extra_adapters=...)` | Not registered | `whetstone-sandbox gepa` |
+| **COPRO** | Live; pass a COPRO adapter in the `build_runtime` registry | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
+| **GEPA** | Live harness adapter + step engine; pass via the `build_runtime` registry | Not registered | `whetstone-sandbox gepa` |
 | **MIPROv2** | Adapter/control exist | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
 
 **Out of scope here:** particular benchmarks or envs (those live in separate
@@ -63,7 +63,7 @@ Optimization  →  Sandbox / interpretation
 
 - **Experiment** — generation graph, initial/ceiling candidates, eval configs, reward policy
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
-- **OptimizerAdapter** — COPRO plugs into the shared harness on the default runtime; GEPA and MIPROv2 adapters exist but are not platform-wired
+- **OptimizerAdapter** — COPRO and GEPA plug into the shared harness when present in the `build_runtime` registry; MIPROv2 exists as an adapter but is not platform-wired. Adding or removing an adapter changes controller identity.
 - **StepContractProvider** — each optimizer declares its first-step and continuation contracts and parses its own launch control, registered by adapter key; `StepRequestBuilder` and `HarnessRunController` dispatch through it
 - **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents`, and evaluations its own search drove in `search_evidence`, each bound to its run and step index and verified by the harness; a terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
@@ -76,8 +76,28 @@ inside the step. `EvalDispatchMode.PLATFORM` persists eval intents, fans out
 row jobs, fans results back in, then resumes the step. Submit a run with
 `submit_optim_run`.
 
-`whetstone-optim run` is a stub until step 5; it echoes the control ref and
-exits 2.
+`whetstone-optim` (requires the `platform` extra) is the production entry
+point. `run` resolves a bound launch from a SQLite store, assembles
+`build_runtime` + `deploy_platform`, submits a members tuple, and prints the
+receipt. Adapter-set membership is part of controller identity: adding an
+adapter changes `runtime.controller.runtime_hash`. `status` reads the run
+manifest and release state; `result` loads `OptimPlatformRunResult`.
+
+```bash
+uv sync --extra platform
+uv run whetstone-optim run \
+  --run-id <bound-run-id> \
+  --store-path runtime.sqlite \
+  --database-url "$WHETSTONE_DATABASE_URL" \
+  --campaign-key campaign-1 \
+  --run-key run-1 \
+  --adapter copro \
+  --proposer provider \
+  --application-version 0.1.3 \
+  --executor-id local-1
+uv run whetstone-optim status --run-key run-1 --store-path runtime.sqlite
+uv run whetstone-optim result --run-key run-1 --store-path runtime.sqlite
+```
 
 ## Sandbox
 

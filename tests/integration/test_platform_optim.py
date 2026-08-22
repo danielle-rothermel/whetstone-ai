@@ -61,6 +61,7 @@ def test_inline_platform_copro_submit_to_result(
                 registration=context.registration,
                 now=NOW,
                 work_item_id=work_item_id,
+                run_key=context.run_key,
             )
             terminal_result_ref = await_run_completion(
                 run_key=context.run_key,
@@ -114,6 +115,7 @@ def test_platform_deferral_fanout_fanin_through_admission(
                 now=NOW,
                 deadline_seconds=180,
                 work_item_id=work_item_id,
+                run_key=context.run_key,
             )
             terminal_result_ref = await_run_completion(
                 run_key=context.run_key,
@@ -182,6 +184,7 @@ def test_platform_deferral_survives_fanin_retry(
                 now=NOW,
                 deadline_seconds=180,
                 work_item_id=work_item_id,
+                run_key=context.run_key,
             )
             terminal_result_ref = await_run_completion(
                 run_key=context.run_key,

@@ -92,7 +92,7 @@ class OptimWorkState:
 
 
 def _load_launch(runtime: RegisteredRuntime, run_id: str) -> OptimRunLaunch:
-    return runtime.controller._load_launch(run_id)  # noqa: SLF001
+    return runtime.controller.load_launch(run_id)
 
 
 def _validate_platform_stage_index(

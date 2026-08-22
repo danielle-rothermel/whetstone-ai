@@ -10,10 +10,10 @@ from dr_platform.completion.execution import RunCompletionPayload, StateCount
 from dr_store.content_addressing import format_object_reference
 
 from whetstone.coordination.eval_service import EvalDispatchMode
-from whetstone.coordination.runtime_bootstrap import (
+from whetstone.testing.runtime import (
     build_toy_copro_control,
-    prepare_copro_run,
-    register_runtime,
+    prepare_toy_copro_run,
+    register_toy_runtime,
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.platform.contracts import (
@@ -75,12 +75,12 @@ def _depth2_copro_launch(sqlite_store):
     runtime_config = ReferenceEvalRuntimeConfig()
     engine = runtime_config.build_engine(sqlite_store)
     control = build_toy_copro_control(breadth=2, depth=2, engine=engine)
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         engine=engine,
         copro_control=control,
     )
-    launch = prepare_copro_run(
+    launch = prepare_toy_copro_run(
         runtime,
         run_id=f"test-run-{uuid4().hex[:8]}",
         control=control,

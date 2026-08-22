@@ -2,44 +2,25 @@
 
 from __future__ import annotations
 
-import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from dbos import DBOS, Queue
 from sqlalchemy import Engine, select
 
 from dr_platform._core.ledger.schema import LedgerSchema
 from dr_platform._core.ledger.states import StageExecutionState
-from dr_platform.admission.controls import set_stage_capacity
-from dr_platform.admission.runner import run_admission_pass
-from dr_platform.completion.execution import inspect_run_completion
 from dr_platform.inspection.work_items import (
     get_work_item_stages,
     list_predecessor_stage_outputs,
 )
 from dr_platform.pipeline.registry import PipelineRegistry
-from dr_platform.recovery.live_identity import LiveDbosIdentity
-from dr_platform.runtime.database.migrate import upgrade_platform_schema
-from dr_platform.runtime.dbos import (
-    DEFAULT_POOL_SIZE,
-    PlatformDbosConfig,
-    initialize_dbos_runtime,
-)
-from dr_platform.runtime.dispatcher import register_scheduled_dispatcher
 from dr_store.content_addressing import parse_object_reference
 
 from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.coordination.harness_run_controller import OptimRunLaunch
-from whetstone.coordination.runtime_bootstrap import (
-    RegisteredRuntime,
-    build_toy_copro_control,
-    prepare_copro_run,
-    register_runtime,
-)
+from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from dr_store.sync import BlockingObjectStore
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
@@ -48,11 +29,20 @@ from whetstone.platform.contracts import (
     STAGE_EVAL_ROW,
     load_run_result,
 )
-from whetstone.platform.pipeline import (
-    EVAL_ROW_QUEUE_CONCURRENCY,
-    register_optim_pipeline,
+from whetstone.platform.deploy import (
+    PlatformDeployment,
+    await_run_completion as _await_run_completion,
+    deploy_platform,
+    drive_until_quiescent,
+    upgrade_platform_schema,
+    wait_for_run_released,
 )
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
+from whetstone.testing.runtime import (
+    build_toy_copro_control,
+    prepare_toy_copro_run,
+    register_toy_runtime,
+)
 
 if TYPE_CHECKING:
     from dr_platform.runtime.dispatcher import DispatcherRegistration
@@ -72,17 +62,12 @@ class PlatformIntegrationContext:
     registry: PipelineRegistry
     registration: DispatcherRegistration
     store: BlockingObjectStore
+    deployment: PlatformDeployment
 
 
 def migrate_platform_schema(engine: Engine) -> LedgerSchema:
     upgrade_platform_schema(engine.url.render_as_string(hide_password=False))
     return LedgerSchema()
-
-
-def queue_concurrency(stage_key: str) -> int:
-    if stage_key == STAGE_EVAL_ROW:
-        return EVAL_ROW_QUEUE_CONCURRENCY
-    return 1
 
 
 def lookup_work_item_id(
@@ -157,27 +142,6 @@ def assert_fanin_barrier_predecessors(
     assert len(predecessors) == expected_eval_row_count
 
 
-def await_dbos_result(workflow_id: str, *, registration, timeout: float = 60):
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(
-            registration.client.retrieve_workflow(workflow_id).get_result,
-            polling_interval_sec=0.01,
-        )
-        return future.result(timeout=timeout)
-
-
-def stage_workflow_ids(engine: Engine) -> tuple[str, ...]:
-    schema = LedgerSchema()
-    with engine.connect() as connection:
-        return tuple(
-            connection.execute(
-                select(schema.stage_attempts.c.workflow_id).order_by(
-                    schema.stage_attempts.c.stage_attempt_id
-                )
-            ).scalars()
-        )
-
-
 def diagnose_work_item(engine: Engine, work_item_id: int) -> str:
     stages = get_work_item_stages(work_item_id, engine=engine)
     counts: dict[str, dict[str, int]] = {}
@@ -207,27 +171,6 @@ def assert_no_failed_stages(engine: Engine, work_item_id: int) -> None:
         )
 
 
-def wait_for_run_released(
-    engine: Engine,
-    *,
-    run_key: str,
-    timeout: float = 120,
-) -> None:
-    schema = LedgerSchema()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        with engine.connect() as connection:
-            released_at = connection.execute(
-                select(schema.pipeline_runs.c.released_at).where(
-                    schema.pipeline_runs.c.run_key == run_key
-                )
-            ).scalar_one_or_none()
-        if released_at is not None:
-            return
-        time.sleep(0.05)
-    raise TimeoutError(f"run {run_key!r} was not released before deadline")
-
-
 def run_until_quiescent(
     *,
     pg_engine: Engine,
@@ -236,47 +179,16 @@ def run_until_quiescent(
     now: datetime,
     deadline_seconds: float = 120,
     work_item_id: int | None = None,
+    run_key: str | None = None,
 ) -> None:
-    seen: set[str] = set()
-    deadline = time.monotonic() + deadline_seconds
-    schema = LedgerSchema()
-    idle_passes = 0
-    while time.monotonic() < deadline:
-        registration.workflow(now, now)
-        processed_new = False
-        for workflow_id in stage_workflow_ids(pg_engine):
-            if workflow_id in seen:
-                continue
-            seen.add(workflow_id)
-            processed_new = True
-            await_dbos_result(workflow_id, registration=registration)
-        run_admission_pass(
-            pg_engine,
-            client=registration.client,
-            registry=registry,
-            clock=lambda: now,
-        )
-        with pg_engine.connect() as connection:
-            pending_stage = connection.execute(
-                select(schema.stage_executions.c.stage_execution_id).where(
-                    schema.stage_executions.c.state.in_(
-                        ("READY", "ADMITTED", "ENQUEUED")
-                    )
-                )
-            ).first()
-        if pending_stage is not None:
-            idle_passes = 0
-            continue
-        if processed_new:
-            idle_passes = 0
-            continue
-        idle_passes += 1
-        if idle_passes >= 3:
-            break
-        time.sleep(0.05)
-    else:
-        raise TimeoutError("platform integration run did not quiesce before deadline")
-
+    drive_until_quiescent(
+        engine=pg_engine,
+        registry=registry,
+        registration=registration,
+        now=now,
+        deadline_seconds=deadline_seconds,
+        run_key=run_key,
+    )
     if work_item_id is not None:
         assert_no_failed_stages(pg_engine, work_item_id)
 
@@ -290,38 +202,14 @@ def await_run_completion(
     now: datetime,
     timeout: float = 120,
 ) -> str:
-    deadline = time.monotonic() + timeout
-    last_error: Exception | None = None
-    while time.monotonic() < deadline:
-        registration.barrier_workflow(now, now)
-        run_admission_pass(
-            pg_engine,
-            client=registration.client,
-            registry=registry,
-            clock=lambda: now,
-        )
-        for workflow_id in stage_workflow_ids(pg_engine):
-            await_dbos_result(workflow_id, registration=registration)
-        try:
-            wait_for_run_released(
-                pg_engine,
-                run_key=run_key,
-                timeout=min(5.0, deadline - time.monotonic()),
-            )
-            execution = inspect_run_completion(run_key, engine=pg_engine)
-            terminal_result_ref = await_dbos_result(
-                execution.workflow_id,
-                registration=registration,
-            )
-            completed = inspect_run_completion(run_key, engine=pg_engine)
-            assert completed.output_reference == terminal_result_ref
-            return terminal_result_ref
-        except (LookupError, TimeoutError, AssertionError) as error:
-            last_error = error
-            time.sleep(0.05)
-    raise TimeoutError(
-        f"run completion for {run_key!r} did not finish before deadline"
-    ) from last_error
+    return _await_run_completion(
+        run_key=run_key,
+        engine=pg_engine,
+        registration=registration,
+        registry=registry,
+        now=now,
+        timeout=timeout,
+    )
 
 
 def bootstrap_platform_runtime(
@@ -346,34 +234,24 @@ def bootstrap_platform_runtime(
         depth=depth,
         engine=eval_engine,
     )
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=store,
         ledger_engine=pg_engine,
         engine=eval_engine,
         copro_control=control,
+        platform=True,
     )
-    registry = PipelineRegistry()
-    pipeline = register_optim_pipeline(
-        registry,
-        runtime,
-        max_recovery_attempts=1,
+    deployment = deploy_platform(
+        runtime=runtime,
+        engine=pg_engine,
+        database_url=clean_pg,
+        application_version=f"whetstone-test-{suffix}",
+        executor_id=f"whetstone-test-exec-{suffix}",
+        now=now,
+        app_name=f"whetstone-platform-{suffix}",
+        sweep_cron=None,
     )
-    for stage in pipeline.stages:
-        Queue(
-            stage.queue_name,
-            concurrency=queue_concurrency(stage.key.value),
-        )
-        set_stage_capacity(
-            pipeline=pipeline.identity,
-            stage_key=stage.key,
-            capacity=queue_concurrency(stage.key.value),
-            engine=pg_engine,
-            clock=lambda: now,
-        )
-    assert pipeline.run_completion is not None
-    Queue(pipeline.run_completion.queue_name, concurrency=1)
-
-    launch = prepare_copro_run(
+    launch = prepare_toy_copro_run(
         runtime,
         run_id=f"integration-run-{suffix}",
         control=control,
@@ -381,7 +259,7 @@ def bootstrap_platform_runtime(
     )
     submit_optim_run(
         runtime=runtime,
-        registry=registry,
+        registry=deployment.registry,
         engine=pg_engine,
         campaign_key=campaign_key,
         run_key=run_key,
@@ -391,26 +269,6 @@ def bootstrap_platform_runtime(
         dispatch_mode=dispatch_mode,
     )
 
-    config = PlatformDbosConfig(
-        database_url=clean_pg,
-        system_database_url=clean_pg,
-        max_recovery_attempts=1,
-        pool_size=DEFAULT_POOL_SIZE,
-    )
-    initialize_dbos_runtime(config, app_name=f"whetstone-platform-{suffix}")
-    registration = register_scheduled_dispatcher(
-        live_dbos_identity=LiveDbosIdentity(),
-        config=config,
-        engine=pg_engine,
-        registry=registry,
-        sweep_cron=None,
-    )
-    DBOS.launch()
-    # Pin this process as the current deployment. Without this, workflows
-    # left in a reused Postgres database by a *different* prior application
-    # version are treated as recoverable work and stall the run.
-    DBOS.set_latest_application_version(DBOS.application_version)
-
     return PlatformIntegrationContext(
         suffix=suffix,
         campaign_key=campaign_key,
@@ -418,9 +276,10 @@ def bootstrap_platform_runtime(
         work_key=work_key,
         runtime=runtime,
         launch=launch,
-        registry=registry,
-        registration=registration,
+        registry=deployment.registry,
+        registration=deployment.registration,
         store=store,
+        deployment=deployment,
     )
 
 
@@ -442,5 +301,5 @@ def load_terminal_optim_result(
 
 
 def shutdown_platform_runtime(context: PlatformIntegrationContext) -> None:
-    context.registration.close()
-    DBOS.destroy(destroy_registry=True)
+    context.deployment.shutdown()
+    context.runtime.close()

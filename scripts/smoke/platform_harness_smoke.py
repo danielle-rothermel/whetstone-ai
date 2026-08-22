@@ -9,10 +9,10 @@ import tempfile
 from dr_store.content_addressing import parse_object_reference
 
 from dr_store.sync import open_sqlite
-from whetstone.coordination.runtime_bootstrap import (
+from whetstone.testing.runtime import (
     build_toy_copro_control,
-    prepare_copro_run,
-    register_runtime,
+    prepare_toy_copro_run,
+    register_toy_runtime,
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
@@ -37,13 +37,13 @@ def _inline_platform_driver_smoke() -> None:
         with open_sqlite(store_path) as store:
             engine = ReferenceEvalRuntimeConfig().build_engine(store)
             control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
-            runtime = register_runtime(
+            runtime = register_toy_runtime(
                 store=store,
                 engine=engine,
                 copro_control=control,
             )
             run_id = "platform-smoke-run"
-            launch = prepare_copro_run(
+            launch = prepare_toy_copro_run(
                 runtime,
                 run_id=run_id,
                 control=control,

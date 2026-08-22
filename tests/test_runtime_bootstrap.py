@@ -5,10 +5,16 @@ from dataclasses import replace
 import pytest
 from dr_store.sync import BlockingObjectStore, open_sqlite
 
-from whetstone.coordination.runtime_bootstrap import register_runtime
+from whetstone.coordination.runtime_bootstrap import prepare_copro_run, prepare_gepa_run
 from whetstone.core.leasing import ReplayPolicy
 from whetstone.optim.contracts import StepMode
 from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+from whetstone.testing.runtime import build_toy_copro_control, register_toy_runtime
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    build_toy_experiment,
+    toy_template_render_contract,
+)
 
 
 class _StubGepaAdapter:
@@ -83,23 +89,30 @@ def _gepa_harness_adapter(control, *, seed_text: str):
     )
 
 
+def _toy_launch_kwargs(experiment=None):
+    resolved = experiment or build_toy_experiment(num_seeds=1)
+    return {
+        "experiment": resolved,
+        "render_contract": toy_template_render_contract(),
+        "mutation_field": TOY_MUTATION_FIELD,
+    }
+
+
 def test_register_runtime_is_idempotent_for_same_store(sqlite_store) -> None:
-    first = register_runtime(store=sqlite_store)
-    second = register_runtime(store=sqlite_store)
+    first = register_toy_runtime(store=sqlite_store)
+    second = register_toy_runtime(store=sqlite_store)
     assert first.harness is not second.harness
     assert first.controller.runtime_hash != second.controller.runtime_hash
 
 
 def test_register_runtime_opens_store_when_omitted(tmp_path) -> None:
-    runtime = register_runtime(sqlite_path=str(tmp_path / "runtime.sqlite"))
+    runtime = register_toy_runtime(sqlite_path=str(tmp_path / "runtime.sqlite"))
     assert isinstance(runtime.store, BlockingObjectStore)
     assert runtime.store.resolve("absent") is None
 
 
 def test_register_runtime_accepts_caller_engine(sqlite_store) -> None:
-    from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-    from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
     engine = ReferenceEvalRuntimeConfig().build_engine(
@@ -107,7 +120,7 @@ def test_register_runtime_accepts_caller_engine(sqlite_store) -> None:
         experiment=experiment,
     )
     control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         engine=engine,
         copro_control=control,
@@ -127,7 +140,7 @@ def test_register_runtime_requires_store_when_engine_is_supplied(
         experiment=experiment,
     )
     with pytest.raises(ValueError, match="requires store="):
-        register_runtime(engine=engine)
+        register_toy_runtime(engine=engine)
 
 
 def test_register_runtime_requires_control_when_engine_is_supplied(
@@ -142,20 +155,11 @@ def test_register_runtime_requires_control_when_engine_is_supplied(
         experiment=experiment,
     )
     with pytest.raises(ValueError, match="requires copro_control="):
-        register_runtime(store=sqlite_store, engine=engine)
+        register_toy_runtime(store=sqlite_store, engine=engine)
 
 
 def test_prepare_copro_run_uses_caller_experiment(sqlite_store) -> None:
-    from whetstone.coordination.runtime_bootstrap import (
-        build_toy_copro_control,
-        prepare_copro_run,
-    )
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-    from whetstone.testing.toy.experiment import (
-        TOY_MUTATION_FIELD,
-        build_toy_experiment,
-        toy_template_render_contract,
-    )
 
     experiment = build_toy_experiment(num_seeds=1)
     engine = ReferenceEvalRuntimeConfig().build_engine(
@@ -163,7 +167,7 @@ def test_prepare_copro_run_uses_caller_experiment(sqlite_store) -> None:
         experiment=experiment,
     )
     control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         engine=engine,
         copro_control=control,
@@ -183,9 +187,7 @@ def test_prepare_copro_run_uses_caller_experiment(sqlite_store) -> None:
 def test_build_toy_copro_control_binds_engine_hashes(sqlite_store) -> None:
     from dr_providers import ProviderKind
 
-    from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-    from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
     engine = ReferenceEvalRuntimeConfig(
@@ -208,13 +210,8 @@ def test_build_toy_copro_control_binds_engine_hashes(sqlite_store) -> None:
 def test_prepare_copro_run_rejects_mismatched_reward_policy(
     sqlite_store,
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import (
-        build_toy_copro_control,
-        prepare_copro_run,
-    )
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
     from whetstone.experiment.reward import RewardPolicy, RewardTerm
-    from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
     engine = ReferenceEvalRuntimeConfig().build_engine(
@@ -222,7 +219,7 @@ def test_prepare_copro_run_rejects_mismatched_reward_policy(
         experiment=experiment,
     )
     control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         engine=engine,
         copro_control=control,
@@ -239,15 +236,13 @@ def test_prepare_copro_run_rejects_mismatched_reward_policy(
             runtime,
             run_id="mismatched-reward",
             control=control,
-            experiment=other,
+            **_toy_launch_kwargs(other),
         )
 
 
 def test_register_runtime_accepts_caller_proposer_transport(sqlite_store) -> None:
-    from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
     from whetstone.testing.fakes.proposer import DummyProposerTransport
-    from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
     engine = ReferenceEvalRuntimeConfig().build_engine(
@@ -260,7 +255,7 @@ def test_register_runtime_accepts_caller_proposer_transport(sqlite_store) -> Non
         execution_policy_hash=control.provider_execution_policy_hash,
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,
     )
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         engine=engine,
         copro_control=control,
@@ -272,20 +267,21 @@ def test_register_runtime_accepts_caller_proposer_transport(sqlite_store) -> Non
 def test_prepare_gepa_run_requires_registered_adapter(
     sqlite_store, tmp_path
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import prepare_gepa_run
-
-    runtime = register_runtime(store=sqlite_store)
+    runtime = register_toy_runtime(store=sqlite_store)
     control = _toy_gepa_control(sqlite_path=str(tmp_path / "gepa.sqlite"))
-    with pytest.raises(ValueError, match="extra_adapters"):
-        prepare_gepa_run(runtime, run_id="missing-gepa", control=control)
+    with pytest.raises(ValueError, match="adapter registry"):
+        prepare_gepa_run(
+            runtime,
+            run_id="missing-gepa",
+            control=control,
+            **_toy_launch_kwargs(),
+        )
 
 
 def test_prepare_gepa_run_binds_when_adapter_is_registered(
     sqlite_store, tmp_path
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import prepare_gepa_run
-
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         extra_adapters={GEPA_ADAPTER_KEY: _StubGepaAdapter()},
     )
@@ -294,6 +290,7 @@ def test_prepare_gepa_run_binds_when_adapter_is_registered(
         runtime,
         run_id="registered-gepa",
         control=control,
+        **_toy_launch_kwargs(),
     )
     assert launch.run.adapter_key == GEPA_ADAPTER_KEY
     assert launch.run.terminal_output_contract.returned_proposal_count == 1
@@ -302,12 +299,6 @@ def test_prepare_gepa_run_binds_when_adapter_is_registered(
 def test_prepare_gepa_run_rejects_mismatched_control(
     sqlite_store, tmp_path
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import prepare_gepa_run
-    from whetstone.testing.toy.experiment import (
-        TOY_MUTATION_FIELD,
-        build_toy_experiment,
-    )
-
     experiment = build_toy_experiment(num_seeds=1)
     seed_text = str(experiment.initial_candidate.payload[TOY_MUTATION_FIELD])
     control = _toy_gepa_control(sqlite_path=str(tmp_path / "gepa-a.sqlite"))
@@ -315,7 +306,7 @@ def test_prepare_gepa_run_rejects_mismatched_control(
         sqlite_path=str(tmp_path / "gepa-b.sqlite"),
         max_metric_calls=3,
     )
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         extra_adapters={
             GEPA_ADAPTER_KEY: _gepa_harness_adapter(control, seed_text=seed_text),
@@ -326,19 +317,16 @@ def test_prepare_gepa_run_rejects_mismatched_control(
             runtime,
             run_id="mismatched-gepa-control",
             control=other,
-            experiment=experiment,
+            **_toy_launch_kwargs(experiment),
         )
 
 
 def test_prepare_gepa_run_rejects_mismatched_seed(
     sqlite_store, tmp_path
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import prepare_gepa_run
-    from whetstone.testing.toy.experiment import build_toy_experiment
-
     experiment = build_toy_experiment(num_seeds=1)
     control = _toy_gepa_control(sqlite_path=str(tmp_path / "gepa-seed.sqlite"))
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         extra_adapters={
             GEPA_ADAPTER_KEY: _gepa_harness_adapter(
@@ -352,23 +340,17 @@ def test_prepare_gepa_run_rejects_mismatched_seed(
             runtime,
             run_id="mismatched-gepa-seed",
             control=control,
-            experiment=experiment,
+            **_toy_launch_kwargs(experiment),
         )
 
 
 def test_prepare_gepa_run_binds_matching_adapter_seed(
     sqlite_store, tmp_path
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import prepare_gepa_run
-    from whetstone.testing.toy.experiment import (
-        TOY_MUTATION_FIELD,
-        build_toy_experiment,
-    )
-
     experiment = build_toy_experiment(num_seeds=1)
     seed_text = str(experiment.initial_candidate.payload[TOY_MUTATION_FIELD])
     control = _toy_gepa_control(sqlite_path=str(tmp_path / "gepa-ok.sqlite"))
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         extra_adapters={
             GEPA_ADAPTER_KEY: _gepa_harness_adapter(control, seed_text=seed_text),
@@ -378,19 +360,14 @@ def test_prepare_gepa_run_binds_matching_adapter_seed(
         runtime,
         run_id="matching-gepa",
         control=control,
-        experiment=experiment,
+        **_toy_launch_kwargs(experiment),
     )
     assert launch.initial_candidate == experiment.initial_candidate
     assert launch.run.optimizer_config == control.reference()
 
 
 def test_prepare_copro_run_rejects_mismatched_control(sqlite_store) -> None:
-    from whetstone.coordination.runtime_bootstrap import (
-        build_toy_copro_control,
-        prepare_copro_run,
-    )
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-    from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
     engine = ReferenceEvalRuntimeConfig().build_engine(
@@ -399,7 +376,7 @@ def test_prepare_copro_run_rejects_mismatched_control(sqlite_store) -> None:
     )
     control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
     other = build_toy_copro_control(breadth=3, depth=1, engine=engine)
-    runtime = register_runtime(
+    runtime = register_toy_runtime(
         store=sqlite_store,
         engine=engine,
         copro_control=control,
@@ -409,17 +386,15 @@ def test_prepare_copro_run_rejects_mismatched_control(sqlite_store) -> None:
             runtime,
             run_id="mismatched-copro-control",
             control=other,
-            experiment=experiment,
+            **_toy_launch_kwargs(experiment),
         )
 
 
 def test_register_runtime_rejects_control_that_disagrees_with_engine(
     sqlite_store,
 ) -> None:
-    from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
     from whetstone.experiment.reward import RewardPolicy, RewardTerm
-    from whetstone.testing.toy.experiment import build_toy_experiment
 
     experiment = build_toy_experiment(num_seeds=1)
     other = replace(
@@ -439,7 +414,7 @@ def test_register_runtime_rejects_control_that_disagrees_with_engine(
     )
     control = build_toy_copro_control(breadth=2, depth=1, engine=other_engine)
     with pytest.raises(ValueError, match="reward policy must match"):
-        register_runtime(
+        register_toy_runtime(
             store=sqlite_store,
             engine=engine,
             copro_control=control,
@@ -447,7 +422,6 @@ def test_register_runtime_rejects_control_that_disagrees_with_engine(
 
 
 def test_copro_adapter_rejects_mismatched_transport(sqlite_store) -> None:
-    from whetstone.coordination.runtime_bootstrap import build_toy_copro_control
     from whetstone.core.identity import compute_identity_hash
     from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
     from whetstone.optim.copro.adapter import CoproAdapter
@@ -478,3 +452,232 @@ def test_copro_adapter_rejects_mismatched_transport(sqlite_store) -> None:
                 ),
             ),
         )
+
+
+def test_build_runtime_accepts_a_non_toy_experiment(sqlite_store) -> None:
+    from whetstone.coordination.runtime_bootstrap import build_runtime
+    from whetstone.core.leasing import EffectLeaseAuthority
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.experiment.reward import RewardPolicy, RewardTerm
+    from whetstone.optim.adapters import MappingAdapterRegistry
+    from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
+    from whetstone.core.identity import compute_identity_hash
+    from whetstone.optim.proposal.proposer import (
+        build_inline_proposal_executor,
+        prompt_adapter_identity_hash,
+    )
+    from whetstone.provider.language_model import PlainPromptAdapter
+    from whetstone.testing.fakes.proposer import DummyProposerTransport
+
+    experiment = replace(
+        build_toy_experiment(num_seeds=1),
+        env_name="whetstone.factory_probe",
+        reward_policy=RewardPolicy(
+            policy_name="factory-probe-reward",
+            terms=(RewardTerm(name="score", weight=1.0),),
+        ),
+    )
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    prompt_adapter = PlainPromptAdapter()
+    adapter = CoproAdapter(
+        control=control,
+        transport=DummyProposerTransport(
+            scripted_bodies=("body",),
+            execution_policy_hash=control.provider_execution_policy_hash,
+            prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+                prompt_adapter
+            ),
+        ),
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=compute_identity_hash(
+                schema="whetstone.testing.inline_proposal_executor",
+                schema_version=1,
+                payload={"mode": "inline"},
+            ),
+        ),
+    )
+    runtime = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=MappingAdapterRegistry(
+            {COPRO_ADAPTER_KEY: adapter}
+        ),
+        effect_authority=EffectLeaseAuthority.memory(),
+    )
+    assert runtime.engine is engine
+    assert runtime.ledger_engine is None
+    launch = prepare_copro_run(
+        runtime,
+        run_id="factory-probe",
+        control=control,
+        experiment=experiment,
+        render_contract=toy_template_render_contract(),
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+    assert launch.run.reward_policy == experiment.reward_policy
+
+
+def test_build_runtime_platform_mode_requires_ledger_engine(
+    sqlite_store,
+) -> None:
+    from whetstone.coordination.runtime_bootstrap import build_runtime
+    from whetstone.core.leasing import EffectLeaseAuthority
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.adapters import MappingAdapterRegistry
+    from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
+    from whetstone.core.identity import compute_identity_hash
+    from whetstone.optim.proposal.proposer import (
+        build_inline_proposal_executor,
+        prompt_adapter_identity_hash,
+    )
+    from whetstone.provider.language_model import PlainPromptAdapter
+    from whetstone.testing.fakes.proposer import DummyProposerTransport
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    prompt_adapter = PlainPromptAdapter()
+    adapter = CoproAdapter(
+        control=control,
+        transport=DummyProposerTransport(
+            scripted_bodies=("body",),
+            execution_policy_hash=control.provider_execution_policy_hash,
+            prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+                prompt_adapter
+            ),
+        ),
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=compute_identity_hash(
+                schema="whetstone.testing.inline_proposal_executor",
+                schema_version=1,
+                payload={"mode": "inline"},
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="platform mode requires ledger_engine"):
+        build_runtime(
+            store=sqlite_store,
+            engine=engine,
+            adapter_registry=MappingAdapterRegistry(
+                {COPRO_ADAPTER_KEY: adapter}
+            ),
+            effect_authority=EffectLeaseAuthority.memory(),
+            platform=True,
+        )
+
+
+def test_build_runtime_owner_id_is_part_of_controller_identity(
+    sqlite_store,
+) -> None:
+    from whetstone.coordination.runtime_bootstrap import build_runtime
+    from whetstone.core.identity import compute_identity_hash
+    from whetstone.core.leasing import EffectLeaseAuthority
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.adapters import MappingAdapterRegistry
+    from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
+    from whetstone.optim.proposal.proposer import (
+        build_inline_proposal_executor,
+        prompt_adapter_identity_hash,
+    )
+    from whetstone.provider.language_model import PlainPromptAdapter
+    from whetstone.testing.fakes.proposer import DummyProposerTransport
+
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store,
+        experiment=experiment,
+    )
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    prompt_adapter = PlainPromptAdapter()
+    adapter = CoproAdapter(
+        control=control,
+        transport=DummyProposerTransport(
+            scripted_bodies=("body",),
+            execution_policy_hash=control.provider_execution_policy_hash,
+            prompt_adapter_identity_hash=prompt_adapter_identity_hash(
+                prompt_adapter
+            ),
+        ),
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=compute_identity_hash(
+                schema="whetstone.testing.inline_proposal_executor",
+                schema_version=1,
+                payload={"mode": "inline"},
+            ),
+        ),
+    )
+    registry = MappingAdapterRegistry({COPRO_ADAPTER_KEY: adapter})
+    first = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=registry,
+        effect_authority=EffectLeaseAuthority.memory(),
+        owner_id="owner-a",
+    )
+    second = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=registry,
+        effect_authority=EffectLeaseAuthority.memory(),
+        owner_id="owner-a",
+    )
+    other = build_runtime(
+        store=sqlite_store,
+        engine=engine,
+        adapter_registry=registry,
+        effect_authority=EffectLeaseAuthority.memory(),
+        owner_id="owner-b",
+    )
+    assert first.controller.runtime_hash == second.controller.runtime_hash
+    assert first.controller.runtime_hash != other.controller.runtime_hash
+    first.close()
+    second.close()
+    other.close()
+
+
+def test_registered_runtime_close_stops_child_workers(sqlite_store) -> None:
+    import os
+    import subprocess
+
+    from whetstone.eval.protocol import EvalRequest
+    from whetstone.eval.metadata import metadata_with_purpose
+    from whetstone.eval.protocol import eval_is_success
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+
+    def child_pids() -> frozenset[str]:
+        listing = subprocess.run(
+            ["pgrep", "-P", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return frozenset(listing.stdout.split())
+
+    before = child_pids()
+    engine = ReferenceEvalRuntimeConfig(
+        driver_mode="subprocess",
+    ).build_engine(sqlite_store)
+    control = build_toy_copro_control(breadth=2, depth=1, engine=engine)
+    runtime = register_toy_runtime(
+        store=sqlite_store,
+        engine=engine,
+        copro_control=control,
+    )
+    evaluated = runtime.engine.evaluate(
+        EvalRequest(
+            request_id="runtime-close:run",
+            candidate=runtime.engine.experiment.initial_candidate,
+            metadata=metadata_with_purpose("test"),
+        )
+    )
+    assert eval_is_success(evaluated)
+    assert child_pids() - before
+    runtime.close()
+    assert child_pids() - before == frozenset()
