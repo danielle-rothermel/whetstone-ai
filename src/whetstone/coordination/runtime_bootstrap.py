@@ -317,6 +317,14 @@ def prepare_miprov2_run(
             "prepare_miprov2_run initial candidate must be the control "
             "base candidate"
         )
+    if (
+        mutation_field is not None
+        and mutation_field != control.mutation_field
+    ):
+        raise ValueError(
+            "prepare_miprov2_run mutation_field must match the control "
+            "mutation_field"
+        )
     run = OptimRun(
         run_id=run_id,
         optimizer_config=control.reference(),
@@ -329,7 +337,7 @@ def prepare_miprov2_run(
             render_contract or control.template_render_contract
         ),
         initial_candidate_ref=candidate_reference(candidate),
-        mutation_field=mutation_field or control.mutation_field,
+        mutation_field=control.mutation_field,
         reward_policy=experiment.reward_policy,
     )
     run_ref = optimization_run_reference(run)

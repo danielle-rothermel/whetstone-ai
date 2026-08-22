@@ -29,6 +29,7 @@ from whetstone.optim.contracts import (
     OptimStepResult,
     OutputContract,
     StepKind,
+    StepStatus,
     step_result_reference,
 )
 from whetstone.optim.miprov2.adapter import (
@@ -74,7 +75,13 @@ def miprov2_step_output_contract(
     terminal = run.record.terminal_output_contract
     return OutputContract(
         returned_proposal_count=0,
-        terminal_proposal_count=terminal.returned_proposal_count,
+        # The run's COMPLETE cardinality, not its continuing count: a run
+        # whose terminal contract sets the two differently would otherwise
+        # bind a step contract that fails ``honors_terminal``, rejecting
+        # every honest completing step.
+        terminal_proposal_count=terminal.accepted_count_for(
+            StepStatus.COMPLETE
+        ),
         require_distinct_bases=terminal.require_distinct_bases,
     )
 

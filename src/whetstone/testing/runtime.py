@@ -275,6 +275,14 @@ def prepare_toy_miprov2_run(
 
     resolved = experiment or build_toy_experiment(num_seeds=1)
     candidate = initial_candidate or control.base_candidate.record
+    if (
+        mutation_field is not None
+        and mutation_field != control.mutation_field
+    ):
+        raise ValueError(
+            "prepare_toy_miprov2_run mutation_field must match the control "
+            "mutation_field"
+        )
     if initial_state is None:
         try:
             adapter = runtime.adapter_registry.resolve(MIPROV2_ADAPTER_KEY)
@@ -293,7 +301,7 @@ def prepare_toy_miprov2_run(
                 render_contract or control.template_render_contract
             ),
             initial_candidate_ref=candidate_reference(candidate),
-            mutation_field=mutation_field or control.mutation_field,
+            mutation_field=control.mutation_field,
             reward_policy=resolved.reward_policy,
         )
         initial_state = build_toy_miprov2_state(

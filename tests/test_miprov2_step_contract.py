@@ -80,3 +80,22 @@ def test_build_next_is_identical_from_the_same_prior(tmp_path) -> None:
         assert next_one.prior_state_ref == result.state_ref
         assert MIPROV2_STATE_KEY not in next_one.pools
         assert next_one.pools == next_two.pools
+
+
+def test_complete_step_contract_uses_the_run_complete_cardinality() -> None:
+    from types import SimpleNamespace
+
+    from whetstone.optim.contracts import OutputContract, StepStatus
+    from whetstone.optim.miprov2.adapter import MIPROV2_COMPLETE
+    from whetstone.optim.miprov2.step_contract import miprov2_step_output_contract
+
+    terminal = OutputContract(
+        returned_proposal_count=0,
+        terminal_proposal_count=1,
+    )
+    run = SimpleNamespace(record=SimpleNamespace(terminal_output_contract=terminal))
+    contract = miprov2_step_output_contract(run, kind_label=MIPROV2_COMPLETE)
+    assert contract.returned_proposal_count == 0
+    assert contract.terminal_proposal_count == 1
+    assert contract.accepted_count_for(StepStatus.COMPLETE) == 1
+    assert contract.honors_terminal(terminal)

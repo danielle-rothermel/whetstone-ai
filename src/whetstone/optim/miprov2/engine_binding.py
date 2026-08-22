@@ -92,6 +92,14 @@ class EngineEvalBindingResolver:
                 f"({split.seed_plan.num_seeds}) do not match the requested "
                 f"num_seeds ({request.num_seeds})"
             )
+        engine_task_model = subset.task_model_identity_hash()
+        requested_task_model = request.execution_policy.task_model_identity_hash
+        if engine_task_model != requested_task_model:
+            raise ValueError(
+                "engine task-model route "
+                f"({engine_task_model}) does not match the requested "
+                f"task_model_identity_hash ({requested_task_model})"
+            )
         # The binding records the derivation of the *source* config under the
         # subset sampling, which is the identity MIPROv2 persists. The
         # subset engine's own eval_config_ref is derived the same way from

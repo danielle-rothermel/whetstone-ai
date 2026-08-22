@@ -39,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TPE sampler through 25 fewshot trials and 5 `add_trial` promotions,
   past the random-startup window. Auto-mode instruct/trial counts are
   pinned for fewshot vs the shared zeroshot/ground_only arm.
+- MIPROv2 eval bindings reject an engine whose task-model hash differs
+  from the request. `prepare_miprov2_run` rejects a mutation-field
+  override that disagrees with the control. Completing steps bind the
+  run's COMPLETE cardinality via `accepted_count_for`.
 
 ## 0.1.3 - 2026-08-21
 
