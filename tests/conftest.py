@@ -47,3 +47,22 @@ def copro_launch(toy_runtime):
 
 
 __all__ = ["copro_launch", "sqlite_store", "toy_runtime"]
+
+
+@pytest.fixture
+def codex_engine(sqlite_store):
+    """The reference eval engine every Codex test binds its control to."""
+    return ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+
+
+@pytest.fixture
+def codex_tool_config(codex_engine):
+    """The one Tool Config a Codex run grants, plus its RUN subject ref."""
+    from tests.codex_support import toy_codex_control, toy_codex_run
+    from whetstone.optim.contracts import optimization_run_reference
+
+    control = toy_codex_control(engine=codex_engine)
+    run, config, _candidate = toy_codex_run(
+        control=control, engine=codex_engine
+    )
+    return config, optimization_run_reference(run).record_ref

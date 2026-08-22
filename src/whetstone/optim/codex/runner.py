@@ -280,8 +280,11 @@ def _codex_budgets(
     run that spawns without bound.
     """
     unbudgeted = UnbudgetedLimit()
-    half = max_output_bytes // 4
-    remainder = max_output_bytes - 3 * half
+    # dr-exec requires the four retention windows to sum to max_bytes
+    # exactly; the remainder lands on the stdout head, which is where the
+    # JSONL event stream the runner parses begins.
+    quarter = max_output_bytes // 4
+    stdout_head = max_output_bytes - 3 * quarter
     return Budgets(
         wall_time=FiniteDurationLimit.from_seconds(wall_seconds),
         input_bytes=unbudgeted,
@@ -290,12 +293,12 @@ def _codex_budgets(
             overflow_policy=OutputOverflowPolicy.MARKED_TRUNCATION,
             retention=PayloadRetentionBudget(
                 stdout=StreamRetentionBudget(
-                    head_bytes=half + remainder,
-                    tail_bytes=half,
+                    head_bytes=stdout_head,
+                    tail_bytes=quarter,
                 ),
                 stderr=StreamRetentionBudget(
-                    head_bytes=half,
-                    tail_bytes=half,
+                    head_bytes=quarter,
+                    tail_bytes=quarter,
                 ),
             ),
         ),
@@ -635,7 +638,10 @@ class SubprocessCodexRunner:
                 budgets=budgets,
             )
             try:
-                completed = self._executor.run(job)
+                # dr-exec's Executor.run is a coroutine; the optimizer
+                # harness drives Steps synchronously, so this path takes
+                # the blocking entry point.
+                completed = self._executor.run_blocking(job)
             except ExecutorFailure as exc:
                 raise OpaqueStepError("Codex execution failed") from exc
             stdout_stream = _retained_bytes(

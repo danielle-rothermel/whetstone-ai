@@ -75,8 +75,8 @@ class CodexControl(BaseModel):
     reward_policy_hash: StrictStr
     evaluation_execution_policy_hash: StrictStr
     task_model_identity_hash: StrictStr
-    #: The internal split the Tool evaluates. A ``task_ids`` argument may
-    #: only narrow within this set; the engine cannot widen past it.
+    #: The exact internal split the Tool evaluates. The Tool grants no
+    #: narrowing: one call scores this whole set.
     internal_task_hashes: tuple[StrictStr, ...]
     mutation_field: StrictStr = CODEX_DEFAULT_MUTATION_FIELD
 

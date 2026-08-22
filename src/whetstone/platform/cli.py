@@ -321,8 +321,6 @@ def _codex_adapter_from_launch(
         raise typer.BadParameter(
             "launch control eval_config_ref does not match the rebuilt engine"
         )
-    if launch.run.reward_policy is None:
-        raise typer.BadParameter("a Codex run requires a run Reward Policy")
     executor = build_codex_executor(run_root=run_root)
     runner = SubprocessCodexRunner(
         executor=executor,
@@ -331,7 +329,7 @@ def _codex_adapter_from_launch(
         runtime_config_class=(
             f"{type(runtime_config).__module__}:{type(runtime_config).__name__}"
         ),
-        reward_policy=launch.run.reward_policy,
+        reward_policy=engine.reward_policy,
         codex_binary=control.codex_binary,
         model=control.model,
         timeout_seconds=control.wall_seconds,
@@ -513,7 +511,7 @@ def run_command(
                 tool_executor=(
                     _codex_tool_executor(
                         engine=engine,
-                        reward_policy=launch.run.reward_policy,
+                        reward_policy=engine.reward_policy,
                         effect_authority=effect_authority,
                         owner_id=resolved_owner_id,
                     )

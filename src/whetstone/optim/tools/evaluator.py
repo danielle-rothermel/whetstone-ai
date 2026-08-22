@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 from whetstone.core.identity import (
     ImmutableJsonObject,
     TerminalFailure,
@@ -54,27 +52,7 @@ class EngineToolEvaluator:
                 "tool call model_route must match the engine's exact "
                 "Provider Call Config route"
             )
-        engine = self._engine
-        task_ids = call.args.get("task_ids")
-        if task_ids is not None:
-            if isinstance(task_ids, (str, bytes)) or not isinstance(
-                task_ids, Sequence
-            ):
-                raise ToolValidationError(
-                    "tool task_ids must be an ordered list of strings"
-                )
-            resolved: list[str] = []
-            for task_id in task_ids:
-                if not isinstance(task_id, str):
-                    raise ToolValidationError(
-                        "tool task_ids must be an ordered list of strings"
-                    )
-                resolved.append(task_id)
-            try:
-                engine = self._engine.for_task_ids(tuple(resolved))
-            except ValueError as exc:
-                raise ToolValidationError(str(exc)) from exc
-        return engine
+        return self._engine
 
     def evaluate(self, call: ToolCall, config: ToolConfig) -> ToolEvaluation:
         engine = self._resolve_engine(call, config)

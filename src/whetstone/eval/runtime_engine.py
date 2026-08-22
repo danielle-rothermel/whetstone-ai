@@ -22,6 +22,7 @@ from whetstone.eval.drivers.eval_result import (
 )
 from whetstone.eval.row_slice import RowEvalCompletion, RowEvalSlice
 from whetstone.eval.plan import TaskTrialProvenanceRow, seed_plan_from_provenance
+from whetstone.experiment.reward import RewardPolicy
 from whetstone.provider.llm_call import derive_rng_seed
 from whetstone.eval.task_trial import TaskTrialKey
 from whetstone.eval.protocol import (
@@ -223,6 +224,16 @@ class RuntimeEvalEngine:
 
     def execution_policy_identity_hash(self) -> str:
         return self._execution_policy.identity_hash
+
+    @property
+    def reward_policy(self) -> RewardPolicy:
+        """The exact Reward Policy this engine's evaluations are scored by.
+
+        A tool-mediated evaluator needs the policy itself, not just its
+        identity hash: it applies the policy to produce the Reward that
+        the Tool Result carries.
+        """
+        return self._experiment.reward_policy
 
     def reward_policy_identity_hash(self) -> str:
         return self._experiment.reward_policy.identity_hash()

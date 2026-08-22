@@ -21,18 +21,17 @@ from whetstone.optim.tools.contracts import (
 #: The one Tool the Codex optimizer is granted (D12).
 CODEX_EVAL_TOOL_NAME = "evaluate_candidate"
 
-#: The canonical ordered ``ToolDefinition.input_fields``. The wire schema the
-#: MCP server advertises is these fields plus ``call_id``.
+#: The canonical ordered ``ToolDefinition.input_fields``. The wire schema
+#: the MCP server advertises is these fields plus ``call_id``.
+#:
+#: The tool evaluates the whole internal split (D12). There is no
+#: subset-narrowing variant: ``EvalEngine.for_task_ids`` mints a different
+#: Eval Config identity, which ``EvaluatingToolExecutor`` rejects as
+#: ``tool_eval_config_mismatch``, so a narrowed call could never complete.
 CODEX_EVAL_INPUT_FIELDS: tuple[str, ...] = (
     "base_ref",
     "model_route",
     "template",
-)
-#: The subset-narrowing variant. ``task_ids`` may only narrow within the
-#: internal split; the engine cannot widen past what it was bound to.
-CODEX_EVAL_TASK_SUBSET_INPUT_FIELDS: tuple[str, ...] = (
-    *CODEX_EVAL_INPUT_FIELDS,
-    "task_ids",
 )
 #: The canonical ordered ``ToolDefinition.output_fields``, chosen from what
 #: ``EngineToolEvaluator`` can supply.
@@ -45,7 +44,6 @@ CODEX_EVAL_OUTPUT_FIELDS: tuple[str, ...] = (
 )
 
 _BASE_INPUT_FIELDS = frozenset(CODEX_EVAL_INPUT_FIELDS)
-_TASK_SUBSET_INPUT_FIELDS = frozenset(CODEX_EVAL_TASK_SUBSET_INPUT_FIELDS)
 
 
 @verify(UNIQUE)
@@ -117,13 +115,10 @@ class EvaluateCandidateServer(MCPServer[None]):
     def __init__(self, *, handle: RuntimeToolHandle) -> None:
         definition = handle.config.definition.record
         input_fields = frozenset(definition.input_fields)
-        if input_fields not in (
-            _BASE_INPUT_FIELDS,
-            _TASK_SUBSET_INPUT_FIELDS,
-        ):
+        if input_fields != _BASE_INPUT_FIELDS:
             raise ValueError(
                 "MCP evaluation Tool Definition must declare exactly "
-                "base_ref, model_route, template, and optionally task_ids"
+                "base_ref, model_route, and template"
             )
 
         super().__init__(name="whetstone", version="1")
@@ -131,37 +126,18 @@ class EvaluateCandidateServer(MCPServer[None]):
         self._handle = handle
         self._input_names = frozenset({"call_id", *input_fields})
 
-        if input_fields == _TASK_SUBSET_INPUT_FIELDS:
-
-            def evaluate_candidate(
-                call_id: NonEmptyId,
-                base_ref: TypedRef,
-                model_route: NonEmptyId,
-                template: str,
-                task_ids: list[str],
-            ) -> mcp_types.CallToolResult:
-                return self._call(
-                    call_id=call_id,
-                    base_ref=base_ref,
-                    model_route=model_route,
-                    template=template,
-                    task_ids=task_ids,
-                )
-
-        else:
-
-            def evaluate_candidate(
-                call_id: NonEmptyId,
-                base_ref: TypedRef,
-                model_route: NonEmptyId,
-                template: str,
-            ) -> mcp_types.CallToolResult:
-                return self._call(
-                    call_id=call_id,
-                    base_ref=base_ref,
-                    model_route=model_route,
-                    template=template,
-                )
+        def evaluate_candidate(
+            call_id: NonEmptyId,
+            base_ref: TypedRef,
+            model_route: NonEmptyId,
+            template: str,
+        ) -> mcp_types.CallToolResult:
+            return self._call(
+                call_id=call_id,
+                base_ref=base_ref,
+                model_route=model_route,
+                template=template,
+            )
 
         self.add_tool(
             evaluate_candidate,
@@ -212,15 +188,12 @@ class EvaluateCandidateServer(MCPServer[None]):
         base_ref: TypedRef,
         model_route: NonEmptyId,
         template: str,
-        task_ids: list[str] | None = None,
     ) -> mcp_types.CallToolResult:
         raw_args: dict[str, object] = {
             "base_ref": base_ref.model_dump(mode="json"),
             "model_route": str(model_route),
             "template": template,
         }
-        if task_ids is not None:
-            raw_args["task_ids"] = task_ids
         call = ToolCall(
             call_id=call_id,
             tool_config=self._handle.tool_config_ref,
@@ -233,7 +206,6 @@ class EvaluateCandidateServer(MCPServer[None]):
 __all__ = [
     "CODEX_EVAL_INPUT_FIELDS",
     "CODEX_EVAL_OUTPUT_FIELDS",
-    "CODEX_EVAL_TASK_SUBSET_INPUT_FIELDS",
     "CODEX_EVAL_TOOL_NAME",
     "EvaluateCandidateServer",
     "McpResultKey",

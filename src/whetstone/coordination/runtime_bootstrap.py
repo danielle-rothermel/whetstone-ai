@@ -425,7 +425,6 @@ def codex_tool_config(
     engine: EvalEngine,
     reward_policy_hash: str,
     store_namespace_key: str,
-    task_subset_enabled: bool = True,
 ) -> ToolConfig:
     """Build the one Tool Config a Codex run grants its agent (D12).
 
@@ -436,23 +435,19 @@ def codex_tool_config(
     from whetstone.optim.codex.mcp_bridge import (
         CODEX_EVAL_INPUT_FIELDS,
         CODEX_EVAL_OUTPUT_FIELDS,
-        CODEX_EVAL_TASK_SUBSET_INPUT_FIELDS,
         CODEX_EVAL_TOOL_NAME,
     )
     from whetstone.optim.tools.contracts import (
         ToolCapacity,
         ToolCapacityScope,
+        ToolConfig,
         ToolDefinition,
         tool_definition_reference,
     )
 
     definition = ToolDefinition(
         tool_name=CODEX_EVAL_TOOL_NAME,
-        input_fields=(
-            CODEX_EVAL_TASK_SUBSET_INPUT_FIELDS
-            if task_subset_enabled
-            else CODEX_EVAL_INPUT_FIELDS
-        ),
+        input_fields=CODEX_EVAL_INPUT_FIELDS,
         output_fields=CODEX_EVAL_OUTPUT_FIELDS,
     )
     return ToolConfig(
@@ -544,7 +539,8 @@ def prepare_codex_run(
         template_render_contract=render_contract,
         initial_candidate_ref=candidate_reference(candidate),
         mutation_field=mutation_field,
-        reward_policy=experiment.reward_policy,
+        # A TOOL_USING run carries no Reward Policy: the Tool Config pins
+        # the policy hash, and the tool executor holds the policy itself.
     )
     launch = OptimRunLaunch(
         run=run,
