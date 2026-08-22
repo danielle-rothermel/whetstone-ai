@@ -36,7 +36,6 @@ from whetstone.platform.deploy import (
     deploy_platform,
     drive_until_quiescent,
     upgrade_platform_schema,
-    wait_for_run_released,
 )
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
 from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
