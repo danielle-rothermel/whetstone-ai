@@ -84,15 +84,15 @@ def test_the_task_model_key_never_enters_the_codex_process_environment(
     assert granted["OPENAI_API_KEY"] == _CODEX_AGENT_KEY_VALUE
 
 
-def test_the_task_model_key_is_granted_to_the_mcp_server_child(
+def test_the_task_model_key_is_granted_to_the_evaluation_server(
     tmp_path,
     sqlite_store,
     task_model_key_env,
 ) -> None:
-    """The eval driver still needs the key; only the child gets it.
+    """The eval driver still needs the key; only the server gets it.
 
-    It travels as one more ``mcp_servers.whetstone.env.*`` entry, which
-    the CLI applies to the server process alone.
+    whetstone hosts that server in its own environment, so the key never
+    crosses into the sandbox at all.
     """
     runner = _runner(
         tmp_path,

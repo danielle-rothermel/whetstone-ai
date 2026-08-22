@@ -247,7 +247,7 @@ def test_the_reasoning_effort_reaches_the_cli_as_a_config_override() -> None:
         codex_binary="/usr/bin/codex",
         model="toy-model",
         reasoning_effort="high",
-        mcp_env=None,
+        mcp_endpoint=None,
         output_schema_path="/tmp/schema.json",
         output_artifact_path="/tmp/last.json",
         working_directory="/tmp/work",
@@ -265,7 +265,7 @@ def test_an_empty_reasoning_effort_adds_no_override() -> None:
         codex_binary="/usr/bin/codex",
         model="toy-model",
         reasoning_effort="",
-        mcp_env=None,
+        mcp_endpoint=None,
         output_schema_path="/tmp/schema.json",
         output_artifact_path="/tmp/last.json",
         working_directory="/tmp/work",
@@ -287,3 +287,60 @@ def test_the_control_carries_no_field_the_cli_cannot_honor() -> None:
     assert "max_turns" not in fields
     assert "seed" not in fields
     assert "reasoning_effort" in fields
+
+
+def test_the_agent_is_given_an_endpoint_url_and_never_the_store() -> None:
+    """The agent connects to a server; it never spawns one.
+
+    Spawning the server as a child of the sandboxed agent gave the agent
+    the server's profile, and the server must write the whetstone store
+    -- the durable ledger, and the admission-capacity rows that cap paid
+    evaluations. So the CLI is configured with a URL, and the store path
+    and the server's own configuration never enter its argv at all.
+    """
+    from whetstone.optim.codex.mcp_host import CodexMcpEndpoint
+    from whetstone.optim.codex.runner import CODEX_MCP_TOKEN_ENV
+
+    argv = build_codex_command(
+        prompt="go",
+        codex_binary="/usr/bin/codex",
+        model="toy-model",
+        reasoning_effort="low",
+        mcp_endpoint=CodexMcpEndpoint(
+            url="http://127.0.0.1:4242/mcp", auth_token="run-token"
+        ),
+        output_schema_path="/tmp/schema.json",
+        output_artifact_path="/tmp/last.json",
+        working_directory="/tmp/work",
+    )
+    joined = " ".join(argv)
+
+    assert 'mcp_servers.whetstone.url="http://127.0.0.1:4242/mcp"' in argv
+    assert (
+        f'mcp_servers.whetstone.bearer_token_env_var="{CODEX_MCP_TOKEN_ENV}"'
+        in argv
+    )
+    # No command, no server module, and no environment block: the agent
+    # is given nothing it could use to start a store-writing process.
+    assert "mcp_servers.whetstone.command" not in joined
+    assert "mcp_servers.whetstone.env." not in joined
+    # The token travels in the environment, not in a world-readable argv.
+    assert "run-token" not in joined
+
+
+def test_the_bearer_token_variable_is_pinned() -> None:
+    from whetstone.optim.codex.runner import CODEX_MCP_TOKEN_ENV
+
+    assert CODEX_MCP_TOKEN_ENV == "WS_MCP_BEARER_TOKEN"
+
+
+def test_the_mcp_endpoint_path_and_auth_scheme_are_pinned() -> None:
+    from whetstone.optim.codex.mcp_host import (
+        CODEX_MCP_AUTH_HEADER,
+        CODEX_MCP_AUTH_SCHEME,
+        CODEX_MCP_HTTP_PATH,
+    )
+
+    assert CODEX_MCP_HTTP_PATH == "/mcp"
+    assert CODEX_MCP_AUTH_HEADER == "authorization"
+    assert CODEX_MCP_AUTH_SCHEME == "Bearer"

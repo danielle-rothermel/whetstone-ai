@@ -169,11 +169,18 @@ class _CodexWorld:
                 ),
                 FAKE_CODEX_TRANSCRIPT_ENV: transcript_document,
                 CODEX_AUTH_PLACEHOLDER: "sk-fake",
+                # The real Codex binary needs no whetstone import; the
+                # scripted stand-in is a Python module, so this test
+                # grants it a path explicitly rather than production
+                # staging the package into every run's sandbox.
+                "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
             },
             # The runner's environment allowlist is production behavior;
-            # the fake CLI's transcript is granted explicitly rather than
-            # by widening it.
-            extra_environment_keys=frozenset({FAKE_CODEX_TRANSCRIPT_ENV}),
+            # the fake CLI's needs are granted explicitly rather than by
+            # widening it.
+            extra_environment_keys=frozenset(
+                {FAKE_CODEX_TRANSCRIPT_ENV, "PYTHONPATH"}
+            ),
         )
         adapter = CodexAdapter(
             runner,

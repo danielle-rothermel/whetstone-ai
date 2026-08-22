@@ -1,8 +1,10 @@
 """Persisted environment keys for the Codex MCP evaluation server.
 
-The Codex CLI receives these as ``mcp_servers.whetstone.env.*`` entries and
-the server reads them back by name, so the literal spellings are a
-persisted format with a golden test rather than incidental strings.
+whetstone hosts the evaluation server itself and configures it through
+these variables. They never reach the Codex process, which is given only
+the endpoint URL and a bearer token. The server reads them back by name,
+so the literal spellings are a persisted format with a golden test rather
+than incidental strings.
 """
 
 from enum import UNIQUE, StrEnum, verify

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 import shutil
@@ -57,6 +56,8 @@ from whetstone.optim.codex.containment import (
     CODEX_NETWORK_POLICY,
 )
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+from whetstone.optim.codex.mcp_host import CodexMcpEndpoint, CodexMcpHost
+from whetstone.optim.codex.mcp_server import build_server_from_env
 from whetstone.optim.contracts import OptimStepRequest
 from whetstone.optim.tools.contracts import (
     RuntimeToolHandle,
@@ -70,6 +71,10 @@ _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
 
 _MCP_TOOLS_APPROVAL_MODE = "auto"
+
+#: The variable the Codex CLI reads the evaluation endpoint's bearer
+#: token from. It crosses into the CLI's configuration, so it is pinned.
+CODEX_MCP_TOKEN_ENV = "WS_MCP_BEARER_TOKEN"
 
 #: The Codex config key that carries the control's reasoning effort. It
 #: crosses into a foreign CLI and nothing derives it, so it is pinned by
@@ -207,8 +212,7 @@ def build_codex_command(
     codex_binary: str,
     model: str,
     reasoning_effort: str,
-    mcp_env: dict[str, str] | None,
-    mcp_server_module: str = "whetstone.optim.codex.mcp_server",
+    mcp_endpoint: CodexMcpEndpoint | None,
     output_schema_path: str,
     output_artifact_path: str,
     working_directory: str,
@@ -249,28 +253,25 @@ def build_codex_command(
                 f"{_REASONING_EFFORT_CONFIG_KEY}={json.dumps(reasoning_effort)}",
             ]
         )
-    if mcp_env is not None:
+    if mcp_endpoint is not None:
+        # A URL, not a command: the agent connects to a server whetstone
+        # already runs. It never spawns the server, so it never inherits
+        # a profile that can write the store. The bearer token comes from
+        # the agent's environment rather than the argv, which is world
+        # readable through the process table.
         argv.extend(
             [
                 "-c",
-                f"mcp_servers.whetstone.command={json.dumps(sys.executable)}",
+                "mcp_servers.whetstone.url="
+                + json.dumps(mcp_endpoint.url),
                 "-c",
-                "mcp_servers.whetstone.args="
-                + json.dumps(
-                    ["-m", mcp_server_module]
-                ),
+                "mcp_servers.whetstone.bearer_token_env_var="
+                + json.dumps(CODEX_MCP_TOKEN_ENV),
                 "-c",
                 "mcp_servers.whetstone.default_tools_approval_mode="
                 + json.dumps(_MCP_TOOLS_APPROVAL_MODE),
             ]
         )
-        for key, value in sorted(mcp_env.items()):
-            argv.extend(
-                [
-                    "-c",
-                    f"mcp_servers.whetstone.env.{key}={json.dumps(value)}",
-                ]
-            )
     argv.append(prompt)
     return argv
 
@@ -385,7 +386,6 @@ class SubprocessCodexRunner:
         codex_binary: str = "codex",
         model: str = "",
         reasoning_effort: str = "",
-        mcp_server_module: str = "whetstone.optim.codex.mcp_server",
         timeout_seconds: float = 600.0,
         max_output_bytes: int = CODEX_DEFAULT_MAX_OUTPUT_BYTES,
         environment: Mapping[str, str] | None = None,
@@ -432,7 +432,6 @@ class SubprocessCodexRunner:
         self._runtime = runtime_config
         self._runtime_config_class = runtime_config_class
         self._reward_policy = reward_policy
-        self._mcp_server_module = mcp_server_module
         self._binary = codex_binary
         self._model = model
         self._reasoning_effort = reasoning_effort
@@ -475,7 +474,7 @@ class SubprocessCodexRunner:
         # general-purpose agent with network access, so holding that key
         # would let it score candidates directly -- unadmitted, unleased,
         # and outside the ledger. Only the MCP evaluation server needs it,
-        # and it receives it through the mcp_servers.whetstone.env block.
+        # and whetstone hosts that server in its own environment.
         secret_key_env = (
             self._runtime.execution_policy.transport_policy.api_key_env
             if self._runtime is not None
@@ -497,13 +496,13 @@ class SubprocessCodexRunner:
     def codex_process_environment(self) -> dict[str, str]:
         """Exactly what the untrusted Codex process is granted.
 
-        ``CODEX_HOME`` and ``PYTHONPATH`` are rewritten per run to point
-        at that run's scratch directory; everything else is fixed here.
+        ``CODEX_HOME`` is rewritten per run to point at that run's
+        scratch directory; everything else is fixed here.
         """
         return dict(self._environment)
 
     def mcp_server_secret_environment(self) -> dict[str, str]:
-        """The credentials only the MCP evaluation server child receives.
+        """The credentials only the evaluation server receives.
 
         These never enter :meth:`codex_process_environment`, so the agent
         cannot read them out of its own environment.
@@ -548,46 +547,23 @@ class SubprocessCodexRunner:
             if self._prompt_builder is None
             else self._prompt_builder(request)
         )
-        execution = self._execute_structured(
-            prompt=prompt,
-            output_schema=schema,
-            mcp_env={
-                McpEnvironmentKey.SQLITE_PATH: self._sqlite_path,
-                McpEnvironmentKey.TOOL_CONFIG: handle.config.model_dump_json(),
-                McpEnvironmentKey.CAPACITY_BINDING: (
-                    handle.binding.model_dump_json()
-                ),
-                McpEnvironmentKey.RUNTIME_CONFIG: (
-                    self._runtime.model_dump_json()
-                ),
-                McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
-                    self._runtime_config_class
-                ),
-                McpEnvironmentKey.REWARD_POLICY: (
-                    self._reward_policy.model_dump_json()
-                ),
-                McpEnvironmentKey.RUN_LEASE_TOKEN: lease_token,
-                McpEnvironmentKey.RUN_LEASE_BINDING: (
-                    codex_run_lease_binding(
-                        token=lease_token,
-                        store_namespace_key=str(
-                            handle.config.store_namespace_key
-                        ),
-                        tool_config_hash=str(
-                            handle.config.identity_hash()
-                        ),
-                        capacity_scope=handle.binding.scope.value,
-                        capacity_subject=_capacity_subject_key(
-                            handle.binding
-                        ),
-                    )
-                ),
-                # The eval transport's credential reaches the server child
-                # and nothing else; see mcp_server_secret_environment.
-                **self._mcp_secret_environment,
-            },
-            stage_runtime=True,
-        )
+        # whetstone hosts the evaluation server itself, before the sandbox
+        # exists, and hands the agent only a loopback URL and this run's
+        # bearer token. The server is the sole writer of the whetstone
+        # store, and SQLite needs real write access to that file: running
+        # it under the agent's profile would hand the agent the ledger and
+        # the admission-capacity rows that cap paid evaluations.
+        with CodexMcpHost(
+            build_server_from_env(
+                self._mcp_server_environment(handle, lease_token)
+            ),
+            auth_token=lease_token,
+        ) as endpoint:
+            execution = self._execute_structured(
+                prompt=prompt,
+                output_schema=schema,
+                mcp_endpoint=endpoint,
+            )
         artifact = _parse_output_artifact_bytes(
             execution.artifact_bytes,
             stdout=execution.stdout,
@@ -596,6 +572,45 @@ class SubprocessCodexRunner:
             isolation=execution.isolation,
         )
         return CodexRunResult(artifact=artifact)
+
+    def _mcp_server_environment(
+        self,
+        handle: RuntimeToolHandle,
+        lease_token: str,
+    ) -> dict[str, str]:
+        """Configure the evaluation server this Step hosts.
+
+        This never reaches the Codex process. It stays in whetstone's own
+        environment, which is why the task-model credential and the store
+        path are safe to name here.
+        """
+        assert self._sqlite_path is not None
+        assert self._runtime is not None
+        assert self._runtime_config_class is not None
+        assert self._reward_policy is not None
+        return {
+            McpEnvironmentKey.SQLITE_PATH: self._sqlite_path,
+            McpEnvironmentKey.TOOL_CONFIG: handle.config.model_dump_json(),
+            McpEnvironmentKey.CAPACITY_BINDING: (
+                handle.binding.model_dump_json()
+            ),
+            McpEnvironmentKey.RUNTIME_CONFIG: self._runtime.model_dump_json(),
+            McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+                self._runtime_config_class
+            ),
+            McpEnvironmentKey.REWARD_POLICY: (
+                self._reward_policy.model_dump_json()
+            ),
+            McpEnvironmentKey.RUN_LEASE_TOKEN: lease_token,
+            McpEnvironmentKey.RUN_LEASE_BINDING: codex_run_lease_binding(
+                token=lease_token,
+                store_namespace_key=str(handle.config.store_namespace_key),
+                tool_config_hash=str(handle.config.identity_hash()),
+                capacity_scope=handle.binding.scope.value,
+                capacity_subject=_capacity_subject_key(handle.binding),
+            ),
+            **self._mcp_secret_environment,
+        }
 
     def run_structured_prompt(
         self,
@@ -607,8 +622,7 @@ class SubprocessCodexRunner:
         return self._execute_structured(
             prompt=prompt,
             output_schema=output_schema,
-            mcp_env=None,
-            stage_runtime=False,
+            mcp_endpoint=None,
         )
 
     def _execute_structured(
@@ -616,8 +630,7 @@ class SubprocessCodexRunner:
         *,
         prompt: str,
         output_schema: dict[str, Any],
-        mcp_env: dict[str, str] | None,
-        stage_runtime: bool,
+        mcp_endpoint: CodexMcpEndpoint | None,
     ) -> CodexStructuredExecution:
         resolved_binary = shutil.which(
             self._binary, path=self._environment.get("PATH")
@@ -630,11 +643,6 @@ class SubprocessCodexRunner:
             prefix="whetstone-codex-"
         ) as working_directory:
             root = Path(working_directory)
-            runtime_root: Path | None = None
-            if stage_runtime:
-                runtime_root = root / "runtime"
-                runtime_root.mkdir()
-                self._stage_runtime(runtime_root)
             codex_home = root / "codex-home"
             codex_home.mkdir()
             self._stage_auth(codex_home)
@@ -642,14 +650,12 @@ class SubprocessCodexRunner:
                 **self._environment,
                 "CODEX_HOME": str(codex_home),
             }
-            exact_mcp_env = mcp_env
-            if runtime_root is not None:
-                isolated_environment["PYTHONPATH"] = str(runtime_root)
-                assert exact_mcp_env is not None
-                exact_mcp_env = {
-                    **exact_mcp_env,
-                    "PYTHONPATH": str(runtime_root),
-                }
+            if mcp_endpoint is not None:
+                # The only MCP material the agent gets: a bearer token for
+                # an endpoint whetstone already runs.
+                isolated_environment[CODEX_MCP_TOKEN_ENV] = (
+                    mcp_endpoint.auth_token
+                )
             schema_path = root / "output-schema.json"
             artifact_path = root / "last-message.json"
             schema_path.write_text(
@@ -660,8 +666,7 @@ class SubprocessCodexRunner:
                 codex_binary=resolved_binary,
                 model=self._model,
                 reasoning_effort=self._reasoning_effort,
-                mcp_env=exact_mcp_env,
-                mcp_server_module=self._mcp_server_module,
+                mcp_endpoint=mcp_endpoint,
                 output_schema_path=str(schema_path),
                 output_artifact_path=str(artifact_path),
                 working_directory=working_directory,
@@ -679,13 +684,8 @@ class SubprocessCodexRunner:
                 profile_path=profile_path,
                 readable_paths=self._readable_runtime_paths(
                     resolved_binary=Path(resolved_binary),
-                    runtime_root=runtime_root,
                 ),
-                writable_paths=(
-                    self._writable_runtime_paths(root)
-                    if stage_runtime
-                    else (root.resolve(),)
-                ),
+                writable_paths=self._writable_runtime_paths(root),
             )
             budgets = _codex_budgets(
                 wall_seconds=self._timeout,
@@ -841,37 +841,10 @@ class SubprocessCodexRunner:
             if candidate.is_file():
                 shutil.copy2(candidate, destination / name)
 
-    def _stage_runtime(self, destination: Path) -> None:
-        if self._runtime is None:
-            raise OpaqueStepError("Codex MCP runtime is not configured")
-        package_root = Path(__file__).resolve().parents[2]
-        shutil.copytree(
-            package_root,
-            destination / package_root.name,
-            dirs_exist_ok=True,
-        )
-        module_name = self._runtime.row_job_entrypoint.partition(":")[0]
-        top_level = module_name.partition(".")[0]
-        spec = importlib.util.find_spec(top_level)
-        if spec is None:
-            raise OpaqueStepError(
-                f"transport factory package {top_level!r} was not found"
-            )
-        if spec.submodule_search_locations:
-            target = destination / top_level
-
-            for location in reversed(spec.submodule_search_locations):
-                source = Path(location)
-                if source.resolve() != package_root.resolve():
-                    shutil.copytree(source, target, dirs_exist_ok=True)
-        elif spec.origin is not None:
-            shutil.copy2(spec.origin, destination / Path(spec.origin).name)
-
     def _readable_runtime_paths(
         self,
         *,
         resolved_binary: Path,
-        runtime_root: Path | None,
     ) -> tuple[Path, ...]:
         paths = {
             resolved_binary.resolve(),
@@ -879,51 +852,30 @@ class SubprocessCodexRunner:
             Path(sys.prefix).resolve(),
             Path(sys.base_prefix).resolve(),
         }
-        if runtime_root is not None:
-            paths.add(runtime_root.resolve())
         for key in ("SSL_CERT_FILE", "SSL_CERT_DIR"):
             raw = self._environment.get(key)
             if raw:
                 paths.add(Path(raw).resolve())
+        # Read-only, and only what the caller already chose to grant: a
+        # PYTHONPATH entry is in the environment because the allowlist
+        # admitted it, and the profile must let the interpreter reach it.
+        # Nothing here becomes writable.
+        for entry in self._environment.get("PYTHONPATH", "").split(os.pathsep):
+            if entry:
+                paths.add(Path(entry).resolve())
         return tuple(sorted(paths, key=str))
 
     def _writable_runtime_paths(self, root: Path) -> tuple[Path, ...]:
-        if self._sqlite_path is None or self._runtime is None:
-            raise OpaqueStepError("Codex MCP runtime is not configured")
-        state_paths = {root.resolve()}
-        sqlite_path = Path(self._sqlite_path).resolve()
-        if not sqlite_path.parent.is_dir():
-            raise OpaqueStepError(
-                "Codex MCP SQLite parent directory does not exist"
-            )
-        state_paths.update(
-            {
-                sqlite_path,
-                Path(f"{sqlite_path}-journal"),
-                Path(f"{sqlite_path}-shm"),
-                Path(f"{sqlite_path}-wal"),
-            }
-        )
-        if self._runtime.partial_log_path:
-            partial_path = Path(self._runtime.partial_log_path).resolve()
-            if not partial_path.parent.is_dir():
-                raise OpaqueStepError(
-                    "Codex partial-log parent directory does not exist"
-                )
-            state_paths.add(partial_path)
+        """The only paths the Codex process may write: its own scratch.
 
-            state_paths.add(
-                partial_path.with_name(f".{partial_path.name}.lock")
-            )
-            state_paths.add(partial_path.parent)
-        if self._runtime.prompt_cache_path:
-            cache_path = Path(self._runtime.prompt_cache_path).resolve()
-            if not cache_path.is_dir():
-                raise OpaqueStepError(
-                    "Codex prompt-cache directory does not exist"
-                )
-            state_paths.add(cache_path)
-        return tuple(sorted(state_paths, key=str))
+        The whetstone store is deliberately absent. It is the durable
+        ledger and it holds the admission-capacity rows that cap paid
+        evaluations, and SQLite needs real write access to that file --
+        so granting it here would let the agent forge Tool Results or
+        clear its own budget. The evaluation server is the sole writer,
+        and whetstone runs it outside this profile.
+        """
+        return (root.resolve(),)
 
 
 def _default_prompt(

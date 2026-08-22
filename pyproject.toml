@@ -19,6 +19,9 @@ dependencies = [
     "optuna==4.8.0",
     "typer>=0.26.8",
     "rich>=15.0.0",
+    # whetstone hosts the Codex evaluation endpoint itself, outside the
+    # agent's sandbox, so the HTTP server is a runtime dependency.
+    "uvicorn>=0.52.0",
 ]
 [project.optional-dependencies]
 dbos = ["dbos>=2.25.0"]
@@ -45,7 +48,6 @@ Repository = "https://github.com/danielle-rothermel/whetstone-ai"
 Issues = "https://github.com/danielle-rothermel/whetstone-ai/issues"
 
 [project.scripts]
-whetstone-mcp-eval = "whetstone.optim.codex.mcp_server:main"
 whetstone-sandbox = "whetstone.sandbox.cli:main"
 whetstone-optim = "whetstone.platform.cli:main"
 
