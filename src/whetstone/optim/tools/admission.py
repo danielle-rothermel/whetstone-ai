@@ -147,14 +147,20 @@ class ToolCallStoreEntry(BaseModel):
     @classmethod
     def _parse_effect_terminal(cls, value: Any) -> Any:
         if isinstance(value, dict):
-            return EffectTerminal.model_validate_json(
-                json.dumps(
-                    value,
-                    allow_nan=False,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
+            # jiter rejects unpaired-surrogate JSON escapes; strict
+            # EffectTerminal / LeaseRequest reject enum strings.
+            request = value.get("request")
+            outcome = value.get("outcome")
+            if isinstance(request, dict):
+                request = EffectRequest(
+                    semantic_key=request["semantic_key"],
+                    request_hash=request["request_hash"],
+                    replay_policy=ReplayPolicy(request["replay_policy"]),
                 )
+            if isinstance(outcome, str):
+                outcome = TerminalOutcome(outcome)
+            return EffectTerminal.model_validate(
+                {**value, "request": request, "outcome": outcome}
             )
         return value
 
@@ -277,10 +283,11 @@ class ToolCallStoreConflictError(RuntimeError):
 
 
 def _entry_text(entry: ToolCallStoreEntry) -> str:
+    # ASCII so unpaired surrogates bind as \ud800 into TEXT columns.
     return json.dumps(
         entry.model_dump(mode="json"),
         allow_nan=False,
-        ensure_ascii=False,
+        ensure_ascii=True,
         separators=(",", ":"),
         sort_keys=True,
     )
@@ -290,12 +297,12 @@ def _decode_entry(raw: object) -> ToolCallStoreEntry:
     if type(raw) is not str:
         raise RuntimeError("persisted Tool admission entry is not JSON text")
     encoded = raw.encode()
-    decode_strict_json_bytes(
+    payload = decode_strict_json_bytes(
         encoded,
         max_bytes=len(encoded),
         max_depth=len(encoded),
     )
-    return ToolCallStoreEntry.model_validate_json(encoded)
+    return ToolCallStoreEntry.model_validate(payload)
 
 
 def _decode_persisted_count(raw: object, *, field: str) -> int:

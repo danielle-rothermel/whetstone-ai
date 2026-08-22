@@ -93,9 +93,9 @@ def _tool_call() -> tuple[ToolCall, ToolConfig]:
     ids=["oversized", "nul", "unpaired-surrogate"],
 )
 def test_tool_call_store_complete_accepts_a_dirty_failed_terminal(
-    sqlite_store, message: str
+    sqlite_store, tmp_path, message: str
 ) -> None:
-    """fail() then complete() keeps terminal.failure equal to the Tool Result."""
+    """fail() then complete() keeps terminal.failure equal after SQLite reload."""
     call, config = _tool_call()
     failure = _dirty_failure(message)
     result = ToolResult(
@@ -104,9 +104,8 @@ def test_tool_call_store_complete_accepts_a_dirty_failed_terminal(
         provenance_ordinal=1,
     )
     effect_authority = EffectLeaseAuthority.memory()
-    store = ToolCallStore(
-        sqlite_store, ToolAdmissionAuthority.memory(), effect_authority
-    )
+    admission = ToolAdmissionAuthority.sqlite(tmp_path / "admission.sqlite")
+    store = ToolCallStore(sqlite_store, admission, effect_authority)
     try:
         store.admit(call, config)
         result_ref = store.persist_result(result)
@@ -124,12 +123,17 @@ def test_tool_call_store_complete_accepts_a_dirty_failed_terminal(
         assert terminal.failure == failure
         completed = store.complete(result, terminal=terminal)
         loaded = store.load_terminal_result(completed)
+        reloaded = store.get(call)
     finally:
         effect_authority.close()
+        admission.close()
 
     assert loaded.terminal_failure == failure
     assert completed.effect_terminal is not None
     assert completed.effect_terminal.failure == failure
+    assert reloaded is not None
+    assert reloaded.effect_terminal is not None
+    assert reloaded.effect_terminal.failure == failure
 
 
 class _FailingAdapter:

@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`ToolCallStore.complete`, FAILED replay) stay equal after coercion.
   `LeaseAuthoritySchemaMismatchError` is re-exported next to
   `StaleLeaseError` and `TerminalConflictError`.
+- Durable Tool admission ASCII-encodes the stored `EffectTerminal`, so
+  persist-and-compare still holds for unpaired surrogates on SQLite and
+  PostgreSQL admission.
 - A transient failure while publishing a terminal through a maintenance
   handle is now retryable. The handle restarts its renewer and stays open,
   where the previous implementation marked terminalization started before
