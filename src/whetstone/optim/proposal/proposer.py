@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from dr_providers import (
         PromptMessage,
         ProviderCallConfig,
-        ProviderCallRequest,
     )
 
 __all__ = [

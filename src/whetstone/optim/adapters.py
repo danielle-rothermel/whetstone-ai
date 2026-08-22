@@ -21,7 +21,6 @@ from whetstone.optim.contracts import (
     OptimEvalRequest,
     SearchEvidence,
     OptimStepRequest,
-    StepKind,
     StepMode,
     StepStatus,
 )

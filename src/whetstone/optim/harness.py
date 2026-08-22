@@ -24,7 +24,6 @@ from whetstone.core.identity import (
     compute_prefixed_identity_key,
     typed_ref_for_record,
 )
-from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import (
     CandidateRef,
     candidate_reference,
