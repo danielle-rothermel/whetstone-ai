@@ -355,7 +355,12 @@ def load_terminal_optim_result(
     assert cost, "platform run completion must populate OptimResult.cost"
     assert cost["schema_version"] == COST_REPORT_SCHEMA_VERSION
     assert set(cost) == {"schema_version", "task_model", "proposer"}
-    assert cost["proposer"]["calls"] >= 1
+    if result.proposals:
+        # A run that proposed must have paid for at least one proposer call.
+        assert cost["proposer"]["calls"] >= 1
+    else:
+        # A seed-retained run that never reached reflection paid for none.
+        assert cost["proposer"]["calls"] == 0
     for role in ("task_model", "proposer"):
         role_cost = cost[role]
         assert (
