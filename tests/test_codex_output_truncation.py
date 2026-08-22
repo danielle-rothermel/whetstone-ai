@@ -13,8 +13,12 @@ was truncated and by how much.
 
 from __future__ import annotations
 
+import pytest
+
+from whetstone.optim.codex.adapter import OpaqueStepError
 from whetstone.optim.codex.runner import (
     CODEX_ELIDED_MARKER_PREFIX,
+    _parse_jsonl_events,
     _retained_bytes,
 )
 
@@ -73,3 +77,46 @@ def test_the_marker_terminates_a_head_that_ends_mid_line() -> None:
     assert b'{"cut": ' in lines
     assert any(line.startswith(CODEX_ELIDED_MARKER_PREFIX) for line in lines)
     assert b'{"b": 2}' in lines
+
+
+def test_a_truncated_transcript_parses_to_its_complete_records() -> None:
+    """The marker and the cut boundary lines never fail the parse.
+
+    An over-budget stdout cut mid-line is the expected end of a chatty
+    agent, not a contract violation. The run's final artifact is still
+    valid, so the transcript yields exactly the records that survived
+    retention intact, and says how many it lost.
+    """
+    stream = _FakeStream(
+        head=b'{"a": 1}\n{"cut": ',
+        tail=b'ue}\n{"b": 2}\n',
+        dropped_bytes=4096,
+    )
+    retained = _retained_bytes(stream)
+
+    parsed = _parse_jsonl_events(retained.data, truncated=True)
+
+    assert parsed.events == ({"a": 1}, {"b": 2})
+    # The head's cut tail and the tail's cut head: two damaged lines.
+    assert parsed.dropped_partial_lines == 2
+
+
+def test_an_untruncated_stream_still_rejects_a_malformed_event() -> None:
+    """Tolerance is for budget damage only, never for what Codex wrote."""
+    with pytest.raises(OpaqueStepError, match="malformed"):
+        _parse_jsonl_events(b'{"a": 1}\nnot json\n', truncated=False)
+
+
+def test_a_truncated_stream_rejects_damage_away_from_the_stitch() -> None:
+    """Only the two lines the marker sits between may be dropped."""
+    # The malformed line is the *first* of the head, two lines clear of
+    # the marker, so retention cannot explain it.
+    stitched = (
+        b'not json\n{"a": 1}\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"9 bytes elided ...]\n"
+        + b'{"b": 2}\n'
+    )
+
+    with pytest.raises(OpaqueStepError, match="malformed"):
+        _parse_jsonl_events(stitched, truncated=True)

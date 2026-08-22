@@ -396,6 +396,21 @@ def _retained_bytes(stream: RetainedPayloadStream) -> _RetainedStream:
     )
 
 
+def _stdout_was_truncated(isolation: dict[str, Any] | None) -> bool:
+    """Did the output budget stitch this run's stdout?
+
+    The runner already records truncation in the isolation evidence, so
+    the JSONL parser reads its tolerance from the same place rather than
+    from a second flag that could disagree with the recorded artifact.
+    """
+    if not isolation:
+        return False
+    truncation = isolation.get("output_truncation")
+    if not isinstance(truncation, dict):
+        return False
+    return bool(truncation.get("stdout_truncated"))
+
+
 @dataclass(frozen=True, slots=True)
 class CodexStructuredExecution:
     artifact_bytes: bytes
@@ -604,6 +619,7 @@ class SubprocessCodexRunner:
             stderr=execution.stderr,
             run_id=request.run_id,
             isolation=execution.isolation,
+            stdout_truncated=_stdout_was_truncated(execution.isolation),
         )
         return CodexRunResult(artifact=artifact)
 
@@ -965,10 +981,38 @@ def _default_prompt(
     )
 
 
-def _parse_jsonl_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
+@dataclass(frozen=True, slots=True)
+class _ParsedJsonlEvents:
+    """The complete events in a stream, plus what truncation cost."""
+
+    events: tuple[dict[str, Any], ...]
+    #: Lines the output budget cut mid-record, dropped rather than parsed.
+    dropped_partial_lines: int
+
+
+def _parse_jsonl_events(
+    stdout: bytes,
+    *,
+    truncated: bool,
+) -> _ParsedJsonlEvents:
+    """Read the JSONL event stream, tolerating only budget damage.
+
+    An untruncated stream is exactly what Codex wrote, so every line must
+    parse and a malformed one is a contract violation. A truncated stream
+    is a stitched head+tail: it carries the elision marker, which is
+    deliberately not JSON, and the budget may have cut the head's last
+    line and the tail's first line mid-record. Those are artifacts of
+    retention, not of what Codex emitted, so they are skipped and counted
+    rather than failing a run whose final artifact is valid.
+
+    The tolerance is bounded to the two lines a stitch can damage: a
+    truncated stream that loses more than that is still malformed.
+    """
     events: list[dict[str, Any]] = []
-    for ordinal, raw in enumerate(stdout.splitlines(), start=1):
-        if not raw.strip():
+    lines = [raw for raw in stdout.splitlines() if raw.strip()]
+    dropped_partial = 0
+    for ordinal, raw in enumerate(lines, start=1):
+        if truncated and raw.startswith(CODEX_ELIDED_MARKER_PREFIX):
             continue
         try:
             value = decode_strict_json_bytes(
@@ -977,6 +1021,9 @@ def _parse_jsonl_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
                 max_depth=len(raw),
             )
         except StrictJsonDecodeError as exc:
+            if truncated and _is_stitch_boundary(ordinal, lines):
+                dropped_partial += 1
+                continue
             raise OpaqueStepError(
                 f"Codex JSONL event {ordinal} is malformed"
             ) from exc
@@ -985,7 +1032,24 @@ def _parse_jsonl_events(stdout: bytes) -> tuple[dict[str, Any], ...]:
                 f"Codex JSONL event {ordinal} is not an object"
             )
         events.append(value)
-    return tuple(events)
+    return _ParsedJsonlEvents(
+        events=tuple(events),
+        dropped_partial_lines=dropped_partial,
+    )
+
+
+def _is_stitch_boundary(ordinal: int, lines: list[bytes]) -> bool:
+    """Is this line one of the two the elision marker sits between?
+
+    Only the line before the marker and the line after it can have been
+    cut mid-record by the retention window. A malformed line anywhere
+    else was malformed when Codex wrote it.
+    """
+    index = ordinal - 1
+    for marker_index, raw in enumerate(lines):
+        if raw.startswith(CODEX_ELIDED_MARKER_PREFIX):
+            return index in (marker_index - 1, marker_index + 1)
+    return False
 
 
 def _parse_output_artifact_bytes(
@@ -995,6 +1059,7 @@ def _parse_output_artifact_bytes(
     stderr: str,
     run_id: str,
     isolation: dict[str, Any] | None = None,
+    stdout_truncated: bool = False,
 ) -> CodexOutputArtifact:
     try:
         decode_strict_json_bytes(
@@ -1009,9 +1074,13 @@ def _parse_output_artifact_bytes(
         ) from exc
     if artifact.run_id != run_id:
         raise OpaqueStepError("Codex final output artifact has the wrong run")
+    parsed = _parse_jsonl_events(stdout, truncated=stdout_truncated)
     process_evidence = {
         "agent": artifact.conversation_evidence,
-        "jsonl_events": list(_parse_jsonl_events(stdout)),
+        "jsonl_events": list(parsed.events),
+        # What the output budget cost this transcript. Without it a reader
+        # cannot tell a complete event stream from a stitched one.
+        "jsonl_dropped_partial_lines": parsed.dropped_partial_lines,
         "stderr": stderr,
         "isolation": isolation or {},
     }
