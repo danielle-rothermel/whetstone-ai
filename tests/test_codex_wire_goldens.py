@@ -31,6 +31,7 @@ from whetstone.optim.codex.mcp_bridge import (
 )
 from whetstone.optim.codex.control import CodexControl
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+from whetstone.optim.codex.containment import CODEX_DENIED_FEATURES
 from whetstone.optim.codex.runner import build_codex_command
 from whetstone.optim.codex.step_contract import (
     CODEX_TOOL_CALLS_BUDGET_LABEL,
@@ -280,6 +281,42 @@ def test_an_empty_reasoning_effort_adds_no_override() -> None:
     )
 
     assert not any("model_reasoning_effort" in entry for entry in argv)
+
+
+def test_web_search_is_disabled_by_config_key_not_by_feature_flags() -> None:
+    """Codex 0.148 enables web search by default; the flags no longer gate it.
+
+    ``web_search_cached`` and ``web_search_request`` were in the deny list
+    as ``--disable`` flags. Against the real 0.148 CLI they are
+    *deprecated*: they disable nothing, and each one makes the CLI emit a
+    deprecation ``error`` item into the JSONL transcript the adapter
+    parses. Web search stayed on, so a contained agent could still reach
+    the open web.
+
+    The top-level ``web_search`` config key is what actually turns it off,
+    and ``--strict-config`` makes a misspelling fatal rather than silent.
+    Both halves are pinned: the key is present, and the deprecated flags
+    are gone.
+    """
+    argv = build_codex_command(
+        prompt="go",
+        codex_binary="/usr/bin/codex",
+        model="toy-model",
+        reasoning_effort="",
+        mcp_endpoint=None,
+        output_schema_path="/tmp/schema.json",
+        output_artifact_path="/tmp/last.json",
+        working_directory="/tmp/work",
+    )
+
+    assert 'web_search="disabled"' in argv
+    assert argv[argv.index('web_search="disabled"') - 1] == "-c"
+    # The deprecated flags must not come back: passing them is what
+    # produced the transcript noise and the false sense of containment.
+    assert "web_search_cached" not in argv
+    assert "web_search_request" not in argv
+    assert "web_search_cached" not in CODEX_DENIED_FEATURES
+    assert "web_search_request" not in CODEX_DENIED_FEATURES
 
 
 def test_the_control_carries_no_field_the_cli_cannot_honor() -> None:

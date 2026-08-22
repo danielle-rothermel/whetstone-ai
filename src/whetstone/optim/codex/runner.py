@@ -58,6 +58,8 @@ from whetstone.optim.codex.containment import (
     CODEX_DENIED_FEATURES,
     CODEX_FILESYSTEM_POLICY,
     CODEX_NETWORK_POLICY,
+    CODEX_WEB_SEARCH_CONFIG_KEY,
+    CODEX_WEB_SEARCH_DISABLED,
 )
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.codex.mcp_host import CodexMcpEndpoint, CodexMcpHost
@@ -242,6 +244,13 @@ def build_codex_command(
         output_artifact_path,
         "-c",
         'shell_environment_policy.inherit="none"',
+        # Web search is enabled by default from 0.148 and the feature flags
+        # that once gated it are deprecated, so this key is the only thing
+        # that still turns it off. The agent must reach the evaluation tool
+        # and nothing else.
+        "-c",
+        f"{CODEX_WEB_SEARCH_CONFIG_KEY}="
+        f"{json.dumps(CODEX_WEB_SEARCH_DISABLED)}",
     ]
     for feature in CODEX_DENIED_FEATURES:
         argv.extend(["--disable", feature])
