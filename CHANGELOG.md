@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Pinned dependencies moved in lockstep: dr-exec 0.1.14, dr-store 0.2.6, and
+  dr-platform 0.2.7.
+- The subprocess rollout driver reads `CancelledOutcome.started` to tell a row
+  the batch deadline killed inside a worker from one that never left the queue.
+  dr-exec now publishes that flag, so the driver no longer infers the
+  distinction from the cancelled row's measured span.
+
 ## 0.1.5 - 2026-08-22
 
 ### Added
