@@ -550,3 +550,11 @@ def test_the_power_surface_uses_the_two_sided_multiplier() -> None:
             num_seeds=point.num_seeds,
         )
         assert point.mdd_at_target == pytest.approx(expected)
+
+
+def test_power_config_rejects_positional_construction() -> None:
+    # alpha (a headroom fraction) and significance_alpha are both small
+    # floats with no shared meaning, so the dataclass is keyword-only and a
+    # positional call cannot quietly swap them.
+    with pytest.raises(TypeError):
+        PowerConfig(0.25, 0.80)  # type: ignore[misc]

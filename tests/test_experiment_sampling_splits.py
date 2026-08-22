@@ -252,44 +252,61 @@ def test_a_toy_experiment_can_define_a_held_out_split() -> None:
 
 def test_a_held_out_task_reaching_the_internal_split_is_a_leak() -> None:
     pool = _pool()
-    configs = EvalConfigs(
-        env_name=NAMESPACE,
-        procedure_config_hash="procedure-hash",
-        internal=_split(pool[:8], split_role=INTERNAL_EVAL),
-        official=_split(pool[8:20], split_role=OFFICIAL),
-        # Overlaps the internal split by one task.
-        held_out=_split(pool[7:20], split_role=HELD_OUT),
-    )
 
     with pytest.raises(HeldOutReferencedError, match="share 1 held-out"):
-        assert_split_disjointness(configs)
+        EvalConfigs(
+            env_name=NAMESPACE,
+            procedure_config_hash="procedure-hash",
+            internal=_split(pool[:8], split_role=INTERNAL_EVAL),
+            official=_split(pool[8:20], split_role=OFFICIAL),
+            # Overlaps the internal split by one task.
+            held_out=_split(pool[7:20], split_role=HELD_OUT),
+        )
 
 
 def test_a_held_out_task_reaching_the_official_split_is_a_leak() -> None:
     pool = _pool()
-    configs = EvalConfigs(
-        env_name=NAMESPACE,
-        procedure_config_hash="procedure-hash",
-        internal=_split(pool[:8], split_role=INTERNAL_EVAL),
-        official=_split(pool[8:20], split_role=OFFICIAL),
-        held_out=_split(pool[19:30], split_role=HELD_OUT),
-    )
 
     with pytest.raises(HeldOutReferencedError, match="held_out"):
-        assert_split_disjointness(configs)
+        EvalConfigs(
+            env_name=NAMESPACE,
+            procedure_config_hash="procedure-hash",
+            internal=_split(pool[:8], split_role=INTERNAL_EVAL),
+            official=_split(pool[8:20], split_role=OFFICIAL),
+            held_out=_split(pool[19:30], split_role=HELD_OUT),
+        )
 
 
 def test_internal_and_official_overlap_is_a_plain_split_overlap() -> None:
     pool = _pool()
-    configs = EvalConfigs(
-        env_name=NAMESPACE,
-        procedure_config_hash="procedure-hash",
-        internal=_split(pool[:8], split_role=INTERNAL_EVAL),
-        official=_split(pool[6:20], split_role=OFFICIAL),
-    )
 
     with pytest.raises(SplitOverlapError, match="share 2 task identities"):
-        assert_split_disjointness(configs)
+        EvalConfigs(
+            env_name=NAMESPACE,
+            procedure_config_hash="procedure-hash",
+            internal=_split(pool[:8], split_role=INTERNAL_EVAL),
+            official=_split(pool[6:20], split_role=OFFICIAL),
+        )
+
+
+def test_a_leaking_experiment_cannot_be_built_at_all() -> None:
+    # The leakage check runs in EvalConfigs.__post_init__, so an experiment
+    # builder that hands the same tasks to two splits fails at construction
+    # rather than producing a leaking Experiment that a caller must
+    # remember to audit.
+    internal = (
+        ToyTask(task_id="i", prompt_inputs={"prompt": "i"}),
+        ToyTask(task_id="j", prompt_inputs={"prompt": "j"}),
+    )
+
+    with pytest.raises(HeldOutReferencedError, match="share 2 held-out"):
+        build_toy_experiment(
+            internal_tasks=internal,
+            official_tasks=(
+                ToyTask(task_id="o", prompt_inputs={"prompt": "o"}),
+            ),
+            held_out_tasks=internal,
+        )
 
 
 def test_a_split_cannot_be_derived_with_a_repeated_task() -> None:

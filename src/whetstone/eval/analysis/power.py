@@ -43,9 +43,13 @@ def _sample_grid(sample_cap: int) -> tuple[int, ...]:
     return tuple(range(1, max(1, sample_cap) + 1))
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PowerConfig:
     """The design knobs of one power analysis.
+
+    Every field is keyword-only: ``alpha`` and ``significance_alpha`` are both
+    plausible-looking small floats, and a positional call could silently swap
+    a headroom fraction for a significance level.
 
     ``alpha`` and ``significance_alpha`` are different quantities and are
     deliberately not merged:

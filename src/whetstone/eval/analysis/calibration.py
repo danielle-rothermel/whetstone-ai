@@ -101,7 +101,14 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed planned row accounting")
     if expected_reward_policy_hash is None:
         # Reward evidence is minted only on the internal role, so a non-internal
-        # anchor legitimately carries no reward reference.
+        # anchor must carry no reward reference. One that does means the
+        # producer's role gate and this consumer's have drifted apart, and the
+        # reward would be attributed to a role that never earned it.
+        if evidence.reward_ref is not None:
+            raise ValueError(
+                "calibration evidence carries reward evidence on a "
+                "non-internal role"
+            )
         return
     if evidence.reward_ref is None:
         raise ValueError("calibration requires internal reward evidence")

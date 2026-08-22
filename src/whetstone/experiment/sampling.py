@@ -133,7 +133,8 @@ class EvalConfigs:
     :class:`EvalSplit` derived by its own ``derive_eval_split`` call, so its
     task identity, seed plan, and Eval Config are content-addressed on the
     same terms as the other two and can be intersected against them by
-    :func:`assert_split_disjointness`.
+    :func:`assert_split_disjointness`, which construction runs so a leaking
+    set of splits can never be assembled into an ``EvalConfigs`` at all.
     """
 
     env_name: str
@@ -153,6 +154,10 @@ class EvalConfigs:
                     f"eval configs field for {expected!r} carries split "
                     f"role {split.split_role!r}"
                 )
+        # Leakage is a construction-time invariant, not a check a caller may
+        # forget to run: an experiment whose splits share a task identity
+        # cannot be built.
+        assert_split_disjointness(self)
 
     @property
     def held_out_task_hashes(self) -> tuple[str, ...]:
@@ -253,6 +258,10 @@ def assert_split_disjointness(configs: EvalConfigs) -> frozenset[str]:
     :class:`HeldOutReferencedError`; any other overlap raises
     :class:`SplitOverlapError`. Returns the union of all task hashes so a
     caller can record the study's total task identity in one place.
+
+    :meth:`EvalConfigs.__post_init__` runs this, so any ``EvalConfigs`` that
+    exists is already disjoint. Call it directly to obtain the covered-hash
+    union, or to check a set of splits' disjointness before assembling them.
     """
     # Within-split uniqueness is already a TaskSet validation, so this only
     # has to rule out cross-split sharing.

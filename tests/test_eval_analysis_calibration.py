@@ -489,3 +489,67 @@ def test_calibration_logs_progress_for_both_anchors() -> None:
     # 3 tasks x 2 repeats
     assert any("(6 rows)" in line for line in messages)
     assert any("present=6/6" in line for line in messages)
+
+
+def test_calibration_rejects_reward_evidence_on_a_non_internal_role() -> None:
+    # Reward evidence is minted only on the internal role. If a non-internal
+    # anchor ever arrives carrying one, the producer's role gate and this
+    # consumer's have drifted apart, so the calibration must refuse rather
+    # than attribute reward to a role that never earned it.
+    experiment, scores = _three_split_experiment()
+    with temp_sqlite_store() as store:
+        internal_engine = ReferenceEvalRuntimeConfig(
+            split_role=INTERNAL_EVAL
+        ).build_engine(
+            store,
+            experiment=experiment,
+            eval_runner=ScriptedEvalProcedureRunner(scores),
+        )
+        internal = internal_engine.for_task_ids(("task-0",)).evaluate(
+            EvalRequest(
+                request_id="reward-source",
+                candidate=experiment.initial_candidate,
+                metadata=metadata_with_purpose("reward-source"),
+            )
+        )
+        assert isinstance(internal, EvalEvidenceWithRef)
+        stray_reward_ref = internal.evidence.reward_ref
+        assert stray_reward_ref is not None
+
+        official_engine = ReferenceEvalRuntimeConfig(
+            split_role=OFFICIAL
+        ).build_engine(
+            store,
+            experiment=experiment,
+            eval_runner=ScriptedEvalProcedureRunner(scores),
+        )
+        official = official_engine.for_task_ids(("task-1",)).evaluate(
+            EvalRequest(
+                request_id="official-anchor",
+                candidate=experiment.initial_candidate,
+                metadata=metadata_with_purpose("official-anchor"),
+            )
+        )
+        assert isinstance(official, EvalEvidenceWithRef)
+        assert official.evidence.reward_ref is None
+        drifted = EvalEvidenceWithRef(
+            evidence=official.evidence.model_copy(
+                update={"reward_ref": stray_reward_ref}
+            ),
+            evidence_ref=official.evidence_ref,
+        )
+
+        with pytest.raises(
+            ValueError, match="reward evidence on a non-internal role"
+        ):
+            run_anchor_calibration(
+                engine=_StubbedEvalEngine(official_engine, drifted),
+                baseline_candidate=experiment.initial_candidate,
+                ceiling_candidate=experiment.ceiling_candidate,
+                baseline_purpose="calibration-baseline",
+                ceiling_purpose="calibration-ceiling",
+                task_ids=("task-1",),
+                pool_ceiling=1,
+                eval_role=EvalRole.OFFICIAL,
+                bootstrap_resamples=50,
+            )

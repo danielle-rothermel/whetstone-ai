@@ -165,6 +165,13 @@ def bootstrap_paired_delta_ci(
     resamples: int = DEFAULT_RESAMPLES,
     seed: int = 0,
 ) -> BootstrapCI:
+    """Percentile bootstrap CI and p-value for the paired ``b - a`` delta.
+
+    With a single task there is nothing to resample: the interval collapses to
+    the point estimate and the p-value is the ``1 / resamples`` floor, so a
+    one-task delta carries no evidence about its own uncertainty however the
+    interval reads.
+    """
     _validate_interval(level=level, resamples=resamples)
     if len(a_per_task) != len(b_per_task):
         raise ValueError(
