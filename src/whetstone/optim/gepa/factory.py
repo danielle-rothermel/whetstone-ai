@@ -37,7 +37,7 @@ from whetstone.optim.gepa.contracts import (
     GepaEffectRecorder,
     GepaSkippedMutation,
 )
-from whetstone.optim.contracts import SearchEvidence
+from whetstone.optim.contracts import OptimStepResult, SearchEvidence
 from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaDetailedResult
@@ -133,7 +133,8 @@ class CanonicalGepaAdapterFactory:
         Step can replay the prefix its predecessors already paid for. The
         authority stamps it onto the ``OptimEvalRequest`` of each evaluation
         it actually executes, so a fresh evaluation carries the Step that
-        caused it while a replayed one never reaches the intent layer.
+        caused it while a replayed one is re-collected from its recorded
+        resolution and rebound to the Step that reports it.
         """
         if step_index < 0:
             raise ValueError("GEPA factory step_index cannot be negative")
@@ -160,30 +161,97 @@ class CanonicalGepaAdapterFactory:
             )
         return self._step_index
 
+    def recorded_evidence_ids(
+        self,
+        *,
+        prior_step_result_ref: TypedRef | None,
+    ) -> frozenset[str]:
+        """Eval Request IDs already recorded on this run's durable Step chain.
+
+        Walks ``prior_step_result_ref`` back to the initial Step, unioning
+        each ancestor's ``search_evidence`` keys. This is the durable record
+        of what the run has already accounted for, so it -- not the effect
+        cache -- decides what a Step still owes.
+        """
+        recorded: set[str] = set()
+        ref = prior_step_result_ref
+        seen: set[tuple[str, str]] = set()
+        while ref is not None:
+            key = (ref.schema_name, str(ref.content_hash))
+            if key in seen:
+                raise ValueError(
+                    "GEPA Step chain cites itself; evidence cannot be "
+                    "reconciled against a cyclic chain"
+                )
+            seen.add(key)
+            result = OptimStepResult.model_validate(
+                self._store.get(ref.reference)
+            )
+            recorded.update(
+                str(evidence.eval_request_id)
+                for evidence in result.search_evidence
+            )
+            ref = result.request.record.prior_step_result_ref
+        return frozenset(recorded)
+
     def search_evidence(
         self,
         *,
         run_id: str,
         step_index: int,
+        prior_step_result_ref: TypedRef | None = None,
     ) -> tuple[SearchEvidence, ...]:
-        """Evidence for every evaluation this Step's search drove."""
+        """Evidence for the evaluations this Step still owes the run.
+
+        Upstream ``optimize`` re-runs from the seed every Step, so each Step
+        replays the whole prefix its predecessors already paid for. Recording
+        that prefix again would make each Step carry roughly as many entries
+        as its index, so a run's evidence would grow quadratically in Steps
+        while the paid evaluations stayed flat.
+
+        The filter is therefore *already recorded on an ancestor Step
+        Result*, not *served from the effect cache*. Those differ exactly
+        where it matters: an attempt that crashes after the effect cache
+        durably records an evaluation but before its Step Result persists,
+        and a PLATFORM deferral episode whose placeholder result is
+        discarded when the same ``step_index`` resumes. In both, the
+        evaluation replays yet sits on no Step Result at all, so filtering
+        on replay alone would lose it permanently. Reconciling against the
+        durable chain keeps it: this Step reports every evaluation its
+        search touched, fresh or replayed, that no ancestor recorded.
+
+        Each evaluation is still recorded exactly once run-wide, so run
+        evidence stays linear in evaluations.
+        """
         authority = self._evaluation_authority
         resolutions = authority.resolved_intents
         replayed = authority.replayed_flags
-        return tuple(
-            (
-                SearchEvidence.from_replayed_resolution
-                if was_replayed
-                else SearchEvidence.from_resolution
-            )(
-                resolution,
-                optim_run_id=run_id,
-                optim_step_index=step_index,
-            )
-            for resolution, was_replayed in zip(
-                resolutions, replayed, strict=True
-            )
+        recorded = self.recorded_evidence_ids(
+            prior_step_result_ref=prior_step_result_ref
         )
+        evidence: list[SearchEvidence] = []
+        emitted: set[str] = set()
+        for resolution, was_replayed in zip(
+            resolutions, replayed, strict=True
+        ):
+            request_id = str(
+                resolution.optim_eval_request.eval_request.request_id
+            )
+            if request_id in recorded or request_id in emitted:
+                continue
+            emitted.add(request_id)
+            evidence.append(
+                (
+                    SearchEvidence.from_replayed_resolution
+                    if was_replayed
+                    else SearchEvidence.from_resolution
+                )(
+                    resolution,
+                    optim_run_id=run_id,
+                    optim_step_index=step_index,
+                )
+            )
+        return tuple(evidence)
 
     def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:
         """Usage for every reflection call this Step's search made.

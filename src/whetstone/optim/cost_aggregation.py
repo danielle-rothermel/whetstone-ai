@@ -169,14 +169,29 @@ def _row_observation(row: EvalOutputRowUsage) -> UsageObservation | None:
     ``rows_missing_token_breakdown`` records that its tokens are missing from
     the token totals.
 
+    A row carries a token *breakdown* only when both directions are present.
+    One direction still evidences a call, but the absent side is carried into
+    the totals as zero, so the row is billable *and* flagged as missing its
+    breakdown -- the same rule ``ProposerCallUsage.observation`` applies, so
+    the two cost roles agree on what a breakdown is.
+
     Only a row with no telemetry that went missing, or failed without any
     provider response, evidences no provider call -- a failure before the
     provider answered, or a row that never ran -- and is dropped.
     """
-    has_tokens = (
+    # Two different questions are asked of the same two fields. *Any* token
+    # count is evidence the provider answered, so one direction is enough to
+    # evidence a call. Only *both* directions are a token breakdown, though:
+    # the absent side is carried into the totals as zero, so a row reporting
+    # one direction publishes an understated token total. Collapsing these
+    # into one test would either drop a call or hide that understatement.
+    has_any_token_count = (
         row.prompt_tokens is not None or row.completion_tokens is not None
     )
-    has_telemetry = has_tokens or row.provider_cost is not None
+    has_token_breakdown = (
+        row.prompt_tokens is not None and row.completion_tokens is not None
+    )
+    has_telemetry = has_any_token_count or row.provider_cost is not None
     if row.cache_hit:
         return UsageObservation(cached=True)
     if not has_telemetry and row.missing:
@@ -187,7 +202,7 @@ def _row_observation(row: EvalOutputRowUsage) -> UsageObservation | None:
         input_tokens=row.prompt_tokens or 0,
         output_tokens=row.completion_tokens or 0,
         usd=row.provider_cost,
-        missing_token_breakdown=not has_tokens,
+        missing_token_breakdown=not has_token_breakdown,
     )
 
 
