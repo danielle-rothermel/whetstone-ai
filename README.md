@@ -16,6 +16,7 @@ stepping through runs to inspect behavior. Optimizers are not co-equal:
 | **COPRO** | Live; pass a COPRO adapter in the `build_runtime` registry | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
 | **GEPA** | Live harness adapter + step engine; pass via the `build_runtime` registry | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox gepa` |
 | **MIPROv2** | Live via `register_toy_runtime(..., extra_adapters=...)` + `prepare_miprov2_run` | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
+| **Codex direct** | Live via the `build_runtime` registry + `prepare_codex_run`; the only tool-using optimizer, and macOS-only (its sandbox is `sandbox-exec`) | Not on the pipeline | No sandbox command |
 
 **Out of scope here:** particular benchmarks or envs (those live in separate
 packages or repos), one-off experiment scripts, and product-facing runners.
@@ -41,8 +42,15 @@ packages or repos), one-off experiment scripts, and product-facing runners.
 4. **Sandbox & interpretation** — dry-run previews and toy-graph helpers to step
    through optimizer behavior before spending full eval budget
    (`whetstone-sandbox`).
-5. **Codex MCP eval** — `whetstone-mcp-eval` serves the Codex evaluate-candidate
-   tool over stdio.
+5. **Codex MCP eval** — `whetstone-mcp-eval` serves the one tool a Codex run is
+   granted: evaluate a candidate on the run's internal split and read back the
+   aggregate reward and per-task scores. Every call is admitted through
+   `ToolAdmissionAuthority` against a per-run capacity, leased, persisted, and
+   recorded in the step's Issued Tool Call ledger. The Codex output artifact
+   carries no candidate body -- it names the `call_id` it selected, and the
+   adapter rebuilds that candidate from the call's recorded, content-addressed
+   arguments, so a template that was never evaluated through the tool cannot be
+   returned.
 
 ```text
 Evaluation  →  Evaluation analysis
@@ -58,16 +66,16 @@ Optimization  →  Sandbox / interpretation
 | **dr-providers** | Provider call configs, transport, and invocation evidence |
 | **dr-store** | Content-addressed persistence for candidates, evidence, and step records |
 | **dr-serialize** | Strict JSON and canonical identity hashing |
-| **dr-exec** | Budgeted subprocess execution: Codex optimizer steps, and the subprocess rollout driver's worker pool |
+| **dr-exec** | Budgeted subprocess execution: the Codex optimizer's `ProcessExecutor`, and the subprocess rollout driver's worker pool |
 | **dr-platform** | Durable pipeline stages, deferral/fan-in, and run submission (`platform` extra) |
 
 ## Stable seams
 
 - **Experiment** — generation graph, initial/ceiling candidates, eval configs, reward policy
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
-- **OptimizerAdapter** — COPRO and GEPA plug into the shared harness and platform pipeline when present in the `build_runtime` registry; MIPROv2 is harness-only via `extra_adapters`. Adding or removing an adapter changes controller identity.
+- **OptimizerAdapter** — COPRO and GEPA plug into the shared harness and platform pipeline when present in the `build_runtime` registry; MIPROv2 and Codex are harness-only. Codex is the only `TOOL_USING` adapter, so its run carries a `ToolConfig` and `build_runtime` needs a `tool_executor` and a durable `admission` authority. Adding or removing an adapter changes controller identity.
 - **StepContractProvider** — each optimizer declares its first-step and continuation contracts and parses its own launch control, registered by adapter key; `StepRequestBuilder` and `HarnessRunController` dispatch through it
-- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents` (COPRO, MIPROv2), and evaluations its own search drove in `search_evidence` (GEPA), each bound to its run and step index and verified by the harness; a terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
+- **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents` (COPRO, MIPROv2), and evaluations its own search drove in `search_evidence` (GEPA), each bound to its run and step index and verified by the harness. A `TOOL_USING` step (Codex) carries `tool_evidence` instead: intent/search evidence and tool evidence are mutually exclusive, and the Issued Tool Call ledger records one entry per admitted call. A terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
 
 ## Platform pipeline

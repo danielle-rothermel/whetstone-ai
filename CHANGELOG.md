@@ -225,6 +225,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole reflection prefix from that cache on every Step and the Step that
   first drove the call already carries its spend.
   `STEP_RESULT_SCHEMA_VERSION` is now 4.
+- The Codex-direct optimizer is wired through the shared contracts:
+  `CodexControl`, a `CodexStepContractProvider` registered under the
+  `codex` adapter key, `prepare_codex_run` beside the other
+  `prepare_*_run` functions, `whetstone-optim run --adapter codex`, and
+  `build_toy_codex_control` / `build_toy_codex_adapter` /
+  `prepare_toy_codex_run` in `whetstone.testing`.
+- Codex is granted exactly one tool: evaluate a candidate on the run's
+  internal split and read back the aggregate reward plus per-task
+  scores. Every call is admitted against a per-run `ToolCapacity` whose
+  size is the control's `max_tool_calls`, which is simultaneously the
+  step's `tool_calls` budget, so the admission cap and the Issued Tool
+  Call ledger's limit cannot drift. A capacity refusal is advisory --
+  the agent is told further calls will be refused, and the wall budget
+  is the hard stop.
+- The Codex output artifact carries no candidate body. It names the
+  `call_id` it selected, and the adapter rebuilds that candidate from
+  the call's recorded, content-addressed arguments, so a template that
+  was never evaluated through the tool cannot be returned. An artifact
+  naming a call that was never issued is a terminal failure, and so is
+  one naming a call whose evaluation terminally failed: `COMPLETED` is
+  also the terminal state of a failed evaluation, which carries no
+  output and no reward, and a candidate that was never successfully
+  scored is not a result.
+- The ledger is total over *admitted* calls, not reported ones, on every
+  path that terminalizes a step. The adapter reconciles the reported
+  `evaluated_call_ids` against the durable per-run accepted count; on a
+  shortfall, and on a wall-budget stop where there is no artifact to read
+  call ids from at all, it enumerates the durable admission entries and
+  re-issues every completed one through the guarded handle before it
+  fails. The handle reads the recorded terminal instead of evaluating, so
+  this records work already paid for and never buys more. An agent
+  therefore cannot hide paid evaluations from the Step Result or leave
+  the `tool_calls` budget under-debited by omitting them, and a run that
+  simply ran out of wall clock still surfaces everything it spent.
+- A shortfall says which kind it is. An omitted call that `COMPLETED` is
+  the agent under-reporting (`codex_unreported_evaluation`); an admitted
+  call whetstone's own evaluation server never reached a terminal for is
+  a harness failure (`codex_evaluation_interrupted`), named with the
+  interrupted call ids. The agent had no result to report in the second
+  case, so the two no longer share one accusatory code.
+- `ToolCallStore.admitted_entries` joins `accepted_count` across the
+  memory, SQLite, and PostgreSQL admission backends: the count says how
+  many evaluations a scope paid for, the projection says which calls and
+  what durable state each one reached.
+- whetstone hosts the MCP evaluation endpoint itself, outside the Codex
+  sandbox, and gives the agent only a loopback URL and a bearer token.
+  The evaluation server is the sole writer of the whetstone store -- the
+  durable ledger, and the admission-capacity rows that cap paid
+  evaluations -- so the agent's sandbox profile grants no write access to
+  it at all; its scratch directory is the whole writable set. The
+  containment profile permits network, so the endpoint is authenticated
+  rather than merely bound to loopback.
+- A run-scoped lease token (`WS_MCP_RUN_LEASE_TOKEN`) does two separate
+  jobs. `WS_MCP_RUN_LEASE_BINDING` binds it to the run's exact Tool
+  Config and capacity binding, and the server refuses to start when the
+  digest it recomputes disagrees, so a token minted for another run
+  brings up nothing. Separately, the adapter refuses an artifact whose
+  recorded token hash is not the one it minted, which shows the artifact
+  came from a process that received this step's prompt.
+- A Codex wall-budget stop terminalizes the step under a typed failure
+  instead of raising `subprocess.TimeoutExpired` out of the optimizer,
+  which previously escaped the harness's effect-lease maintenance and
+  wedged the run until the lease lapsed.
+- `codex_auth_preflight` proves a usable Codex session -- binary, auth
+  source, and one cheap structured probe. It is required rather than
+  optional: `prepare_codex_run` takes no default `preflight`, and the
+  CLI's `--adapter codex` path runs the real check before it builds an
+  adapter, so a broken session commits no capacity or eval budget.
+- `build_codex_executor` is the repository's one production dr-exec
+  `ProcessExecutor` construction site.
 
 ### Changed
 
@@ -281,6 +351,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   argument asserts the engine is bound to the role the caller expects. Reward
   evidence is validated only on the internal role, which is the only role that
   mints it.
+- `EngineToolEvaluator` was dead on arrival: it referenced `Candidate`,
+  `EvalEvidence`, and `EvalFailureEvidence` without importing them, and
+  raised `ToolEvaluationError` with a plain string where the constructor
+  takes a `TerminalFailure`. Every failure path now constructs a real
+  `TerminalFailure` under an owned code, and each is covered by a test.
+- `build_runtime` takes an injectable `admission` authority, an
+  injectable `tool_executor`, and derives `adapter_replay_policy` from
+  the registered adapters instead of hardcoding `DURABLE_WORKFLOW`.
+  Codex requires `NO_REDRIVE` and a durable admission authority, because
+  its capacity gates an out-of-process MCP server; a `TOOL_USING` run
+  additionally needs a tool executor, which `build_runtime` never
+  passed.
+- The Codex dr-exec job now bounds `payload_output` as well as
+  `wall_time`, and truncation under that budget is a reported outcome
+  rather than an error. `RegisteredRuntime` exposes the exact
+  `tool_store` the harness admits through, and the runtime engine
+  exposes its `reward_policy`.
+- `SubprocessCodexRunner` calls `Executor.run_blocking`; it previously
+  called the coroutine `Executor.run` without awaiting it.
+- The task-model API key reaches the evaluation server alone. It was
+  previously added to the environment allowlist of the Codex process
+  itself, which -- with network allowed and an interpreter on PATH --
+  was the credential an agent would need to score candidates outside the
+  tool entirely.
+- `CodexControl` carries `reasoning_effort`, which now reaches the CLI as
+  `-c model_reasoning_effort`. No control field shapes identity without
+  shaping execution; the module docstring names the route each one takes,
+  since only `codex_binary`, `model`, `reasoning_effort`, and
+  `denied_features` reach the argv itself.
+- A failed Step Result may now supersede its nested terminal failures
+  instead of being required to equal every one of them. Two evaluations
+  that failed for different reasons -- the ordinary shape, since
+  `EngineToolEvaluator` names the failing call in its own failure --
+  previously made the Step Result unconstructable: it raised a raw
+  `ValidationError` after the effect lease had already been terminalized,
+  so every re-run replayed the same checkpoint and raised again. A
+  superseding Step failure must name the exact set of nested codes it
+  stands for, under `superseded_failure_codes`, so it still cannot
+  silently disagree with its own evidence.
+- The Codex MCP host serves on the loopback socket it reserved rather
+  than closing it and letting uvicorn re-bind, and takes readiness from
+  uvicorn's own started signal rather than a connect probe. A probe
+  proved only that *something* accepted on the port, so a process that
+  won the re-bind window became the agent's evaluation endpoint and
+  received the run's bearer token while uvicorn's bind failure went
+  unread. Its startup budget is also now the real time it names: the
+  previous wait counted iterations without sleeping, spending a nominal
+  30 seconds in about 0.14 of them. The host closes the persistent store
+  session its server opened, which the stdio server it replaced used to
+  release by exiting.
+
+### Removed
+
+- `CodexControl.max_turns` and `CodexControl.seed`. Both shaped the
+  control identity and the recorded hyperparameters while reaching no
+  part of the invocation -- `codex exec` exposes neither, and
+  `--strict-config` rejects both as unknown configuration fields -- so
+  two runs differing only in `max_turns` recorded different identities
+  and executed byte-identical commands.
+- The stdio MCP server entrypoint, the `whetstone-mcp-eval` console
+  script, and the runtime staging that copied the whetstone package into
+  every run's scratch directory. The agent no longer spawns the
+  evaluation server, so none of it has a caller.
+- `CodexOutputArtifact.proposals` and the adapter's proposal-contract
+  validation, superseded by ledger-resolved selection.
+- The MCP evaluation tool's optional `task_ids` subset variant, and the
+  evaluator's engine-narrowing branch. A narrowed engine mints a
+  different Eval Config identity, which `EvaluatingToolExecutor` rejects
+  as `tool_eval_config_mismatch`, so such a call could never complete.
+- The unused `Path`-taking `_parse_output_artifact`.
 
 ### Known limitations
 
@@ -303,6 +443,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OptimStepResult.tool_evidence`, which `aggregate_run_cost` does not
   traverse; that wiring lands with the Codex tool work on branch
   `08-22-codex`.
+- Codex process isolation is macOS-only: it requires `sandbox-exec` and
+  refuses to run without it rather than falling back to an insecure
+  path. A Linux containment profile is separate work. Of the 77 tests in
+  `tests/test_codex_*.py`, 13 are Darwin-gated -- the 10 end-to-end tests
+  that spawn a sandboxed process, the 2 sandbox-profile tests, and the
+  one preflight test that asserts a nonzero probe exit -- so 64 run on
+  Linux. Every guarantee whetstone enforces in Python is among them: the
+  environment allowlist and run lease binding
+  (`tests/test_codex_containment_boundary.py`), ledger totality,
+  selection, and shared-failure terminalization
+  (`tests/test_codex_adapter_selection.py`), admission
+  (`tests/test_codex_admission.py`), timeout terminalization
+  (`tests/test_codex_budget_exhaustion.py`), the evaluation endpoint's
+  startup and teardown (`tests/test_codex_mcp_host_lifecycle.py`), and
+  both golden files.
+- dr-exec v1 accepts no finite limit on `process_count` or the resource
+  axes, so those are recorded as unbudgeted in the artifact's isolation
+  block. The wall budget and the process boundary are the containment.
 
 ### Fixed
 
