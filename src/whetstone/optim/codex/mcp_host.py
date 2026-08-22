@@ -23,8 +23,9 @@ from __future__ import annotations
 import asyncio
 import socket
 import threading
-from contextlib import closing
+import time
 from dataclasses import dataclass
+
 from hmac import compare_digest
 
 from whetstone.optim.codex.mcp_bridge import EvaluateCandidateServer
@@ -35,13 +36,18 @@ from whetstone.optim.codex.mcp_bridge import EvaluateCandidateServer
 CODEX_MCP_HTTP_PATH = "/mcp"
 CODEX_MCP_AUTH_HEADER = "authorization"
 CODEX_MCP_AUTH_SCHEME = "Bearer"
-#: How long the host waits for uvicorn to report a bound port before it
-#: gives up. A server that has not bound by then is not going to.
+#: How long the host waits for uvicorn to report the endpoint started
+#: before it gives up. This is real elapsed time against a monotonic
+#: deadline: a server that has not started by then is not going to.
 CODEX_MCP_STARTUP_SECONDS = 30.0
 
 
 class CodexMcpHostError(RuntimeError):
     """The evaluation endpoint could not be brought up or shut down."""
+
+    def __init__(self, message: str, *, log: str = "") -> None:
+        super().__init__(f"{message}: {log}" if log else message)
+        self.log = log
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,17 +58,37 @@ class CodexMcpEndpoint:
     auth_token: str
 
 
-def reserve_loopback_port() -> int:
-    """Take a loopback port the server will bind.
+@dataclass(frozen=True, slots=True)
+class ReservedLoopbackPort:
+    """A loopback port held open, to be served on directly.
 
-    Binding with ``SO_REUSEADDR`` and closing immediately leaves the port
-    free for uvicorn while making a collision with another local listener
-    vanishingly unlikely.
+    The socket is already bound and listening. Handing it to uvicorn
+    rather than closing it and letting uvicorn re-bind means the port is
+    never unowned, so no other local process can win it and become the
+    endpoint the agent authenticates to.
     """
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
+
+    socket: socket.socket
+    port: int
+
+
+def reserve_loopback_port() -> ReservedLoopbackPort:
+    """Take a loopback port and keep holding it.
+
+    The returned socket is listening. Its owner is responsible for
+    closing it -- :class:`CodexMcpHost` does so on exit, after uvicorn
+    has released it.
+    """
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(128)
+    except BaseException:
+        listener.close()
+        raise
+    return ReservedLoopbackPort(
+        socket=listener, port=int(listener.getsockname()[1])
+    )
 
 
 def bearer_auth_middleware(expected_token: str):
@@ -91,6 +117,11 @@ class CodexMcpHost:
     Use it as a context manager: the endpoint exists for exactly the
     lifetime of the block, and the server thread is joined on exit so no
     listener outlives the Step that owns it.
+
+    Readiness is uvicorn's own started signal, never a connect probe. A
+    probe proves only that *something* accepts on the port; taking that
+    as readiness would hand the agent -- and this run's bearer token --
+    to whatever process happened to own it.
     """
 
     def __init__(
@@ -103,11 +134,12 @@ class CodexMcpHost:
     ) -> None:
         self._server = server
         self._auth_token = auth_token
-        self._port = reserve_loopback_port() if port is None else port
+        self._reserved = reserve_loopback_port() if port is None else None
+        self._port = self._reserved.port if self._reserved else int(port or 0)
         self._startup_seconds = startup_seconds
         self._thread: threading.Thread | None = None
         self._uvicorn = None
-        self._ready = threading.Event()
+        self._settled = threading.Event()
         self._failure: BaseException | None = None
 
     @property
@@ -135,49 +167,68 @@ class CodexMcpHost:
             log_level="warning",
             lifespan="on",
         )
-        self._uvicorn = uvicorn.Server(config)
+        server = uvicorn.Server(config)
+        self._uvicorn = server
+        # uvicorn logs bind and lifespan failures rather than raising
+        # them, and a failed startup exits the thread through SystemExit
+        # carrying no detail. Capturing its log is what lets the host
+        # say *why* the endpoint is unavailable.
+        log = _CapturedServerLog()
+        # Serve on the socket already reserved for this host. uvicorn
+        # binds nothing of its own, so there is no window between the
+        # reservation and the listener in which another process could
+        # take the port.
+        sockets = (
+            [self._reserved.socket] if self._reserved is not None else None
+        )
 
         def _serve() -> None:
             try:
-                asyncio.run(self._uvicorn.serve())
+                with log.capturing():
+                    asyncio.run(server.serve(sockets=sockets))
             except BaseException as exc:  # noqa: BLE001 - reported to caller
                 self._failure = exc
             finally:
-                self._ready.set()
+                self._settled.set()
 
         self._thread = threading.Thread(
             target=_serve, name="whetstone-codex-mcp", daemon=True
         )
         self._thread.start()
-        self._await_started()
+        self._await_started(server, log)
         return self.endpoint
 
-    def _await_started(self) -> None:
-        """Block until the socket is accepting, or fail loudly.
+    def _await_started(self, server, log: _CapturedServerLog) -> None:
+        """Block until uvicorn reports started, or fail loudly.
 
-        Readiness is the listener answering, not a delay: a connect that
-        succeeds is the state that makes the endpoint usable.
+        Readiness is ``Server.started``, which uvicorn sets only after
+        its own listeners are up -- so it is proof that *this* server
+        owns the endpoint. The wait is against a monotonic deadline, so
+        the budget is the real time it names.
         """
-        deadline = self._startup_seconds
-        step = 0.01
-        waited = 0.0
-        while waited < deadline:
-            if self._failure is not None:
+        deadline = time.monotonic() + self._startup_seconds
+        while True:
+            if self._failure is not None or self._settled.is_set():
                 self.__exit__(None, None, None)
                 raise CodexMcpHostError(
-                    "the Codex MCP evaluation endpoint failed to start"
+                    "the Codex MCP evaluation endpoint failed to start",
+                    log=log.text(),
                 ) from self._failure
-            with closing(
-                socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            ) as probe:
-                probe.settimeout(step)
-                if probe.connect_ex(("127.0.0.1", self._port)) == 0:
-                    return
-            waited += step
+            if server.started:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            # The serve thread sets ``_settled`` on any terminal exit, so
+            # waiting on it means a failed startup wakes the host at once
+            # rather than at the deadline. ``started`` has no event of its
+            # own, hence the bounded poll interval.
+            self._settled.wait(timeout=min(remaining, 0.01))
         self.__exit__(None, None, None)
         raise CodexMcpHostError(
-            "the Codex MCP evaluation endpoint did not bind "
-            f"127.0.0.1:{self._port} within {deadline} seconds"
+            "the Codex MCP evaluation endpoint did not start on "
+            f"127.0.0.1:{self._port} within {self._startup_seconds} seconds",
+            log=log.text(),
         )
 
     def __exit__(self, *_exc_info: object) -> None:
@@ -188,6 +239,67 @@ class CodexMcpHost:
             thread.join(timeout=self._startup_seconds)
         self._thread = None
         self._uvicorn = None
+        reserved = self._reserved
+        if reserved is not None:
+            self._reserved = None
+            reserved.socket.close()
+        self._close_store_session()
+
+    def _close_store_session(self) -> None:
+        """Release the store session this Step's server opened.
+
+        ``persistent_sqlite`` sessions are process-lifetime and keyed by
+        path: each one owns an event loop, a thread, and an open SQLite
+        backend. The stdio server that preceded this host released them
+        by dying; the in-process host outlives its Steps, so it closes
+        the session it owns instead.
+        """
+        sqlite_path = getattr(self._server, "sqlite_path", None)
+        if not sqlite_path:
+            return
+        from dr_store.sync import close_persistent
+
+        close_persistent(sqlite_path)
+
+
+class _CapturedServerLog:
+    """uvicorn's own error log for one server run.
+
+    uvicorn reports a failed bind or a failed lifespan by logging and
+    exiting, so the raised ``SystemExit`` says nothing useful. This keeps
+    the log line the operator actually needs on the host error.
+    """
+
+    def __init__(self) -> None:
+        self._records: list[str] = []
+        self._lock = threading.Lock()
+
+    def capturing(self):
+        import contextlib
+        import logging
+
+        captured = self
+
+        class _Handler(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                with captured._lock:
+                    captured._records.append(record.getMessage())
+
+        @contextlib.contextmanager
+        def _scope():
+            handler = _Handler(level=logging.ERROR)
+            logger = logging.getLogger("uvicorn.error")
+            logger.addHandler(handler)
+            try:
+                yield
+            finally:
+                logger.removeHandler(handler)
+
+        return _scope()
+
+    def text(self) -> str:
+        with self._lock:
+            return " ".join(self._records)
 
 
 __all__ = [
@@ -198,6 +310,7 @@ __all__ = [
     "CodexMcpEndpoint",
     "CodexMcpHost",
     "CodexMcpHostError",
+    "ReservedLoopbackPort",
     "bearer_auth_middleware",
     "reserve_loopback_port",
 ]

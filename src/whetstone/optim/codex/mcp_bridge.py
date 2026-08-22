@@ -125,6 +125,11 @@ class EvaluateCandidateServer(MCPServer[None]):
         self.tool_config = handle.config
         self._handle = handle
         self._input_names = frozenset({"call_id", *input_fields})
+        #: The store path this server's persistent session was opened on,
+        #: set by the factory that opened it. Whoever hosts the server is
+        #: the only party that knows when the session may be released, so
+        #: the path travels with the server rather than being rediscovered.
+        self.sqlite_path: str | None = None
 
         def evaluate_candidate(
             call_id: NonEmptyId,

@@ -88,9 +88,15 @@ def build_server_from_env(
             else ReplayPolicy.NO_REDRIVE
         ),
     )
-    return EvaluateCandidateServer(
+    server = EvaluateCandidateServer(
         handle=executor.runtime_handle(tool_config, tool_store, binding)
     )
+    # The persistent session opened above is process-lifetime and keyed by
+    # path, so nothing releases it on its own. whetstone now hosts the
+    # server in-process and outlives every Step it runs, so the host needs
+    # to know which session it owns in order to close it on teardown.
+    server.sqlite_path = sqlite_path
+    return server
 
 
 def _capacity_subject_key(binding: ToolCapacityBinding) -> str:
