@@ -140,3 +140,104 @@ def test_the_run_lease_token_is_not_a_codex_process_variable(
         McpEnvironmentKey.RUN_LEASE_TOKEN
         not in runner.codex_process_environment()
     )
+
+
+def _server_environment(tmp_path, sqlite_store, *, run_id: str) -> dict:
+    """The exact environment the runner grants one run's MCP server."""
+    from tests.codex_support import (
+        toy_capacity_binding,
+        toy_codex_control,
+        toy_codex_run,
+    )
+    from whetstone.optim.codex.adapter import codex_run_lease_binding
+    from whetstone.optim.codex.runner import _capacity_subject_key
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    control = toy_codex_control(engine=engine, max_tool_calls=2)
+    run, config, _candidate = toy_codex_run(
+        control=control, engine=engine, run_id=run_id
+    )
+    binding = toy_capacity_binding(run)
+    token = f"token-for-{run_id}"
+    runtime_config = ReferenceEvalRuntimeConfig()
+    return {
+        McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),
+        McpEnvironmentKey.TOOL_CONFIG: config.model_dump_json(),
+        McpEnvironmentKey.CAPACITY_BINDING: binding.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG: runtime_config.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+            "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
+        ),
+        McpEnvironmentKey.REWARD_POLICY: (
+            engine.reward_policy.model_dump_json()
+        ),
+        McpEnvironmentKey.RUN_LEASE_TOKEN: token,
+        McpEnvironmentKey.RUN_LEASE_BINDING: codex_run_lease_binding(
+            token=token,
+            store_namespace_key=str(config.store_namespace_key),
+            tool_config_hash=str(config.identity_hash()),
+            capacity_scope=binding.scope.value,
+            capacity_subject=_capacity_subject_key(binding),
+        ),
+    }
+
+
+def test_the_mcp_server_refuses_a_token_bound_to_another_run(
+    tmp_path,
+    sqlite_store,
+) -> None:
+    """A non-empty token is not proof that the server serves this run.
+
+    The binding digest covers the token together with the server's own
+    Tool Config and capacity binding, so a token minted for a different
+    run does not verify against this server's configuration.
+    """
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+
+    mine = _server_environment(tmp_path, sqlite_store, run_id="run-mine")
+    theirs = _server_environment(
+        tmp_path, sqlite_store, run_id="run-theirs"
+    )
+    foreign = {
+        **mine,
+        McpEnvironmentKey.RUN_LEASE_TOKEN: theirs[
+            McpEnvironmentKey.RUN_LEASE_TOKEN
+        ],
+        McpEnvironmentKey.RUN_LEASE_BINDING: theirs[
+            McpEnvironmentKey.RUN_LEASE_BINDING
+        ],
+    }
+
+    with pytest.raises(ValueError, match="not bound to this run"):
+        build_server_from_env(foreign)
+
+
+def test_the_mcp_server_refuses_a_replayed_token_without_its_binding(
+    tmp_path,
+    sqlite_store,
+) -> None:
+    """A stale server started from a leaked token alone is refused."""
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+
+    mine = _server_environment(tmp_path, sqlite_store, run_id="run-mine")
+    without_binding = dict(mine)
+    without_binding.pop(McpEnvironmentKey.RUN_LEASE_BINDING)
+
+    with pytest.raises(ValueError, match="requires the run lease binding"):
+        build_server_from_env(without_binding)
+
+    tampered = {**mine, McpEnvironmentKey.RUN_LEASE_BINDING: "0" * 64}
+    with pytest.raises(ValueError, match="not bound to this run"):
+        build_server_from_env(tampered)
+
+
+def test_the_mcp_server_accepts_its_own_run_binding(
+    tmp_path,
+    sqlite_store,
+) -> None:
+    """The success side: the runner's own binding verifies."""
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+
+    mine = _server_environment(tmp_path, sqlite_store, run_id="run-mine")
+
+    assert build_server_from_env(mine) is not None

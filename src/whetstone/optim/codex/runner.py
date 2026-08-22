@@ -47,6 +47,7 @@ from whetstone.optim.codex.adapter import (
     CodexWallBudgetExceeded,
     OpaqueStepError,
     codex_lease_token_hash,
+    codex_run_lease_binding,
 )
 from whetstone.optim.codex.containment import (
     CODEX_CONTAINMENT_PROFILE,
@@ -57,7 +58,10 @@ from whetstone.optim.codex.containment import (
 )
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.contracts import OptimStepRequest
-from whetstone.optim.tools.contracts import RuntimeToolHandle
+from whetstone.optim.tools.contracts import (
+    RuntimeToolHandle,
+    ToolCapacityBinding,
+)
 
 if TYPE_CHECKING:
     from whetstone.optim.codex.config import EvalRuntimeConfig
@@ -269,6 +273,14 @@ def build_codex_command(
             )
     argv.append(prompt)
     return argv
+
+
+def _capacity_subject_key(binding: ToolCapacityBinding) -> str:
+    """The capacity subject as one exact string for the lease binding."""
+    subject = binding.subject_ref
+    if subject is None:
+        return ""
+    return f"{subject.schema_name}@{subject.content_hash}"
 
 
 def _require_absolute(field: str, raw: str | None, *, optional: bool) -> None:
@@ -555,6 +567,21 @@ class SubprocessCodexRunner:
                     self._reward_policy.model_dump_json()
                 ),
                 McpEnvironmentKey.RUN_LEASE_TOKEN: lease_token,
+                McpEnvironmentKey.RUN_LEASE_BINDING: (
+                    codex_run_lease_binding(
+                        token=lease_token,
+                        store_namespace_key=str(
+                            handle.config.store_namespace_key
+                        ),
+                        tool_config_hash=str(
+                            handle.config.identity_hash()
+                        ),
+                        capacity_scope=handle.binding.scope.value,
+                        capacity_subject=_capacity_subject_key(
+                            handle.binding
+                        ),
+                    )
+                ),
                 # The eval transport's credential reaches the server child
                 # and nothing else; see mcp_server_secret_environment.
                 **self._mcp_secret_environment,

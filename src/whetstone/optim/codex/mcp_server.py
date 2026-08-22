@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from hmac import compare_digest
 
 from dr_serialize import decode_strict_json_bytes
 from dr_store.sync import close_persistent, persistent_sqlite
@@ -11,6 +12,7 @@ from whetstone.core.leasing import (
     ReplayPolicy,
 )
 from whetstone.experiment.reward import RewardPolicy
+from whetstone.optim.codex.adapter import codex_run_lease_binding
 from whetstone.optim.codex.mcp_bridge import (
     EvaluateCandidateServer,
 )
@@ -46,11 +48,30 @@ def build_server_from_env(
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")
-    # The token itself is never echoed anywhere; the adapter compares its
-    # hash against the token it minted, so a stale or foreign server
-    # process cannot serve this run's artifact.
-    if not env.get(McpEnvironmentKey.RUN_LEASE_TOKEN):
+    # Bind this server process to this run. A non-empty token proves only
+    # that whoever started the server held some token; the binding digest
+    # is over the token *and* this server's own Tool Config and capacity
+    # binding, so a token minted for another run -- or replayed at a
+    # server configured for a different one -- does not verify and the
+    # server refuses to start rather than admitting that run's calls.
+    token = env.get(McpEnvironmentKey.RUN_LEASE_TOKEN)
+    if not token:
         raise ValueError("MCP server requires the run lease token")
+    presented = env.get(McpEnvironmentKey.RUN_LEASE_BINDING)
+    if not presented:
+        raise ValueError("MCP server requires the run lease binding")
+    expected = codex_run_lease_binding(
+        token=token,
+        store_namespace_key=str(tool_config.store_namespace_key),
+        tool_config_hash=str(tool_config.identity_hash()),
+        capacity_scope=binding.scope.value,
+        capacity_subject=_capacity_subject_key(binding),
+    )
+    if not compare_digest(presented, expected):
+        raise ValueError(
+            "MCP server run lease token is not bound to this run's exact "
+            "Tool Config and capacity binding"
+        )
     effect_authority = EffectLeaseAuthority.sqlite(sqlite_path)
     tool_store = ToolCallStore(
         store,
@@ -71,6 +92,13 @@ def build_server_from_env(
     return EvaluateCandidateServer(
         handle=executor.runtime_handle(tool_config, tool_store, binding)
     )
+
+
+def _capacity_subject_key(binding: ToolCapacityBinding) -> str:
+    subject = binding.subject_ref
+    if subject is None:
+        return ""
+    return f"{subject.schema_name}@{subject.content_hash}"
 
 
 def _strict_env_json(raw: str) -> bytes:

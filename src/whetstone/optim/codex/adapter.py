@@ -580,6 +580,34 @@ def codex_lease_token_hash(token: str) -> str:
     return sha256(token.encode("utf-8")).hexdigest()
 
 
+def codex_run_lease_binding(
+    *,
+    token: str,
+    store_namespace_key: str,
+    tool_config_hash: str,
+    capacity_scope: str,
+    capacity_subject: str,
+) -> str:
+    """Bind a run lease token to the exact run the server may serve.
+
+    The token alone proves only that its holder received some token. The
+    MCP server checks this digest against the one it recomputes from its
+    own Tool Config and capacity binding, so a token minted for a
+    different run -- or replayed at a server started for one -- does not
+    verify. The inputs are joined under a length prefix so no two
+    different tuples can produce the same payload.
+    """
+    parts = (
+        token,
+        store_namespace_key,
+        tool_config_hash,
+        capacity_scope,
+        capacity_subject,
+    )
+    payload = "".join(f"{len(part)}:{part}" for part in parts)
+    return sha256(payload.encode("utf-8")).hexdigest()
+
+
 __all__ = [
     "CODEX_ADAPTER_KEY",
     "CODEX_LEASE_TOKEN_MISMATCH_CODE",
@@ -597,4 +625,5 @@ __all__ = [
     "CodexWallBudgetExceeded",
     "OpaqueStepError",
     "codex_lease_token_hash",
+    "codex_run_lease_binding",
 ]

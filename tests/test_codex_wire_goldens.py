@@ -56,6 +56,7 @@ def test_the_mcp_environment_keys_are_pinned() -> None:
         "RUNTIME_CONFIG_CLASS": "WS_MCP_RUNTIME_CONFIG_CLASS",
         "REWARD_POLICY": "WS_MCP_REWARD_POLICY",
         "RUN_LEASE_TOKEN": "WS_MCP_RUN_LEASE_TOKEN",
+        "RUN_LEASE_BINDING": "WS_MCP_RUN_LEASE_BINDING",
     }
 
 
