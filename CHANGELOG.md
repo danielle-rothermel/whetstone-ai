@@ -50,6 +50,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker-side row failure no longer has to be reproduced in process to be
   named.
 
+## 0.1.3 - 2026-08-21
+
+### Added
+
+- `build_runtime` assembles a `RegisteredRuntime` from explicit
+  collaborators (store, engine, adapter registry, lease authority).
+  Platform mode requires a ledger engine so fan-in verification cannot
+  be silently off. `RegisteredRuntime.close()` forwards to the eval
+  engine (and any closeable authority).
+- `whetstone.testing.register_toy_runtime` holds the former toy
+  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
+- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
+  by integration tests and the CLI. `PlatformDbosConfig` is constructed
+  with explicit `application_version` and `executor_id`.
+- `whetstone-optim run`, `status`, and `result` submit a bound launch
+  and read the run manifest / `OptimPlatformRunResult`.
+
+### Changed
+
+- `register_runtime` is gone. Callers pass an explicit adapter registry
+  into `build_runtime`. Adding or removing an adapter changes
+  controller identity.
+- `prepare_copro_run` / `prepare_gepa_run` require `experiment`,
+  `render_contract`, and `mutation_field`.
+
 ## 0.1.2 - 2026-08-21
 
 ### Added

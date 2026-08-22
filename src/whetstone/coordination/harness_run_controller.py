@@ -131,41 +131,15 @@ class HarnessRunController:
         )
         return run_ref
 
-    def _load_launch(self, run_id: str) -> OptimRunLaunch:
-        run_binding = self._store.resolve(
-            f"{RUN_LAUNCH_BINDING_PREFIX}{run_id}"
-        )
-        if run_binding is None:
-            raise ValueError(
-                f"optimization run launch is not bound: {run_id!r}"
-            )
-        run = OptimRun.model_validate(self._store.get(run_binding))
-        payload_binding = self._store.resolve(
-            f"{RUN_LAUNCH_BINDING_PREFIX}{run_id}:payload"
-        )
-        if payload_binding is None:
-            raise ValueError(
-                f"optimization run launch payload is not bound: {run_id!r}"
-            )
-        record = self._store.get(payload_binding)
-        candidate = Candidate.model_validate(record["initial_candidate"])
-        control = None
-        if record.get("control") is not None:
-            control = resolve_step_contract_provider(
-                run.adapter_key
-            ).parse_control(record["control"])
-        return OptimRunLaunch(
-            run=run,
-            initial_candidate=candidate,
-            control=control,
-        )
+    def load_launch(self, run_id: str) -> OptimRunLaunch:
+        return load_launch(self._store, run_id)
 
     def drive(self, request: RunRequest) -> TypedRef:
         require_full_hash(
             request.control_identity_hash,
             field="control_identity_hash",
         )
-        launch = self._load_launch(request.run_id)
+        launch = self.load_launch(request.run_id)
         if launch.control is not None:
             if launch.control.identity_hash() != request.control_identity_hash:
                 raise ValueError(
@@ -219,6 +193,32 @@ class HarnessRunController:
         return terminal_ref
 
 
+def load_launch(store: ObjectStore, run_id: str) -> OptimRunLaunch:
+    run_binding = store.resolve(f"{RUN_LAUNCH_BINDING_PREFIX}{run_id}")
+    if run_binding is None:
+        raise ValueError(f"optimization run launch is not bound: {run_id!r}")
+    run = OptimRun.model_validate(store.get(run_binding))
+    payload_binding = store.resolve(
+        f"{RUN_LAUNCH_BINDING_PREFIX}{run_id}:payload"
+    )
+    if payload_binding is None:
+        raise ValueError(
+            f"optimization run launch payload is not bound: {run_id!r}"
+        )
+    record = store.get(payload_binding)
+    candidate = Candidate.model_validate(record["initial_candidate"])
+    control = None
+    if record.get("control") is not None:
+        control = resolve_step_contract_provider(
+            run.adapter_key
+        ).parse_control(record["control"])
+    return OptimRunLaunch(
+        run=run,
+        initial_candidate=candidate,
+        control=control,
+    )
+
+
 __all__ = [
     "HarnessRunController",
     "OptimRunLaunch",
@@ -228,4 +228,5 @@ __all__ = [
     "RUN_WORKFLOW_SCHEMA",
     "RUN_WORKFLOW_SCHEMA_VERSION",
     "RunRequest",
+    "load_launch",
 ]

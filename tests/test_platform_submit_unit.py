@@ -21,7 +21,7 @@ from whetstone.platform.contracts import (
     load_work_input,
     persist_work_input,
 )
-from whetstone.coordination.runtime_bootstrap import prepare_copro_run
+from whetstone.testing.runtime import prepare_toy_copro_run
 from whetstone.platform.pipeline import build_optim_pipeline, register_optim_pipeline
 from whetstone.platform.stages.eval_fanin import eval_fanin_args_for
 from whetstone.platform.stages.eval_row import eval_row_args_for
@@ -113,13 +113,13 @@ def test_submit_optim_run_builds_member(copro_launch) -> None:
 
 def test_submit_optim_run_builds_two_members(toy_runtime) -> None:
     runtime, control = toy_runtime
-    launch_a = prepare_copro_run(
+    launch_a = prepare_toy_copro_run(
         runtime,
         run_id="harness-run-a",
         control=control,
         terminal_top_k=1,
     )
-    launch_b = prepare_copro_run(
+    launch_b = prepare_toy_copro_run(
         runtime,
         run_id="harness-run-b",
         control=control,
