@@ -75,6 +75,7 @@ def build_toy_miprov2_control(
     max_labeled_demos: int | None = None,
     seed: int = 9,
     minibatch: bool = False,
+    minibatch_full_eval_steps: int = 1,
 ) -> Miprov2Control:
     """Resolve a toy MIPROv2 control bound to ``engine``'s exact authorities.
 
@@ -141,7 +142,7 @@ def build_toy_miprov2_control(
         init_temperature=1.0,
         minibatch=minibatch,
         minibatch_size=len(task_hashes[1:]),
-        minibatch_full_eval_steps=1,
+        minibatch_full_eval_steps=minibatch_full_eval_steps,
         demo_mode=demo_mode,
         defaults=defaults,
     )

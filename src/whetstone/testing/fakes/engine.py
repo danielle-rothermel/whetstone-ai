@@ -34,7 +34,15 @@ class FakeEvalEngine:
         self._provider_execution_policy_record = provider_execution_policy_record
         self._plan_snapshot = plan_snapshot
         self._sampling = sampling
-        self._sampling_split = sampling_split
+        if sampling_split is not None:
+            self._sampling_split = sampling_split
+        elif isinstance(sampling, EvalSplit):
+            self._sampling_split = sampling
+        else:
+            raise TypeError(
+                "FakeEvalEngine requires sampling_split unless sampling is "
+                "an EvalSplit"
+            )
         self._model_route = model_route
 
     @property
@@ -59,10 +67,6 @@ class FakeEvalEngine:
 
     @property
     def sampling_split(self) -> EvalSplit:
-        if self._sampling_split is None:
-            raise TypeError(
-                "FakeEvalEngine was constructed without sampling_split"
-            )
         return self._sampling_split
 
     def task_model_identity_hash(self) -> str:

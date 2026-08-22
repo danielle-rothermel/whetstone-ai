@@ -2214,9 +2214,7 @@ class Miprov2Driver:
             ),
             budget=budget,
             bootstrap_plans=planned.plans,
-            phase=(
-                "bootstrap" if planned.plans else "proposal"
-            ),
+            phase="bootstrap",
         )
 
     def plan(self, state: Miprov2State) -> Miprov2DriverPlan:
