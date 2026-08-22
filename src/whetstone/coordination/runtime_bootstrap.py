@@ -473,15 +473,21 @@ def prepare_codex_run(
     render_contract: TemplateRenderContract,
     mutation_field: str,
     initial_candidate: Candidate | None = None,
-    preflight: Callable[[], None] | None = None,
+    preflight: Callable[[], None],
 ) -> OptimRunLaunch:
     """Bind one Codex-direct run and the single Tool it may use.
 
     Codex is the only ``TOOL_USING`` optimizer, so this is the only
     ``prepare_*`` that constructs a Tool Config and attaches it to the run.
-    ``preflight`` runs before the launch is bound, so a broken Codex
-    session fails before any capacity or eval budget is committed; pass
-    ``None`` only when the caller has already proven the session.
+
+    ``preflight`` is required and runs before the launch is bound, so a
+    broken Codex session fails before any capacity or eval budget is
+    committed. It has no default: an optional check is only as good as
+    each caller remembering it, and the whole point is that no budgeted
+    run starts without a proven session. A caller that drives a scripted
+    stand-in rather than a real CLI passes
+    :func:`whetstone.testing.runtime.scripted_codex_preflight`, which
+    lives outside this package and so cannot be selected here.
     """
     from whetstone.optim.codex.adapter import CODEX_ADAPTER_KEY
     from whetstone.optim.tools.contracts import tool_config_reference
@@ -525,8 +531,7 @@ def prepare_codex_run(
         reward_policy_hash=reward_policy_hash,
         store_namespace_key=f"{CODEX_MCP_ENDPOINT_KEY}:{run_id}",
     )
-    if preflight is not None:
-        preflight()
+    preflight()
     run = OptimRun(
         run_id=run_id,
         optimizer_config=control.reference(),

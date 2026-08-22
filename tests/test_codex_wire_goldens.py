@@ -27,7 +27,9 @@ from whetstone.optim.codex.mcp_bridge import (
     CODEX_EVAL_TOOL_NAME,
     McpResultKey,
 )
+from whetstone.optim.codex.control import CodexControl
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+from whetstone.optim.codex.runner import build_codex_command
 from whetstone.optim.codex.step_contract import (
     CODEX_TOOL_CALLS_BUDGET_LABEL,
 )
@@ -229,3 +231,58 @@ def test_a_terminal_failure_payload_uses_the_pinned_keys(
         mcp_result.structured_content["terminal_failure"]["code"]
         == TOOL_EVAL_UNEXPECTED_RESULT_CODE
     )
+
+
+def test_the_reasoning_effort_reaches_the_cli_as_a_config_override() -> None:
+    """Every identity-bearing control field must reach the invocation.
+
+    The Codex CLI has no reasoning-effort flag; it is a config key, and
+    the run passes ``--strict-config``, so a misspelling fails the launch
+    rather than being silently dropped. The literal is pinned here
+    because nothing derives it and it crosses into a foreign binary.
+    """
+    argv = build_codex_command(
+        prompt="go",
+        codex_binary="/usr/bin/codex",
+        model="toy-model",
+        reasoning_effort="high",
+        mcp_env=None,
+        output_schema_path="/tmp/schema.json",
+        output_artifact_path="/tmp/last.json",
+        working_directory="/tmp/work",
+    )
+
+    assert "--strict-config" in argv
+    override = 'model_reasoning_effort="high"'
+    assert override in argv
+    assert argv[argv.index(override) - 1] == "-c"
+
+
+def test_an_empty_reasoning_effort_adds_no_override() -> None:
+    argv = build_codex_command(
+        prompt="go",
+        codex_binary="/usr/bin/codex",
+        model="toy-model",
+        reasoning_effort="",
+        mcp_env=None,
+        output_schema_path="/tmp/schema.json",
+        output_artifact_path="/tmp/last.json",
+        working_directory="/tmp/work",
+    )
+
+    assert not any("model_reasoning_effort" in entry for entry in argv)
+
+
+def test_the_control_carries_no_field_the_cli_cannot_honor() -> None:
+    """A turn cap and a sampling seed are not Codex CLI concepts.
+
+    ``codex exec`` exposes neither, and ``--strict-config`` rejects
+    ``max_turns`` and ``seed`` as unknown configuration fields. Carrying
+    them would mean two runs with different identities and different
+    recorded hyperparameters executing byte-identical invocations.
+    """
+    fields = set(CodexControl.model_fields)
+
+    assert "max_turns" not in fields
+    assert "seed" not in fields
+    assert "reasoning_effort" in fields

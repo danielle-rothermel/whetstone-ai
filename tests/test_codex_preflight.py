@@ -8,6 +8,8 @@ binding the launch -- so no capacity is committed.
 
 from __future__ import annotations
 
+import inspect
+
 import sys
 from pathlib import Path
 
@@ -201,3 +203,19 @@ def test_a_successful_preflight_lets_the_launch_bind(tmp_path) -> None:
         assert launch.run.adapter_key == CODEX_ADAPTER_KEY
         assert len(launch.run.tool_configs) == 1
         assert load_launch(store, _PREFLIGHT_RUN_ID).run == launch.run
+
+
+def test_prepare_codex_run_has_no_preflight_default(tmp_path) -> None:
+    """A budgeted run cannot start without naming a session proof.
+
+    An optional preflight is only as good as each caller remembering it,
+    and the guarantee is that no capacity or eval budget is committed
+    against an unproven session. So the parameter is required: omitting
+    it is a TypeError, not a silently unchecked launch.
+    """
+    del tmp_path
+    signature = inspect.signature(prepare_codex_run)
+    parameter = signature.parameters["preflight"]
+
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY

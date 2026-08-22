@@ -67,6 +67,11 @@ _MACOS_SANDBOX_EXEC = Path("/usr/bin/sandbox-exec")
 
 _MCP_TOOLS_APPROVAL_MODE = "auto"
 
+#: The Codex config key that carries the control's reasoning effort. It
+#: crosses into a foreign CLI and nothing derives it, so it is pinned by
+#: a golden test.
+_REASONING_EFFORT_CONFIG_KEY = "model_reasoning_effort"
+
 #: dr-exec v1 rejects a finite limit on these axes, so the artifact records
 #: them as unbudgeted rather than claiming containment it cannot enforce.
 _CODEX_UNBUDGETED_AXES = (
@@ -197,6 +202,7 @@ def build_codex_command(
     prompt: str,
     codex_binary: str,
     model: str,
+    reasoning_effort: str,
     mcp_env: dict[str, str] | None,
     mcp_server_module: str = "whetstone.optim.codex.mcp_server",
     output_schema_path: str,
@@ -229,6 +235,16 @@ def build_codex_command(
         argv.extend(["--disable", feature])
     if model:
         argv.extend(["--model", model])
+    if reasoning_effort:
+        # The CLI has no reasoning-effort flag; it is a config key, and
+        # --strict-config rejects an unknown one, so a misspelling here
+        # fails the launch rather than being silently ignored.
+        argv.extend(
+            [
+                "-c",
+                f"{_REASONING_EFFORT_CONFIG_KEY}={json.dumps(reasoning_effort)}",
+            ]
+        )
     if mcp_env is not None:
         argv.extend(
             [
@@ -356,6 +372,7 @@ class SubprocessCodexRunner:
         reward_policy: RewardPolicy | None = None,
         codex_binary: str = "codex",
         model: str = "",
+        reasoning_effort: str = "",
         mcp_server_module: str = "whetstone.optim.codex.mcp_server",
         timeout_seconds: float = 600.0,
         max_output_bytes: int = CODEX_DEFAULT_MAX_OUTPUT_BYTES,
@@ -406,6 +423,7 @@ class SubprocessCodexRunner:
         self._mcp_server_module = mcp_server_module
         self._binary = codex_binary
         self._model = model
+        self._reasoning_effort = reasoning_effort
         self._timeout = timeout_seconds
         if max_output_bytes < 4:
             raise ValueError("max_output_bytes must leave room for retention")
@@ -614,6 +632,7 @@ class SubprocessCodexRunner:
                 prompt=prompt,
                 codex_binary=resolved_binary,
                 model=self._model,
+                reasoning_effort=self._reasoning_effort,
                 mcp_env=exact_mcp_env,
                 mcp_server_module=self._mcp_server_module,
                 output_schema_path=str(schema_path),

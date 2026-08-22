@@ -476,7 +476,6 @@ def build_toy_codex_control(
     *,
     engine: EvalEngine,
     max_tool_calls: int = 3,
-    max_turns: int = 4,
     mutation_field: str = TOY_MUTATION_FIELD,
     wall_seconds: float = 120.0,
     codex_binary: str = "codex",
@@ -485,7 +484,6 @@ def build_toy_codex_control(
 
     return configure_codex(
         model=TOY_CODEX_MODEL,
-        max_turns=max_turns,
         max_tool_calls=max_tool_calls,
         eval_config_ref=engine.eval_config_ref,
         reward_policy_hash=engine.reward_policy_identity_hash(),
@@ -515,6 +513,18 @@ def build_toy_codex_adapter(
     return CodexAdapter(runner, store=store)
 
 
+def scripted_codex_preflight() -> None:
+    """The preflight a scripted Codex stand-in satisfies.
+
+    ``prepare_codex_run`` requires proof of a usable Codex session before
+    it commits capacity or eval budget. A test driving the scripted fake
+    CLI has no real session to prove and no spend to protect, so it names
+    this explicitly. It lives in ``whetstone.testing`` and is not a
+    default anywhere, so no production path can reach it: the CLI must
+    pass the real :func:`codex_auth_preflight`.
+    """
+
+
 def prepare_toy_codex_run(
     runtime: RegisteredRuntime,
     *,
@@ -524,7 +534,7 @@ def prepare_toy_codex_run(
     experiment: Experiment | None = None,
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
-    preflight: Callable[[], None] | None = None,
+    preflight: Callable[[], None] = scripted_codex_preflight,
 ) -> OptimRunLaunch:
     from whetstone.coordination.runtime_bootstrap import prepare_codex_run
 
@@ -552,6 +562,7 @@ __all__ = [
     "build_toy_gepa_adapter",
     "build_toy_gepa_control",
     "prepare_toy_codex_run",
+    "scripted_codex_preflight",
     "prepare_toy_copro_run",
     "prepare_toy_gepa_run",
     "prepare_toy_miprov2_run",

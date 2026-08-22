@@ -36,8 +36,8 @@ _PLACEHOLDER_TASK_HASHES = ("d" * 64, "e" * 64)
 
 #: The identity hash of :func:`_toy_control`. Regenerate deliberately.
 _TOY_CONTROL_HASH = (
-    "46c77ec96ecab294c2944346d6d27d1d"
-    "03c799f9b7eeccfcf23f27b56f890b1e"
+    "23ccda059b88fffee4a21d63a1d04961"
+    "9f60e9513e1ee7d2a0179653c18a8535"
 )
 
 
@@ -47,14 +47,20 @@ def _eval_config_ref(tmp_path):
 
 
 def _toy_control(tmp_path) -> CodexControl:
-    """A control whose every hash is a placeholder.
+    """A control whose supplied hashes are placeholders.
 
-    The golden hash then pins this control's own payload shape rather than
-    the reference engine's identity, which moves for unrelated reasons.
+    ``eval_config_ref`` is deliberately not one: it is a live reference
+    engine binding, and ``identity_payload`` hashes both the full
+    ``eval_config_ref`` dump and the derived
+    ``eval_config_identity_hash``. So ``_TOY_CONTROL_HASH`` is coupled to
+    the reference engine's identity as well as to this control's own
+    payload shape, and a change to the toy eval definition moves it. That
+    coupling is intended -- the eval binding is part of what a control
+    identity means -- but it is why a golden break here can originate
+    outside this file.
     """
     return configure_codex(
         model="toy-codex-model",
-        max_turns=4,
         max_tool_calls=3,
         eval_config_ref=_eval_config_ref(tmp_path),
         reward_policy_hash=_PLACEHOLDER_REWARD_HASH,
@@ -110,13 +116,11 @@ def test_the_identity_payload_field_set_is_pinned(tmp_path) -> None:
         "internal_task_hashes",
         "max_output_bytes",
         "max_tool_calls",
-        "max_turns",
         "model",
         "mutation_field",
         "network_policy",
         "reasoning_effort",
         "reward_policy_hash",
-        "seed",
         "task_model_identity_hash",
         "wall_seconds",
     }
@@ -131,7 +135,6 @@ def test_max_tool_calls_is_required_and_positive(tmp_path) -> None:
     with pytest.raises(ValueError, match="max_tool_calls must be positive"):
         configure_codex(
             model="toy-codex-model",
-            max_turns=4,
             max_tool_calls=0,
             eval_config_ref=reference,
             reward_policy_hash=_PLACEHOLDER_REWARD_HASH,
@@ -145,7 +148,6 @@ def test_internal_task_hashes_must_be_non_empty_and_unique(tmp_path) -> None:
     reference = _eval_config_ref(tmp_path)
     common = {
         "model": "toy-codex-model",
-        "max_turns": 4,
         "max_tool_calls": 2,
         "eval_config_ref": reference,
         "reward_policy_hash": _PLACEHOLDER_REWARD_HASH,
@@ -168,8 +170,8 @@ def test_the_containment_posture_is_fixed(tmp_path) -> None:
 
 def test_model_copy_revalidates_through_the_full_boundary(tmp_path) -> None:
     control = _toy_control(tmp_path)
-    with pytest.raises(ValueError, match="max_turns must be positive"):
-        control.model_copy(update={"max_turns": 0})
+    with pytest.raises(ValueError, match="max_tool_calls must be positive"):
+        control.model_copy(update={"max_tool_calls": 0})
     widened = control.model_copy(update={"max_tool_calls": 9})
     assert widened.max_tool_calls == 9
     assert widened.identity_hash() != control.identity_hash()

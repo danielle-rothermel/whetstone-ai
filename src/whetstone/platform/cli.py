@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -306,10 +307,24 @@ def _codex_adapter_from_launch(
     store_path: str,
     run_root: Path,
     runtime_config,
+    preflight: Callable[..., None] | None = None,
 ) -> CodexAdapter:
+    """Build the one production Codex adapter, session proven first.
+
+    A Codex run commits real eval capacity the moment its first Tool Call
+    is admitted, and a broken session burns the whole wall budget for
+    nothing. So this refuses to hand back an adapter until the preflight
+    has proven the binary, an auth source, and one cheap structured probe.
+    ``preflight`` exists only so a test can name the scripted stand-in;
+    production takes the real check.
+    """
     from whetstone.optim.codex.executor import build_codex_executor
+    from whetstone.optim.codex.preflight import codex_auth_preflight
     from whetstone.optim.codex.runner import SubprocessCodexRunner
 
+    resolved_preflight = (
+        codex_auth_preflight if preflight is None else preflight
+    )
     control = launch.control
     if not isinstance(control, CodexControl):
         raise typer.BadParameter("launch Codex control is not a CodexControl")
@@ -332,8 +347,17 @@ def _codex_adapter_from_launch(
         reward_policy=engine.reward_policy,
         codex_binary=control.codex_binary,
         model=control.model,
+        reasoning_effort=control.reasoning_effort.value,
         timeout_seconds=control.wall_seconds,
         max_output_bytes=control.max_output_bytes,
+    )
+    # Prove the session before the adapter exists, so a broken login
+    # cannot reach the harness and start spending the run's capacity.
+    resolved_preflight(
+        executor=executor,
+        codex_binary=control.codex_binary,
+        environment=runner.codex_process_environment(),
+        model=control.model,
     )
     return CodexAdapter(runner, store=store)
 

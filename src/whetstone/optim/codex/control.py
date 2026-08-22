@@ -3,9 +3,12 @@
 Codex runs exactly one opaque Step: the CLI is given a single Tool -- an
 external MCP evaluation endpoint bound to the internal split -- and it
 returns the ``call_id`` of the call whose candidate it selected. The
-control pins everything that identity depends on: the model and turn cap,
-the containment posture, the eval binding, and the per-run tool capacity
-that is simultaneously the Step's ``tool_calls`` budget.
+control pins everything that identity depends on: the model and its
+reasoning effort, the containment posture, the eval binding, and the
+per-run tool capacity that is simultaneously the Step's ``tool_calls``
+budget. Every field reaches the CLI invocation -- the Codex CLI accepts
+no turn cap and no sampling seed, so the control carries neither rather
+than recording identity the execution does not honor.
 """
 
 from __future__ import annotations
@@ -60,15 +63,16 @@ class CodexControl(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model: StrictStr
+    #: Passed to the CLI as ``-c model_reasoning_effort``. Every control
+    #: field reaches the invocation: a field that shaped identity without
+    #: changing execution would claim a distinction the run never made.
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM
-    max_turns: StrictInt
     wall_seconds: float = CODEX_DEFAULT_WALL_SECONDS
     max_output_bytes: StrictInt = CODEX_DEFAULT_MAX_OUTPUT_BYTES
     #: Both the Step's ``tool_calls`` budget label and the per-run
     #: ``ToolCapacity.max_accepted_calls``. Required: whetstone-ai holds no
     #: policy on how large an eval budget a caller should buy.
     max_tool_calls: StrictInt
-    seed: StrictInt = 0
     codex_binary: StrictStr = CODEX_DEFAULT_BINARY
 
     eval_config_ref: EvalConfigRef
@@ -116,8 +120,6 @@ class CodexControl(BaseModel):
             raise ValueError("mutation_field must be non-empty")
         if self.max_tool_calls < 1:
             raise ValueError("max_tool_calls must be positive")
-        if self.max_turns < 1:
-            raise ValueError("max_turns must be positive")
         if not math.isfinite(self.wall_seconds) or self.wall_seconds <= 0:
             raise ValueError("wall_seconds must be finite and positive")
         if self.max_output_bytes < 4:
@@ -168,9 +170,7 @@ class CodexControl(BaseModel):
             "round_index": iteration,
             "model": self.model,
             "reasoning_effort": self.reasoning_effort.value,
-            "max_turns": self.max_turns,
             "max_tool_calls": self.max_tool_calls,
-            "seed": self.seed,
             "eval_config_identity_hash": self.eval_config_ref.config_hash,
             "reward_policy_hash": self.reward_policy_hash,
         }
@@ -203,7 +203,6 @@ class CodexControl(BaseModel):
 def configure_codex(
     *,
     model: str,
-    max_turns: int,
     max_tool_calls: int,
     eval_config_ref: EvalConfigRef,
     reward_policy_hash: str,
@@ -213,7 +212,6 @@ def configure_codex(
     reasoning_effort: CodexReasoningEffort = CodexReasoningEffort.MEDIUM,
     wall_seconds: float = CODEX_DEFAULT_WALL_SECONDS,
     max_output_bytes: int = CODEX_DEFAULT_MAX_OUTPUT_BYTES,
-    seed: int = 0,
     codex_binary: str = CODEX_DEFAULT_BINARY,
     mutation_field: str = CODEX_DEFAULT_MUTATION_FIELD,
 ) -> CodexControl:
@@ -221,11 +219,9 @@ def configure_codex(
     return CodexControl(
         model=model,
         reasoning_effort=reasoning_effort,
-        max_turns=max_turns,
         wall_seconds=wall_seconds,
         max_output_bytes=max_output_bytes,
         max_tool_calls=max_tool_calls,
-        seed=seed,
         codex_binary=codex_binary,
         eval_config_ref=eval_config_ref,
         reward_policy_hash=reward_policy_hash,
