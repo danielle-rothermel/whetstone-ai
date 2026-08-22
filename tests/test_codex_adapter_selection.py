@@ -34,6 +34,7 @@ from whetstone.testing.toy.experiment import (
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
+    CODEX_ARTIFACT_RUN_MISMATCH_CODE,
     CODEX_EVALUATION_INTERRUPTED_CODE,
     CODEX_EXECUTION_FAILED_CODE,
     CODEX_LEASE_TOKEN_MISMATCH_CODE,
@@ -1413,3 +1414,85 @@ def test_a_parse_failure_keeps_its_isolation_evidence(
         "stderr_truncated": False,
         "stderr_dropped_bytes": 0,
     }
+
+
+class _ForeignRunIdRunner:
+    """Pays for real evaluations, then returns another run's artifact.
+
+    ``CodexRunner`` is a Protocol, so the adapter cannot assume the
+    runner validated the artifact it hands back. A crossed output path,
+    a resumed scratch directory, or a second runner implementation can
+    all produce an artifact naming a run this Step is not.
+    """
+
+    def __init__(self, world, *, calls, artifact_run_id: str) -> None:
+        self._world = world
+        self._calls = calls
+        self._artifact_run_id = artifact_run_id
+
+    def run(self, request, handle, *, lease_token):
+        del handle, request
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=self._artifact_run_id,
+                evaluated_call_ids=tuple(
+                    call_id for call_id, _template in self._calls
+                ),
+                selected_call_id=self._calls[0][0],
+                lease_token_hash=codex_lease_token_hash(_FIXED_LEASE_TOKEN),
+            )
+        )
+
+
+def test_a_foreign_artifact_run_id_terminalizes_and_frees_the_lease(
+    selection_world,
+) -> None:
+    """A mismatched artifact run must fail the Step, not escape it.
+
+    This check used to raise ``OpaqueStepError`` from outside the
+    terminalizing block, so it took the one exit that skips the
+    harness's effect-lease maintenance: the lease is released only once
+    ``invoke`` returns an ``AdapterOutput``, and under ``NO_REDRIVE``
+    the run then could not recover until the lease lapsed. It also
+    skipped reconciliation, so the evaluations this Step really paid for
+    before the artifact arrived stayed off the ledger and undebited.
+
+    The evidence that the lease was released is a state fact, not a
+    delay: the identical Step runs again immediately rather than raising
+    ``EffectBusyError``.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _ForeignRunIdRunner(
+            world,
+            calls=[("c1", _TEMPLATE_A), ("c2", _TEMPLATE_B)],
+            artifact_run_id="some-other-run",
+        )
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_ARTIFACT_RUN_MISMATCH_CODE
+    )
+    assert result.terminal_failure.details["artifact_run_id"] == (
+        "some-other-run"
+    )
+    assert result.accepted_candidates == ()
+    # Reconciliation ran first: the paid evaluations stay reachable from
+    # the Step Result and debited from the tool_calls budget.
+    assert len(result.tool_evidence) == 2
+    assert result.budget_delta.consumed["tool_calls"] == 2
+
+    # The lease reached a terminal state, so the same effect is free.
+    retried = world.run_step_with_runner(
+        _ForeignRunIdRunner(
+            world,
+            calls=[("c3", _TEMPLATE_A)],
+            artifact_run_id="some-other-run",
+        )
+    )
+    assert retried.status is StepStatus.FAILED

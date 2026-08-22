@@ -82,6 +82,9 @@ CODEX_OUTPUT_ARTIFACT_SCHEMA = "whetstone.codex_output_artifact"
 #: Result, so they are named constants rather than call-site literals.
 CODEX_SELECTION_UNEVALUATED_CODE = "codex_selection_unevaluated"
 CODEX_LEASE_TOKEN_MISMATCH_CODE = "codex_lease_token_mismatch"
+#: The artifact the runner returned names a different run than the Step
+#: being invoked, so it cannot be this Step's evidence.
+CODEX_ARTIFACT_RUN_MISMATCH_CODE = "codex_artifact_run_mismatch"
 CODEX_SELECTION_CONTRACT_CODE = "codex_selection_contract"
 #: The agent admitted more paid evaluations than it reported, so the
 #: Issued Tool Call ledger would not be total over admitted calls.
@@ -367,10 +370,6 @@ class CodexAdapter:
                 ),
             )
         artifact = run.artifact
-        if artifact.run_id != request.run_id:
-            raise OpaqueStepError(
-                "Codex output artifact belongs to another run"
-            )
         typed_artifact_ref = self._persist_artifact(artifact)
         # The durable, per-run count of calls this exact Tool Config and
         # capacity binding admitted. It is ground truth about what was
@@ -385,6 +384,33 @@ class CodexAdapter:
             "tool_namespace": str(config.store_namespace_key),
             "harness_store_accepted_call_count": accepted_count,
         }
+
+        if artifact.run_id != request.run_id:
+            # Same shape as the lease-token mismatch below, and handled
+            # the same way. A runner that validated the artifact's run
+            # would already have failed; this is the adapter's own
+            # boundary check on the ``CodexRunner`` protocol, so it must
+            # not assume the runner ran one. Raising here skipped the
+            # harness's effect-lease maintenance entirely -- the lease is
+            # released only once ``invoke`` returns an ``AdapterOutput``
+            # -- so a NO_REDRIVE run wedged until the lease lapsed, with
+            # any evaluations this Step already paid for left off the
+            # ledger. Reconciling first keeps that spend visible; the
+            # foreign run still fails the Step.
+            return self._terminalize(
+                handle,
+                state_delta=state_delta,
+                fallback=TerminalFailure(
+                    code=CODEX_ARTIFACT_RUN_MISMATCH_CODE,
+                    message=(
+                        "Codex output artifact belongs to another run"
+                    ),
+                    details={
+                        "run_id": request.run_id,
+                        "artifact_run_id": artifact.run_id,
+                    },
+                ),
+            )
 
         if artifact.lease_token_hash != codex_lease_token_hash(lease_token):
             # The agent holds the bearer token for the MCP endpoint, so it
@@ -971,6 +997,7 @@ def codex_run_lease_binding(
 
 __all__ = [
     "CODEX_ADAPTER_KEY",
+    "CODEX_ARTIFACT_RUN_MISMATCH_CODE",
     "CODEX_EVALUATION_INTERRUPTED_CODE",
     "CODEX_EXECUTION_FAILED_CODE",
     "CODEX_LEASE_TOKEN_MISMATCH_CODE",

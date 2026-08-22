@@ -24,9 +24,16 @@ already paid for, so without both keys a replayed call would be billed again.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictInt,
+    ValidationError,
+)
 
 from whetstone.core.identity import TypedRef
 from whetstone.eval.schema_names import (
@@ -41,6 +48,9 @@ from whetstone.optim.cost import (
     RunCostReport,
     UsageObservation,
     aggregate_role_cost,
+)
+from whetstone.optim.tools.evaluator import (
+    TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY as _TOOL_FAILURE_EVIDENCE_REF_KEY,
 )
 
 if TYPE_CHECKING:
@@ -127,10 +137,49 @@ def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
         # and a *failed* one may still carry them: the provider work done
         # before the tool failed was billed exactly like any other
         # interrupted evaluation, which is why failure evidence is costed.
-        for ref in tool_evidence.result.record.evaluation_evidence_refs:
+        record = tool_evidence.result.record
+        for ref in record.evaluation_evidence_refs:
             if ref.schema_name in _COSTED_EVIDENCE_SCHEMAS:
                 refs.append(ref)
+        failure_ref = _tool_failure_evidence_ref(record)
+        if failure_ref is not None:
+            refs.append(failure_ref)
     return tuple(refs)
+
+
+def _tool_failure_evidence_ref(record: Any) -> TypedRef | None:
+    """The failure evidence ref a terminally failed Tool Result cites.
+
+    A tool-mediated evaluation that produced ``EvalFailureEvidence``
+    reaches its rows by a different route than a successful one. The
+    executor builds the failed ``ToolResult`` from the evaluator's
+    ``TerminalFailure`` alone, so ``evaluation_evidence_refs`` is empty
+    and the only citation of the persisted evidence is the typed ref the
+    evaluator put in ``details``. When that evaluation failed *after*
+    provider rows were produced and persisted, those rows were billed --
+    reading only the success channel drops them from task-model spend
+    while the intent path counts the identical failure.
+
+    The ref is validated rather than trusted: ``details`` is an
+    open-ended JSON body, so a value that is not a well-formed
+    ``TypedRef`` under the failure schema contributes nothing instead of
+    raising inside cost aggregation. It is read as a ``Mapping`` rather
+    than a ``dict`` because ``details`` is an ``ImmutableJsonObject``,
+    whose nested objects are mappings and not dicts.
+    """
+    failure = getattr(record, "terminal_failure", None)
+    if failure is None:
+        return None
+    raw = failure.details.get(_TOOL_FAILURE_EVIDENCE_REF_KEY)
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        ref = TypedRef.model_validate(dict(raw))
+    except ValidationError:
+        return None
+    if ref.schema_name != EVAL_FAILURE_SCHEMA:
+        return None
+    return ref
 
 
 def _task_model_observations(

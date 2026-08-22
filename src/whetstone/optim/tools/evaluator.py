@@ -28,6 +28,13 @@ from whetstone.optim.tools.execution import (
 TOOL_EVAL_FAILURE_EVIDENCE_CODE = "tool_eval_failure_evidence"
 TOOL_EVAL_UNEXPECTED_RESULT_CODE = "tool_eval_unexpected_result"
 
+#: The ``TerminalFailure.details`` key carrying the typed ref of the
+#: persisted ``EvalFailureEvidence`` behind a failed tool evaluation. It
+#: is the only citation of that evidence on a failed Tool Result -- the
+#: executor leaves ``evaluation_evidence_refs`` empty there -- so run
+#: cost reads the rows already paid for through this exact key.
+TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY = "evidence_ref"
+
 
 class EngineToolEvaluator:
     def __init__(self, engine: EvalEngine) -> None:
@@ -93,8 +100,8 @@ class EngineToolEvaluator:
                     details={
                         "exception_type": result.evidence.exception_type,
                         "message": result.evidence.message,
-                        "evidence_ref": result.evidence_ref.model_dump(
-                            mode="json"
+                        TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY: (
+                            result.evidence_ref.model_dump(mode="json")
                         ),
                     },
                 )
@@ -149,6 +156,7 @@ class EngineToolEvaluator:
 
 __all__ = [
     "TOOL_EVAL_FAILURE_EVIDENCE_CODE",
+    "TOOL_EVAL_FAILURE_EVIDENCE_REF_KEY",
     "TOOL_EVAL_UNEXPECTED_RESULT_CODE",
     "EngineToolEvaluator",
 ]

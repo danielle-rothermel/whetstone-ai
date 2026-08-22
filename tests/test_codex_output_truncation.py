@@ -167,3 +167,66 @@ def test_only_the_exact_marker_line_is_skipped() -> None:
 
     assert parsed.events == ({"a": 1}, {"b": 2})
     assert parsed.dropped_partial_lines == 0
+
+
+def test_a_complete_malformed_record_beside_the_marker_still_fails() -> None:
+    """Adjacency to the stitch does not excuse a whole malformed record.
+
+    Retention can end exactly on a record boundary, and then the line
+    before the marker is a complete line Codex really emitted. If that
+    line is malformed it is genuine process output that violates the
+    contract, and forgiving it on position alone deletes it silently --
+    the persisted ``jsonl_events`` then differ from the retained stream
+    with nothing but a ``dropped_partial_lines`` bump to show for it.
+
+    ``not json`` is balanced: it neither opens a record it fails to
+    close nor closes one it never opened, so it is not a partial record
+    in either direction.
+    """
+    stitched = (
+        b'{"a": 1}\nnot json\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"4096 bytes elided ...]\n"
+        + b'{"b": 2}\n'
+    )
+
+    with pytest.raises(OpaqueStepError, match="event 2 is malformed"):
+        _parse_jsonl_events(stitched, truncated=True)
+
+
+def test_a_complete_malformed_record_after_the_marker_still_fails() -> None:
+    """The same rule on the tail side, where retention began cleanly.
+
+    A tail whose first retained byte is a record boundary hands the
+    parser a whole line. A malformed whole line there is Codex's output,
+    not the budget's damage.
+    """
+    stitched = (
+        b'{"a": 1}\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"4096 bytes elided ...]\n"
+        + b'{"b": 2} trailing garbage\n'
+    )
+
+    with pytest.raises(OpaqueStepError, match="event 3 is malformed"):
+        _parse_jsonl_events(stitched, truncated=True)
+
+
+def test_a_genuinely_cut_boundary_line_is_still_forgiven() -> None:
+    """The tolerance the parser exists for must survive the tightening.
+
+    The head fragment opens an object it never closes and the tail
+    fragment closes one it never opened, so both are demonstrably
+    partial records rather than complete lines.
+    """
+    stitched = (
+        b'{"a": 1}\n{"cut": "val\n'
+        + CODEX_ELIDED_MARKER_PREFIX
+        + b"4096 bytes elided ...]\n"
+        + b'ue"}\n{"b": 2}\n'
+    )
+
+    parsed = _parse_jsonl_events(stitched, truncated=True)
+
+    assert parsed.events == ({"a": 1}, {"b": 2})
+    assert parsed.dropped_partial_lines == 2

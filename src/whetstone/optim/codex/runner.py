@@ -1130,7 +1130,7 @@ def _parse_jsonl_events(
                 max_depth=len(raw),
             )
         except StrictJsonDecodeError as exc:
-            if truncated and _is_stitch_boundary(ordinal, lines):
+            if truncated and _is_cut_stitch_boundary(ordinal, lines):
                 dropped_partial += 1
                 continue
             raise OpaqueStepError(
@@ -1147,18 +1147,100 @@ def _parse_jsonl_events(
     )
 
 
-def _is_stitch_boundary(ordinal: int, lines: list[bytes]) -> bool:
-    """Is this line one of the two the elision marker sits between?
+def _is_cut_stitch_boundary(ordinal: int, lines: list[bytes]) -> bool:
+    """Was this line demonstrably cut mid-record by the retention window?
 
-    Only the line before the marker and the line after it can have been
-    cut mid-record by the retention window. A malformed line anywhere
-    else was malformed when Codex wrote it.
+    Adjacency to the marker is necessary but not sufficient. Retention
+    can end or begin exactly on a record boundary, and then the line
+    beside the marker is a *whole* record that Codex emitted. Forgiving
+    it on position alone silently deletes genuine malformed process
+    output and reports it as retention damage, so the persisted
+    ``jsonl_events`` no longer match the retained stream.
+
+    A cut is demonstrable from the line's own shape, and the two sides
+    are cut in opposite directions. The head's last line is the *front*
+    of a record whose end the budget removed, so it opens a record it
+    never closes. The tail's first line is the *back* of a record whose
+    start was removed, so it closes structure it never opened. Either
+    way the line cannot be a complete record. A line that is balanced --
+    ``not json``, or a whole object followed by trailing garbage -- is
+    not a partial record in either direction, so it stays a contract
+    violation whatever it sits next to.
     """
     index = ordinal - 1
     for marker_index, raw in enumerate(lines):
-        if _is_elision_marker(raw):
-            return index in (marker_index - 1, marker_index + 1)
+        if not _is_elision_marker(raw):
+            continue
+        if index == marker_index - 1:
+            return _is_cut_record_head(lines[index])
+        if index == marker_index + 1:
+            return _is_cut_record_tail(lines[index])
+        return False
     return False
+
+
+def _is_cut_record_head(raw: bytes) -> bool:
+    """Is this the opening fragment of a record cut before its end?
+
+    A Codex JSONL record is one object per line, so an intact record
+    ends on its closing brace. A head fragment opens the object and
+    stops wherever the budget fell, leaving more braces open than
+    closed.
+    """
+    stripped = raw.strip()
+    if not stripped.startswith(b"{"):
+        return False
+    return _brace_balance(stripped) > 0
+
+
+def _is_cut_record_tail(raw: bytes) -> bool:
+    """Is this the closing fragment of a record cut after its start?
+
+    A tail fragment is whatever survived from somewhere inside the
+    record through its closing brace. Its first retained byte lands
+    mid-token, so brace counting cannot be trusted on this side -- a cut
+    that lands inside a string value leaves quote parity meaningless.
+    What is reliable is the two ends: a record Codex emitted whole opens
+    on ``{``, and a fragment that reaches the record's end closes on
+    ``}``. A line that closes without opening is missing its start, and
+    only the retention window removes a record's start.
+    """
+    stripped = raw.strip()
+    if stripped.startswith(b"{"):
+        return False
+    return stripped.endswith(b"}")
+
+
+def _brace_balance(raw: bytes) -> int:
+    """Opening braces minus closing ones, ignoring braces inside strings.
+
+    Only structure outside string literals says whether a record is
+    complete; a brace in a message body is content. Escapes are honored
+    so an escaped quote does not end the string it sits in.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:  # backslash
+                escaped = True
+            elif byte == 0x22:  # double quote
+                in_string = False
+            continue
+        if byte == 0x22:
+            in_string = True
+        elif byte == 0x7B:  # {
+            depth += 1
+        elif byte == 0x7D:  # }
+            depth -= 1
+    # An unterminated string is itself a cut: the record stopped inside
+    # a value, so whatever braces it had opened are still open.
+    if in_string and depth == 0:
+        return 1
+    return depth
 
 
 def _parse_output_artifact_bytes(

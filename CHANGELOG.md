@@ -478,6 +478,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Codex output artifact naming another run now terminalizes the step
+  under `codex_artifact_run_mismatch` instead of raising past the adapter
+  checkpoint. `CodexRunner` is a Protocol, so the adapter cannot assume
+  the runner validated the artifact's run; the mismatch check sat outside
+  the terminalizing block, and the harness releases the effect lease only
+  once the adapter returns an `AdapterOutput`, so a `NO_REDRIVE` run was
+  wedged until the lease lapsed. The check now runs on the single
+  `_terminalize` path, reconciling the ledger first, so evaluations the
+  step already paid for stay reachable and debited.
+- Run cost reads the rows a tool-mediated evaluation paid for before it
+  failed. `EvaluatingToolExecutor` builds a failed `ToolResult` from the
+  evaluator's `TerminalFailure` alone, leaving `evaluation_evidence_refs`
+  empty, so an evaluation that produced `EvalFailureEvidence` with an
+  `outputs_ref` -- scoring or persistence failing after billed provider
+  rows were produced -- cited its evidence only from the failure's
+  `details`. `aggregate_run_cost` now follows that typed ref, symmetric
+  with the `resolved_intents` path and de-duplicated by ref, so those
+  billed rows no longer drop out of Codex task-model spend.
+- The truncated-JSONL parser no longer forgives a complete malformed
+  record next to the stitch. When retention ended or began exactly on a
+  record boundary, a whole malformed line adjacent to the elision marker
+  was classified as budget damage on position alone and silently dropped,
+  so the persisted `jsonl_events` differed from the retained output. A
+  boundary line is now forgiven only when it is demonstrably cut: the
+  head side must open a record it never closes, and the tail side must
+  close one it never opened. Genuinely cut fragments are still tolerated
+  and counted.
 - A Codex run whose stdout exceeded `max_output_bytes` no longer fails on
   its own truncation. The retained stream is a stitched head+tail
   carrying a deliberately non-JSON elision marker, and the budget may cut
