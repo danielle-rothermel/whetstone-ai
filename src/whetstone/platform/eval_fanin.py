@@ -37,6 +37,7 @@ from whetstone.platform.contracts import (
 )
 from whetstone.platform.step_executor import (
     _bind_step_result,
+    _deferred_row_count,
     _load_work_state,
     _persist_work_state,
     _require_controller_identity,
@@ -292,10 +293,7 @@ def _expected_episode_row_count(
 ) -> int:
     if not state.pending_deferred_intents:
         raise ValueError("deferral episode is missing pending deferred intents")
-    engine = runtime.eval_service._engine  # noqa: SLF001
-    task_count = len(engine.sampling.tasks)
-    seed_count = engine.sampling.num_seeds
-    return len(state.pending_deferred_intents) * task_count * seed_count
+    return _deferred_row_count(runtime, state.pending_deferred_intents)
 
 
 def _verify_episode_eval_row_predecessors(
@@ -453,6 +451,26 @@ def _finalize_deferred_step(
             loaded = _load_work_state(runtime, work_state_ref)
             if loaded.step_index > step_index:
                 return loaded
+    from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+    from whetstone.platform.deferred_intents import evict_deferred_intents
+
+    evict_deferred_intents(
+        runtime.store,
+        run_id=run_id,
+        step_index=step_index,
+    )
+    adapter_key = pending.request.record.run.record.adapter_key
+    if adapter_key == GEPA_ADAPTER_KEY:
+        # Search was interrupted mid-optimize(). Do not keep the placeholder
+        # as history: resume the same step so optimize() can consume the
+        # bound resolutions and emit real search_evidence.
+        loaded = _load_work_state(runtime, work_state_ref)
+        return OptimWorkState(
+            work_input=loaded.work_input,
+            step_index=step_index,
+            step_result_refs=loaded.step_result_refs[:step_index],
+            terminal=False,
+        )
     merged = pending.model_copy(update={"resolved_intents": resolutions})
     merged_ref = runtime.harness._put_result(merged)  # noqa: SLF001
     _bind_step_result(
@@ -460,13 +478,6 @@ def _finalize_deferred_step(
         run_id=run_id,
         step_index=step_index,
         result_ref=merged_ref,
-    )
-    from whetstone.platform.deferred_intents import evict_deferred_intents
-
-    evict_deferred_intents(
-        runtime.store,
-        run_id=run_id,
-        step_index=step_index,
     )
     loaded = _load_work_state(runtime, work_state_ref)
     if loaded.step_index > step_index:

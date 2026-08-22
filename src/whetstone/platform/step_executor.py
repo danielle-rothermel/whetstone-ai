@@ -19,6 +19,7 @@ from whetstone.coordination.harness_run_controller import (
 from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from whetstone.coordination.step_request_builder import StepRequestBuilder
 from whetstone.core.identity import TypedRef
+from whetstone.eval.metadata import eval_task_ids
 from whetstone.eval.runtime_engine import _task_id
 from whetstone.platform.deferred_intents import (
     evict_deferred_intents,
@@ -29,6 +30,7 @@ from whetstone.platform.work_state_head import (
     bind_work_state_head,
     resolve_work_state_head,
 )
+from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 from whetstone.optim.contracts import (
     OPTIM_RESULT_SCHEMA,
     OptimEvalRequest,
@@ -408,6 +410,17 @@ def _next_work_input(state: OptimWorkState, *, platform_stage_index: int) -> Any
     )
 
 
+def _task_ids_for_intent(
+    runtime: RegisteredRuntime,
+    intent: OptimEvalRequest,
+) -> tuple[str, ...]:
+    scoped = eval_task_ids(intent.eval_request.metadata)
+    if scoped is not None:
+        return scoped
+    engine = runtime.eval_service._engine  # noqa: SLF001
+    return tuple(_task_id(task) for task in engine.sampling.tasks)
+
+
 def _expand_eval_rows(
     runtime: RegisteredRuntime,
     intents: tuple[OptimEvalRequest, ...],
@@ -416,13 +429,11 @@ def _expand_eval_rows(
     work_state_ref: str,
 ) -> tuple[EvalRowInput, ...]:
     engine = runtime.eval_service._engine  # noqa: SLF001
-    sampling = engine.sampling
-    task_ids = tuple(_task_id(task) for task in sampling.tasks)
-    num_seeds = sampling.num_seeds
+    num_seeds = engine.sampling.num_seeds
     rows: list[EvalRowInput] = []
     row_ordinal = 0
     for intent in intents:
-        for task_id in task_ids:
+        for task_id in _task_ids_for_intent(runtime, intent):
             for seed_index in range(num_seeds):
                 rows.append(
                     EvalRowInput(
@@ -492,8 +503,10 @@ def _deferred_row_count(
     deferred_intents: tuple[OptimEvalRequest, ...],
 ) -> int:
     engine = runtime.eval_service._engine  # noqa: SLF001
-    return (
-        len(deferred_intents) * len(engine.sampling.tasks) * engine.sampling.num_seeds
+    num_seeds = engine.sampling.num_seeds
+    return sum(
+        len(_task_ids_for_intent(runtime, intent)) * num_seeds
+        for intent in deferred_intents
     )
 
 
@@ -630,12 +643,17 @@ def execute_optim_step_sync(
     control = launch.control
     step_builder = StepRequestBuilder(store=runtime.store)
 
+    extra_pools = None
+    if adapter_key == GEPA_ADAPTER_KEY:
+        # Same-step resume must not replay the deferred adapter effect.
+        extra_pools = {"platform_stage_index": current_stage_index}
     if state.step_index == 0:
         step_request = step_builder.build_first(
             run=bound,
             adapter_key=adapter_key,
             initial_candidate=launch.initial_candidate,
             control=control,
+            extra_pools=extra_pools,
         )
     else:
         prior_ref = state.step_result_refs[-1].record_ref
@@ -843,7 +861,9 @@ __all__ = [
     "_bind_step_result",
     "_load_work_state",
     "_persist_work_state",
+    "_deferred_row_count",
     "_platform_deferred_successors",
+    "_task_ids_for_intent",
     "_require_controller_identity",
     "_validate_platform_stage_index",
     "execute_optim_step_sync",

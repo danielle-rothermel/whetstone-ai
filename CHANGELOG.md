@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.5 - 2026-08-22
+
+### Added
+
+- GEPA is platform-wired: `submit_optim_run` runs a GEPA adapter inline or
+  with PLATFORM deferral. Search evals raise `EvalPlatformDeferred` and
+  fan-in resumes the same `step_index` so every completed step still
+  carries resolvable `search_evidence`.
+- `build_gepa_harness_adapter` is the shared production constructor used
+  by the CLI and tests. `whetstone-optim run --adapter gepa` reconstructs
+  the adapter from a stored launch.
+- Continuation pools re-supply both the GEPA checkpoint and accumulated
+  skipped mutations from the last completed `prior.state_ref`.
+
+### Changed
+
+- Per-intent `task_hashes` on `OptimEvalRequest` scopes GEPA minibatch
+  fan-out through the same engine-narrowing path MIPROv2 uses.
+  `load_terminal_optim_result` accepts a seed-retained result with no
+  proposals.
+
 ## 0.1.4 - 2026-08-22
 
 ### Added

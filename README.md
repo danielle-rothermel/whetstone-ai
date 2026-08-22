@@ -14,7 +14,7 @@ stepping through runs to inspect behavior. Optimizers are not co-equal:
 | Optimizer | Harness adapter | Platform pipeline | Sandbox |
 |-----------|-----------------|-------------------|---------|
 | **COPRO** | Live; pass a COPRO adapter in the `build_runtime` registry | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox copro` |
-| **GEPA** | Live harness adapter + step engine; pass via the `build_runtime` registry | Not registered | `whetstone-sandbox gepa` |
+| **GEPA** | Live harness adapter + step engine; pass via the `build_runtime` registry | Wired (`submit_optim_run`, inline and PLATFORM deferral) | `whetstone-sandbox gepa` |
 | **MIPROv2** | Live via `register_toy_runtime(..., extra_adapters=...)` + `prepare_miprov2_run` | Not on the pipeline | `whetstone-sandbox miprov2` (plan preview only) |
 
 **Out of scope here:** particular benchmarks or envs (those live in separate
@@ -34,11 +34,10 @@ packages or repos), one-off experiment scripts, and product-facing runners.
    anchor calibration over persisted evaluation evidence (`eval/analysis/`).
 3. **Optimization** — shared harness and adapters that propose candidates and
    drive evaluation intents in a loop. COPRO is the platform-wired optimizer;
-   GEPA and MIPROv2 plug into the shared harness when present in the
-   `build_runtime` registry (GEPA also has a step engine). Neither GEPA nor
-   MIPROv2 is on the platform pipeline. Toy MIPROv2 runs use
+   GEPA is platform-wired the same way as COPRO when present in the
+   `build_runtime` registry. MIPROv2 plugs into the in-process harness via
    `register_toy_runtime(..., extra_adapters=...)` plus
-   `prepare_toy_miprov2_run`.
+   `prepare_toy_miprov2_run` and is not on the platform pipeline.
 4. **Sandbox & interpretation** — dry-run previews and toy-graph helpers to step
    through optimizer behavior before spending full eval budget
    (`whetstone-sandbox`).
@@ -66,7 +65,7 @@ Optimization  →  Sandbox / interpretation
 
 - **Experiment** — generation graph, initial/ceiling candidates, eval configs, reward policy
 - **EvaluationEngine** — validates and evaluates a candidate; returns typed evidence refs
-- **OptimizerAdapter** — COPRO, GEPA, and MIPROv2 plug into the shared harness when present in the `build_runtime` registry. Adding or removing an adapter changes controller identity. MIPROv2 is not platform-wired.
+- **OptimizerAdapter** — COPRO and GEPA plug into the shared harness and platform pipeline when present in the `build_runtime` registry; MIPROv2 is harness-only via `extra_adapters`. Adding or removing an adapter changes controller identity.
 - **StepContractProvider** — each optimizer declares its first-step and continuation contracts and parses its own launch control, registered by adapter key; `StepRequestBuilder` and `HarnessRunController` dispatch through it
 - **Step evidence** — a step reports evaluations it asked the harness to run in `resolved_intents` (COPRO, MIPROv2), and evaluations its own search drove in `search_evidence` (GEPA), each bound to its run and step index and verified by the harness; a terminal step whose contract sets `terminal_proposal_count` and that accepted no improvement over the run's own initial candidate sets `seed_retained`
 - **Graph rollouts** — `experiment/graph/` builds standard two-node graphs; drivers execute them per row
@@ -96,7 +95,7 @@ uv run whetstone-optim run \
   --run-key run-1 \
   --adapter copro \
   --proposer provider \
-  --application-version 0.1.3 \
+  --application-version 0.1.5 \
   --executor-id local-1
 uv run whetstone-optim status --run-key run-1 --store-path runtime.sqlite
 uv run whetstone-optim result --run-key run-1 --store-path runtime.sqlite

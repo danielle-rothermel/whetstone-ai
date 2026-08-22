@@ -1,0 +1,339 @@
+"""GEPA platform wiring: continuation pools, fan-out, seed-retained completion."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+from uuid import uuid4
+
+from whetstone.coordination.eval_service import EvalDispatchMode
+from whetstone.coordination.step_request_builder import StepRequestBuilder
+from whetstone.core.identity import ImmutableJsonObject
+from whetstone.eval.metadata import PURPOSE_METADATA_KEY, TASK_IDS_METADATA_KEY
+from whetstone.eval.protocol import EvalRequest
+from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.optim.contracts import (
+    OptimEvalRequest,
+    OptimStepResultRef,
+    StepStatus,
+)
+from whetstone.optim.gepa.harness_adapter import (
+    GEPA_ADAPTER_KEY,
+    GEPA_SKIPPED_MUTATIONS_KEY,
+)
+from whetstone.optim.gepa.step_engine import GEPA_STATE_KEY
+from whetstone.platform.contracts import OptimWorkInput, persist_work_input
+from whetstone.platform.step_executor import (
+    _deferred_row_count,
+    _expand_eval_rows,
+    _task_ids_for_intent,
+    execute_optim_step_sync,
+    execute_run_completion_sync,
+)
+from whetstone.testing.runtime import (
+    build_toy_copro_control,
+    build_toy_gepa_adapter,
+    build_toy_gepa_control,
+    prepare_toy_gepa_run,
+    register_toy_runtime,
+)
+from whetstone.testing.toy.experiment import (
+    DEFAULT_TOY_TEMPLATE,
+    TOY_MUTATION_FIELD,
+    build_toy_experiment,
+)
+
+
+def _gepa_runtime(
+    store,
+    *,
+    run_id: str,
+    max_metric_calls: int,
+    reflection_bodies=None,
+    bind_platform_eval_service: bool = False,
+):
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(store, experiment=experiment)
+    control = build_toy_gepa_control(
+        engine=engine,
+        max_metric_calls=max_metric_calls,
+    )
+    adapter = build_toy_gepa_adapter(
+        store=store,
+        engine=engine,
+        control=control,
+        run_id=run_id,
+        initial_candidate=experiment.initial_candidate,
+        reflection_bodies=reflection_bodies
+        if reflection_bodies is not None
+        else (DEFAULT_TOY_TEMPLATE,),
+    )
+    runtime = register_toy_runtime(
+        store=store,
+        engine=engine,
+        copro_control=build_toy_copro_control(engine=engine),
+        extra_adapters={GEPA_ADAPTER_KEY: adapter},
+    )
+    launch = prepare_toy_gepa_run(
+        runtime,
+        run_id=run_id,
+        control=control,
+        experiment=experiment,
+    )
+    if bind_platform_eval_service:
+        adapter.bind_evaluation_service(runtime.eval_service)
+    return runtime, launch, adapter, experiment
+
+
+def test_persisted_build_next_matches_in_process_continuation_pools(
+    sqlite_store,
+) -> None:
+    """Platform reconstructs GEPA continuation from the last completed prior."""
+    run_id = "gepa-persisted-build-next"
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(
+        sqlite_store, experiment=experiment
+    )
+    control = build_toy_gepa_control(engine=engine, max_metric_calls=8)
+    adapter = build_toy_gepa_adapter(
+        store=sqlite_store,
+        engine=engine,
+        control=control,
+        run_id=run_id,
+        initial_candidate=experiment.initial_candidate,
+    )
+    runtime = register_toy_runtime(
+        store=sqlite_store,
+        engine=engine,
+        copro_control=build_toy_copro_control(engine=engine),
+        extra_adapters={GEPA_ADAPTER_KEY: adapter},
+    )
+    launch = prepare_toy_gepa_run(
+        runtime,
+        run_id=run_id,
+        control=control,
+        experiment=experiment,
+    )
+    bound = runtime.harness.bind_run(launch.run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    first_request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    first, first_ref = runtime.harness.run_step(first_request)
+    assert first.status is StepStatus.CONTINUE
+
+    in_process = builder.build_next(
+        prior=first,
+        prior_ref=first_ref,
+        prior_results=(first,),
+        control=control,
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+    persisted_prior = OptimStepResultRef(record=first, record_ref=first_ref)
+    reconstructed = builder.build_next(
+        prior=persisted_prior.record,
+        prior_ref=persisted_prior.record_ref,
+        prior_results=(persisted_prior.record,),
+        control=control,
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+    in_process_pools = dict(in_process.pools)
+    reconstructed_pools = dict(reconstructed.pools)
+    assert reconstructed_pools[GEPA_STATE_KEY] == in_process_pools[GEPA_STATE_KEY]
+    assert (
+        reconstructed_pools[GEPA_SKIPPED_MUTATIONS_KEY]
+        == in_process_pools[GEPA_SKIPPED_MUTATIONS_KEY]
+    )
+
+    authority = adapter._adapter_factory._factory._evaluation_authority
+    prefix_hits = len(first.search_evidence)
+    second, _ = runtime.harness.run_step(reconstructed)
+    replayed = sum(1 for flag in authority.replayed_flags if flag)
+    assert prefix_hits
+    assert replayed == prefix_hits
+    assert second.search_evidence
+
+
+def test_seed_retained_completes_a_platform_run(sqlite_store) -> None:
+    """A GEPA run that keeps the seed still terminalizes the platform loop."""
+    run_id = f"gepa-seed-retained-{uuid4().hex[:8]}"
+    runtime, launch, _adapter, _experiment = _gepa_runtime(
+        sqlite_store,
+        run_id=run_id,
+        max_metric_calls=1,
+        reflection_bodies=(DEFAULT_TOY_TEMPLATE,),
+    )
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.INLINE,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+    completion = execute_optim_step_sync(runtime, input_reference=current_ref)
+    while completion.successors:
+        current_ref = completion.successors[0].input_reference
+        completion = execute_optim_step_sync(
+            runtime,
+            input_reference=current_ref,
+            stage_index=completion.successors[0].stage_index,
+        )
+    terminal_ref = execute_run_completion_sync(
+        runtime,
+        input_reference=completion.output_reference,
+    )
+    from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
+    from dr_store.content_addressing import parse_object_reference
+
+    parsed = parse_object_reference(terminal_ref)
+    assert parsed.schema == OPTIM_RESULT_SCHEMA
+    result = OptimResult.model_validate(runtime.store.get(parsed))
+    assert result.seed_retained is True
+    assert not result.proposals
+    assert result.step_results
+    for step_ref in result.step_results:
+        assert step_ref.record.search_evidence
+
+
+def test_gepa_two_intents_expand_per_intent_task_sets() -> None:
+    """Fan-out uses each GEPA intent's task set; COPRO-shaped intents stay full."""
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = MagicMock()
+    engine.sampling.num_seeds = 1
+    engine.sampling.tasks = [
+        MagicMock(task_id="engine-a"),
+        MagicMock(task_id="engine-b"),
+    ]
+    runtime = MagicMock()
+    runtime.eval_service._engine = engine
+
+    def make_intent(*, request_id: str, task_ids: list[str] | None):
+        metadata = {PURPOSE_METADATA_KEY: "gepa_metric"}
+        if task_ids is not None:
+            metadata[TASK_IDS_METADATA_KEY] = task_ids
+        return OptimEvalRequest(
+            optim_run_id="gepa-fanout",
+            optim_step_index=0,
+            eval_request=EvalRequest(
+                request_id=request_id,
+                candidate=experiment.initial_candidate,
+                metadata=ImmutableJsonObject(metadata),
+            ),
+            expected_reward_policy_hash=experiment.reward_policy.identity_hash(),
+        )
+
+    scoped = (
+        make_intent(request_id="gepa-a", task_ids=["task-a"]),
+        make_intent(request_id="gepa-bc", task_ids=["task-b", "task-c"]),
+    )
+    assert _deferred_row_count(runtime, scoped) == 3
+    rows = _expand_eval_rows(
+        runtime,
+        scoped,
+        deferral_origin_stage_index=0,
+        work_state_ref="ws-ref",
+    )
+    assert [row.task_id for row in rows] == ["task-a", "task-b", "task-c"]
+    assert [row.row_ordinal for row in rows] == [0, 1, 2]
+
+    full = make_intent(request_id="copro-full", task_ids=None)
+    assert _task_ids_for_intent(runtime, full) == ("engine-a", "engine-b")
+    assert _deferred_row_count(runtime, (full,)) == 2
+
+
+def test_gepa_platform_deferral_same_step_resume(sqlite_store) -> None:
+    """PLATFORM fan-in re-queues the same step and then the run can finish."""
+    from whetstone.platform.contracts import (
+        STAGE_EVAL_FANIN,
+        STAGE_EVAL_ROW,
+        STAGE_OPTIM_STEP,
+    )
+    from whetstone.platform.eval_fanin import (
+        build_platform_row_executor,
+        execute_eval_fanin_sync,
+        execute_eval_row_sync,
+    )
+
+    run_id = f"gepa-platform-e2e-{uuid4().hex[:8]}"
+    runtime, launch, adapter, _experiment = _gepa_runtime(
+        sqlite_store,
+        run_id=run_id,
+        max_metric_calls=2,
+        bind_platform_eval_service=True,
+    )
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+    episodes = 0
+    completion = None
+    while episodes < 8:
+        completion = execute_optim_step_sync(
+            runtime,
+            input_reference=current_ref,
+        )
+        row_successors = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_ROW
+        ]
+        fanin_successors = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_FANIN
+        ]
+        if not row_successors and not fanin_successors:
+            assert not completion.successors or (
+                completion.successors[0].stage_key.value == STAGE_OPTIM_STEP
+            )
+            if not completion.successors:
+                current_ref = completion.output_reference
+                break
+            current_ref = completion.successors[0].input_reference
+            continue
+        episodes += 1
+        assert fanin_successors and fanin_successors[0].barrier is True
+        platform_executor = build_platform_row_executor(runtime)
+        for row_successor in row_successors:
+            execute_eval_row_sync(
+                runtime,
+                input_reference=row_successor.input_reference,
+                stage_index=row_successor.stage_index,
+                row_executor=platform_executor,
+            )
+        fanin_completion = execute_eval_fanin_sync(
+            runtime,
+            input_reference=fanin_successors[0].input_reference,
+            stage_index=fanin_successors[0].stage_index,
+        )
+        assert fanin_completion.successors
+        successor = fanin_completion.successors[0]
+        assert successor.stage_key.value == STAGE_OPTIM_STEP
+        current_ref = successor.input_reference
+    assert 1 <= episodes < 8
+    assert adapter.invocations > 1
+    terminal_ref = execute_run_completion_sync(
+        runtime,
+        input_reference=current_ref,
+    )
+    from dr_store.content_addressing import parse_object_reference
+    from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
+
+    parsed = parse_object_reference(terminal_ref)
+    assert parsed.schema == OPTIM_RESULT_SCHEMA
+    result = OptimResult.model_validate(runtime.store.get(parsed))
+    assert result.proposals or result.seed_retained
+    assert result.step_results
+    for step_ref in result.step_results:
+        assert step_ref.record.search_evidence

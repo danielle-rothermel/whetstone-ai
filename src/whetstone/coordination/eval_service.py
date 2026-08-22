@@ -60,6 +60,15 @@ class EvalDispatchMode(StrEnum):
 class EvalPlatformDeferred(RuntimeError):
     """Evaluation intent persisted for platform row fan-out."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        intent: OptimEvalRequest | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.intent = intent
+
 
 @dataclass(frozen=True, slots=True)
 class EvalExecutionContext:
@@ -540,6 +549,9 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         owned: _OwnedClaim,
     ) -> IntentResolution:
         self._persist_intent_targets(optim_eval_request)
+        existing = self._store.resolve(self._key(optim_eval_request))
+        if existing is not None:
+            return self._load(existing, expected_optim_eval_request=optim_eval_request)
         effective = self._effective_context(self._active_context)
         if effective.dispatch_mode is EvalDispatchMode.PLATFORM:
             self.persist_platform_intent(
@@ -547,7 +559,8 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
                 context=effective,
             )
             raise EvalPlatformDeferred(
-                "evaluation intent deferred to platform eval stages"
+                "evaluation intent deferred to platform eval stages",
+                intent=optim_eval_request,
             )
         engine = self._engine_for(optim_eval_request)
         resolved_eval_config = engine.eval_config_ref

@@ -24,7 +24,10 @@ from whetstone.optim.contracts import (
     StepKind,
     StepStatus,
 )
-from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+from whetstone.optim.gepa.harness_adapter import (
+    GEPA_ADAPTER_KEY,
+    GEPA_SKIPPED_MUTATIONS_KEY,
+)
 from whetstone.optim.gepa.step_engine import GEPA_STATE_KEY
 
 if TYPE_CHECKING:
@@ -54,7 +57,7 @@ def gepa_step_output_contract(run: OptimRunRef) -> OutputContract:
     )
 
 
-def _gepa_checkpoint(
+def _gepa_prior_state(
     store: ObjectStore, prior: OptimStepResult
 ) -> dict[str, Any]:
     prior_state = (
@@ -62,8 +65,16 @@ def _gepa_checkpoint(
         if prior.state_ref is None
         else store.get(prior.state_ref.reference)
     )
+    if not isinstance(prior_state, dict):
+        return {}
     checkpoint = prior_state.get(GEPA_STATE_KEY, {})
-    return checkpoint if isinstance(checkpoint, dict) else {}
+    skipped = prior_state.get(GEPA_SKIPPED_MUTATIONS_KEY, [])
+    pools: dict[str, Any] = {
+        GEPA_STATE_KEY: checkpoint if isinstance(checkpoint, dict) else {},
+    }
+    if isinstance(skipped, list):
+        pools[GEPA_SKIPPED_MUTATIONS_KEY] = skipped
+    return pools
 
 
 class GepaStepContractProvider:
@@ -133,7 +144,6 @@ class GepaStepContractProvider:
         if not isinstance(control, GepaControl):
             raise TypeError("GEPA continuation requires GepaControl")
         step_index = prior.step_index + 1
-        checkpoint = _gepa_checkpoint(store, prior)
         run = prior.request.record.run
         return OptimStepRequest(
             run=run,
@@ -145,7 +155,7 @@ class GepaStepContractProvider:
             prior_state_ref=prior.state_ref,
             prior_history_ref=prior.history_ref,
             candidates=(prior.request.record.candidates[0],),
-            pools=ImmutableJsonObject({GEPA_STATE_KEY: checkpoint}),
+            pools=ImmutableJsonObject(_gepa_prior_state(store, prior)),
             hyperparameters=ImmutableJsonObject(
                 control.step_hyperparameters(iteration=step_index)
             ),

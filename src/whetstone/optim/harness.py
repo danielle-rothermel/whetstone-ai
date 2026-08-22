@@ -278,6 +278,11 @@ class OptimHarness(OptimRunStore):
             if request.mode is StepMode.TOOL_USING
             else ()
         )
+        bind_eval_context = getattr(
+            resolved_adapter.adapter, "bind_eval_context", None
+        )
+        if callable(bind_eval_context):
+            bind_eval_context(effective_eval_context)
         if request.mode is StepMode.PURE:
             output = self._invoke_pure(request, resolved_adapter.adapter)
         else:
@@ -797,6 +802,37 @@ class OptimHarness(OptimRunStore):
                     f"{item.schema_name}"
                 ) from error
 
+    @staticmethod
+    def _require_eval_request_on_step(
+        request: OptimStepRequest,
+        optim_eval_request: OptimEvalRequest,
+        allowed: dict[str, CandidateRef],
+    ) -> None:
+        if optim_eval_request.optim_run_id != request.run_id:
+            raise ValueError(
+                "Optim Eval Request belongs to another optimization run"
+            )
+        if optim_eval_request.optim_step_index != request.step_index:
+            raise ValueError(
+                "Optim Eval Request belongs to another optimization step"
+            )
+        from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+
+        if request.adapter_key == GEPA_ADAPTER_KEY:
+            # Search evals are minted inside optimize() for candidates the
+            # step has not proposed yet. COPRO still requires the candidate
+            # to be a step output.
+            return
+        candidate_ref = candidate_reference(
+            optim_eval_request.eval_request.candidate
+        )
+        exact_candidate = allowed.get(str(candidate_ref.identity_hash))
+        if exact_candidate is None or exact_candidate != candidate_ref:
+            raise ValueError(
+                "Optim Eval Request candidate is not an exact Step output "
+                "candidate"
+            )
+
     def _validate_output_intents(
         self,
         request: OptimStepRequest,
@@ -828,26 +864,11 @@ class OptimHarness(OptimRunStore):
                 )
             self._require_resolvable_evidence(evidence)
         for optim_eval_request in output.optim_eval_requests:
-            if optim_eval_request.optim_run_id != request.run_id:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization run"
-                )
-            if optim_eval_request.optim_step_index != request.step_index:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization step"
-                )
-            candidate_ref = candidate_reference(
-                optim_eval_request.eval_request.candidate
+            self._require_eval_request_on_step(
+                request,
+                optim_eval_request,
+                allowed,
             )
-            exact_candidate = allowed.get(str(candidate_ref.identity_hash))
-            if (
-                exact_candidate is None
-                or exact_candidate != candidate_ref
-            ):
-                raise ValueError(
-                    "Optim Eval Request candidate is not an exact Step output "
-                    "candidate"
-                )
             if optim_eval_request.expected_reward_policy_hash is not None:
                 if (
                     reward_policy is None
@@ -897,26 +918,11 @@ class OptimHarness(OptimRunStore):
         )
         deferred: list[OptimEvalRequest] = []
         for optim_eval_request in output.optim_eval_requests:
-            if optim_eval_request.optim_run_id != request.run_id:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization run"
-                )
-            if optim_eval_request.optim_step_index != request.step_index:
-                raise ValueError(
-                    "Optim Eval Request belongs to another optimization step"
-                )
-            candidate_ref = candidate_reference(
-                optim_eval_request.eval_request.candidate
+            self._require_eval_request_on_step(
+                request,
+                optim_eval_request,
+                allowed,
             )
-            exact_candidate = allowed.get(str(candidate_ref.identity_hash))
-            if (
-                exact_candidate is None
-                or exact_candidate != candidate_ref
-            ):
-                raise ValueError(
-                    "Optim Eval Request candidate is not an exact Step output "
-                    "candidate"
-                )
             self._persist_intent_records(optim_eval_request)
             if platform_mode:
                 assert isinstance(self._evaluation_service, EvalEngineService)

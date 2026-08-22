@@ -17,6 +17,12 @@ from whetstone.core.leasing import EffectLeaseAuthority
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY, CoproAdapter
+from whetstone.optim.gepa.control import GepaControl
+from whetstone.optim.gepa.factory import (
+    build_gepa_harness_adapter,
+    default_gepa_prompt_services,
+)
+from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 from whetstone.optim.proposal.proposer import (
     FakeProposerTransport,
     ProposerConfig,
@@ -126,6 +132,65 @@ def _copro_adapter_from_control(
     )
 
 
+def _gepa_adapter_from_launch(launch, engine, store):
+    control = launch.control
+    if not isinstance(control, GepaControl):
+        raise typer.BadParameter("launch GEPA control is not a GepaControl")
+    prompt_adapter = PlainPromptAdapter()
+    adapter_hash = prompt_adapter_identity_hash(prompt_adapter)
+    if control.proposal_prompt_adapter_identity_hash != adapter_hash:
+        raise typer.BadParameter(
+            "launch GEPA control prompt adapter does not match "
+            "the CLI PlainPromptAdapter"
+        )
+    if control.reward_policy_hash != engine.reward_policy_identity_hash():
+        raise typer.BadParameter(
+            "launch control reward policy does not match the rebuilt engine"
+        )
+    if control.metric != engine.eval_config_ref:
+        raise typer.BadParameter(
+            "launch control metric does not match the rebuilt engine"
+        )
+    services = default_gepa_prompt_services(
+        component_names=control.component_names,
+        mutation_field=launch.run.mutation_field,
+    )
+    if (
+        services.descriptor.identity_hash()
+        != control.prompt_format_identity_hash
+        or services.binding.identity_hash()
+        != control.prompt_binding_identity_hash
+    ):
+        raise typer.BadParameter(
+            "launch GEPA prompt services do not match the CLI defaults; "
+            "pass a GEPA adapter to build_runtime"
+        )
+    transport = FakeProposerTransport(
+        {},
+        default=(
+            "Reply briefly to: {prompt} with a concise greeting.",
+            "Answer {prompt} in one short friendly sentence.",
+        ),
+        execution_policy_hash=engine.execution_policy_identity_hash(),
+        prompt_adapter_identity_hash=adapter_hash,
+    )
+    return build_gepa_harness_adapter(
+        store=store,
+        engine=engine,
+        control=control,
+        run_id=launch.run.run_id,
+        initial_candidate=launch.initial_candidate,
+        mutation_field=launch.run.mutation_field,
+        prompt_services=services,
+        transport=transport,
+        proposal_executor=build_inline_proposal_executor(
+            policy_identity_hash=(
+                control.proposal_durability_policy_identity_hash
+            ),
+        ),
+    )
+
+
 def _receipt_payload(receipt) -> dict[str, object]:
     return {
         "run_key": receipt.run_key.value,
@@ -206,11 +271,6 @@ def run_command(
                     f"launch adapter {launch.run.adapter_key!r} does not "
                     f"match --adapter {adapter!r}"
                 )
-            if adapter == ADAPTER_GEPA:
-                raise typer.BadParameter(
-                    "GEPA reconstruction from a stored launch is not "
-                    "supported; pass a GEPA adapter to build_runtime"
-                )
             if launch.control is None:
                 raise typer.BadParameter("launch is missing optimizer control")
             runtime_config = ReferenceEvalRuntimeConfig()
@@ -219,13 +279,22 @@ def run_command(
                 mutation_field=launch.run.mutation_field,
                 render_contract=launch.run.template_render_contract,
             )
-            copro_adapter = _copro_adapter_from_control(
-                launch.control,
-                engine,
-                store=store,
-                proposer=proposer,
-                execution_policy=runtime_config.execution_policy,
-            )
+            if adapter == ADAPTER_GEPA:
+                adapters = {
+                    GEPA_ADAPTER_KEY: _gepa_adapter_from_launch(
+                        launch, engine, store
+                    )
+                }
+            else:
+                adapters = {
+                    COPRO_ADAPTER_KEY: _copro_adapter_from_control(
+                        launch.control,
+                        engine,
+                        store=store,
+                        proposer=proposer,
+                        execution_policy=runtime_config.execution_policy,
+                    )
+                }
             resolved_owner_id = owner_id or _stable_owner_id(
                 application_version=application_version,
                 executor_id=executor_id,
@@ -233,9 +302,7 @@ def run_command(
             runtime = build_runtime(
                 store=store,
                 engine=engine,
-                adapter_registry=MappingAdapterRegistry(
-                    {COPRO_ADAPTER_KEY: copro_adapter}
-                ),
+                adapter_registry=MappingAdapterRegistry(adapters),
                 effect_authority=EffectLeaseAuthority.sqlite(store_path),
                 ledger_engine=ledger,
                 platform=True,
