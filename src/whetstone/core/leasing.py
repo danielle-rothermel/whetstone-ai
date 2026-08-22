@@ -113,13 +113,25 @@ def typed_ref(reference: ObjectReference) -> TypedRef:
 # ``maintain(...)`` block and leaving the lease to expire and be redriven.
 _LEASE_TEXT_LIMIT = 1024
 _TRUNCATION_SUFFIX = "..."
+# Boundary-owned sidecar. Not a caller diagnostic key: ``untruncated_*``
+# collided with arbitrary Tool Result / checkpoint details. Values are
+# ``unicode-escape`` ASCII so unpaired surrogates survive JSON.
+_LEASE_ORIGINAL_KEY = "_whetstone_lease_original"
+
+
+def _escape_lease_original(value: str) -> str:
+    return value.encode("unicode-escape").decode("ascii")
+
+
+def _unescape_lease_original(value: str) -> str:
+    return value.encode("ascii").decode("unicode-escape")
 
 
 def _lease_text(value: str, *, field: str, details: dict[str, Any]) -> str:
     """Coerce whetstone failure text into dr-store's accepted text shape.
 
-    Preserves the original under ``details[f"untruncated_{field}"]`` whenever
-    coercion loses information, so no diagnostic text is dropped.
+    Preserves the original under ``details[_LEASE_ORIGINAL_KEY][field]``
+    whenever coercion loses information, so no diagnostic text is dropped.
     """
     coerced = value.replace("\x00", "")
     coerced = "".join(
@@ -137,7 +149,11 @@ def _lease_text(value: str, *, field: str, details: dict[str, Any]) -> str:
         # NonEmptyId admits both beyond the empty string.
         coerced = f"<unprintable {field}>"
     if coerced != value:
-        details[f"untruncated_{field}"] = value
+        envelope = details.get(_LEASE_ORIGINAL_KEY)
+        if not isinstance(envelope, dict):
+            envelope = {}
+            details[_LEASE_ORIGINAL_KEY] = envelope
+        envelope[field] = _escape_lease_original(value)
     return coerced
 
 
@@ -162,19 +178,22 @@ def _from_lease_failure(failure: _LeaseTerminalFailure) -> TerminalFailure:
     Callers persist the original ``TerminalFailure`` on the Tool Result,
     adapter checkpoint, or intent resolution, then exact-compare it to
     ``EffectTerminal.failure``. The lease-side coercion is a transport
-    concern: invert it here so those comparisons stay equal. Restore
-    ``untruncated_*`` only when the stored text is our coercion of that
-    original, so a caller-owned detail of the same name is left alone.
+    concern: invert it here so those comparisons stay equal. Only the
+    reserved envelope is popped; caller-owned ``untruncated_*`` keys stay.
+    Restore a field only when the stored text is our coercion of the
+    decoded original, so a stuffed envelope cannot rewrite clean text.
     """
     data = failure.model_dump(mode="json")
     details = dict(data["details"])
-    for field in ("code", "message"):
-        original = details.get(f"untruncated_{field}")
-        if original is None:
-            continue
-        if _lease_text_shape(str(original), field=field) == data[field]:
-            data[field] = original
-            del details[f"untruncated_{field}"]
+    envelope = details.pop(_LEASE_ORIGINAL_KEY, None)
+    if isinstance(envelope, dict):
+        for field in ("code", "message"):
+            encoded = envelope.get(field)
+            if not isinstance(encoded, str):
+                continue
+            original = _unescape_lease_original(encoded)
+            if _lease_text_shape(original, field=field) == data[field]:
+                data[field] = original
     data["details"] = details
     return TerminalFailure.model_validate(data)
 

@@ -272,27 +272,26 @@ def test_a_failed_effect_replays_its_whetstone_terminal_failure(
 
 
 @pytest.mark.parametrize(
-    ("message", "json_safe"),
+    "message",
     [
-        ("provider error: " + "x" * 1200, True),
-        ("   ", True),
-        ("hello\x00world", True),
-        ("bad\ud800surrogate", False),
+        "provider error: " + "x" * 1200,
+        "   ",
+        "hello\x00world",
+        "bad\ud800surrogate",
     ],
     ids=["oversized", "whitespace-only", "nul", "unpaired-surrogate"],
 )
 def test_a_dirty_failure_message_round_trips_the_whetstone_failure(
     authority: tuple[EffectLeaseAuthority, FakeClock],
     message: str,
-    json_safe: bool,
 ) -> None:
     """Provider text that dr-store would reject still publishes as FAILED.
 
     The write path coerces code/message into dr-store's accepted shape so a
     long or dirty provider message cannot raise inside ``maintain(...)`` and
-    lose the lease. ``EffectTerminal.failure`` restores the original so
-    persist-and-compare call sites stay equal. Unpaired surrogates cannot
-    ride in JSON details, so ``verify_terminal`` is skipped for that case.
+    lose the lease. Originals ride in a reserved unicode-escaped envelope
+    so ``EffectTerminal.failure`` restores the caller value and relational
+    JSON can persist unpaired surrogates.
     """
     lease_authority, _clock = authority
     request = _request()
@@ -309,12 +308,14 @@ def test_a_dirty_failure_message_round_trips_the_whetstone_failure(
 
     assert terminal.outcome is TerminalOutcome.FAILED
     assert terminal.failure == failure
-    if json_safe:
-        assert lease_authority.verify_terminal(terminal) == terminal
+    assert lease_authority.verify_terminal(terminal) == terminal
     lease_failure = terminal.to_lease().failure
     assert lease_failure is not None
-    assert lease_failure.details["untruncated_message"] == message
     assert lease_failure.details["attempt"] == 1
+    assert "untruncated_message" not in lease_failure.details
+    assert lease_failure.details["_whetstone_lease_original"]["message"] == (
+        message.encode("unicode-escape").decode("ascii")
+    )
     if len(message) > 1024:
         assert len(lease_failure.message) == 1024
         assert lease_failure.message.endswith("...")
@@ -326,6 +327,38 @@ def test_a_dirty_failure_message_round_trips_the_whetstone_failure(
     )
     assert replay.outcome is AcquireOutcome.FAILED
     assert replay.terminal == terminal
+    assert replay.terminal is not None
+    assert replay.terminal.failure == failure
+
+
+def test_a_caller_owned_untruncated_detail_survives_the_lease_boundary(
+    authority: tuple[EffectLeaseAuthority, FakeClock],
+) -> None:
+    """Caller diagnostic keys named untruncated_* are not lease metadata."""
+    lease_authority, _clock = authority
+    request = _request()
+    lease = _acquire(lease_authority, request)
+    failure = TerminalFailure(
+        code="evaluation_RuntimeError",
+        message="the effect failed",
+        details=ImmutableJsonObject(
+            {"untruncated_message": "the effect failed"}
+        ),
+    )
+
+    terminal = lease_authority.fail(
+        lease, result_ref=_result_ref(), failure=failure
+    )
+
+    assert terminal.failure == failure
+    assert lease_authority.verify_terminal(terminal) == terminal
+    replay = lease_authority.acquire(
+        request,
+        owner_id="owner-b",
+        attempt_id="attempt-b",
+        lease_duration=_LEASE,
+    )
+    assert replay.outcome is AcquireOutcome.FAILED
     assert replay.terminal is not None
     assert replay.terminal.failure == failure
 
@@ -417,6 +450,34 @@ def test_the_effect_terminal_round_trips_through_its_stored_json() -> None:
         assert reloaded.failure == failure
         # The reloaded terminal is still authoritative against the store.
         assert whetstone_authority.verify_terminal(reloaded) == terminal
+
+
+def test_a_surrogate_failure_publishes_on_sqlite() -> None:
+    """Relational JSON must accept a unicode-escaped unpaired surrogate."""
+    with temp_sqlite_lease_authority() as lease_authority:
+        whetstone_authority = EffectLeaseAuthority(lease_authority)
+        request = _request(payload={"call": "surrogate"})
+        lease = _acquire(whetstone_authority, request)
+        failure = TerminalFailure(
+            code="evaluation_RuntimeError",
+            message="bad\ud800surrogate",
+            details=ImmutableJsonObject({"attempt": 1}),
+        )
+
+        terminal = whetstone_authority.fail(
+            lease, result_ref=_result_ref(), failure=failure
+        )
+
+        assert terminal.failure == failure
+        assert whetstone_authority.verify_terminal(terminal) == terminal
+        replay = whetstone_authority.acquire(
+            request,
+            owner_id="owner-b",
+            attempt_id="attempt-b",
+            lease_duration=_LEASE,
+        )
+        assert replay.outcome is AcquireOutcome.FAILED
+        assert replay.terminal == terminal
 
 
 def test_a_transient_terminalization_failure_does_not_poison_the_handle(
