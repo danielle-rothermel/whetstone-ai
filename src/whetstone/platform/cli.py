@@ -62,6 +62,48 @@ def _live_transport_call(execution_policy: ProviderExecutionPolicy):
     return HttpProvider(policy=execution_policy.transport_policy).invoke
 
 
+class ToyExperimentOnlyError(typer.BadParameter):
+    """A stored launch was not bound against the CLI's toy experiment.
+
+    The CLI rebuilds its evaluation engine from
+    :class:`ReferenceEvalRuntimeConfig`, whose experiment is the in-memory toy
+    experiment. A launch's persisted record cannot supply a different one: an
+    :class:`~whetstone.experiment.env.Experiment` owns a live ``rollout_graph``
+    (graph config, provider call config, evaluation procedure), and the launch
+    persists only identity hashes over the eval config, not the graph itself.
+
+    Rather than fan a non-toy run out over toy tasks, the CLI refuses.
+    """
+
+
+def _require_launch_matches_engine(
+    launch,
+    engine,
+    *,
+    eval_config_ref,
+) -> None:
+    """Refuse a launch the CLI's toy-experiment engine cannot honestly run.
+
+    ``eval_config_ref`` is the launch's own bound eval config -- COPRO's
+    ``control.eval_config_ref`` or GEPA's ``control.metric``. When it does not
+    address the rebuilt engine's eval config, the launch was bound against a
+    different experiment and the engine's tasks are not the launch's tasks.
+    """
+    if eval_config_ref == engine.eval_config_ref:
+        return
+    raise ToyExperimentOnlyError(
+        f"launch {launch.run.run_id!r} was bound against an experiment this "
+        "command cannot rebuild: its eval config "
+        f"{eval_config_ref!r} does not match the toy experiment engine's "
+        f"{engine.eval_config_ref!r}. `whetstone-optim run` reconstructs its "
+        "evaluation engine from the built-in toy experiment, and a launch "
+        "does not persist the rollout graph needed to rebuild any other one, "
+        "so running this launch here would evaluate it over toy tasks. Drive "
+        "a non-toy experiment through a runtime built with that experiment "
+        "instead."
+    )
+
+
 def _copro_adapter_from_control(
     control,
     engine,
@@ -309,6 +351,16 @@ def run_command(
                 render_contract=launch.run.template_render_contract,
             )
             if adapter == ADAPTER_GEPA:
+                gepa_control = launch.control
+                if not isinstance(gepa_control, GepaControl):
+                    raise typer.BadParameter(
+                        "launch GEPA control is not a GepaControl"
+                    )
+                _require_launch_matches_engine(
+                    launch,
+                    engine,
+                    eval_config_ref=gepa_control.metric,
+                )
                 adapters = {
                     GEPA_ADAPTER_KEY: _gepa_adapter_from_launch(
                         launch,
@@ -319,6 +371,11 @@ def run_command(
                     )
                 }
             else:
+                _require_launch_matches_engine(
+                    launch,
+                    engine,
+                    eval_config_ref=launch.control.eval_config_ref,
+                )
                 adapters = {
                     COPRO_ADAPTER_KEY: _copro_adapter_from_control(
                         launch.control,

@@ -52,6 +52,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   head's pending fan-out and step-keyed deferred intents, and its
   `platform_stage_index` untouched, performs no persist, and enqueues no
   `optim_step` that would duplicate the successor already queued.
+- `whetstone-optim run` refuses a launch it cannot honestly evaluate.
+  Both the `--adapter gepa` and `--adapter copro` paths rebuild their
+  evaluation engine from `ReferenceEvalRuntimeConfig`, whose experiment is
+  the built-in toy experiment, and a launch persists only eval-config
+  identity hashes -- not the live `rollout_graph` needed to rebuild any
+  other experiment. A launch whose bound eval config (GEPA
+  `control.metric`, COPRO `control.eval_config_ref`) does not address the
+  rebuilt engine's now raises `ToyExperimentOnlyError` naming both refs and
+  the limitation, instead of fanning the run out over toy tasks. Known
+  limitation: the command runs only launches bound against the toy
+  experiment; drive any other experiment through a runtime built with it.
 
 ## 0.1.4 - 2026-08-22
 
