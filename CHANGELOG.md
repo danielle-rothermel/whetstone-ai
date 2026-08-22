@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.9 - 2026-08-22
+
 ### Fixed
 - MIPROv2 no longer aborts a durable run with `ValueError: No valid program
   found in param_score_dict` when minibatching is on and every observed
