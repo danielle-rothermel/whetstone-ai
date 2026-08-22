@@ -44,6 +44,7 @@ from whetstone.platform.step_executor import (
     _validate_platform_stage_index,
     OptimWorkState,
 )
+from whetstone.platform.work_state_head import resolve_work_state_head
 
 if TYPE_CHECKING:
     from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
@@ -464,6 +465,26 @@ def _finalize_deferred_step(
         # Search was interrupted mid-optimize(). Do not keep the placeholder
         # as history: resume the same step so optimize() can consume the
         # bound resolutions and emit real search_evidence.
+        head_ref = resolve_work_state_head(
+            runtime.store,
+            run_id=run_id,
+            work_key=work_state.work_input.work_key,
+        )
+        if head_ref is not None:
+            head = _load_work_state(runtime, head_ref)
+            if head.step_index > step_index:
+                return head
+            if (
+                head.step_index == step_index
+                and head.pending_step_result_ref is None
+                and not head.pending_deferred_intents
+            ):
+                return OptimWorkState(
+                    work_input=work_state.work_input,
+                    step_index=head.step_index,
+                    step_result_refs=head.step_result_refs,
+                    terminal=head.terminal,
+                )
         loaded = _load_work_state(runtime, work_state_ref)
         return OptimWorkState(
             work_input=loaded.work_input,

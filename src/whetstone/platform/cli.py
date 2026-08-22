@@ -132,7 +132,14 @@ def _copro_adapter_from_control(
     )
 
 
-def _gepa_adapter_from_launch(launch, engine, store):
+def _gepa_adapter_from_launch(
+    launch,
+    engine,
+    store,
+    *,
+    proposer: str,
+    execution_policy: ProviderExecutionPolicy,
+):
     control = launch.control
     if not isinstance(control, GepaControl):
         raise typer.BadParameter("launch GEPA control is not a GepaControl")
@@ -165,15 +172,37 @@ def _gepa_adapter_from_launch(launch, engine, store):
             "launch GEPA prompt services do not match the CLI defaults; "
             "pass a GEPA adapter to build_runtime"
         )
-    transport = FakeProposerTransport(
-        {},
-        default=(
-            "Reply briefly to: {prompt} with a concise greeting.",
-            "Answer {prompt} in one short friendly sentence.",
-        ),
-        execution_policy_hash=engine.execution_policy_identity_hash(),
-        prompt_adapter_identity_hash=adapter_hash,
-    )
+    if proposer == PROPOSER_FAKE:
+        transport: (
+            FakeProposerTransport | ProviderProposerTransport
+        ) = FakeProposerTransport(
+            {},
+            default=(
+                "Reply briefly to: {prompt} with a concise greeting.",
+                "Answer {prompt} in one short friendly sentence.",
+            ),
+            execution_policy_hash=execution_policy.identity_hash,
+            prompt_adapter_identity_hash=adapter_hash,
+        )
+    elif proposer == PROPOSER_PROVIDER:
+        if not isinstance(control.reflection_model, ProposerConfig):
+            raise typer.BadParameter(
+                "provider proposer requires a stored ProviderCallConfig"
+            )
+        from dr_providers import PROVIDER_CALL_CONFIG_SCHEMA, ProviderCallConfig
+
+        transport = ProviderProposerTransport(
+            resolve_provider_call_config=store_config_resolver(
+                store,
+                PROVIDER_CALL_CONFIG_SCHEMA,
+                ProviderCallConfig,
+            ),
+            transport=_live_transport_call(execution_policy),
+            execution_policy=execution_policy,
+            prompt_adapter=prompt_adapter,
+        )
+    else:
+        raise typer.BadParameter("proposer must be provider or fake")
     return build_gepa_harness_adapter(
         store=store,
         engine=engine,
@@ -216,7 +245,7 @@ def run_command(
         Literal["provider", "fake"],
         typer.Option(
             "--proposer",
-            help="COPRO proposer transport: live provider or scripted fake",
+            help="Proposer transport for COPRO or GEPA: live provider or fake",
         ),
     ] = PROPOSER_PROVIDER,
     work_key: Annotated[str | None, typer.Option("--work-key")] = None,
@@ -282,7 +311,11 @@ def run_command(
             if adapter == ADAPTER_GEPA:
                 adapters = {
                     GEPA_ADAPTER_KEY: _gepa_adapter_from_launch(
-                        launch, engine, store
+                        launch,
+                        engine,
+                        store,
+                        proposer=proposer,
+                        execution_policy=runtime_config.execution_policy,
                     )
                 }
             else:

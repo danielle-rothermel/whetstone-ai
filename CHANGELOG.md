@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries resolvable `search_evidence`.
 - `build_gepa_harness_adapter` is the shared production constructor used
   by the CLI and tests. `whetstone-optim run --adapter gepa` reconstructs
-  the adapter from a stored launch.
+  the adapter from a stored launch and honors `--proposer` (provider or
+  fake).
 - Continuation pools re-supply both the GEPA checkpoint and accumulated
   skipped mutations from the last completed `prior.state_ref`.
 

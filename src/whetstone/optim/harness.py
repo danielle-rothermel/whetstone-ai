@@ -802,8 +802,8 @@ class OptimHarness(OptimRunStore):
                     f"{item.schema_name}"
                 ) from error
 
-    @staticmethod
     def _require_eval_request_on_step(
+        self,
         request: OptimStepRequest,
         optim_eval_request: OptimEvalRequest,
         allowed: dict[str, CandidateRef],
@@ -819,9 +819,10 @@ class OptimHarness(OptimRunStore):
         from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
 
         if request.adapter_key == GEPA_ADAPTER_KEY:
-            # Search evals are minted inside optimize() for candidates the
-            # step has not proposed yet. COPRO still requires the candidate
-            # to be a step output.
+            self._require_gepa_assembled_eval_candidate(
+                request,
+                optim_eval_request,
+            )
             return
         candidate_ref = candidate_reference(
             optim_eval_request.eval_request.candidate
@@ -831,6 +832,72 @@ class OptimHarness(OptimRunStore):
             raise ValueError(
                 "Optim Eval Request candidate is not an exact Step output "
                 "candidate"
+            )
+
+    def _require_gepa_assembled_eval_candidate(
+        self,
+        request: OptimStepRequest,
+        optim_eval_request: OptimEvalRequest,
+    ) -> None:
+        # Search evals are minted inside optimize() for candidates the step
+        # has not proposed yet. Require the same assembler binding the run
+        # used: seed candidate + control component_names.
+        from whetstone.optim.gepa.authorities import (
+            CanonicalGepaCandidateAssembler,
+            GepaCandidateFieldBinding,
+        )
+        from whetstone.optim.gepa.contracts import GepaCandidateComponent
+        from whetstone.optim.gepa.control import GepaControl
+        from whetstone.optim.gepa.harness_adapter import (
+            gepa_candidate_field_name,
+        )
+
+        if not request.candidates:
+            raise ValueError("GEPA step must carry the run seed candidate")
+        control = GepaControl.model_validate(
+            self._store.get(
+                request.run.record.optimizer_config.record_ref.reference
+            )
+        )
+        control.require_identity_hash(
+            request.run.record.optimizer_config.record_hash
+        )
+        mutation_field = request.run.record.mutation_field
+        fields = tuple(
+            GepaCandidateFieldBinding(
+                component_name=name,
+                candidate_field=gepa_candidate_field_name(
+                    component_name=name,
+                    component_names=control.component_names,
+                    mutation_field=mutation_field,
+                ),
+            )
+            for name in control.component_names
+        )
+        assembler = CanonicalGepaCandidateAssembler(
+            base_candidate=candidate_reference(request.candidates[0]),
+            fields=fields,
+        )
+        candidate = optim_eval_request.eval_request.candidate
+        try:
+            components = tuple(
+                GepaCandidateComponent(
+                    name=name,
+                    text=candidate.payload[field.candidate_field],
+                )
+                for name, field in zip(
+                    control.component_names, fields, strict=True
+                )
+            )
+        except KeyError as exc:
+            raise ValueError(
+                "Optim Eval Request candidate is not assembled from the run "
+                "base and control component_names"
+            ) from exc
+        if candidate_reference(candidate) != assembler.assemble(components):
+            raise ValueError(
+                "Optim Eval Request candidate is not assembled from the run "
+                "base and control component_names"
             )
 
     def _validate_output_intents(

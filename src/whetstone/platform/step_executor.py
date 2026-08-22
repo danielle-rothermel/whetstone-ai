@@ -652,7 +652,10 @@ def execute_optim_step_sync(
 
     extra_pools = None
     if adapter_key == GEPA_ADAPTER_KEY:
-        # Same-step resume must not replay the deferred adapter effect.
+        # Fan-in retry of the same episode keeps this salt and the same
+        # request; retry safety is the idempotent step-result / fan-in
+        # binding. The salt distinguishes successive deferral episodes
+        # inside one step_index so the deferred CONTINUE is not replayed.
         extra_pools = {"platform_stage_index": current_stage_index}
     if state.step_index == 0:
         step_request = step_builder.build_first(

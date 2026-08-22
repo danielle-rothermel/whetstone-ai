@@ -114,6 +114,11 @@ class HarnessRunController:
             )
         run_ref = optimization_run_reference(launch.run)
         self._store.put(OPTIM_RUN_SCHEMA, run_ref.record.record_content())
+        if launch.control is not None:
+            self._store.put(
+                launch.run.optimizer_config.record_ref.schema_name,
+                launch.control.model_dump(mode="json"),
+            )
         payload_ref, _ = self._store.put(
             RUN_LAUNCH_SCHEMA,
             {

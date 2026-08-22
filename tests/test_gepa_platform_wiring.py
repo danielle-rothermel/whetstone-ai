@@ -5,17 +5,26 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from whetstone.coordination.eval_service import EvalDispatchMode
 from whetstone.coordination.step_request_builder import StepRequestBuilder
-from whetstone.core.identity import ImmutableJsonObject
+from whetstone.core.identity import ImmutableJsonObject, TypedRef
 from whetstone.eval.metadata import PURPOSE_METADATA_KEY
 from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.contracts import (
+    IntentOutcome,
     OptimEvalRequest,
     OptimStepResultRef,
     StepStatus,
 )
+from whetstone.optim.gepa.authorities import (
+    CanonicalGepaCandidateAssembler,
+    GepaCandidateFieldBinding,
+)
+from whetstone.optim.gepa.contracts import GepaCandidateComponent
 from whetstone.optim.gepa.harness_adapter import (
     GEPA_ADAPTER_KEY,
     GEPA_SKIPPED_MUTATIONS_KEY,
@@ -25,11 +34,13 @@ from whetstone.platform.contracts import OptimWorkInput, persist_work_input
 from whetstone.platform.step_executor import (
     _deferred_row_count,
     _expand_eval_rows,
+    _load_work_state,
     _task_ids_for_intent,
     execute_optim_step_sync,
     execute_run_completion_sync,
 )
 from whetstone.testing.runtime import (
+    TOY_GEPA_COMPONENT,
     build_toy_copro_control,
     build_toy_gepa_adapter,
     build_toy_gepa_control,
@@ -83,6 +94,47 @@ def _gepa_runtime(
     if bind_platform_eval_service:
         adapter.bind_evaluation_service(runtime.eval_service)
     return runtime, launch, adapter, experiment
+
+
+def _assembled_gepa_eval_candidate(experiment):
+    assembler = CanonicalGepaCandidateAssembler(
+        base_candidate=candidate_reference(experiment.initial_candidate),
+        fields=(
+            GepaCandidateFieldBinding(
+                component_name=TOY_GEPA_COMPONENT,
+                candidate_field=TOY_MUTATION_FIELD,
+            ),
+        ),
+    )
+    return assembler.assemble(
+        (
+            GepaCandidateComponent(
+                name=TOY_GEPA_COMPONENT,
+                text="Answer {prompt} with a mutated greeting.",
+            ),
+        )
+    )
+
+
+def _gepa_lineage_request(runtime, launch, experiment):
+    bound = runtime.harness.bind_run(launch.run)
+    return StepRequestBuilder(store=runtime.store).build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=launch.control,
+    )
+
+
+def _gepa_eval_intent(request, candidate, *, request_id: str):
+    return OptimEvalRequest(
+        optim_run_id=request.run_id,
+        optim_step_index=request.step_index,
+        eval_request=EvalRequest(
+            request_id=request_id,
+            candidate=candidate,
+        ),
+    )
 
 
 def test_persisted_build_next_matches_in_process_continuation_pools(
@@ -355,3 +407,338 @@ def test_gepa_platform_deferral_same_step_resume(sqlite_store) -> None:
     assert result.step_results
     for step_ref in result.step_results:
         assert step_ref.record.search_evidence
+
+
+def test_gepa_search_eval_candidate_passes_lineage_check(sqlite_store) -> None:
+    runtime, launch, _adapter, experiment = _gepa_runtime(
+        sqlite_store,
+        run_id="gepa-lineage-ok",
+        max_metric_calls=2,
+    )
+    request = _gepa_lineage_request(runtime, launch, experiment)
+    assembled = _assembled_gepa_eval_candidate(experiment)
+    intent = _gepa_eval_intent(
+        request,
+        assembled.record,
+        request_id="gepa-lineage-ok",
+    )
+    runtime.harness._require_eval_request_on_step(request, intent, {})
+
+
+def test_gepa_eval_candidate_rejects_alien_base_ref(sqlite_store) -> None:
+    runtime, launch, _adapter, experiment = _gepa_runtime(
+        sqlite_store,
+        run_id="gepa-lineage-base-ref",
+        max_metric_calls=2,
+    )
+    request = _gepa_lineage_request(runtime, launch, experiment)
+    assembled = _assembled_gepa_eval_candidate(experiment)
+    alien = assembled.record.model_copy(
+        update={
+            "base_ref": TypedRef(
+                schema_name="whetstone.alien_base",
+                content_hash="ab" * 32,
+            )
+        }
+    )
+    intent = _gepa_eval_intent(
+        request,
+        alien,
+        request_id="gepa-lineage-base-ref",
+    )
+    with pytest.raises(ValueError, match="assembled from the run"):
+        runtime.harness._require_eval_request_on_step(request, intent, {})
+
+
+def test_gepa_eval_candidate_rejects_extra_payload_key(sqlite_store) -> None:
+    runtime, launch, _adapter, experiment = _gepa_runtime(
+        sqlite_store,
+        run_id="gepa-lineage-extra-key",
+        max_metric_calls=2,
+    )
+    request = _gepa_lineage_request(runtime, launch, experiment)
+    assembled = _assembled_gepa_eval_candidate(experiment)
+    payload = dict(assembled.record.payload)
+    payload["alien"] = "extra"
+    alien = Candidate(
+        candidate_id=assembled.record.candidate_id,
+        base_ref=assembled.record.base_ref,
+        payload=payload,
+    )
+    intent = _gepa_eval_intent(
+        request,
+        alien,
+        request_id="gepa-lineage-extra-key",
+    )
+    with pytest.raises(ValueError, match="assembled from the run"):
+        runtime.harness._require_eval_request_on_step(request, intent, {})
+
+
+def _run_gepa_platform_to_first_fanin(runtime, launch):
+    from whetstone.platform.contracts import STAGE_EVAL_FANIN, STAGE_EVAL_ROW
+    from whetstone.platform.eval_fanin import (
+        build_platform_row_executor,
+        execute_eval_row_sync,
+    )
+
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+    for _ in range(8):
+        completion = execute_optim_step_sync(
+            runtime,
+            input_reference=current_ref,
+        )
+        row_successors = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_ROW
+        ]
+        fanin_successors = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_FANIN
+        ]
+        if row_successors or fanin_successors:
+            assert fanin_successors and fanin_successors[0].barrier is True
+            platform_executor = build_platform_row_executor(runtime)
+            for row_successor in row_successors:
+                execute_eval_row_sync(
+                    runtime,
+                    input_reference=row_successor.input_reference,
+                    stage_index=row_successor.stage_index,
+                    row_executor=platform_executor,
+                )
+            return runtime, row_successors, fanin_successors[0]
+        if not completion.successors:
+            raise AssertionError("GEPA PLATFORM run finished before deferral")
+        current_ref = completion.successors[0].input_reference
+    raise AssertionError("GEPA PLATFORM run did not defer")
+
+
+def test_gepa_fanin_retry_is_idempotent(sqlite_store) -> None:
+    from whetstone.platform.eval_fanin import execute_eval_fanin_sync
+
+    run_id = f"gepa-fanin-retry-{uuid4().hex[:8]}"
+    runtime, launch, adapter, _experiment = _gepa_runtime(
+        sqlite_store,
+        run_id=run_id,
+        max_metric_calls=2,
+    )
+    runtime, _rows, fanin_successor = _run_gepa_platform_to_first_fanin(
+        runtime, launch
+    )
+    first = execute_eval_fanin_sync(
+        runtime,
+        input_reference=fanin_successor.input_reference,
+        stage_index=fanin_successor.stage_index,
+    )
+    invocations = adapter.invocations
+    second = execute_eval_fanin_sync(
+        runtime,
+        input_reference=fanin_successor.input_reference,
+        stage_index=fanin_successor.stage_index,
+    )
+    assert second.successors[0].input_reference == first.successors[0].input_reference
+    assert second.successors[0].stage_index == first.successors[0].stage_index
+    assert adapter.invocations == invocations
+
+
+def test_gepa_failed_deferred_row_resumes_without_redeferral(sqlite_store) -> None:
+    from whetstone.coordination.eval_service import EvalEngineService
+    from whetstone.core.roles import EvalRole
+    from whetstone.eval.row_slice import RowEvalCompletion
+    from whetstone.eval.schema import EvalFailureEvidence
+    from whetstone.eval.schema_names import EVAL_FAILURE_SCHEMA
+    from whetstone.optim.contracts import IntentResolution
+    from whetstone.platform.contracts import STAGE_EVAL_FANIN, STAGE_EVAL_ROW
+    from whetstone.platform.eval_fanin import (
+        execute_eval_fanin_sync,
+        execute_eval_row_sync,
+    )
+
+    run_id = f"gepa-failed-row-{uuid4().hex[:8]}"
+    runtime, launch, adapter, _experiment = _gepa_runtime(
+        sqlite_store,
+        run_id=run_id,
+        max_metric_calls=1,
+    )
+    control = launch.control
+    assert control is not None
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+    step_completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+    )
+    row_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_ROW
+    ]
+    fanin_successors = [
+        successor
+        for successor in step_completion.successors
+        if successor.stage_key.value == STAGE_EVAL_FANIN
+    ]
+    assert row_successors and fanin_successors
+    service = runtime.eval_service
+    assert isinstance(service, EvalEngineService)
+
+    def failing_executor(*, intent, **kwargs) -> RowEvalCompletion:
+        _ = kwargs
+        failure = EvalFailureEvidence(
+            candidate=candidate_reference(intent.eval_request.candidate),
+            eval_config_ref=service._engine.eval_config_ref,  # noqa: SLF001
+            eval_role=EvalRole.INTERNAL,
+            provider_execution_policy_ref=service._engine.provider_execution_policy_ref,  # noqa: SLF001
+            metadata=intent.eval_request.metadata,
+            exception_type="RuntimeError",
+            message="row failed",
+        )
+        failure_ref_obj, _ = runtime.store.put(
+            EVAL_FAILURE_SCHEMA, failure.record_content()
+        )
+        return RowEvalCompletion(
+            evidence_ref=TypedRef(
+                schema_name=failure_ref_obj.schema,
+                content_hash=failure_ref_obj.content_hash,
+            )
+        )
+
+    for row_successor in row_successors:
+        execute_eval_row_sync(
+            runtime,
+            input_reference=row_successor.input_reference,
+            stage_index=row_successor.stage_index,
+            row_executor=failing_executor,
+        )
+    fanin_completion = execute_eval_fanin_sync(
+        runtime,
+        input_reference=fanin_successors[0].input_reference,
+        stage_index=fanin_successors[0].stage_index,
+    )
+    intent = runtime.harness.last_deferred_platform_intents[0]
+    bound = runtime.store.resolve(service._key(intent))
+    assert bound is not None
+    resolution = IntentResolution.model_validate(runtime.store.get(bound))
+    assert resolution.outcome is IntentOutcome.FAILED
+
+    resume = execute_optim_step_sync(
+        runtime,
+        input_reference=fanin_completion.successors[0].input_reference,
+        stage_index=fanin_completion.successors[0].stage_index,
+    )
+    assert not any(
+        successor.stage_key.value in {STAGE_EVAL_ROW, STAGE_EVAL_FANIN}
+        for successor in resume.successors
+    )
+    authority = adapter._adapter_factory._factory._evaluation_authority
+    assert authority.resolved_intents
+    assert all(
+        item.outcome is IntentOutcome.FAILED
+        for item in authority.resolved_intents
+    )
+
+
+def test_gepa_stale_fanin_does_not_regress_later_head(sqlite_store) -> None:
+    from whetstone.platform.contracts import (
+        STAGE_EVAL_FANIN,
+        STAGE_EVAL_ROW,
+        load_deferral_join_input,
+    )
+    from whetstone.platform.eval_fanin import (
+        build_platform_row_executor,
+        execute_eval_fanin_sync,
+        execute_eval_row_sync,
+    )
+    from whetstone.platform.work_state_head import resolve_work_state_head
+
+    run_id = f"gepa-stale-fanin-{uuid4().hex[:8]}"
+    runtime, launch, _adapter, _experiment = _gepa_runtime(
+        sqlite_store,
+        run_id=run_id,
+        max_metric_calls=2,
+    )
+    runtime, _rows, fanin_successor = _run_gepa_platform_to_first_fanin(
+        runtime, launch
+    )
+    join_input = load_deferral_join_input(
+        runtime.store, fanin_successor.input_reference
+    )
+    deferred_state = _load_work_state(runtime, join_input.work_state_ref)
+    first = execute_eval_fanin_sync(
+        runtime,
+        input_reference=fanin_successor.input_reference,
+        stage_index=fanin_successor.stage_index,
+    )
+    current_ref = first.successors[0].input_reference
+    for _ in range(8):
+        completion = execute_optim_step_sync(
+            runtime,
+            input_reference=current_ref,
+        )
+        row_successors = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_ROW
+        ]
+        fanin_successors = [
+            successor
+            for successor in completion.successors
+            if successor.stage_key.value == STAGE_EVAL_FANIN
+        ]
+        if row_successors or fanin_successors:
+            platform_executor = build_platform_row_executor(runtime)
+            for row_successor in row_successors:
+                execute_eval_row_sync(
+                    runtime,
+                    input_reference=row_successor.input_reference,
+                    stage_index=row_successor.stage_index,
+                    row_executor=platform_executor,
+                )
+            later = execute_eval_fanin_sync(
+                runtime,
+                input_reference=fanin_successors[0].input_reference,
+                stage_index=fanin_successors[0].stage_index,
+            )
+            current_ref = later.successors[0].input_reference
+            continue
+        if completion.successors:
+            current_ref = completion.successors[0].input_reference
+            continue
+        current_ref = completion.output_reference
+        break
+    head_ref = resolve_work_state_head(
+        runtime.store,
+        run_id=run_id,
+        work_key="",
+    )
+    assert head_ref is not None
+    head = _load_work_state(runtime, head_ref)
+    assert head.step_index > deferred_state.step_index or (
+        len(head.step_result_refs) > len(deferred_state.step_result_refs)
+    )
+    replayed = execute_eval_fanin_sync(
+        runtime,
+        input_reference=fanin_successor.input_reference,
+        stage_index=fanin_successor.stage_index,
+    )
+    replayed_state = _load_work_state(
+        runtime, replayed.successors[0].input_reference
+    )
+    assert replayed_state.step_index >= head.step_index
+    assert len(replayed_state.step_result_refs) >= len(head.step_result_refs)

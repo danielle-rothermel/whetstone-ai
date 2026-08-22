@@ -138,7 +138,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         return EvalExecutionContext()
 
     @classmethod
-    def _platform_intent_key(cls, optim_eval_request: OptimEvalRequest) -> str:
+    def platform_intent_key(cls, optim_eval_request: OptimEvalRequest) -> str:
         return (
             f"{_PLATFORM_INTENT_NAMESPACE}.pending:"
             f"{cls._intent_ref(optim_eval_request).content_hash}"
@@ -158,7 +158,7 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
             "whetstone.optim_eval_request",
             optim_eval_request.model_dump(mode="json"),
         )
-        key = self._platform_intent_key(optim_eval_request)
+        key = self.platform_intent_key(optim_eval_request)
         self._store.bind(key, reference)
         return TypedRef(
             schema_name=reference.schema,
@@ -183,13 +183,13 @@ class EvalEngineService(EvalClaims, EvalEvidenceValidation):
         self,
         optim_eval_request: OptimEvalRequest,
     ) -> OptimEvalRequest | None:
-        bound = self._store.resolve(self._platform_intent_key(optim_eval_request))
+        bound = self._store.resolve(self.platform_intent_key(optim_eval_request))
         if bound is None:
             return None
         return OptimEvalRequest.model_validate(self._store.get(bound))
 
     def _clear_platform_intent(self, optim_eval_request: OptimEvalRequest) -> None:
-        self._store.evict_bindings([self._platform_intent_key(optim_eval_request)])
+        self._store.evict_bindings([self.platform_intent_key(optim_eval_request)])
 
     def resolve_platform_intent_from_row_outcomes(
         self,

@@ -587,7 +587,7 @@ class CanonicalGepaEvalAuthority:
             intent = deferred.intent or optim_eval_request
             if deferred.intent is None:
                 deferred = EvalPlatformDeferred(str(deferred), intent=intent)
-            bound = self._store.resolve(service._platform_intent_key(intent))
+            bound = self._store.resolve(service.platform_intent_key(intent))
             if bound is not None:
                 self._store.bind(alias_key, bound)
             raise deferred
