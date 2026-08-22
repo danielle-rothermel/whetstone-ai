@@ -28,6 +28,19 @@ class BootstrapCI:
     ``[1 / resamples, 1]``. The lower clamp matters: an all-positive bootstrap
     would otherwise report an exact zero, which a Holm correction propagates
     as an exact zero rather than as "smaller than this bootstrap can resolve".
+
+    ``degenerate`` marks an interval built from fewer than two paired
+    observations. With one observation every resample is that same point, so
+    the "interval" is the point estimate and the resample vector carries no
+    information about sampling uncertainty at all. A degenerate interval
+    reports ``p_value == 1.0``: not because the effect is known to be absent,
+    but because a single observation cannot support a significance claim. The
+    unclamped alternative is worse -- one task with a nonzero delta lands the
+    ``1 / resamples`` floor, the most significant value the estimator can
+    emit, and that floor then survives a Holm correction as a false positive.
+    Only ``n < 2`` is degenerate: at ``n >= 2`` the resampler genuinely varies
+    its draws, so a vector with a single nonzero delta still produces a
+    real -- and appropriately unimpressive -- p-value.
     """
 
     point: float
@@ -36,6 +49,7 @@ class BootstrapCI:
     level: float
     resamples: int
     p_value: float
+    degenerate: bool = False
 
     @property
     def delta(self) -> float:
@@ -59,6 +73,27 @@ def _two_sided_p(values: list[float], *, resamples: int) -> float:
     at_or_above = sum(1 for value in values if value >= 0.0)
     raw = 2.0 * min(at_or_below, at_or_above) / n
     return min(1.0, max(1.0 / resamples, raw))
+
+
+def _degenerate_ci(
+    point: float, *, level: float, resamples: int
+) -> BootstrapCI:
+    """The interval for a sample too small to resample: no significance.
+
+    A one-observation bootstrap resamples that observation and nothing else,
+    so the interval collapses onto the point estimate and the resample vector
+    is constant. There is no sampling distribution to read a p-value off, so
+    the p-value is 1.0 and the interval is flagged ``degenerate``.
+    """
+    return BootstrapCI(
+        point,
+        point,
+        point,
+        level,
+        resamples,
+        1.0,
+        degenerate=True,
+    )
 
 
 def holm_adjust(pvalues: tuple[float, ...]) -> tuple[float, ...]:
@@ -136,14 +171,7 @@ def bootstrap_mean_ci(
     n = len(per_task)
     point = mean(per_task)
     if n == 1:
-        return BootstrapCI(
-            point,
-            point,
-            point,
-            level,
-            resamples,
-            _two_sided_p([point], resamples=resamples),
-        )
+        return _degenerate_ci(point, level=level, resamples=resamples)
     draws = resample_indices(n, resamples=resamples, seed=seed)
     means = [sum(per_task[i] for i in idx) / n for idx in draws]
     low, high = _percentile_bounds(means, level, resamples)
@@ -168,9 +196,8 @@ def bootstrap_paired_delta_ci(
     """Percentile bootstrap CI and p-value for the paired ``b - a`` delta.
 
     With a single task there is nothing to resample: the interval collapses to
-    the point estimate and the p-value is the ``1 / resamples`` floor, so a
-    one-task delta carries no evidence about its own uncertainty however the
-    interval reads.
+    the point estimate and the result is marked ``degenerate`` with
+    ``p_value == 1.0``, so a one-task delta never claims significance.
     """
     _validate_interval(level=level, resamples=resamples)
     if len(a_per_task) != len(b_per_task):
@@ -182,14 +209,7 @@ def bootstrap_paired_delta_ci(
     n = len(a_per_task)
     point = mean(b_per_task) - mean(a_per_task)
     if n == 1:
-        return BootstrapCI(
-            point,
-            point,
-            point,
-            level,
-            resamples,
-            _two_sided_p([point], resamples=resamples),
-        )
+        return _degenerate_ci(point, level=level, resamples=resamples)
     draws = resample_indices(n, resamples=resamples, seed=seed)
     deltas: list[float] = []
     for idx in draws:

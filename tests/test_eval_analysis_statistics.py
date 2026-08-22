@@ -286,12 +286,74 @@ def test_the_p_value_is_computed_from_the_interval_s_own_resamples() -> None:
     assert ci.p_value <= 0.05
 
 
-def test_a_single_task_bootstrap_still_reports_a_p_value() -> None:
+def test_a_single_task_bootstrap_claims_no_significance() -> None:
+    # One observation resamples to itself, so there is no sampling
+    # distribution to read a p-value off. Reporting the 1/resamples floor
+    # here would make the least informative possible sample look maximally
+    # significant, so a degenerate interval reports p = 1 instead.
     positive = bootstrap_paired_delta_ci((0.1,), (0.6,), resamples=50, seed=0)
     flat = bootstrap_paired_delta_ci((0.4,), (0.4,), resamples=50, seed=0)
 
-    assert positive.p_value == pytest.approx(1 / 50)
+    assert positive.degenerate is True
+    assert positive.p_value == 1.0
+    assert positive.point == pytest.approx(0.5)
+    assert flat.degenerate is True
     assert flat.p_value == 1.0
+
+
+def test_a_single_task_mean_ci_is_degenerate_too() -> None:
+    ci = bootstrap_mean_ci((0.7,), resamples=50, seed=0)
+
+    assert ci.degenerate is True
+    assert ci.p_value == 1.0
+
+
+def test_a_degenerate_p_value_cannot_be_rescued_by_holm() -> None:
+    # The bug this pins: a lone task with a large delta used to emit the
+    # 1/resamples floor, which survived Holm as a family-wise false positive.
+    lone = bootstrap_paired_delta_ci((0.1,), (0.6,), resamples=10_000, seed=0)
+
+    adjusted = holm_adjust((lone.p_value, 0.02, 0.4))
+
+    assert adjusted[0] == 1.0
+
+
+def test_two_tasks_with_one_zero_delta_still_resample_normally() -> None:
+    # n >= 2 is not degenerate: the resampler genuinely varies its draws, so
+    # a single nonzero delta among two tasks yields a real, unimpressive
+    # p-value rather than the degenerate escape hatch.
+    ci = bootstrap_paired_delta_ci(
+        (0.4, 0.1), (0.4, 0.6), resamples=1000, seed=0
+    )
+
+    assert ci.degenerate is False
+    assert ci.p_value == pytest.approx(0.486)
+    assert not ci.excludes_zero()
+
+
+def test_one_nonzero_delta_among_many_tasks_is_not_degenerate() -> None:
+    ci = bootstrap_paired_delta_ci(
+        (0.4,) * 10, (0.4,) * 9 + (0.9,), resamples=2000, seed=0
+    )
+
+    assert ci.degenerate is False
+    assert ci.p_value == pytest.approx(0.669)
+    assert not ci.excludes_zero()
+
+
+def test_non_degenerate_significance_still_agrees_with_the_interval() -> None:
+    # p < alpha iff the interval excludes zero, for every informative sample.
+    samples = (
+        ((0.1, 0.2, 0.3, 0.4), (0.6, 0.7, 0.8, 0.9)),
+        ((0.5, 0.5, 0.5, 0.5), (0.5, 0.5, 0.5, 0.5)),
+        ((0.1, 0.9, 0.2, 0.8), (0.2, 0.7, 0.4, 0.6)),
+        ((0.4,) * 10, (0.4,) * 9 + (0.9,)),
+    )
+
+    for a, b in samples:
+        ci = bootstrap_paired_delta_ci(a, b, resamples=2000, seed=7)
+        assert ci.degenerate is False
+        assert ci.excludes_zero() == (ci.p_value < 0.05)
 
 
 def test_the_mean_ci_also_carries_a_two_sided_p_value() -> None:
