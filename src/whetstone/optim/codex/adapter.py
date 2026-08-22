@@ -43,6 +43,16 @@ through a recorded, admitted Tool Call. The selected call must also
 carry a real score -- a refusal or a terminally failed evaluation is
 rejected, because the agent would be claiming a candidate it never
 successfully measured.
+
+Every reconciled call is checked against the Step Request, not just the
+selected one, because every one of them is paid Tool Evidence on the
+Step Result. Its recorded ``template`` and ``base_ref`` must be usable,
+and its ``base_ref`` must be one of this Step Request's candidates by
+exact ref equality: nothing resolves a ``base_ref`` during evaluation,
+so a ref from another run or a forged one would otherwise be scored and
+carried as evidence for a candidate outside the run's mutation
+ancestry. Both checks run *before* the call is issued, so an unusable
+one never reaches the ledger.
 """
 
 from __future__ import annotations
@@ -435,7 +445,10 @@ class CodexAdapter:
 
         try:
             admitted = self._admitted_calls(request, artifact, handle)
-        except _UnevaluatedSelectionError as exc:
+        except (
+            _UnevaluatedSelectionError,
+            _RecordedCallContractError,
+        ) as exc:
             # _admitted_calls re-issues as it goes, so calls may already
             # be on the ledger when it rejects a later one.
             return self._terminalize(
@@ -748,9 +761,12 @@ class CodexAdapter:
         artifact: CodexOutputArtifact,
         handle: RuntimeToolHandle,
     ) -> tuple[_AdmittedCall, ...]:
-        del request
         config = handle.config
         namespace = str(config.store_namespace_key)
+        request_bases = {
+            candidate_reference(candidate).record_ref
+            for candidate in request.candidates
+        }
         seen: set[str] = set()
         admitted: list[_AdmittedCall] = []
 
@@ -801,31 +817,59 @@ class CodexAdapter:
                         details={"call_id": call_id},
                     )
                 )
-            # Re-issue through the guarded handle so the Step's Issued Tool
-            # Call ledger records every call Codex made out of process. The
-            # ledger reads the durable terminal instead of executing, so
-            # this is a durable read, not a second paid evaluation.
-            result = handle(call)
+            # Validate the recorded args *before* issuing. Issuing first
+            # would put the call on the Step's Issued Tool Call ledger
+            # and then reject it, leaving a ledgered call that the
+            # reconciled evidence does not know about -- the same
+            # ledger-versus-evidence split ``_issue_completed`` avoids.
             recorded_args = call.args.to_json()
             template = recorded_args.get("template")
             raw_base = recorded_args.get("base_ref")
             if not isinstance(template, str) or not isinstance(raw_base, dict):
-                raise reject(
+                raise _RecordedCallContractError(
                     TerminalFailure(
-                        code=CODEX_SELECTION_UNEVALUATED_CODE,
+                        code=CODEX_RECORDED_CALL_CONTRACT_CODE,
                         message=(
                             "a recorded Codex Tool Call does not carry an "
                             "exact base_ref and template"
                         ),
                         details={"call_id": call_id},
-                    )
+                    ),
+                    issued=tuple(admitted),
                 )
+            base_ref = TypedRef.model_validate(raw_base)
+            # Every admitted call is paid Tool Evidence on this Step's
+            # Result, so every one of them must sit inside the run's
+            # mutation ancestry -- not only the call the agent selected.
+            # A syntactically valid ref from another run, or a forged
+            # one, is not a candidate this Step Request offered, and
+            # scoring it would put a candidate outside the ancestry on
+            # the Step's evidence.
+            if base_ref not in request_bases:
+                raise _RecordedCallContractError(
+                    TerminalFailure(
+                        code=CODEX_RECORDED_CALL_CONTRACT_CODE,
+                        message=(
+                            "a recorded Codex Tool Call binds a base that is "
+                            "not a candidate on this Step Request"
+                        ),
+                        details={
+                            "call_id": call_id,
+                            "base_ref": raw_base,
+                        },
+                    ),
+                    issued=tuple(admitted),
+                )
+            # Re-issue through the guarded handle so the Step's Issued Tool
+            # Call ledger records every call Codex made out of process. The
+            # ledger reads the durable terminal instead of executing, so
+            # this is a durable read, not a second paid evaluation.
             admitted.append(
                 _AdmittedCall(
                     call_id=call_id,
-                    result=result,
+                    result=handle(call),
                     template=template,
-                    base_ref=TypedRef.model_validate(raw_base),
+                    base_ref=base_ref,
                 )
             )
         return tuple(admitted)
@@ -945,10 +989,23 @@ class _UnevaluatedSelectionError(Exception):
 
 
 class _RecordedCallContractError(Exception):
-    """A durable admitted call cannot be rebuilt into Tool Evidence."""
+    """A durable admitted call cannot be rebuilt into Tool Evidence.
 
-    def __init__(self, failure: TerminalFailure) -> None:
+    Raised from both reconciliation paths. ``_issue_completed``
+    validates before issuing anything and carries no ``issued``;
+    ``_admitted_calls`` walks the reported ids in order, so earlier
+    ones are already on the ledger when a later one is rejected and
+    must be carried here rather than re-issued or dropped.
+    """
+
+    def __init__(
+        self,
+        failure: TerminalFailure,
+        *,
+        issued: tuple[_AdmittedCall, ...] = (),
+    ) -> None:
         self.failure = failure
+        self.issued = issued
         super().__init__(failure.message)
 
 

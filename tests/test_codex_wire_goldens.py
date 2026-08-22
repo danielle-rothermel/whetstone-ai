@@ -47,6 +47,7 @@ from whetstone.optim.tools.evaluator import (
     TOOL_EVAL_FAILURE_EVIDENCE_CODE,
     TOOL_EVAL_UNEXPECTED_RESULT_CODE,
 )
+from whetstone.optim.tools.execution import TOOL_EVALUATION_REJECTED_CODE
 
 
 def test_the_mcp_environment_keys_are_pinned() -> None:
@@ -110,6 +111,7 @@ def test_the_persisted_schema_and_code_literals_are_pinned() -> None:
     )
     assert TOOL_EVAL_FAILURE_EVIDENCE_CODE == "tool_eval_failure_evidence"
     assert TOOL_EVAL_UNEXPECTED_RESULT_CODE == "tool_eval_unexpected_result"
+    assert TOOL_EVALUATION_REJECTED_CODE == "tool_evaluation_rejected"
 
 
 def test_the_budget_label_the_ledger_reads_is_pinned() -> None:

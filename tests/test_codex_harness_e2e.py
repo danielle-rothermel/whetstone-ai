@@ -54,7 +54,10 @@ from whetstone.optim.contracts import (
 )
 from whetstone.optim.harness import OptimHarness
 from whetstone.optim.tools.evaluator import EngineToolEvaluator
-from whetstone.optim.tools.execution import EvaluatingToolExecutor
+from whetstone.optim.tools.execution import (
+    TOOL_EVALUATION_REJECTED_CODE,
+    EvaluatingToolExecutor,
+)
 from whetstone.optim.tools.facade import (
     ToolAdmissionAuthority,
     ToolCallStore,
@@ -574,3 +577,66 @@ def _admitted_evaluation_row_count(world, result) -> int:
             )
             total += len(outputs["outputs"])
     return total
+
+
+def test_a_rejected_evaluation_completes_instead_of_stranding_its_admission(
+    codex_world,
+) -> None:
+    """An engine rejection after admission terminalizes that call.
+
+    ``EngineToolEvaluator.validate`` runs before admission and can only
+    check what the call carries -- the Eval Config binding and the model
+    route. A render-contract violation is only discovered inside
+    ``evaluate``, by which point the entry is ACCEPTED, its capacity is
+    debited, and its effect lease is held.
+
+    The executor caught only ``ToolEvaluationError`` there, so the
+    ``ToolValidationError`` the engine raises propagated out as an MCP
+    error and left the entry nonterminal. Reconciliation then read that
+    admission as an interrupted evaluation and failed the whole Step
+    under ``codex_evaluation_interrupted`` -- an agent that simply
+    submitted a bad template could not recover by submitting a good one,
+    and the lease stayed held until it expired.
+
+    The rejection now terminalizes the call the same way an evaluation
+    failure does, so the ledger stays total and the Step can still
+    complete on the agent's next, valid call.
+    """
+    world = codex_world()
+    # ``required_fields=("prompt",)``: a template that never references
+    # the prompt cannot be rendered under the run's render contract.
+    contract_violating = "Answer with a single friendly word."
+    adapter = world.adapter(
+        [
+            world.tool_step(contract_violating, "c1"),
+            world.tool_step(_TEMPLATE_B, "c2"),
+            {"final": {"selected_call_id": "c2"}},
+        ]
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.terminal_failure is None, result.terminal_failure
+    assert result.status is StepStatus.COMPLETE
+    # Both admitted calls are on the ledger: the rejected one carries a
+    # terminal failure, the valid one a score.
+    recorded = {
+        str(entry.store_entry.call_id): entry for entry in result.tool_evidence
+    }
+    assert set(recorded) == {"c1", "c2"}
+    rejected = recorded["c1"].result.record
+    assert rejected.terminal_failure is not None
+    assert rejected.terminal_failure.code == TOOL_EVALUATION_REJECTED_CODE
+    assert rejected.reward is None
+    scored = recorded["c2"].result.record
+    assert scored.terminal_failure is None
+    assert scored.reward is not None
+    # The rejected call was still admitted, so its capacity stays debited.
+    assert result.budget_delta.consumed["tool_calls"] == 2
+    accepted = world.store.get(
+        result.accepted_candidates[0].record_ref.reference
+    )
+    assert accepted["payload"][TOY_MUTATION_FIELD] == _TEMPLATE_B

@@ -269,6 +269,32 @@ class _SelectionWorld:
             )
         )
 
+    def issue_foreign_base(self, call_id: str, template: str):
+        """Admit and complete a call bound to a base no candidate names.
+
+        The ref is well-formed and its schema is the candidate schema,
+        so nothing about its *shape* is wrong -- it simply names a
+        record this Step Request never offered, which is what another
+        run's ref or a forged one looks like.
+        """
+        args = toy_tool_args(
+            candidate=self.candidate,
+            engine=self.engine,
+            template=template,
+        )
+        args["base_ref"] = {
+            **args["base_ref"],
+            "content_hash": "f" * 64,
+        }
+        return self._agent_handle(
+            ToolCall(
+                call_id=call_id,
+                tool_config=tool_config_reference(self.config),
+                capacity_binding=self.binding,
+                args=ImmutableJsonObject(args),
+            )
+        )
+
     def run_step(self, *, calls, artifact_fields):
         return self.run_step_with_runner(
             _ScriptedRunner(
@@ -1496,3 +1522,127 @@ def test_a_foreign_artifact_run_id_terminalizes_and_frees_the_lease(
         )
     )
     assert retried.status is StepStatus.FAILED
+
+
+class _ReportedMalformedArgsRunner:
+    """Reports a well-formed call and then a malformed one.
+
+    ``_admitted_calls`` walks the reported ids in order, so the first is
+    already on the Issued Tool Call ledger when the second is rejected.
+    """
+
+    def __init__(self, world, *, good_call_id: str, bad_call_id: str) -> None:
+        self._world = world
+        self._good = good_call_id
+        self._bad = bad_call_id
+
+    def run(self, request, handle, *, lease_token):
+        del handle
+        self._world.issue(self._good, _TEMPLATE_A)
+        self._world.issue_malformed(self._bad)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=(self._good, self._bad),
+                selected_call_id=self._good,
+                lease_token_hash=codex_lease_token_hash(lease_token),
+            )
+        )
+
+
+def test_a_reported_malformed_call_is_validated_before_it_is_issued(
+    tmp_path,
+) -> None:
+    """A reported call's recorded args are checked before the ledger sees it.
+
+    ``_admitted_calls`` called the guarded handle first and only then
+    read the recorded ``template``/``base_ref``, so an unusable entry
+    reached the Issued Tool Call ledger and was then left out of the
+    ``issued`` tuple carried to the terminal path. That is the
+    ledger-versus-evidence split the reconciliation rule exists to
+    prevent, and it attributed the failure to the agent's *reporting*
+    rather than to the recorded call's contract.
+
+    Validation now precedes issuance on this path too, and an unusable
+    recorded call fails under ``codex_recorded_call_contract``.
+    """
+    path = str(tmp_path / "codex-reported-malformed.sqlite")
+    with open_sqlite(path) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset())
+        world.use_permissive_evaluator()
+
+        result = world.run_step_with_runner(
+            _ReportedMalformedArgsRunner(
+                world, good_call_id="c1", bad_call_id="c2"
+            )
+        )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_RECORDED_CALL_CONTRACT_CODE
+    assert result.terminal_failure.details["call_id"] == "c2"
+    # The malformed call never reaches the ledger. The good call issued
+    # ahead of it does, and it is carried to the terminal path rather
+    # than re-issued or dropped, so the evidence is exactly the calls
+    # the ledger holds -- no ledgered call without matching evidence.
+    assert len(result.tool_evidence) == 1
+    assert (
+        str(result.tool_evidence[0].result.record.call.record.call_id) == "c1"
+    )
+
+
+class _ForeignBaseRunner:
+    """Evaluates a call bound to a base outside this Step Request.
+
+    The agent then selects a *legitimate* call, so nothing about the
+    selection itself is wrong -- the foreign call is only paid Tool
+    Evidence, which is exactly the case the selected-call check misses.
+    """
+
+    def __init__(self, world, *, foreign_call_id: str, selected_call_id: str):
+        self._world = world
+        self._foreign = foreign_call_id
+        self._selected = selected_call_id
+
+    def run(self, request, handle, *, lease_token):
+        del handle
+        self._world.issue_foreign_base(self._foreign, _TEMPLATE_B)
+        self._world.issue(self._selected, _TEMPLATE_A)
+        return CodexRunResult(
+            artifact=CodexOutputArtifact(
+                run_id=request.run_id,
+                evaluated_call_ids=(self._foreign, self._selected),
+                selected_call_id=self._selected,
+                lease_token_hash=codex_lease_token_hash(lease_token),
+            )
+        )
+
+
+def test_every_reported_call_must_bind_a_request_candidate_as_its_base(
+    tmp_path,
+) -> None:
+    """A base outside the Step Request is rejected, not just an unselected one.
+
+    Only ``_candidate_from_call`` resolved a base against the request,
+    and it runs on the *selected* call alone. An agent could therefore
+    evaluate a candidate built on another run's ref -- or a forged one
+    -- and then select a legitimate call, and the Step would complete
+    with paid Tool Evidence for a candidate outside the run's mutation
+    ancestry.
+
+    Every admitted call is evidence, so every admitted call's base must
+    be one of this Step Request's candidates.
+    """
+    with open_sqlite(str(tmp_path / "codex-foreign-base.sqlite")) as store:
+        world = _SelectionWorld(store, failing_call_ids=frozenset())
+
+        result = world.run_step_with_runner(
+            _ForeignBaseRunner(
+                world, foreign_call_id="c1", selected_call_id="c2"
+            )
+        )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_RECORDED_CALL_CONTRACT_CODE
+    assert result.terminal_failure.details["call_id"] == "c1"
