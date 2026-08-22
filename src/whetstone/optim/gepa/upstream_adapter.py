@@ -8,6 +8,10 @@ from typing import Any
 from gepa import EvaluationBatch
 
 from whetstone.core.identity import compute_identity_hash
+from whetstone.execution.call_support import (
+    PROVIDER_ERROR_KEY,
+    evidences_provider_response,
+)
 from whetstone.optim.gepa.contracts import (
     GepaCandidateComponent,
     GepaDataInstance,
@@ -18,10 +22,12 @@ from whetstone.optim.gepa.contracts import (
     GepaEvaluationEffectRequest,
     GepaProposalAuthorityBinding,
     GepaProposalEffectRequest,
+    GepaProposalEffectResult,
     GepaScoreMismatchEvidence,
     GepaSkippedMutation,
     GepaTrajectoryProjection,
 )
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.gepa.prompts import (
     GepaPromptServices,
     GepaReflectionRequest,
@@ -32,6 +38,16 @@ GEPA_UPSTREAM_ADAPTER_SCHEMA = "whetstone.gepa.upstream_adapter"
 GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION = 2
 #: One reflection attempt plus one bounded retry with the rejection fed back.
 GEPA_REFLECTION_MAX_ATTEMPTS = 2
+class GepaReflectionFailedError(RuntimeError):
+    """A reflection call failed for a reason retrying cannot fix.
+
+    Raised for a transport or provider failure, as opposed to a response the
+    parser rejected (which the bounded retry handles). The Step boundary
+    catches it so the reflection attempts already paid for on this Step reach
+    a Step Result instead of being lost with the exception.
+    """
+
+
 GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH = compute_identity_hash(
     schema=GEPA_UPSTREAM_ADAPTER_SCHEMA,
     schema_version=GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION,
@@ -92,6 +108,7 @@ class WhetstoneGepaAdapter:
         self._score_mismatch_warned = False
         self._score_mismatch_evidence: list[GepaScoreMismatchEvidence] = []
         self._skipped_mutations: list[GepaSkippedMutation] = []
+        self._proposer_usage: list[ProposerCallUsage] = []
 
     @property
     def runtime_hash(self) -> str:
@@ -174,6 +191,7 @@ class WhetstoneGepaAdapter:
         self._score_mismatch_warned = False
         self._score_mismatch_evidence.clear()
         self._skipped_mutations.clear()
+        self._proposer_usage.clear()
 
     def _slot(self) -> GepaEffectSlot:
         slot = GepaEffectSlot(
@@ -419,16 +437,33 @@ class WhetstoneGepaAdapter:
                 rendered_prompt=rendered,
                 authority=self._proposal_authority,
             )
-            result = self._broker.propose(request)
+            result, replayed = self._broker.propose(request)
             if result.request_hash != request.identity_hash():
                 raise ValueError(
                     "GEPA proposal result belongs to another effect request"
                 )
+            # Every attempt this Step paid for is recorded before any branch
+            # below can continue or raise, including one a bounded retry
+            # later recovered from. A replayed attempt is skipped: the
+            # durable effect cache answered it, so the Step that first drove
+            # it already carries the spend on its own Step Result. An attempt
+            # that evidences no billed call at all -- a transport failure
+            # that got nothing back -- is skipped too, rather than counted as
+            # an unpriced call for spend that never happened.
+            if not replayed:
+                call_usage = _proposal_call_usage(result)
+                if call_usage is not None:
+                    self._proposer_usage.append(call_usage)
             if result.failed:
                 # A rejected response is retryable; a transport or provider
-                # failure is not, and must still surface.
+                # failure is not, and must still surface. It surfaces as a
+                # typed failure so the Step boundary can turn it into a
+                # terminal Adapter Output that still carries the reflection
+                # spend recorded above -- a bare exception would lose it,
+                # while the durable effect cache would still mark the paid
+                # call replayed on a resume.
                 if not result.rejected_by_parser:
-                    raise RuntimeError(
+                    raise GepaReflectionFailedError(
                         result.failure_detail or "GEPA proposal effect failed"
                     )
                 prior_attempt = GepaRejectedAttempt(
@@ -472,6 +507,11 @@ class WhetstoneGepaAdapter:
         return None
 
     @property
+    def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:
+        """Usage for every reflection call this step made, in call order."""
+        return tuple(self._proposer_usage)
+
+    @property
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
         """Rejected reflection attempts recorded during this step.
 
@@ -482,10 +522,73 @@ class WhetstoneGepaAdapter:
         return tuple(self._skipped_mutations)
 
 
+def _proposal_call_usage(
+    result: GepaProposalEffectResult,
+) -> ProposerCallUsage | None:
+    """Project one reflection call's provider usage onto the cost contract.
+
+    ``None`` when this result evidences no billed call, which run cost then
+    records as nothing at all. That is a *failed* result carrying neither
+    usage, nor a price, nor a provider response: nothing came back from the
+    provider, so nothing was billed, and counting it would add an unpriced
+    call and withhold the role's ``usd`` for spend that never happened.
+
+    A failure that *does* evidence a provider response is counted like any
+    other call even without telemetry, because the provider produced the
+    response and charged for it. That covers a parser rejection, and it
+    covers a blank or malformed generation that never reached the parser:
+    the authority reports the latter as a plain failure, so the only signal
+    it was billed is the ``rejected_response`` the transport persisted on
+    the response evidence. ``evidences_provider_response`` owns that
+    question for both cost roles, which is the same rule
+    ``ProposalDraft.call_usage`` applies on the COPRO and MIPROv2 path. So
+    is every successful result -- a reflection came back, so the model ran.
+
+    ``usage`` is a dr-providers ``TokenUsage`` dump, so a directional count
+    the provider omitted stays absent rather than reading as zero, which
+    lands the call in ``rows_missing_token_breakdown`` instead of presenting
+    an incomplete token total as complete. ``cost`` stays ``None`` when no
+    price was reported, keeping the run total honest about what it does not
+    know. This is the same rule ``ProposalDraft.call_usage`` applies to the
+    COPRO and MIPROv2 proposer side.
+    """
+    usage = result.usage
+
+    def tokens(key: str) -> int | None:
+        value = usage.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None
+        return max(0, value)
+
+    prompt_tokens = tokens("prompt_tokens")
+    completion_tokens = tokens("completion_tokens")
+    if (
+        result.failed
+        and not result.rejected_by_parser
+        and not evidences_provider_response(
+            result.response_evidence.get(PROVIDER_ERROR_KEY)
+        )
+        and prompt_tokens is None
+        and completion_tokens is None
+        and result.cost is None
+    ):
+        return None
+    return ProposerCallUsage(
+        # The effect request hash identifies this reflection call, so a Step
+        # Result that reports it twice -- or two Step Results that both do --
+        # is de-duplicated by run cost rather than counted twice.
+        call_id=result.request_hash,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        usd=result.cost,
+    )
+
+
 __all__ = [
     "GEPA_REFLECTION_MAX_ATTEMPTS",
     "GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH",
     "GEPA_UPSTREAM_ADAPTER_SCHEMA",
     "GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION",
+    "GepaReflectionFailedError",
     "WhetstoneGepaAdapter",
 ]

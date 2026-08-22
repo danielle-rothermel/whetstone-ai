@@ -200,6 +200,10 @@ def _rollout_row_output_to_json(
         "failure_code": output.failure_code,
         "finish_reason": output.finish_reason,
         "provider_error": output.provider_error,
+        "prompt_tokens": output.prompt_tokens,
+        "completion_tokens": output.completion_tokens,
+        "provider_cost": output.provider_cost,
+        "cache_hit": output.cache_hit,
         "submission_result": output.submission_result,
         "request_identities": list(request_identities),
     }

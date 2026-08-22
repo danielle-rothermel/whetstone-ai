@@ -47,6 +47,7 @@ from whetstone.optim.tools.admission import (
     ToolCallState,
     ToolCallStoreEntry,
 )
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.tools.contracts import (
     ToolCapacityScope,
     ToolConfigRef,
@@ -110,7 +111,7 @@ OPTIM_RUN_SCHEMA_VERSION = 3
 STEP_REQUEST_SCHEMA = "whetstone.optim_step_request"
 STEP_REQUEST_SCHEMA_VERSION = 3
 STEP_RESULT_SCHEMA = "whetstone.optim_step_result"
-STEP_RESULT_SCHEMA_VERSION = 3
+STEP_RESULT_SCHEMA_VERSION = 4
 OPTIM_RESULT_SCHEMA = "whetstone.optim_result"
 OPTIM_RESULT_SCHEMA_VERSION = 3
 
@@ -914,6 +915,10 @@ class OptimStepResult(BaseModel):
     #: the Step never proposed. Carries the same eval/reward evidence refs.
     search_evidence: tuple[SearchEvidence, ...] = ()
     tool_evidence: tuple[ToolEvidence, ...] = ()
+    #: Usage for each proposer-model call this Step made, in call order.
+    #: Recorded here because a proposer call has no evaluation row to carry
+    #: it, which keeps run spend re-derivable from persisted Step Results.
+    proposer_usage: tuple[ProposerCallUsage, ...] = ()
     state_ref: TypedRef | None = None
     history_ref: TypedRef | None = None
     budget_delta: BudgetDelta = Field(default_factory=BudgetDelta)
@@ -1282,6 +1287,11 @@ class OptimResult(BaseModel):
     run: OptimRunRef
     proposals: tuple[OptimProposal, ...]
     step_results: tuple[OptimStepResultRef, ...]
+    #: Run spend as a serialized ``RunCostReport``: per-role call counts and
+    #: token totals, plus a ``usd`` total only when every contributing call
+    #: carried a provider-reported price. Derived from persisted evidence by
+    #: ``whetstone.optim.cost_aggregation.aggregate_run_cost``, which
+    #: ``terminalize`` applies on both the in-process and platform paths.
     cost: ImmutableJsonObject = Field(
         default_factory=lambda: ImmutableJsonObject({})
     )

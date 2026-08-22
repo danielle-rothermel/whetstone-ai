@@ -6,11 +6,13 @@ from whetstone.core.identity import ImmutableJsonObject, canonical_json
 from whetstone.core.leasing import ReplayPolicy
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.contracts import (
     OptimStepRequest,
     SearchEvidence,
     StepMode,
     StepStatus,
+    TerminalFailure,
 )
 from whetstone.optim.gepa.adapter import project_gepa_terminal
 from whetstone.optim.gepa.authorities import (
@@ -35,8 +37,12 @@ from whetstone.optim.gepa.step_engine import (
     load_gepa_checkpoint,
     run_one_gepa_iteration,
 )
+from whetstone.optim.gepa.upstream_adapter import GepaReflectionFailedError
 
 GEPA_ADAPTER_KEY = "gepa"
+#: Terminal-failure code for a reflection call that failed for a reason the
+#: bounded retry cannot fix (a transport or provider failure).
+GEPA_REFLECTION_FAILED_CODE = "gepa_reflection_failed"
 GEPA_TERMINAL_ARTIFACT_KEY = "terminal_artifact_ref"
 #: State-delta key holding the reflection responses this Step's search
 #: rejected. Present on every Step, terminal or not, so a skip is durable on
@@ -157,6 +163,10 @@ class GepaHarnessAdapterFactory:
             )
         )
 
+    def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:
+        """Usage for every reflection call this Step's search made."""
+        return tuple(self._factory.proposer_usage())
+
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:
         """Reflection responses this Step's search rejected, in order."""
         return tuple(self._factory.skipped_mutations())
@@ -261,15 +271,35 @@ class GepaHarnessAdapter:
                 checkpoint=checkpoint,
             )
         except EvalPlatformDeferred as deferred:
+            # The Step continues, but the reflections and evaluations it
+            # already drove this attempt are paid for. Run cost reaches
+            # proposer and task-model rows only through a Step Result's usage
+            # and evidence references, and on resume ``begin_step`` clears the
+            # adapters while the durable effect cache marks those calls
+            # replayed -- so anything not carried here is never recorded at
+            # all. Deferral therefore reports spend on exactly the terms the
+            # reflection-failure and success paths do.
             intent = deferred.intent
             return AdapterOutput(
                 proposed_status=StepStatus.CONTINUE,
                 optim_eval_requests=() if intent is None else (intent,),
+                search_evidence=self._adapter_factory.search_evidence(
+                    run_id=str(request.run_id),
+                    step_index=int(request.step_index),
+                ),
+                proposer_usage=self._adapter_factory.proposer_usage(),
                 state_delta=_state_delta(
                     checkpoint=load_gepa_checkpoint(request),
                     skipped=prefix_skipped,
                 ),
             )
+        except GepaReflectionFailedError as failure:
+            # The reflection calls this Step already paid for are recorded on
+            # the factory. Letting the exception escape would drop them from
+            # run cost for good: the durable effect cache marks the paid call
+            # replayed, so a resumed Step will not record it again either.
+            # The Step fails, but it fails carrying its spend.
+            return self._reflection_failure_output(failure, request=request)
         state_delta = _state_delta(
             checkpoint=checkpoint,
             skipped=_union_skipped_mutations(
@@ -281,6 +311,7 @@ class GepaHarnessAdapter:
             run_id=str(request.run_id),
             step_index=int(request.step_index),
         )
+        proposer_usage = self._adapter_factory.proposer_usage()
         if checkpoint.terminal:
             artifact_ref = self._adapter_factory.persist_result(
                 control=self._control,
@@ -321,6 +352,7 @@ class GepaHarnessAdapter:
                     seed_retained=True,
                     retained_candidate=request.candidates[0],
                     search_evidence=search_evidence,
+                    proposer_usage=proposer_usage,
                     state_delta=state_delta,
                     history_delta=history_delta,
                     budget_delta=checkpoint.budget_delta,
@@ -341,6 +373,7 @@ class GepaHarnessAdapter:
                 proposed_candidates=(candidate,),
                 proposed_status=StepStatus.COMPLETE,
                 search_evidence=search_evidence,
+                proposer_usage=proposer_usage,
                 state_delta=state_delta,
                 history_delta=history_delta,
                 budget_delta=checkpoint.budget_delta,
@@ -348,13 +381,55 @@ class GepaHarnessAdapter:
         return AdapterOutput(
             proposed_status=StepStatus.CONTINUE,
             search_evidence=search_evidence,
+            proposer_usage=proposer_usage,
             state_delta=state_delta,
             budget_delta=checkpoint.budget_delta,
+        )
+
+    def _reflection_failure_output(
+        self,
+        failure: GepaReflectionFailedError,
+        *,
+        request: OptimStepRequest,
+    ) -> AdapterOutput:
+        """Fail the Step while still reporting what its whole Step cost.
+
+        Carries the reflection usage accumulated before the failure, plus the
+        mutations this Step skipped, so a failed Step is accounted for exactly
+        like a successful one.
+
+        It also carries the ``search_evidence`` for every evaluation the Step
+        drove before reflection failed. Run cost reaches task-model rows only
+        through a Step Result's evidence references, so dropping them would
+        silently exclude evaluations that were already persisted and billed --
+        and permanently, since the durable effect cache marks them replayed
+        and a resumed Step will not record them again.
+        """
+        return AdapterOutput(
+            proposed_status=StepStatus.FAILED,
+            terminal_failure=TerminalFailure(
+                code=GEPA_REFLECTION_FAILED_CODE,
+                message=str(failure),
+            ),
+            search_evidence=self._adapter_factory.search_evidence(
+                run_id=str(request.run_id),
+                step_index=int(request.step_index),
+            ),
+            proposer_usage=self._adapter_factory.proposer_usage(),
+            state_delta=ImmutableJsonObject(
+                {
+                    GEPA_SKIPPED_MUTATIONS_KEY: [
+                        skipped.model_dump(mode="json")
+                        for skipped in self._adapter_factory.skipped_mutations()
+                    ]
+                }
+            ),
         )
 
 
 __all__ = [
     "GEPA_ADAPTER_KEY",
+    "GEPA_REFLECTION_FAILED_CODE",
     "GEPA_SKIPPED_MUTATIONS_KEY",
     "GEPA_TERMINAL_ARTIFACT_KEY",
     "GepaHarnessAdapter",

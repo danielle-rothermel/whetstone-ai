@@ -16,6 +16,7 @@ from whetstone.eval.schema import (
     EVAL_TRACES_SCHEMA,
     EVAL_TRACES_SCHEMA_VERSION,
     EvalEvidence,
+    EvalOutputRow,
 )
 from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
 
@@ -48,9 +49,9 @@ EXPECTED_EVIDENCE_FIELDS = (
 
 def test_persisted_schema_names_and_versions_are_pinned() -> None:
     assert EVAL_EVIDENCE_SCHEMA == "whetstone.eval_evidence"
-    assert EVAL_EVIDENCE_SCHEMA_VERSION == 4
+    assert EVAL_EVIDENCE_SCHEMA_VERSION == 5
     assert EVAL_OUTPUTS_SCHEMA == "whetstone.eval_outputs"
-    assert EVAL_OUTPUTS_SCHEMA_VERSION == 4
+    assert EVAL_OUTPUTS_SCHEMA_VERSION == 5
     assert EVAL_TRACES_SCHEMA == "whetstone.eval_component_traces"
     assert EVAL_TRACES_SCHEMA_VERSION == 2
 
@@ -93,3 +94,32 @@ def test_eval_role_values_are_unique() -> None:
     be dropped without a test noticing."""
     values = [member.value for member in EvalRole]
     assert len(set(values)) == len(values)
+
+EXPECTED_OUTPUT_ROW_FIELDS = (
+    "candidate_id",
+    "task_id",
+    "task_hash",
+    "task_index",
+    "seed_index",
+    "rendered_prompt",
+    "output_text",
+    "score",
+    "failed",
+    "missing",
+    "invalid",
+    "failure_code",
+    "finish_reason",
+    "provider_error",
+    "max_budget",
+    "over_budget",
+    "submission_result",
+    "prompt_tokens",
+    "completion_tokens",
+    "provider_cost",
+    "cache_hit",
+)
+
+
+def test_eval_output_row_wire_fields_are_pinned() -> None:
+    """Output rows carry the task-model usage run cost is derived from."""
+    assert tuple(EvalOutputRow.model_fields) == EXPECTED_OUTPUT_ROW_FIELDS

@@ -328,12 +328,24 @@ class CodexCliProposerTransport:
                     ),
                 },
             )
+        invocation_call_id = self._logical_call_id(
+            config=config, request=request, count=count
+        )
         return tuple(
             ProposalDraft(
                 template=body,
                 request_evidence={
                     **request_evidence,
                     "draft_index": index,
+                    # A Codex subprocess invocation is a proposer-model call
+                    # like any other, so it carries a logical call identity
+                    # even though the CLI reports no tokens and no price.
+                    # Without one, run cost would report zero proposer calls
+                    # for an entire COPRO-with-Codex run. One invocation
+                    # returns every body, so all of them share the
+                    # invocation's identity and run cost de-duplicates them
+                    # back to the one execution that was actually billed.
+                    "logical_call_id": invocation_call_id,
                 },
                 response_evidence={
                     **process_evidence,
@@ -343,6 +355,29 @@ class CodexCliProposerTransport:
                 cost=None,
             )
             for index, body in enumerate(artifact.bodies)
+        )
+
+    def _logical_call_id(
+        self,
+        *,
+        config: CodexCliProposerConfig,
+        request: ProposalRequest,
+        count: int,
+    ) -> str:
+        """This Codex invocation's stable provider call identity.
+
+        One ``draft`` call is one subprocess run returning every requested
+        body, so the identity covers the invocation rather than a batch
+        slot: a breadth-two request is one billed Codex execution, not two.
+        ``count`` participates because a differently-sized batch is a
+        different invocation. Same inputs on a re-drive mint the same id, so
+        run cost de-duplicates a replayed Step back to one call.
+        """
+        return (
+            f"codex-proposer:{config.identity_hash()}:"
+            f"{self.execution_policy_hash}:"
+            f"{self.prompt_adapter_identity_hash}:"
+            f"{request.identity_hash()}:{count}"
         )
 
 

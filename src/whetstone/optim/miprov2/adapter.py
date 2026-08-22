@@ -14,6 +14,7 @@ from whetstone.eval.protocol import EvalRequest
 from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.adapters import AdapterOutput
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.contracts import (
     STEP_RESULT_SCHEMA,
     BudgetDelta,
@@ -528,9 +529,13 @@ class Miprov2Adapter:
         budget_delta = BudgetDelta(consumed={"proposal_calls": 1})
         if advanced.proposal_state is None:
             raise ValueError("folded proposal state disappeared")
+        # ``None`` when the draft made no provider call: nothing to bill.
+        draft_usage = draft.call_usage()
+        proposer_usage = () if draft_usage is None else (draft_usage,)
         if advanced.proposal_state.stage != MIPROV2_FAILED:
             return AdapterOutput(
                 budget_delta=budget_delta,
+                proposer_usage=proposer_usage,
                 state_delta={
                     MIPROV2_STATE_KEY: advanced.model_dump(mode="json")
                 },
@@ -551,6 +556,7 @@ class Miprov2Adapter:
                 },
             ),
             budget_delta=budget_delta,
+            proposer_usage=proposer_usage,
         )
 
     @staticmethod
@@ -559,6 +565,7 @@ class Miprov2Adapter:
         *,
         failure: TerminalFailure,
         budget_delta: BudgetDelta | None = None,
+        proposer_usage: tuple[ProposerCallUsage, ...] = (),
     ) -> AdapterOutput:
 
         if state.phase != MIPROV2_FAILED:
@@ -567,6 +574,7 @@ class Miprov2Adapter:
             proposed_status=StepStatus.FAILED,
             terminal_failure=failure,
             budget_delta=budget_delta or BudgetDelta(),
+            proposer_usage=proposer_usage,
             state_delta={MIPROV2_STATE_KEY: state.model_dump(mode="json")},
         )
 

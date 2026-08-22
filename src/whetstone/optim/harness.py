@@ -17,13 +17,13 @@ from whetstone.core.leasing import (
     ReplayPolicy,
 )
 from whetstone.core.identity import (
+    ImmutableJsonObject,
     TerminalFailure,
     TypedRef,
     compute_identity_hash,
     compute_prefixed_identity_key,
     typed_ref_for_record,
 )
-from whetstone.core.roles import EvalRole
 from whetstone.experiment.candidate import (
     CandidateRef,
     candidate_reference,
@@ -39,6 +39,7 @@ from whetstone.eval.schema_names import (
     EVAL_FAILURE_SCHEMA,
 )
 from whetstone.experiment.reward import REWARD_SCHEMA
+from whetstone.optim.cost_aggregation import aggregate_run_cost
 from whetstone.optim.contracts import (
     INTENT_RESOLUTION_SCHEMA,
     OPTIM_RESULT_SCHEMA,
@@ -338,6 +339,7 @@ class OptimHarness(OptimRunStore):
             resolved_intents=resolutions,
             search_evidence=output.search_evidence,
             tool_evidence=tool_evidence,
+            proposer_usage=output.proposer_usage,
             state_ref=self._persist_snapshot(
                 STATE_SNAPSHOT_SCHEMA, output.state_delta
             ),
@@ -1198,7 +1200,6 @@ class OptimHarness(OptimRunStore):
         *,
         run: OptimRunRef,
         step_results: tuple[OptimStepResultRef, ...],
-        cost: dict[str, object] | None = None,
     ) -> tuple[OptimResult, TypedRef]:
         if self._bound_run is None:
             raise ValueError("bind_run must be called before terminalize")
@@ -1222,7 +1223,6 @@ class OptimHarness(OptimRunStore):
         result = self._assemble_terminal(
             run=exact_run,
             step_results=exact_step_results,
-            cost=cost or {},
         )
         requested_ref = optimization_result_reference(result)
         existing_ref = self.resolve_optimization_result(run_id)
@@ -1278,7 +1278,6 @@ class OptimHarness(OptimRunStore):
         *,
         run: OptimRunRef,
         step_results: tuple[OptimStepResultRef, ...],
-        cost: dict[str, object],
     ) -> OptimResult:
         run_id = str(run.record.run_id)
         results: list[OptimStepResult] = []
@@ -1324,11 +1323,15 @@ class OptimHarness(OptimRunStore):
                 for candidate in last.accepted_candidates
             )
         )
+        cost = aggregate_run_cost(
+            store=self._store,
+            step_results=tuple(results),
+        )
         return OptimResult(
             run=run,
             proposals=proposals,
             step_results=step_results,
-            cost=cost,
+            cost=ImmutableJsonObject(cost.record_content()),
             terminal_failure=last.terminal_failure,
             seed_retained=last.seed_retained,
         )

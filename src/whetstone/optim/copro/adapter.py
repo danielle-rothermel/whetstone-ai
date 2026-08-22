@@ -952,6 +952,13 @@ class CoproAdapter:
         evidence: list[dict[str, Any]] = []
         round_start = iteration * config.breadth
         reserved_candidate_ids = {initial.candidate_id}
+        # A draft that made no provider call reports no usage, so a
+        # scripted underfill never becomes a priced zero-dollar call.
+        proposer_usage = tuple(
+            usage
+            for usage in (draft.call_usage() for draft in drafts)
+            if usage is not None
+        )
         for index, draft in enumerate(drafts):
             occurrence_ordinal = round_start + index
             candidate_id = f"copro:{request.run_id}:{occurrence_ordinal}"
@@ -1034,6 +1041,7 @@ class CoproAdapter:
             return AdapterOutput(
                 proposed_candidates=tuple(proposed),
                 proposed_status=StepStatus.FAILED,
+                proposer_usage=proposer_usage,
                 terminal_failure=TerminalFailure(
                     code="copro_proposal_cardinality",
                     message="COPRO proposer failed to fill its round",
@@ -1075,6 +1083,7 @@ class CoproAdapter:
             proposed_candidates=tuple(proposed),
             accepted_candidates=tuple(proposed),
             optim_eval_requests=tuple(optim_eval_requests),
+            proposer_usage=proposer_usage,
             budget_delta=BudgetDelta(
                 consumed={"proposal_calls": plan.proposal_count}
             ),

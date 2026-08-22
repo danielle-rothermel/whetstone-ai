@@ -47,13 +47,17 @@ class HarnessGepaEffectBroker(GepaEffectBroker):
     def propose(
         self,
         request: GepaProposalEffectRequest,
-    ) -> GepaProposalEffectResult:
+    ) -> tuple[GepaProposalEffectResult, bool]:
         self._recorder.record_request(request)
         cached = self._recorder.load_proposal_result(request)
         if cached is not None:
-            return cached
+            # A replayed reflection costs nothing on this attempt: the Step
+            # that first drove it already paid, and this Step is only
+            # re-driving the prefix from the durable effect cache. Reported
+            # as replayed so the caller records no spend for it.
+            return cached, True
         result = self._proposal_authority.propose(request)
-        return self._recorder.record_proposal_result(request, result)
+        return self._recorder.record_proposal_result(request, result), False
 
 
 __all__ = ["HarnessGepaEffectBroker"]

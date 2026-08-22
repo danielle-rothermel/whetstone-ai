@@ -24,6 +24,7 @@ from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 from dr_store.sync import BlockingObjectStore
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA, OptimResult
+from whetstone.optim.cost import COST_REPORT_SCHEMA_VERSION
 from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
@@ -35,7 +36,6 @@ from whetstone.platform.deploy import (
     deploy_platform,
     drive_until_quiescent,
     upgrade_platform_schema,
-    wait_for_run_released,
 )
 from whetstone.platform.submit import OptimRunMemberSpec, submit_optim_run
 from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
@@ -231,6 +231,7 @@ def bootstrap_platform_runtime(
     depth: int = 1,
     optimizer: Literal["copro", "gepa"] = "copro",
     max_metric_calls: int = 2,
+    transport_factory=None,
 ) -> PlatformIntegrationContext:
     migrate_platform_schema(pg_engine)
     suffix = uuid4().hex[:10]
@@ -238,7 +239,9 @@ def bootstrap_platform_runtime(
     run_key = f"run-{suffix}"
     work_key = f"work-{suffix}"
 
-    eval_engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    eval_engine = ReferenceEvalRuntimeConfig().build_engine(
+        store, transport_factory=transport_factory
+    )
     run_id = f"integration-run-{suffix}"
     if optimizer == "gepa":
         experiment = build_toy_experiment(num_seeds=1)
@@ -345,6 +348,28 @@ def load_terminal_optim_result(
     result = OptimResult.model_validate(context.store.get(parsed))
     assert result.run.record.run_id == context.launch.run.run_id
     assert result.proposals or result.seed_retained
+    # The platform completion path fills cost through the same shared
+    # aggregator the in-process path uses, so a platform run reports spend
+    # in the identical shape rather than leaving the field empty.
+    cost = result.cost.to_json()
+    assert cost, "platform run completion must populate OptimResult.cost"
+    assert cost["schema_version"] == COST_REPORT_SCHEMA_VERSION
+    assert set(cost) == {"schema_version", "task_model", "proposer"}
+    if result.proposals:
+        # A run that proposed must have paid for at least one proposer call.
+        assert cost["proposer"]["calls"] >= 1
+    else:
+        # A seed-retained run that never reached reflection paid for none.
+        assert cost["proposer"]["calls"] == 0
+    for role in ("task_model", "proposer"):
+        role_cost = cost[role]
+        assert (
+            role_cost["priced_calls"] + role_cost["unpriced_calls"]
+            == role_cost["calls"]
+        )
+        # A total is claimed only when every contributing call had a price.
+        if role_cost["unpriced_calls"]:
+            assert role_cost["usd"] is None
     return result
 
 

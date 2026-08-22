@@ -552,7 +552,16 @@ class GepaEffectBroker(Protocol):
     def propose(
         self,
         request: GepaProposalEffectRequest,
-    ) -> GepaProposalEffectResult: ...
+    ) -> tuple[GepaProposalEffectResult, bool]:
+        """Serve one reflection call, reporting whether it was replayed.
+
+        The flag is the proposal-side counterpart of
+        :meth:`GepaEvaluationEffectAuthority.collect_replayed`: ``True``
+        means the durable effect cache answered and no provider was paid on
+        this attempt, so the caller must not record the result as spend.
+        GEPA re-drives its whole reflection prefix from that cache on every
+        Step, so without the flag every replayed call would be billed again.
+        """
 
 
 class GepaEvaluationEffectAuthority(Protocol):

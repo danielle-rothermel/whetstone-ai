@@ -76,7 +76,7 @@ class ScriptedProposalBroker:
 
     def propose(
         self, request: GepaProposalEffectRequest
-    ) -> GepaProposalEffectResult:
+    ) -> tuple[GepaProposalEffectResult, bool]:
         self.prompts.append(request.rendered_prompt.text)
         raw = self._bodies.pop(0)
         try:
@@ -84,22 +84,30 @@ class ScriptedProposalBroker:
                 request.component_name, raw
             )
         except (KeyError, TypeError, ValueError) as exc:
-            return GepaProposalEffectResult(
+            return (
+                GepaProposalEffectResult(
+                    request_hash=request.identity_hash(),
+                    raw_response=raw,
+                    failed=True,
+                    rejected_by_parser=True,
+                    failure_detail=str(exc),
+                ),
+                False,
+            )
+        return (
+            GepaProposalEffectResult(
                 request_hash=request.identity_hash(),
                 raw_response=raw,
-                failed=True,
-                rejected_by_parser=True,
-                failure_detail=str(exc),
-            )
-        return GepaProposalEffectResult(
-            request_hash=request.identity_hash(),
-            raw_response=raw,
-            parsed_components=(
-                GepaCandidateComponent(name=request.component_name, text=parsed),
+                parsed_components=(
+                    GepaCandidateComponent(
+                        name=request.component_name, text=parsed
+                    ),
+                ),
+                request_evidence={"scripted": True},
+                response_evidence={"scripted": True},
+                provider_attempt_refs=(_scripted_attempt_ref(),),
             ),
-            request_evidence={"scripted": True},
-            response_evidence={"scripted": True},
-            provider_attempt_refs=(_scripted_attempt_ref(),),
+            False,
         )
 
 
@@ -223,12 +231,15 @@ def test_a_twice_rejected_reflection_is_skipped_and_recorded() -> None:
 class FailingBroker(ScriptedProposalBroker):
     def propose(
         self, request: GepaProposalEffectRequest
-    ) -> GepaProposalEffectResult:
+    ) -> tuple[GepaProposalEffectResult, bool]:
         self.prompts.append(request.rendered_prompt.text)
-        return GepaProposalEffectResult(
-            request_hash=request.identity_hash(),
-            failed=True,
-            failure_detail="provider transport exploded",
+        return (
+            GepaProposalEffectResult(
+                request_hash=request.identity_hash(),
+                failed=True,
+                failure_detail="provider transport exploded",
+            ),
+            False,
         )
 
 

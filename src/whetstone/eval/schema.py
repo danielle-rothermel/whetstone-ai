@@ -42,8 +42,8 @@ from whetstone.experiment.reward import RewardRef
 EVAL_TRACES_SCHEMA = "whetstone.eval_component_traces"
 EVAL_TRACES_SCHEMA_VERSION = 2
 EVAL_OUTPUTS_SCHEMA = "whetstone.eval_outputs"
-EVAL_OUTPUTS_SCHEMA_VERSION = 4
-EVAL_EVIDENCE_SCHEMA_VERSION = 4
+EVAL_OUTPUTS_SCHEMA_VERSION = 5
+EVAL_EVIDENCE_SCHEMA_VERSION = 5
 
 
 class RowAccounting(BaseModel):
@@ -128,6 +128,16 @@ class EvalOutputRow(BaseModel):
     max_budget: StrictInt | None
     over_budget: StrictBool | None
     submission_result: SubmissionResultRecord | None = None
+    #: Task-model usage for this row. ``provider_cost`` is the
+    #: provider-reported price and is absent when the provider reported none;
+    #: it is never estimated from a local pricing table.
+    prompt_tokens: StrictInt | None = None
+    completion_tokens: StrictInt | None = None
+    provider_cost: float | None = None
+    #: The prompt cache replayed this row's provider call. The usage above is
+    #: then the *original* call's, replayed verbatim, so run cost reports the
+    #: row as a cache hit instead of billing it a second time.
+    cache_hit: StrictBool = False
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvalOutputRow:
@@ -140,6 +150,12 @@ class EvalOutputRow(BaseModel):
             raise ValueError("task_index must be non-negative")
         if self.max_budget is not None and self.max_budget < 0:
             raise ValueError("max_budget must be non-negative")
+        for name in ("prompt_tokens", "completion_tokens"):
+            tokens = getattr(self, name)
+            if tokens is not None and tokens < 0:
+                raise ValueError(f"{name} must be non-negative")
+        if self.provider_cost is not None and self.provider_cost < 0:
+            raise ValueError("provider_cost must be non-negative")
         require_exclusive_row_state(
             scored=self.score is not None,
             failed=self.failed,
@@ -300,7 +316,7 @@ class EvalOutputsRecord(BaseModel):
         allow_inf_nan=False,
     )
 
-    schema_version: Literal[4]
+    schema_version: Literal[5]
     candidate: CandidateRef
     eval_config_ref: EvalConfigRef
     eval_role: EvalRole
@@ -394,7 +410,7 @@ class EvalEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[4]
+    schema_version: Literal[5]
     candidate: CandidateRef
     eval_config_ref: EvalConfigRef
     eval_role: EvalRole
@@ -453,6 +469,14 @@ class EvalFailureEvidence(BaseModel):
     )
     exception_type: StrictStr
     message: StrictStr
+    #: The output rows this evaluation had already produced when it failed,
+    #: when any survived the failure. The rows were paid for, so run cost
+    #: reads them through this ref exactly as it reads a successful
+    #: evaluation's; without it a failure after provider work began would
+    #: drop that spend from the run report entirely. Absent when the failure
+    #: left no rows reachable -- a failure inside the driver, which holds its
+    #: rows in memory until it returns.
+    outputs_ref: TypedRef | None = None
 
     def record_content(self) -> dict[str, Any]:
         return self.model_dump(mode="json")

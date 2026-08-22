@@ -38,6 +38,7 @@ from whetstone.optim.gepa.contracts import (
     GepaSkippedMutation,
 )
 from whetstone.optim.contracts import SearchEvidence
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.gepa.control import GepaControl
 from whetstone.optim.gepa.engine import GepaDetailedResult
 from whetstone.optim.gepa.result_artifact import (
@@ -182,6 +183,19 @@ class CanonicalGepaAdapterFactory:
             for resolution, was_replayed in zip(
                 resolutions, replayed, strict=True
             )
+        )
+
+    def proposer_usage(self) -> tuple[ProposerCallUsage, ...]:
+        """Usage for every reflection call this Step's search made.
+
+        Read off the live adapters for the same reason as
+        ``skipped_mutations``: a continuing Step must carry the spend it
+        caused on its own Step Result.
+        """
+        return tuple(
+            usage
+            for adapter in self._adapters
+            for usage in adapter.proposer_usage
         )
 
     def skipped_mutations(self) -> tuple[GepaSkippedMutation, ...]:

@@ -82,6 +82,7 @@ _TELEMETRY_KEYS = (
     "latency_s",
     "finish_reason",
     "provider_error",
+    "provider_cost",
 )
 
 
@@ -106,6 +107,7 @@ def telemetry_metadata(telemetry: CallTelemetry) -> dict[str, Any]:
         "latency_s": telemetry.latency_s,
         "finish_reason": telemetry.finish_reason,
         "provider_error": telemetry.provider_error,
+        "provider_cost": telemetry.provider_cost,
     }
 
 
@@ -120,6 +122,11 @@ def telemetry_from_metadata(metadata: Mapping[str, Any]) -> CallTelemetry:
         latency_s=None if latency is None else float(latency),
         finish_reason=values["finish_reason"],
         provider_error=values["provider_error"],
+        provider_cost=(
+            None
+            if values["provider_cost"] is None
+            else float(values["provider_cost"])
+        ),
     )
 
 
