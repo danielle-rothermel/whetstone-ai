@@ -18,6 +18,7 @@ from whetstone.eval.analysis.statistics import (
     bootstrap_delta_ci,
     bootstrap_mean_ci,
     bootstrap_paired_delta_ci,
+    holm_adjust,
     mean,
     resample_indices,
 )
@@ -221,12 +222,182 @@ def test_paired_delta_ci_rejects_empty_score_vectors() -> None:
 
 
 def test_bootstrap_ci_reports_direction_and_tuple_projection() -> None:
-    positive = BootstrapCI(0.2, 0.1, 0.3, 0.95, 100)
-    negative = BootstrapCI(-0.2, -0.3, -0.1, 0.95, 100)
-    straddling = BootstrapCI(0.0, -0.1, 0.1, 0.95, 100)
+    positive = BootstrapCI(0.2, 0.1, 0.3, 0.95, 100, 0.01)
+    negative = BootstrapCI(-0.2, -0.3, -0.1, 0.95, 100, 0.01)
+    straddling = BootstrapCI(0.0, -0.1, 0.1, 0.95, 100, 0.9)
 
     assert positive.excludes_zero()
     assert negative.excludes_zero()
     assert not straddling.excludes_zero()
     assert positive.delta == 0.2
     assert positive.as_tuple() == (0.1, 0.3)
+
+
+# --- bootstrap p-values -----------------------------------------------------
+
+
+def test_a_strictly_positive_delta_gets_the_clamped_floor_p_value() -> None:
+    # Every resample of a constant positive lift is positive, so
+    # P(delta* <= 0) = 0 and the raw two-sided p-value is exactly zero. The
+    # clamp reports 1/resamples instead, because zero is not a resolution the
+    # bootstrap can claim and Holm would propagate it as an exact zero.
+    ci = bootstrap_paired_delta_ci(
+        (0.0, 0.0, 0.0, 0.0), (0.5, 0.5, 0.5, 0.5), resamples=200, seed=3
+    )
+
+    assert ci.point == pytest.approx(0.5)
+    assert ci.p_value == pytest.approx(1 / 200)
+    assert ci.excludes_zero()
+
+
+def test_a_strictly_negative_delta_gets_the_same_floor_p_value() -> None:
+    # The p-value is two-sided, so direction does not change its magnitude.
+    ci = bootstrap_paired_delta_ci(
+        (0.5, 0.5, 0.5, 0.5), (0.0, 0.0, 0.0, 0.0), resamples=200, seed=3
+    )
+
+    assert ci.point == pytest.approx(-0.5)
+    assert ci.p_value == pytest.approx(1 / 200)
+    assert ci.excludes_zero()
+
+
+def test_an_identically_zero_delta_gets_a_p_value_of_one() -> None:
+    # Every resampled delta is exactly zero, so it counts in both tails:
+    # 2 * min(1, 1) = 2, capped at 1.
+    ci = bootstrap_paired_delta_ci(
+        (0.2, 0.4, 0.6), (0.2, 0.4, 0.6), resamples=100, seed=7
+    )
+
+    assert ci.point == 0.0
+    assert ci.p_value == 1.0
+    assert not ci.excludes_zero()
+
+
+def test_the_p_value_is_computed_from_the_interval_s_own_resamples() -> None:
+    # The p-value and the interval must agree by construction: they come from
+    # one resample vector, so a CI that excludes zero cannot report a p-value
+    # above the interval's own tail mass.
+    a = (0.1, 0.2, 0.15, 0.25, 0.05, 0.2, 0.1, 0.3)
+    b = (0.6, 0.7, 0.65, 0.75, 0.55, 0.7, 0.6, 0.8)
+
+    ci = bootstrap_paired_delta_ci(a, b, level=0.95, resamples=1000, seed=11)
+
+    assert ci.excludes_zero()
+    assert ci.p_value <= 0.05
+
+
+def test_a_single_task_bootstrap_still_reports_a_p_value() -> None:
+    positive = bootstrap_paired_delta_ci((0.1,), (0.6,), resamples=50, seed=0)
+    flat = bootstrap_paired_delta_ci((0.4,), (0.4,), resamples=50, seed=0)
+
+    assert positive.p_value == pytest.approx(1 / 50)
+    assert flat.p_value == 1.0
+
+
+def test_the_mean_ci_also_carries_a_two_sided_p_value() -> None:
+    ci = bootstrap_mean_ci((0.4, 0.5, 0.6), resamples=200, seed=2)
+
+    assert ci.p_value == pytest.approx(1 / 200)
+    assert ci.excludes_zero()
+
+
+def test_p_values_are_stable_under_the_recorded_seed() -> None:
+    a = (0.2, 0.3, 0.1, 0.4, 0.25)
+    b = (0.5, 0.4, 0.6, 0.35, 0.55)
+
+    first = bootstrap_paired_delta_ci(a, b, resamples=500, seed=42)
+    second = bootstrap_paired_delta_ci(a, b, resamples=500, seed=42)
+    other = bootstrap_paired_delta_ci(a, b, resamples=500, seed=43)
+
+    assert first.p_value == second.p_value
+    assert first == second
+    assert other.resamples == 500
+
+
+# --- Holm-Bonferroni --------------------------------------------------------
+
+
+def test_holm_adjust_matches_a_hand_computed_vector() -> None:
+    # m = 4. Sorted ascending: 0.005, 0.011, 0.02, 0.04.
+    #   rank 0: 4 * 0.005 = 0.020
+    #   rank 1: 3 * 0.011 = 0.033
+    #   rank 2: 2 * 0.020 = 0.040
+    #   rank 3: 1 * 0.040 = 0.040   (running max keeps it at 0.040)
+    raw = (0.02, 0.005, 0.04, 0.011)
+
+    assert holm_adjust(raw) == pytest.approx((0.04, 0.02, 0.04, 0.033))
+
+
+def test_holm_adjust_enforces_monotonicity_through_the_running_maximum() -> None:
+    # m = 3. Sorted: 0.01 -> 0.03, 0.02 -> 0.04, 0.021 -> 0.021, which is
+    # below the running maximum and is therefore raised to it.
+    raw = (0.01, 0.02, 0.021)
+
+    adjusted = holm_adjust(raw)
+
+    assert adjusted == pytest.approx((0.03, 0.04, 0.04))
+    assert list(adjusted) == sorted(adjusted)
+
+
+def test_holm_adjust_caps_every_value_at_one() -> None:
+    raw = (0.5, 0.6, 0.7, 0.8)
+
+    assert holm_adjust(raw) == (1.0, 1.0, 1.0, 1.0)
+
+
+def test_holm_adjust_leaves_a_single_hypothesis_alone() -> None:
+    assert holm_adjust((0.03,)) == pytest.approx((0.03,))
+
+
+def test_holm_adjust_of_an_empty_family_is_empty() -> None:
+    assert holm_adjust(()) == ()
+
+
+def test_holm_adjust_preserves_input_order_across_ties() -> None:
+    raw = (0.02, 0.02, 0.02)
+
+    assert holm_adjust(raw) == pytest.approx((0.06, 0.06, 0.06))
+
+
+def test_holm_adjust_is_never_smaller_than_the_raw_p_value() -> None:
+    raw = (0.001, 0.049, 0.2, 0.9)
+
+    adjusted = holm_adjust(raw)
+
+    assert all(
+        adjusted_value >= raw_value
+        for adjusted_value, raw_value in zip(adjusted, raw, strict=True)
+    )
+
+
+@pytest.mark.parametrize("bad", [-0.1, 1.1, float("nan")])
+def test_holm_adjust_rejects_values_outside_the_unit_interval(
+    bad: float,
+) -> None:
+    with pytest.raises(ValueError, match=r"p-values must be in \[0, 1\]"):
+        holm_adjust((0.01, bad))
+
+
+def test_holm_corrects_four_bootstrap_p_values_end_to_end() -> None:
+    # The Step-10 secondary analysis: four real optimizers, Holm over the
+    # bootstrap p-values their own paired CIs produced.
+    naive = (0.0, 0.0, 0.1, 0.0, 0.1, 0.0, 0.0, 0.1)
+    arms = {
+        "strong": tuple(value + 0.6 for value in naive),
+        "moderate": (0.3, 0.4, 0.5, 0.2, 0.6, 0.3, 0.4, 0.5),
+        "weak": (0.1, 0.0, 0.2, 0.1, 0.1, 0.0, 0.1, 0.2),
+        "flat": naive,
+    }
+    cis = {
+        name: bootstrap_paired_delta_ci(
+            naive, scores, resamples=500, seed=5
+        )
+        for name, scores in arms.items()
+    }
+    names = tuple(cis)
+    adjusted = holm_adjust(tuple(cis[name].p_value for name in names))
+    by_name = dict(zip(names, adjusted, strict=True))
+
+    assert by_name["strong"] <= 0.05
+    assert by_name["flat"] == 1.0
+    assert by_name["strong"] >= cis["strong"].p_value
