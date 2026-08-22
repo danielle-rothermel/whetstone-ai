@@ -432,22 +432,6 @@ _DEADLINE_STATUSES = frozenset(
 #: nanosecond, so anything below this is treated as already elapsed.
 _MIN_REPRESENTABLE_WALL_SECONDS = 1e-9
 
-#: Span above which a cancelled row is read as having occupied a worker.
-#:
-#: dr-exec publishes no started flag on ``CancelledOutcome``, so the measured
-#: span is the evidence it does publish. A row the expired scheduler births
-#: already cancelled never leases a worker: it returns from the pre-lease
-#: cancel check having done nothing but stamp two clocks, which is tens of
-#: microseconds. A row that reached a worker survives until the batch watcher
-#: expires the scheduler, so it measures a large fraction of the batch wall.
-#:
-#: One millisecond sits two orders of magnitude above the bookkeeping span
-#: and two orders below the smallest batch wall a real rollout declares, so
-#: no observed span falls near it. Spawning a worker alone costs far more
-#: than this floor, so a row that got as far as leasing is never read as
-#: undispatched.
-_STARTED_ROW_FLOOR_NS = 1_000_000
-
 
 def _validated_unit_deadline(unit_deadline_seconds: float, /) -> float:
     """Reject a per-row budget dr-exec could not turn into a limit.
@@ -542,32 +526,6 @@ def _batch_wall_time(
         return FiniteDurationLimit(max_ns=1)
 
 
-def _cancelled_row_started(completion: CompletedExecution, /) -> bool:
-    """Read dr-exec's own evidence of whether a cancelled row ran.
-
-    ``CancelledOutcome`` carries no started flag, and dr-exec's attribution
-    is identical for both cancel paths, so the execution's measured span is
-    the authoritative signal it does publish.
-
-    dr-exec stamps ``started_at``/``duration_ns`` inside the executor's
-    ``run_blocking``. A job the expired scheduler births already cancelled
-    returns from the pre-lease cancel check without touching a worker, so it
-    measures a bookkeeping span of microseconds. A job that reached a worker
-    is only cancelled when the batch watcher expires the scheduler, so its
-    span runs to the batch wall — orders of magnitude longer. Comparing
-    against a floor far above bookkeeping cost and far below any usable
-    batch wall is what separates the two without a second clock.
-
-    This driver caps the scheduler's capacity at the pool's width, so an
-    admitted job never waits for a worker slot: measured time means worker
-    time.
-    """
-    return (
-        completion.result.measurements.duration_ns
-        >= _STARTED_ROW_FLOOR_NS
-    )
-
-
 def _interpret_completion(
     completion: CompletedExecution,
     /,
@@ -580,12 +538,15 @@ def _interpret_completion(
     rows that never started, and both arrive as ``CancelledOutcome``. Only
     a row that was never handed to a worker is honestly "not dispatched";
     one that ran and was killed is the operation deadline.
+    ``CancelledOutcome.started`` is dr-exec's own record of that boundary:
+    it is false only on the pre-lease cancel check and true once the job has
+    been handed to a worker.
     """
 
     result = completion.result
     outcome = result.outcome
     if isinstance(outcome, CancelledOutcome):
-        if _cancelled_row_started(completion):
+        if outcome.started:
             return {}, RowDispatchStatus.OPERATION_DEADLINE
         return {}, RowDispatchStatus.NOT_DISPATCHED
     if isinstance(outcome, BudgetExceededOutcome):

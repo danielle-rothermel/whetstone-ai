@@ -8,11 +8,11 @@ authors = [
 ]
 requires-python = ">=3.13, <3.15"
 dependencies = [
-    "dr-exec==0.1.13",
+    "dr-exec==0.1.14",
     "dr-graph==0.1.3",
     "dr-providers==0.3.2",
     "dr-serialize==0.1.2",
-    "dr-store==0.2.5",
+    "dr-store==0.2.6",
     "gepa==0.1.1",
     "mcp==2.0.0",
     "numpy>=2.5.1",
@@ -24,7 +24,7 @@ dependencies = [
 dbos = ["dbos>=2.25.0"]
 postgres = ["psycopg[binary]>=3.3.4"]
 platform = [
-  "dr-platform==0.2.6",
+  "dr-platform==0.2.7",
   "dbos[otel]==2.27.0",
   "psycopg[binary]>=3.3.4",
 ]
