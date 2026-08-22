@@ -19,7 +19,10 @@ from typing import TYPE_CHECKING
 
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 
-from whetstone.optim.codex.adapter import OpaqueStepError
+from whetstone.optim.codex.adapter import (
+    CodexStructuredExecutionFailure,
+    OpaqueStepError,
+)
 
 if TYPE_CHECKING:
     from dr_exec import Executor
@@ -59,10 +62,7 @@ def codex_auth_preflight(
     not the caller's whole environment: the preflight must look at exactly
     what the run will see.
     """
-    from whetstone.optim.codex.runner import (
-        CodexStructuredExecutionFailure,
-        SubprocessCodexRunner,
-    )
+    from whetstone.optim.codex.runner import SubprocessCodexRunner
 
     resolved = shutil.which(codex_binary, path=environment.get("PATH"))
     if resolved is None:

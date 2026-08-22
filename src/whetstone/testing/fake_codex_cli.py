@@ -25,6 +25,9 @@ Transcript format -- a JSON list of steps::
       {"exit": 3}
     ]
 
+A ``hang`` step blocks forever, so the caller's wall budget is what ends
+the process -- the way a real agent that overruns its budget ends.
+
 A ``final`` step supplies the fields the harness does not already know;
 ``run_id``, ``lease_token_hash``, and ``evaluated_call_ids`` are filled in
 from the CLI arguments and the calls actually made unless the transcript
@@ -83,6 +86,11 @@ def main(argv: list[str] | None = None) -> int:
             final_overrides = dict(step["final"])
         elif "exit" in step:
             exit_code = int(step["exit"])
+        elif "hang" in step:
+            # Never returns. The caller's wall budget is what stops this
+            # process, which is how a real agent that overruns its budget
+            # ends, so the runner's timeout path is exercised for real.
+            _hang_until_killed()
         else:
             raise ValueError(f"unrecognized fake Codex transcript step: {step}")
 
@@ -217,6 +225,14 @@ def _load_transcript(mcp_env: dict[str, str]) -> list[dict[str, Any]]:
     if not isinstance(loaded, list):
         raise ValueError("fake Codex transcript must be a JSON list")
     return loaded
+
+
+def _hang_until_killed() -> None:
+    """Block until the wall budget stops the process group."""
+    import time
+
+    while True:
+        time.sleep(3600)
 
 
 def _emit(event: dict[str, Any]) -> None:

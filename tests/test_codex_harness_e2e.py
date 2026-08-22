@@ -37,6 +37,7 @@ from whetstone.optim.codex.adapter import (
     CODEX_LEASE_TOKEN_MISMATCH_CODE,
     CODEX_SELECTION_UNEVALUATED_CODE,
     CODEX_UNREPORTED_EVALUATION_CODE,
+    CODEX_WALL_BUDGET_EXCEEDED_CODE,
     CodexAdapter,
     codex_lease_token_hash,
 )
@@ -145,7 +146,12 @@ class _CodexWorld:
         harness.bind_run(self.run)
         return harness
 
-    def adapter(self, transcript: list[dict]) -> CodexAdapter:
+    def adapter(
+        self,
+        transcript: list[dict],
+        *,
+        timeout_seconds: float = 180.0,
+    ) -> CodexAdapter:
         transcript_document = transcript_json(transcript)
         runner = SubprocessCodexRunner(
             executor=build_codex_executor(run_root=self.tmp_path / "runs"),
@@ -156,7 +162,7 @@ class _CodexWorld:
             ),
             reward_policy=self.engine.reward_policy,
             codex_binary="codex",
-            timeout_seconds=180.0,
+            timeout_seconds=timeout_seconds,
             environment={
                 "PATH": os.pathsep.join(
                     [str(self.binary_dir), os.environ.get("PATH", "")]
@@ -466,3 +472,34 @@ def test_reporting_every_admitted_call_debits_the_full_budget(
     assert accepted == 2
     assert len(result.tool_evidence) == accepted
     assert result.budget_delta.consumed["tool_calls"] == accepted
+
+
+def test_a_wall_budget_stop_terminalizes_the_real_spawned_step(
+    codex_world,
+) -> None:
+    """The real process path, stopped by the real dr-exec wall budget.
+
+    The transcript tells the fake CLI to hang; the runner's wall budget
+    stops the process group, and the Step must terminalize rather than
+    letting a subprocess exception unwind past the harness's lease
+    maintenance. The retry is the state evidence that the lease was
+    released -- it would raise ``EffectBusyError`` otherwise.
+    """
+    world = codex_world()
+    adapter = world.adapter([{"hang": True}], timeout_seconds=2.0)
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_WALL_BUDGET_EXCEEDED_CODE
+    )
+    assert result.accepted_candidates == ()
+
+    retry = world.adapter([{"hang": True}], timeout_seconds=2.0)
+    retried, _retry_ref = world.harness(retry).run_step(request)
+    assert retried.status is StepStatus.FAILED

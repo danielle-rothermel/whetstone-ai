@@ -9,7 +9,6 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Any, Final
 from uuid import uuid4
 
@@ -44,6 +43,8 @@ from whetstone.experiment.reward import RewardPolicy
 from whetstone.optim.codex.adapter import (
     CodexOutputArtifact,
     CodexRunResult,
+    CodexStructuredExecutionFailure,
+    CodexWallBudgetExceeded,
     OpaqueStepError,
     codex_lease_token_hash,
 )
@@ -342,23 +343,6 @@ class CodexStructuredExecution:
     stdout: bytes
     stderr: str
     isolation: dict[str, Any]
-
-
-class CodexStructuredExecutionFailure(OpaqueStepError):
-    def __init__(
-        self,
-        message: str,
-        *,
-        stdout: bytes,
-        stderr: bytes,
-        artifact_bytes: bytes = b"",
-        isolation: dict[str, Any] | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.stdout = stdout
-        self.stderr = stderr
-        self.artifact_bytes = artifact_bytes
-        self.isolation = isolation or {}
 
 
 class SubprocessCodexRunner:
@@ -711,11 +695,19 @@ class SubprocessCodexRunner:
             outcome = completed.result.outcome
             if isinstance(outcome, BudgetExceededOutcome):
                 if outcome.axis is BudgetAxis.WALL_TIME:
-                    raise TimeoutExpired(
-                        sandbox_wrapped_command,
-                        self._timeout,
-                        output=stdout,
+                    # A wall stop is the most likely end of a long-running
+                    # paid agent, so it terminalizes the Step through the
+                    # adapter's own failure taxonomy. Raising the raw
+                    # subprocess error here would unwind past the harness's
+                    # effect-lease maintenance and leave the lease
+                    # non-terminal until it lapsed.
+                    raise CodexWallBudgetExceeded(
+                        "Codex exceeded its wall budget of "
+                        f"{self._timeout} seconds",
+                        wall_seconds=self._timeout,
+                        stdout=stdout,
                         stderr=stderr_bytes,
+                        isolation=isolation,
                     )
                 raise CodexStructuredExecutionFailure(
                     "Codex execution failed with an unexpected budget outcome",
@@ -993,7 +985,6 @@ def _decode_stderr(stderr: bytes) -> str:
 
 __all__ = [
     "CodexStructuredExecution",
-    "CodexStructuredExecutionFailure",
     "SubprocessCodexRunner",
     "build_codex_command",
 ]

@@ -18,6 +18,7 @@ from whetstone.optim.codex.adapter import (
     CODEX_SELECTION_UNEVALUATED_CODE,
     CODEX_SELECTION_UNSCORED_CODE,
     CODEX_UNREPORTED_EVALUATION_CODE,
+    CODEX_WALL_BUDGET_EXCEEDED_CODE,
     CodexOutputArtifact,
 )
 from whetstone.optim.codex.mcp_bridge import (
@@ -94,6 +95,9 @@ def test_the_persisted_schema_and_code_literals_are_pinned() -> None:
     assert (
         CODEX_UNREPORTED_EVALUATION_CODE
         == "codex_unreported_evaluation"
+    )
+    assert (
+        CODEX_WALL_BUDGET_EXCEEDED_CODE == "codex_wall_budget_exceeded"
     )
     assert TOOL_EVAL_FAILURE_EVIDENCE_CODE == "tool_eval_failure_evidence"
     assert TOOL_EVAL_UNEXPECTED_RESULT_CODE == "tool_eval_unexpected_result"

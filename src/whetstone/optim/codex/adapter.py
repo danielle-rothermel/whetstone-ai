@@ -62,10 +62,64 @@ CODEX_SELECTION_CONTRACT_CODE = "codex_selection_contract"
 CODEX_UNREPORTED_EVALUATION_CODE = "codex_unreported_evaluation"
 #: The selected call reached a terminal state carrying no score.
 CODEX_SELECTION_UNSCORED_CODE = "codex_selection_unscored"
+#: The Codex process hit the run's hard wall stop.
+CODEX_WALL_BUDGET_EXCEEDED_CODE = "codex_wall_budget_exceeded"
 
 
 class OpaqueStepError(RuntimeError):
     pass
+
+
+class CodexStructuredExecutionFailure(OpaqueStepError):
+    """The Codex process did not produce a usable structured artifact.
+
+    It lives beside the adapter rather than beside the runner because the
+    adapter is what turns these into Step terminal failures, and the
+    runner already imports the adapter's contracts.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stdout: bytes,
+        stderr: bytes,
+        artifact_bytes: bytes = b"",
+        isolation: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+        self.artifact_bytes = artifact_bytes
+        self.isolation = isolation or {}
+
+
+class CodexWallBudgetExceeded(CodexStructuredExecutionFailure):
+    """The Codex process hit the run's hard wall stop.
+
+    This is the expected end of a long-running paid agent, not a defect.
+    The adapter turns it into a Step terminal failure so the harness's
+    effect-lease maintenance sees a failure and releases the lease; a raw
+    subprocess exception would unwind past that block and wedge the run
+    until the lease lapsed.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        wall_seconds: float,
+        stdout: bytes,
+        stderr: bytes,
+        isolation: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            message,
+            stdout=stdout,
+            stderr=stderr,
+            isolation=isolation,
+        )
+        self.wall_seconds = wall_seconds
 
 
 class CodexOutputArtifact(BaseModel):
@@ -177,7 +231,32 @@ class CodexAdapter:
             raise OpaqueStepError("Codex evaluation must be external MCP")
 
         lease_token = self._lease_token_factory()
-        run = self._runner.run(request, handle, lease_token=lease_token)
+        try:
+            run = self._runner.run(request, handle, lease_token=lease_token)
+        except CodexWallBudgetExceeded as exc:
+            # The hard stop of a long-running paid agent. It terminalizes
+            # the Step here so the harness's effect-lease maintenance sees
+            # a failure and releases the lease; letting this unwind would
+            # wedge the run until the lease lapsed.
+            return self._failed(
+                {
+                    "tool_namespace": str(config.store_namespace_key),
+                    "harness_store_accepted_call_count": (
+                        self._bound_tool_store.accepted_count(
+                            config, handle.binding
+                        )
+                    ),
+                    "codex_isolation": exc.isolation,
+                },
+                TerminalFailure(
+                    code=CODEX_WALL_BUDGET_EXCEEDED_CODE,
+                    message=str(exc),
+                    details={
+                        "run_id": request.run_id,
+                        "wall_seconds": exc.wall_seconds,
+                    },
+                ),
+            )
         artifact = run.artifact
         if artifact.run_id != request.run_id:
             raise OpaqueStepError(
@@ -509,10 +588,13 @@ __all__ = [
     "CODEX_SELECTION_UNEVALUATED_CODE",
     "CODEX_SELECTION_UNSCORED_CODE",
     "CODEX_UNREPORTED_EVALUATION_CODE",
+    "CODEX_WALL_BUDGET_EXCEEDED_CODE",
     "CodexAdapter",
     "CodexOutputArtifact",
     "CodexRunResult",
     "CodexRunner",
+    "CodexStructuredExecutionFailure",
+    "CodexWallBudgetExceeded",
     "OpaqueStepError",
     "codex_lease_token_hash",
 ]

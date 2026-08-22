@@ -28,9 +28,11 @@ from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
     CODEX_UNREPORTED_EVALUATION_CODE,
+    CODEX_WALL_BUDGET_EXCEEDED_CODE,
     CodexAdapter,
     CodexOutputArtifact,
     CodexRunResult,
+    CodexWallBudgetExceeded,
     codex_lease_token_hash,
 )
 from whetstone.optim.contracts import StepStatus
@@ -151,10 +153,15 @@ class _SelectionWorld:
         )
 
     def run_step(self, *, calls, artifact_fields):
-        adapter = CodexAdapter(
+        return self.run_step_with_runner(
             _ScriptedRunner(
                 self, calls=calls, artifact_fields=artifact_fields
-            ),
+            )
+        )
+
+    def run_step_with_runner(self, runner):
+        adapter = CodexAdapter(
+            runner,
             store=self.store,
             lease_token_factory=lambda: _FIXED_LEASE_TOKEN,
         )
@@ -266,3 +273,52 @@ def test_an_unreported_admitted_call_fails_the_step_without_a_sandbox(
     )
     assert result.terminal_failure.details["admitted_call_count"] == 2
     assert result.terminal_failure.details["reported_call_count"] == 1
+
+
+class _WallBudgetRunner:
+    """A runner that hits the wall stop instead of returning an artifact."""
+
+    def __init__(self, *, wall_seconds: float) -> None:
+        self.wall_seconds = wall_seconds
+
+    def run(self, request, handle, *, lease_token):
+        del request, handle, lease_token
+        raise CodexWallBudgetExceeded(
+            f"Codex exceeded its wall budget of {self.wall_seconds} seconds",
+            wall_seconds=self.wall_seconds,
+            stdout=b"",
+            stderr=b"",
+            isolation={"strategy": "test"},
+        )
+
+
+def test_a_wall_budget_stop_terminalizes_the_step_and_frees_the_lease(
+    selection_world,
+) -> None:
+    """The wall stop must not escape as a raw subprocess exception.
+
+    A ``subprocess.TimeoutExpired`` unwinding out of ``run_step`` skips
+    the harness's effect-lease maintenance entirely, so the lease stays
+    non-terminal and the run wedges until it lapses. The evidence that
+    the lease was released is a state fact, not a delay: the identical
+    Step runs again immediately instead of raising ``EffectBusyError``.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _WallBudgetRunner(wall_seconds=0.25)
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert (
+        result.terminal_failure.code == CODEX_WALL_BUDGET_EXCEEDED_CODE
+    )
+    assert result.terminal_failure.details["wall_seconds"] == 0.25
+    assert result.accepted_candidates == ()
+
+    # The lease reached a terminal state, so the same effect is free.
+    retried = world.run_step_with_runner(
+        _WallBudgetRunner(wall_seconds=0.25)
+    )
+    assert retried.status is StepStatus.FAILED
