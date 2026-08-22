@@ -12,6 +12,7 @@ from whetstone.optim.contracts import (
     SearchEvidence,
     StepMode,
     StepStatus,
+    TerminalFailure,
 )
 from whetstone.optim.gepa.adapter import project_gepa_terminal
 from whetstone.optim.gepa.authorities import (
@@ -36,8 +37,12 @@ from whetstone.optim.gepa.step_engine import (
     load_gepa_checkpoint,
     run_one_gepa_iteration,
 )
+from whetstone.optim.gepa.upstream_adapter import GepaReflectionFailedError
 
 GEPA_ADAPTER_KEY = "gepa"
+#: Terminal-failure code for a reflection call that failed for a reason the
+#: bounded retry cannot fix (a transport or provider failure).
+GEPA_REFLECTION_FAILED_CODE = "gepa_reflection_failed"
 GEPA_TERMINAL_ARTIFACT_KEY = "terminal_artifact_ref"
 #: State-delta key holding the reflection responses this Step's search
 #: rejected. Present on every Step, terminal or not, so a skip is durable on
@@ -275,6 +280,13 @@ class GepaHarnessAdapter:
                     skipped=prefix_skipped,
                 ),
             )
+        except GepaReflectionFailedError as failure:
+            # The reflection calls this Step already paid for are recorded on
+            # the factory. Letting the exception escape would drop them from
+            # run cost for good: the durable effect cache marks the paid call
+            # replayed, so a resumed Step will not record it again either.
+            # The Step fails, but it fails carrying its spend.
+            return self._reflection_failure_output(failure)
         state_delta = _state_delta(
             checkpoint=checkpoint,
             skipped=_union_skipped_mutations(
@@ -361,9 +373,36 @@ class GepaHarnessAdapter:
             budget_delta=checkpoint.budget_delta,
         )
 
+    def _reflection_failure_output(
+        self, failure: GepaReflectionFailedError
+    ) -> AdapterOutput:
+        """Fail the Step while still reporting what its reflections cost.
+
+        Carries the reflection usage accumulated before the failure, plus the
+        mutations this Step skipped, so a failed Step is accounted for exactly
+        like a successful one.
+        """
+        return AdapterOutput(
+            proposed_status=StepStatus.FAILED,
+            terminal_failure=TerminalFailure(
+                code=GEPA_REFLECTION_FAILED_CODE,
+                message=str(failure),
+            ),
+            proposer_usage=self._adapter_factory.proposer_usage(),
+            state_delta=ImmutableJsonObject(
+                {
+                    GEPA_SKIPPED_MUTATIONS_KEY: [
+                        skipped.model_dump(mode="json")
+                        for skipped in self._adapter_factory.skipped_mutations()
+                    ]
+                }
+            ),
+        )
+
 
 __all__ = [
     "GEPA_ADAPTER_KEY",
+    "GEPA_REFLECTION_FAILED_CODE",
     "GEPA_SKIPPED_MUTATIONS_KEY",
     "GEPA_TERMINAL_ARTIFACT_KEY",
     "GepaHarnessAdapter",

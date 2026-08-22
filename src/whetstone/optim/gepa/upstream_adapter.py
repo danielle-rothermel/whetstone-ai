@@ -34,6 +34,16 @@ GEPA_UPSTREAM_ADAPTER_SCHEMA = "whetstone.gepa.upstream_adapter"
 GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION = 2
 #: One reflection attempt plus one bounded retry with the rejection fed back.
 GEPA_REFLECTION_MAX_ATTEMPTS = 2
+class GepaReflectionFailedError(RuntimeError):
+    """A reflection call failed for a reason retrying cannot fix.
+
+    Raised for a transport or provider failure, as opposed to a response the
+    parser rejected (which the bounded retry handles). The Step boundary
+    catches it so the reflection attempts already paid for on this Step reach
+    a Step Result instead of being lost with the exception.
+    """
+
+
 GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH = compute_identity_hash(
     schema=GEPA_UPSTREAM_ADAPTER_SCHEMA,
     schema_version=GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION,
@@ -439,9 +449,14 @@ class WhetstoneGepaAdapter:
                 )
             if result.failed:
                 # A rejected response is retryable; a transport or provider
-                # failure is not, and must still surface.
+                # failure is not, and must still surface. It surfaces as a
+                # typed failure so the Step boundary can turn it into a
+                # terminal Adapter Output that still carries the reflection
+                # spend recorded above -- a bare exception would lose it,
+                # while the durable effect cache would still mark the paid
+                # call replayed on a resume.
                 if not result.rejected_by_parser:
-                    raise RuntimeError(
+                    raise GepaReflectionFailedError(
                         result.failure_detail or "GEPA proposal effect failed"
                     )
                 prior_attempt = GepaRejectedAttempt(
@@ -533,5 +548,6 @@ __all__ = [
     "GEPA_UPSTREAM_ADAPTER_IDENTITY_HASH",
     "GEPA_UPSTREAM_ADAPTER_SCHEMA",
     "GEPA_UPSTREAM_ADAPTER_SCHEMA_VERSION",
+    "GepaReflectionFailedError",
     "WhetstoneGepaAdapter",
 ]

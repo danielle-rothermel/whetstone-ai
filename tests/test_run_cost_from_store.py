@@ -54,8 +54,16 @@ def _row(
     completion_tokens: int | None,
     provider_cost: float | None,
     cache_hit: bool = False,
+    failed: bool = False,
+    missing: bool = False,
 ) -> dict[str, Any]:
-    """A minimal output row in its persisted shape."""
+    """A minimal output row in its persisted shape.
+
+    ``failed`` / ``missing`` drive the exclusive row state the schema
+    enforces: an unscored row carries exactly one of them, and a scored row
+    carries neither.
+    """
+    scored = not (failed or missing)
     return {
         "candidate_id": "candidate-1",
         "task_id": f"task-{task_index}",
@@ -63,13 +71,13 @@ def _row(
         "task_index": task_index,
         "seed_index": 0,
         "rendered_prompt": "prompt",
-        "output_text": "answer",
-        "score": 1.0,
-        "failed": False,
-        "missing": False,
+        "output_text": "answer" if scored else None,
+        "score": 1.0 if scored else None,
+        "failed": failed,
+        "missing": missing,
         "invalid": False,
-        "failure_code": "",
-        "finish_reason": "stop",
+        "failure_code": "TRANSPORT_ERROR" if failed else "",
+        "finish_reason": "stop" if scored else None,
         "provider_error": None,
         "max_budget": None,
         "over_budget": None,
@@ -189,8 +197,8 @@ def test_one_unpriced_row_withholds_the_task_model_usd_total(
     assert report.task_model.usd is None
 
 
-def test_a_row_with_no_usage_evidence_is_not_a_call(tmp_path) -> None:
-    """No tokens and no price evidences no provider call: a missing row."""
+def test_a_failed_row_with_no_usage_evidence_is_not_a_call(tmp_path) -> None:
+    """A failed row with no telemetry never reached a billable provider."""
     with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
         ref = _persist_evidence(
             store,
@@ -206,6 +214,7 @@ def test_a_row_with_no_usage_evidence_is_not_a_call(tmp_path) -> None:
                     prompt_tokens=None,
                     completion_tokens=None,
                     provider_cost=None,
+                    failed=True,
                 ),
             ],
         )
@@ -218,6 +227,111 @@ def test_a_row_with_no_usage_evidence_is_not_a_call(tmp_path) -> None:
     assert report.task_model.calls == 1
     assert report.task_model.input_tokens == 10
     assert report.task_model.cached_calls == 0
+
+
+def test_a_missing_row_with_no_usage_evidence_is_not_a_call(tmp_path) -> None:
+    """A row that never ran is not a call however the run ended."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=None,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    provider_cost=None,
+                    missing=True,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 1
+
+
+def test_a_successful_row_without_telemetry_is_a_billable_call(
+    tmp_path,
+) -> None:
+    """The provider answered, so the run paid for the call regardless.
+
+    A successful row proves a provider call happened. Dropping it because no
+    usage came back understates ``calls`` and -- worse -- lets the remaining
+    priced rows present a partial ``usd`` as a complete run total. Counting
+    it as unpriced is the honest outcome: the call is in ``calls``, and
+    ``usd`` is withheld.
+    """
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.5,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    provider_cost=None,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 2
+    assert report.task_model.priced_calls == 1
+    assert report.task_model.unpriced_calls == 1
+    assert report.task_model.rows_missing_token_breakdown == 1
+    assert report.task_model.input_tokens == 10
+    assert report.task_model.usd is None
+
+
+def test_a_failed_row_that_was_billed_still_counts(tmp_path) -> None:
+    """A failure the provider charged for is spend the run really made."""
+    with open_sqlite(str(tmp_path / "cost.sqlite")) as store:
+        ref = _persist_evidence(
+            store,
+            [
+                _row(
+                    task_index=0,
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    provider_cost=0.5,
+                ),
+                _row(
+                    task_index=1,
+                    prompt_tokens=7,
+                    completion_tokens=0,
+                    provider_cost=0.25,
+                    failed=True,
+                ),
+            ],
+        )
+        report = aggregate_run_cost(
+            store=store,
+            step_results=(
+                _FakeStepResult(resolved_intents=(_FakeCitation(ref),)),
+            ),
+        )
+    assert report.task_model.calls == 2
+    assert report.task_model.input_tokens == 17
+    assert report.task_model.usd == pytest.approx(0.75)
 
 
 def test_a_cache_hit_row_is_reported_but_never_billed(tmp_path) -> None:

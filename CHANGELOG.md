@@ -75,6 +75,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   but no per-direction token split still counts and still contributes its
   price; `rows_missing_token_breakdown` records that its tokens are missing
   from the token totals.
+- What counts as a billable call is decided by whether a provider answered,
+  not by whether telemetry came back with the answer. An evaluation row that
+  succeeded counts as a call even when the provider reported no usage and no
+  price: it is counted as *unpriced*, which withholds `usd` rather than
+  letting the remaining priced rows present a partial sum as a run total, and
+  it is recorded in `rows_missing_token_breakdown`. Only a failed or missing
+  row with no telemetry at all -- a failure before the provider answered, or
+  a row that never ran -- is excluded, along with cache hits.
+- A call that was billed and then *failed* still counts, in both roles. A
+  task-model row that failed but carried usage contributes its call, tokens,
+  and price while staying failed for scoring; a proposer draft that reached a
+  provider and came back empty does the same. A draft that made no provider
+  call at all reports no usage and is recorded as nothing, so a scripted
+  underfill can no longer appear as a priced zero-dollar call.
+- Retries are counted per billed attempt. When the execution policy retries a
+  response-level failure, the rejected response was still generated and still
+  charged, so `call_telemetry` sums tokens and price across every attempt
+  that carried a response instead of reporting only the terminal generation.
+  An attempt that failed at the transport carried no response and is not
+  billed.
+- A GEPA Step that dies on a reflection failure no bounded retry can fix now
+  fails through a terminal Adapter Output carrying the `proposer_usage` it
+  accumulated, rather than raising it away. The durable effect cache marks
+  those paid calls replayed, so a resumed Step would not have recorded them
+  either and the spend was lost for good.
 - `usd` is reported only when every contributing call carried a
   provider-reported price, so a partial sum is never presented as a run
   total. When any call lacks a price the field is absent and the
@@ -106,52 +131,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GEPA, and MIPROv2 through `AdapterOutput.proposer_usage` rather than three
   different state layouts. Each entry carries a `call_id` -- GEPA's
   reflection effect request hash, the proposer's logical call id for COPRO
-  and MIPROv2 -- so run cost can de-duplicate it the way it de-duplicates an
+  and MIPROv2, which the scripted `FakeProposerTransport` now mints in the
+  same shape so the toy path exercises de-duplication instead of disabling
+  it -- so run cost can de-duplicate it the way it de-duplicates an
   evidence ref. GEPA records every reflection attempt it *paid for*,
   including one a bounded retry later recovered from; a reflection the
   durable effect cache replayed is not recorded, because GEPA re-drives its
   whole reflection prefix from that cache on every Step and the Step that
   first drove the call already carries its spend.
   `STEP_RESULT_SCHEMA_VERSION` is now 4.
-
-### Added
-
-- `prepare_miprov2_run` wires MIPROv2 through the in-process harness: a
-  step-contract provider registered by adapter key, opening state under
-  `MIPROV2_STATE_KEY`, and an explicit `experiment` plus `initial_state`.
-  Toy callers use `register_toy_runtime(..., extra_adapters={...})` with
-  `build_miprov2_adapter` / `prepare_toy_miprov2_run`. MIPROv2 is not on
-  the platform pipeline.
-- `Miprov2DemoMode` (`fewshot`, `zeroshot`, `ground_only`) is the persisted
-  demo decision. `zeroshot_opt` is derived from it. Faithful zeroshot keeps
-  control maxima at 0/0 and the demo dimension out of the study, but still
-  bootstraps 3/0 demos to ground instruction proposals and then discards
-  them (DSPy's zero-shot path). `ground_only` is the Whetstone extension:
-  it bootstraps fewshot-sized pools to ground proposals, never attaches a
-  demo set to a candidate, and marks the study transcript as a deviation.
-  Both non-searching modes share the zeroshot auto-mode trial/instruct
-  arm (`num_instruct_candidates = n`, one search variable per component).
-
-
-- `build_runtime` assembles a `RegisteredRuntime` from explicit
-  collaborators (store, engine, adapter registry, lease authority).
-  Platform mode requires a ledger engine so fan-in verification cannot
-  be silently off. `RegisteredRuntime.close()` forwards to the eval
-  engine (and any closeable authority).
-- `whetstone.testing.register_toy_runtime` holds the former toy
-  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
-- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
-  by integration tests and the CLI. `PlatformDbosConfig` is constructed
-  with explicit `application_version` and `executor_id`.
-- `whetstone-optim run`, `status`, and `result` submit a bound launch
-  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
-  to a live `ProviderProposerTransport` (`--proposer provider`);
-  `--proposer fake` keeps the scripted transport for tests. Controller
-  identity is pinned by `--owner-id`, or derived from
-  `--application-version` + `--executor-id`. The CLI always closes the
-  runtime if `build_runtime` succeeded, including when `deploy_platform`
-  fails. Effect leases persist on `--store-path` so a restarted CLI can
-  replay a completed proposal or eval instead of charging again.
 
 ### Changed
 
@@ -251,6 +239,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.1.4 - 2026-08-22
 
+### Added
+
+- `prepare_miprov2_run` wires MIPROv2 through the in-process harness: a
+  step-contract provider registered by adapter key, opening state under
+  `MIPROV2_STATE_KEY`, and an explicit `experiment` plus `initial_state`.
+  Toy callers use `register_toy_runtime(..., extra_adapters={...})` with
+  `build_miprov2_adapter` / `prepare_toy_miprov2_run`. MIPROv2 is not on
+  the platform pipeline.
+- `Miprov2DemoMode` (`fewshot`, `zeroshot`, `ground_only`) is the persisted
+  demo decision. `zeroshot_opt` is derived from it. Faithful zeroshot keeps
+  control maxima at 0/0 and the demo dimension out of the study, but still
+  bootstraps 3/0 demos to ground instruction proposals and then discards
+  them (DSPy's zero-shot path). `ground_only` is the Whetstone extension:
+  it bootstraps fewshot-sized pools to ground proposals, never attaches a
+  demo set to a candidate, and marks the study transcript as a deviation.
+  Both non-searching modes share the zeroshot auto-mode trial/instruct
+  arm (`num_instruct_candidates = n`, one search variable per component).
+
+### Changed
 
 - MIPROv2 control schema version 6 → 7; GEPA control schema version 1 → 2.
   `num_threads` is removed from both controls (concurrency belongs to the
@@ -269,6 +276,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.1.3 - 2026-08-21
 
+### Added
+
+- `build_runtime` assembles a `RegisteredRuntime` from explicit
+  collaborators (store, engine, adapter registry, lease authority).
+  Platform mode requires a ledger engine so fan-in verification cannot
+  be silently off. `RegisteredRuntime.close()` forwards to the eval
+  engine (and any closeable authority).
+- `whetstone.testing.register_toy_runtime` holds the former toy
+  defaults (`/tmp` sqlite, `DummyProposerTransport`, toy COPRO).
+- `platform/deploy.py` is the shared DBOS/queue/dispatcher assembly used
+  by integration tests and the CLI. `PlatformDbosConfig` is constructed
+  with explicit `application_version` and `executor_id`.
+- `whetstone-optim run`, `status`, and `result` submit a bound launch
+  and read the run manifest / `OptimPlatformRunResult`. `run` defaults
+  to a live `ProviderProposerTransport` (`--proposer provider`);
+  `--proposer fake` keeps the scripted transport for tests. Controller
+  identity is pinned by `--owner-id`, or derived from
+  `--application-version` + `--executor-id`. The CLI always closes the
+  runtime if `build_runtime` succeeded, including when `deploy_platform`
+  fails. Effect leases persist on `--store-path` so a restarted CLI can
+  replay a completed proposal or eval instead of charging again.
 
 ### Removed
 

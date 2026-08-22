@@ -47,10 +47,10 @@ __all__ = ["aggregate_run_cost"]
 class EvalOutputRowUsage(BaseModel):
     """The usage fields of one persisted ``EvalOutputRow``.
 
-    A narrow read-side projection: cost aggregation needs three fields, so it
-    parses only those and ignores the rest of the row. The field names are
-    the persisted spelling pinned by
-    ``tests/test_eval_evidence_schema_golden.py``.
+    A narrow read-side projection: cost aggregation needs the usage fields
+    plus enough row state to tell a call that happened from one that never
+    did, and ignores the rest of the row. The field names are the persisted
+    spelling pinned by ``tests/test_eval_evidence_schema_golden.py``.
     """
 
     model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
@@ -61,6 +61,11 @@ class EvalOutputRowUsage(BaseModel):
     #: The prompt cache replayed this row's call, so the usage above is the
     #: original call's and this row was not paid for again.
     cache_hit: bool = False
+    #: Row state. A row that is neither failed nor missing reached the
+    #: provider and got an answer back, which is a billable call whether or
+    #: not the provider reported any usage telemetry alongside it.
+    failed: bool = False
+    missing: bool = False
 
 
 def _evidence_refs(result: OptimStepResult) -> tuple[TypedRef, ...]:
@@ -105,26 +110,31 @@ def _task_model_observations(
 def _row_observation(row: EvalOutputRowUsage) -> UsageObservation | None:
     """Classify one output row as billable, cached, or no call at all.
 
-    Any recorded usage -- a token count *or* a provider-reported price -- is
-    positive evidence the provider answered, so the row is a call. A price
-    without a token split still counts, and still contributes its price;
-    ``rows_missing_token_breakdown`` records that its tokens are unknown so
-    the token totals are not read as complete.
-
     A row the prompt cache replayed carries the original call's usage
     verbatim. It is reported as a cached call and contributes nothing
     billable, which is what keeps a cache hit from being charged twice.
 
-    A row with no tokens and no price evidences no provider call at all -- a
-    missing row, or a failure before the provider answered -- and is dropped.
+    Otherwise the row is billable when *either* the provider left usage
+    telemetry -- a token count or a provider-reported price -- or the row
+    itself succeeded. A row that is neither failed nor missing has an
+    answer from the provider, so the call happened and was paid for even
+    when no telemetry came back with it. Such a row counts as a call and as
+    an *unpriced* one, which withholds ``usd`` rather than letting a partial
+    sum present itself as a run total; ``rows_missing_token_breakdown``
+    records that its tokens are missing from the token totals.
+
+    Only a row with no telemetry that also failed or went missing evidences
+    no provider call -- a failure before the provider answered, or a row
+    that never ran -- and is dropped.
     """
     has_tokens = (
         row.prompt_tokens is not None or row.completion_tokens is not None
     )
-    if not has_tokens and row.provider_cost is None:
-        return None
+    has_telemetry = has_tokens or row.provider_cost is not None
     if row.cache_hit:
-        return UsageObservation(cached=True)
+        return UsageObservation(cached=True) if has_telemetry else None
+    if not has_telemetry and (row.failed or row.missing):
+        return None
     return UsageObservation(
         input_tokens=row.prompt_tokens or 0,
         output_tokens=row.completion_tokens or 0,

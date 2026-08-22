@@ -233,8 +233,16 @@ class ProposalDraft(BaseModel):
     def failed(self) -> bool:
         return self.terminal_failure is not None
 
-    def call_usage(self) -> ProposerCallUsage:
+    def call_usage(self) -> ProposerCallUsage | None:
         """Project this draft's provider usage onto the run cost contract.
+
+        ``None`` when this draft made no provider call, which run cost then
+        records as nothing at all. A draft only reaches a provider through a
+        ``logical_call_id``, so a draft without one -- a batch slot the
+        proposer never filled -- was never billed and must not appear as a
+        priced zero-dollar call inflating ``calls`` or completing a ``usd``
+        total. A draft that called and *failed* still has its id and still
+        reports its usage: it was billed like any other call.
 
         ``usage`` is a dr-providers ``TokenUsage`` dump, so its keys are the
         provider contract rather than local spelling. A field the provider
@@ -242,15 +250,17 @@ class ProposalDraft(BaseModel):
         provider reported no price, which keeps the run total honest about
         what it does not know.
 
-        The call identity is the ``logical_call_id`` this draft's request
-        evidence already carries, which is derived from the proposal request
-        and batch slot and so is stable across a re-drive. Run cost
-        de-duplicates on it, so a Step Result replayed after a crash reports
-        the same proposer spend as the uninterrupted one.
+        The call identity is derived from the proposal request and batch slot
+        and so is stable across a re-drive. Run cost de-duplicates on it, so a
+        Step Result replayed after a crash reports the same proposer spend as
+        the uninterrupted one.
         """
+        call_id = self.logical_call_id
+        if not call_id:
+            return None
         usage = self.usage.to_json()
         return ProposerCallUsage(
-            call_id=self.logical_call_id,
+            call_id=call_id,
             prompt_tokens=_usage_tokens(usage, "prompt_tokens"),
             completion_tokens=_usage_tokens(usage, "completion_tokens"),
             usd=self.cost,
@@ -759,11 +769,29 @@ class FakeProposerTransport:
             "request_ordinal": request.request_ordinal,
             "proposer_config": config.identity_payload(),
         }
+
+        def call_id(slot: int) -> str:
+            """The scripted stand-in for a provider call's identity.
+
+            Same shape and same inputs as the provider transport's, so the
+            toy path exercises run cost's de-duplication instead of silently
+            disabling it: two re-drives of one request mint one id, and two
+            batch slots mint two.
+            """
+            return (
+                f"fake-proposer:{config.identity_hash()}:"
+                f"{self.execution_policy_hash}:"
+                f"{self.prompt_adapter_identity_hash}:"
+                f"{request.identity_hash()}:{slot}"
+            )
         drafts: list[ProposalDraft] = []
         for index in range(count):
             if index < len(templates):
                 text = templates[index]
             else:
+                # No provider call was made for this slot, so it carries
+                # no call identity and no price: run cost must record
+                # nothing rather than a zero-dollar phantom call.
                 drafts.append(
                     ProposalDraft.failure(
                         detail=(
@@ -775,16 +803,19 @@ class FakeProposerTransport:
                             "draft_index": index,
                         },
                         usage={"proposer_calls": 0},
+                        cost=None,
                     )
                 )
                 continue
             if not text:
+                # A call was made and came back empty: billed, and failed.
                 drafts.append(
                     ProposalDraft.failure(
                         detail="scripted proposer produced an empty draft",
                         request_evidence={
                             **evidence_base,
                             "draft_index": index,
+                            "logical_call_id": call_id(index),
                         },
                         usage={"proposer_calls": 1},
                     )
@@ -793,7 +824,10 @@ class FakeProposerTransport:
             drafts.append(
                 ProposalDraft(
                     template=text,
-                    request_evidence=evidence_base,
+                    request_evidence={
+                        **evidence_base,
+                        "logical_call_id": call_id(index),
+                    },
                     response_evidence={"draft_index": index},
                     usage={"proposer_calls": 1},
                     cost=0.0,

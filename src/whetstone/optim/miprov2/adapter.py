@@ -529,7 +529,9 @@ class Miprov2Adapter:
         budget_delta = BudgetDelta(consumed={"proposal_calls": 1})
         if advanced.proposal_state is None:
             raise ValueError("folded proposal state disappeared")
-        proposer_usage = (draft.call_usage(),)
+        # ``None`` when the draft made no provider call: nothing to bill.
+        draft_usage = draft.call_usage()
+        proposer_usage = () if draft_usage is None else (draft_usage,)
         if advanced.proposal_state.stage != MIPROV2_FAILED:
             return AdapterOutput(
                 budget_delta=budget_delta,

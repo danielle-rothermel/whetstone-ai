@@ -952,7 +952,13 @@ class CoproAdapter:
         evidence: list[dict[str, Any]] = []
         round_start = iteration * config.breadth
         reserved_candidate_ids = {initial.candidate_id}
-        proposer_usage = tuple(draft.call_usage() for draft in drafts)
+        # A draft that made no provider call reports no usage, so a
+        # scripted underfill never becomes a priced zero-dollar call.
+        proposer_usage = tuple(
+            usage
+            for usage in (draft.call_usage() for draft in drafts)
+            if usage is not None
+        )
         for index, draft in enumerate(drafts):
             occurrence_ordinal = round_start + index
             candidate_id = f"copro:{request.run_id}:{occurrence_ordinal}"

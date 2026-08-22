@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from whetstone.provider.attempt import ProviderCallResult
 from whetstone.provider.classification import SemanticFailureClass
 from whetstone.provider.policy import ProviderExecutionPolicy
+
+if TYPE_CHECKING:
+    from dr_providers import ProviderTransportResponse
 
 __all__ = [
     "GUARD_MARGIN_SECONDS",
@@ -34,32 +39,83 @@ class CallTelemetry:
 
 
 def call_telemetry(result: ProviderCallResult | None) -> CallTelemetry:
+    """Accounting for one logical call, summed over every billed attempt.
+
+    A logical call can cost more than one provider response. When the
+    execution policy retries a response-level failure such as
+    ``BLANK_PROVIDER_GENERATION``, the rejected response was still generated
+    and still billed, and it stays on the attempt's ``rejected_response``.
+    Reporting only the terminal generation would drop that spend, so tokens
+    and ``provider_cost`` are summed across every attempt that carried a
+    response -- accepted or rejected.
+
+    The same rule makes a *failed* call report its usage: a call that
+    exhausted its retries having been billed for each one contributes its
+    tokens and price like any other, while ``provider_error`` still marks it
+    failed for scoring. Only an attempt that never got a response back (a
+    transport failure) contributes nothing, because nothing was billed.
+
+    ``finish_reason`` describes the outcome the caller acts on, so it comes
+    from the accepted generation alone and stays absent for a failed call.
+    """
     if result is None:
         return CallTelemetry()
-    if not result.succeeded or result.provider_generation is None:
-        return CallTelemetry(
-            latency_s=_accepted_latency(result),
-            provider_error=_provider_error_of(result),
+    responses = tuple(_billed_responses(result))
+    prompt_tokens, completion_tokens = None, None
+    total_tokens, reasoning_tokens = None, None
+    provider_cost: float | None = None
+    for response in responses:
+        if response.cost is not None:
+            provider_cost = (provider_cost or 0.0) + response.cost.total_cost
+        usage = response.usage
+        if usage is None:
+            continue
+        prompt_tokens = _add(prompt_tokens, usage.prompt_tokens)
+        completion_tokens = _add(completion_tokens, usage.completion_tokens)
+        total_tokens = _add(total_tokens, usage.total_tokens)
+        reasoning_tokens = _add(
+            reasoning_tokens, getattr(usage, "reasoning_tokens", None)
         )
-    response = result.provider_generation.response
-    usage = response.usage
-    finish_reason = response.stop_reason
-    provider_cost = response.cost.total_cost if response.cost is not None else None
-    if usage is None:
-        return CallTelemetry(
-            latency_s=_accepted_latency(result),
-            finish_reason=finish_reason,
-            provider_cost=provider_cost,
-        )
+    accepted = result.provider_generation
     return CallTelemetry(
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        total_tokens=usage.total_tokens,
-        reasoning_tokens=getattr(usage, "reasoning_tokens", None),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        reasoning_tokens=reasoning_tokens,
         latency_s=_accepted_latency(result),
-        finish_reason=finish_reason,
+        finish_reason=(
+            accepted.response.stop_reason if accepted is not None else None
+        ),
+        provider_error=_provider_error_of(result),
         provider_cost=provider_cost,
     )
+
+
+def _add(running: int | None, value: int | None) -> int | None:
+    """Sum token counts, keeping ``None`` for "no attempt reported this"."""
+    if value is None:
+        return running
+    return value if running is None else running + value
+
+
+def _billed_responses(
+    result: ProviderCallResult,
+) -> Iterator[ProviderTransportResponse]:
+    """Every provider response this logical call was billed for, in order.
+
+    An attempt is billed when the provider produced a response: the accepted
+    generation, or a response the classifier rejected (blank, malformed) but
+    the provider had already generated and charged for. An attempt that
+    failed at the transport carries no response and is not billed.
+    """
+    for attempt in result.attempts:
+        if attempt.provider_generation is not None:
+            yield attempt.provider_generation.response
+        elif (
+            attempt.semantic_failure is not None
+            and attempt.semantic_failure.rejected_response is not None
+        ):
+            yield attempt.semantic_failure.rejected_response
 
 
 def _provider_error_of(
