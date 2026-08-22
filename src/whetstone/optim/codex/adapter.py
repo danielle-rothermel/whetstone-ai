@@ -293,7 +293,7 @@ class CodexAdapter:
                     },
                 ),
             )
-        except CodexStructuredExecutionFailure as exc:
+        except OpaqueStepError as exc:
             # A nonzero exit, an unspawnable process, an unreadable or
             # malformed final message. It is not the wall stop, but it
             # ends the Step the same way: the harness only runs its
@@ -301,11 +301,20 @@ class CodexAdapter:
             # AdapterOutput, so an exception escaping here leaves the
             # effect non-terminal, and this adapter's NO_REDRIVE policy
             # then blocks the run from recovering until the lease lapses.
+            #
+            # This catches the base class, not just the structured
+            # subclass: a zero-exit run whose artifact fails schema
+            # validation, and a dr-exec ExecutorFailure, both raise the
+            # base error from inside the runner. Terminalizing is about
+            # releasing the lease, so every way the runner can fail has
+            # to leave through here -- narrowing this to the subclass is
+            # what let those two escape.
+            isolation = getattr(exc, "isolation", {})
             return self._terminalize(
                 handle,
                 state_delta={
                     "tool_namespace": str(config.store_namespace_key),
-                    "codex_isolation": exc.isolation,
+                    "codex_isolation": isolation,
                 },
                 fallback=TerminalFailure(
                     code=CODEX_EXECUTION_FAILED_CODE,

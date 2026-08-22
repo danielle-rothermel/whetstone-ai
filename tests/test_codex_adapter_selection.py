@@ -43,6 +43,7 @@ from whetstone.optim.codex.adapter import (
     CodexRunResult,
     CodexStructuredExecutionFailure,
     CodexWallBudgetExceeded,
+    OpaqueStepError,
     codex_lease_token_hash,
 )
 from whetstone.optim.contracts import (
@@ -863,6 +864,62 @@ def test_a_structured_execution_failure_terminalizes_the_step(
 
     retried = world.run_step_with_runner(
         _ExecutionFailureRunner(world, calls=[("c2", _TEMPLATE_B)])
+    )
+    assert retried.status is StepStatus.FAILED
+
+
+class _BaseRunnerFailureRunner:
+    """Pays for one evaluation, then fails the way the runner's own
+    parsing does.
+
+    A zero-exit CLI whose final artifact fails schema validation, and a
+    dr-exec ``ExecutorFailure``, both surface as the *base*
+    ``OpaqueStepError`` rather than the structured subclass. The Step
+    must still terminalize: the failure taxonomy is about which thing
+    broke, not about whether the lease is released.
+    """
+
+    def __init__(self, world, *, calls) -> None:
+        self._world = world
+        self._calls = calls
+
+    def run(self, request, handle, *, lease_token):
+        del request, handle, lease_token
+        for call_id, template in self._calls:
+            self._world.issue(call_id, template)
+        raise OpaqueStepError(
+            "Codex final output artifact failed schema validation"
+        )
+
+
+def test_a_base_runner_failure_terminalizes_the_step(
+    selection_world,
+) -> None:
+    """A schema-invalid artifact must not escape ``invoke``.
+
+    The runner raises the base ``OpaqueStepError`` for a zero-exit run
+    whose artifact fails validation. Catching only the structured
+    subclass let that unwind past the adapter checkpoint, so the harness
+    never ran ``maintenance.fail`` and this ``NO_REDRIVE`` effect stayed
+    nonterminal. The evidence that the lease was released is a state
+    fact: the identical Step runs again immediately rather than raising
+    ``EffectBusyError``.
+    """
+    world = selection_world()
+
+    result = world.run_step_with_runner(
+        _BaseRunnerFailureRunner(world, calls=[("c1", _TEMPLATE_A)])
+    )
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_EXECUTION_FAILED_CODE
+    # The evaluation it paid for before failing stays on the ledger.
+    assert len(result.tool_evidence) == 1
+    assert result.budget_delta.consumed["tool_calls"] == 1
+
+    retried = world.run_step_with_runner(
+        _BaseRunnerFailureRunner(world, calls=[("c2", _TEMPLATE_B)])
     )
     assert retried.status is StepStatus.FAILED
 
