@@ -12,7 +12,10 @@ import pytest
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.codex.runner import SubprocessCodexRunner
-from whetstone.testing.toy.experiment import TOY_MUTATION_FIELD
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    toy_template_render_contract,
+)
 
 
 _TASK_MODEL_KEY_VALUE = "sk-TASK-MODEL-KEY"
@@ -30,8 +33,12 @@ def _runner(
     Nothing here executes: the tests read the two environments the runner
     computes at construction, which is where the boundary is decided.
     """
+    # Production always carries both rendering settings onto the config
+    # the out-of-process server rebuilds its engine from, and the server
+    # refuses a config missing either.
     runtime_config = ReferenceEvalRuntimeConfig(
-        mutation_field=TOY_MUTATION_FIELD
+        mutation_field=TOY_MUTATION_FIELD,
+        render_contract=toy_template_render_contract(),
     )
     return SubprocessCodexRunner(
         executor=_NeverRunExecutor(),
@@ -162,8 +169,12 @@ def _server_environment(tmp_path, sqlite_store, *, run_id: str) -> dict:
     )
     binding = toy_capacity_binding(run)
     token = f"token-for-{run_id}"
+    # Production always carries both rendering settings onto the config
+    # the out-of-process server rebuilds its engine from, and the server
+    # refuses a config missing either.
     runtime_config = ReferenceEvalRuntimeConfig(
-        mutation_field=TOY_MUTATION_FIELD
+        mutation_field=TOY_MUTATION_FIELD,
+        render_contract=toy_template_render_contract(),
     )
     return {
         McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),

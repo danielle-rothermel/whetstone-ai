@@ -499,8 +499,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutation field made every tool call fail preflight and a non-default
   render contract could score a different prompt than the harness
   declared. The server refuses to start when the configuration cannot
-  supply the field or when it disagrees with the Tool Config's
-  `candidate_template_field`.
+  supply the field, when it disagrees with the Tool Config's
+  `candidate_template_field`, or when it carries no render contract. The
+  contract previously defaulted silently to the toy one even though the
+  mutation-field check passed, so the server rendered the agent's
+  candidate under different rules than the harness scored the baseline
+  with and reported the result as comparable.
+- MCP host setup and lifecycle failures terminalize the step instead of
+  escaping it. `build_server_from_env` raising on a mismatched runtime
+  configuration, and `CodexMcpHost.__enter__` raising `CodexMcpHostError`
+  for a squatted port, a bind or lifespan failure, or a startup that
+  missed its deadline, are not `OpaqueStepError`, so they unwound past
+  the adapter checkpoint and left that `NO_REDRIVE` effect non-terminal
+  until the lease lapsed. They now fail the step under
+  `codex_mcp_host_failed`, which the ledger keeps distinct from an agent
+  that ran and failed: the Codex process never started, so nothing was
+  paid for.
+- Schema and JSONL parse failures keep their isolation evidence. Both
+  were raised as a bare `OpaqueStepError` after `_execute_structured`
+  had already built the isolation record, so the terminalized step stored
+  an empty `codex_isolation` -- no profile, no budgets, and no output
+  truncation flags, leaving a reader unable to tell a malformed artifact
+  from one the output budget cut in half.
 
 ### Known limitations
 

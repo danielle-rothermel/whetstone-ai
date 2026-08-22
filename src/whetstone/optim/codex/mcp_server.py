@@ -64,6 +64,20 @@ def build_server_from_env(
             f"{persisted_field!r} does not match the Tool Config's "
             f"{tool_config.candidate_template_field!r}"
         )
+    # The render contract is the other half of the rendering identity,
+    # and it defaults just as silently: an absent one falls through to
+    # the toy contract, so the server would render the agent's candidate
+    # under different rules than the harness scored the baseline with and
+    # report the result as comparable. Nothing downstream catches that --
+    # both renders succeed -- so it is refused here, symmetric with the
+    # mutation field. Unlike the field, the Tool Config pins no rendering
+    # identity to cross-check against, so presence is the whole check.
+    if getattr(runtime, "render_contract", None) is None:
+        raise ValueError(
+            "MCP runtime config does not carry the launch render "
+            "contract; the evaluation server cannot rebuild the launch's "
+            "engine and would silently evaluate under the toy defaults"
+        )
     engine = runtime.build_engine(store)
     if reward_policy.identity_hash() != tool_config.reward_policy_hash:
         raise ValueError("MCP reward policy does not match Tool Config")

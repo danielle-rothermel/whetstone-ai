@@ -584,3 +584,64 @@ def test_the_mcp_server_refuses_a_runtime_config_without_the_field(
 
     with pytest.raises(ValueError, match="mutation field"):
         build_server_from_env(environment)
+
+
+def test_the_mcp_server_refuses_a_runtime_config_without_the_contract(
+    tmp_path, sqlite_store
+) -> None:
+    """The render contract defaults as silently as the mutation field.
+
+    A config carrying the launch's mutation field but no render contract
+    passes the field check and then falls through to the *toy* contract,
+    so the server renders the agent's candidate under different rules
+    than the harness scored the baseline with. Both renders succeed, so
+    nothing downstream catches it; the server refuses to start instead.
+    """
+    from tests.codex_support import (
+        toy_capacity_binding,
+        toy_codex_control,
+        toy_codex_run,
+    )
+    from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+    from whetstone.optim.codex.adapter import codex_run_lease_binding
+    from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
+    from whetstone.optim.codex.mcp_server import build_server_from_env
+    from whetstone.optim.codex.runner import _capacity_subject_key
+
+    engine = ReferenceEvalRuntimeConfig().build_engine(sqlite_store)
+    control = toy_codex_control(engine=engine, max_tool_calls=2)
+    run, config, _candidate = toy_codex_run(
+        control=control, engine=engine, run_id="codex-no-contract"
+    )
+    binding = toy_capacity_binding(run)
+    token = "token-for-codex-no-contract"
+    # The field the Tool Config pins, so the mutation-field guard passes
+    # and the render contract is the only thing missing.
+    without_contract = ReferenceEvalRuntimeConfig(
+        mutation_field=config.candidate_template_field
+    )
+    environment = {
+        McpEnvironmentKey.SQLITE_PATH: str(tmp_path / "server.sqlite"),
+        McpEnvironmentKey.TOOL_CONFIG: config.model_dump_json(),
+        McpEnvironmentKey.CAPACITY_BINDING: binding.model_dump_json(),
+        McpEnvironmentKey.RUNTIME_CONFIG: (
+            without_contract.model_dump_json()
+        ),
+        McpEnvironmentKey.RUNTIME_CONFIG_CLASS: (
+            "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
+        ),
+        McpEnvironmentKey.REWARD_POLICY: (
+            engine.reward_policy.model_dump_json()
+        ),
+        McpEnvironmentKey.RUN_LEASE_TOKEN: token,
+        McpEnvironmentKey.RUN_LEASE_BINDING: codex_run_lease_binding(
+            token=token,
+            store_namespace_key=str(config.store_namespace_key),
+            tool_config_hash=str(config.identity_hash()),
+            capacity_scope=binding.scope.value,
+            capacity_subject=_capacity_subject_key(binding),
+        ),
+    }
+
+    with pytest.raises(ValueError, match="render contract"):
+        build_server_from_env(environment)

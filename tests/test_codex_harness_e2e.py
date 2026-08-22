@@ -61,7 +61,10 @@ from whetstone.testing.fake_codex_cli import (
     FAKE_CODEX_TRANSCRIPT_ENV,
     install_fake_codex_binary,
 )
-from whetstone.testing.toy.experiment import TOY_MUTATION_FIELD
+from whetstone.testing.toy.experiment import (
+    TOY_MUTATION_FIELD,
+    toy_template_render_contract,
+)
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "darwin",
@@ -157,7 +160,8 @@ class _CodexWorld:
             executor=build_codex_executor(run_root=self.tmp_path / "runs"),
             sqlite_path=self.sqlite_path,
             runtime_config=ReferenceEvalRuntimeConfig(
-                mutation_field=TOY_MUTATION_FIELD
+                mutation_field=TOY_MUTATION_FIELD,
+                render_contract=toy_template_render_contract(),
             ),
             runtime_config_class=(
                 "whetstone.eval.reference_runtime:ReferenceEvalRuntimeConfig"
