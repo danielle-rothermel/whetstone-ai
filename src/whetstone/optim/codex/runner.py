@@ -40,7 +40,7 @@ from dr_exec import (
 from dr_serialize import StrictJsonDecodeError, decode_strict_json_bytes
 from pydantic import ValidationError
 
-from whetstone.experiment.candidate import candidate_reference
+from whetstone.experiment.candidate import CandidateRef, candidate_reference
 from whetstone.experiment.reward import RewardPolicy
 from whetstone.optim.codex.adapter import (
     CodexMcpHostFailure,
@@ -719,23 +719,30 @@ class SubprocessCodexRunner:
 
         host = _entered_mcp_host(_build_host)
         with host as endpoint:
-            prompt = (
-                _default_prompt(
-                    request,
-                    tool_name=handle.config.tool_name,
-                    lease_token_hash=token_hash,
-                    max_tool_calls=(
-                        handle.config.capacity.max_accepted_calls
-                    ),
-                    model_route=(
-                        built[0].expected_model_route or "" if built else ""
-                    ),
-                    base_ref=_request_base_ref_json(request),
-                )
-                if self._prompt_builder is None
-                else self._prompt_builder(request)
-            )
             try:
+                # Building the prompt is inside the try for the same
+                # reason the execution is: it reads the built server, the
+                # Step Request, and a caller-supplied builder, and an
+                # unexpected shape or a raising builder is none of the
+                # three exceptions the adapter catches. Escaping here
+                # would unwind past the adapter's checkpoint and leave
+                # this NO_REDRIVE effect nonterminal until its lease
+                # lapsed, so it is normalized like every other failure
+                # under an entered host.
+                prompt = (
+                    _default_prompt(
+                        request,
+                        tool_name=handle.config.tool_name,
+                        lease_token_hash=token_hash,
+                        max_tool_calls=(
+                            handle.config.capacity.max_accepted_calls
+                        ),
+                        model_route=_expected_model_route(built),
+                        base_ref=_request_base_ref_json(request),
+                    )
+                    if self._prompt_builder is None
+                    else self._prompt_builder(request)
+                )
                 execution = self._execute_structured(
                     prompt=prompt,
                     output_schema=schema,
@@ -747,12 +754,13 @@ class SubprocessCodexRunner:
                 # and the adapter terminalizes them as they are.
                 raise
             except Exception as exc:
-                # An unforeseen defect inside the execution path. It
-                # still has to terminalize -- the harness releases the
-                # effect lease only once the adapter returns, so
-                # unwinding here wedges this NO_REDRIVE run until the
-                # lease lapses -- but under the execution taxonomy,
-                # because the host is up and the agent may have run.
+                # An unforeseen defect in building the prompt or running
+                # the agent. It still has to terminalize -- the harness
+                # releases the effect lease only once the adapter
+                # returns, so unwinding here wedges this NO_REDRIVE run
+                # until the lease lapses -- but under the execution
+                # taxonomy, because the host is up and the agent may
+                # have run.
                 raise OpaqueStepError(
                     f"Codex execution failed unexpectedly: {exc}"
                 ) from exc
@@ -1083,6 +1091,55 @@ class SubprocessCodexRunner:
         return (root.resolve(),)
 
 
+def _seed_candidate_reference(request: OptimStepRequest) -> CandidateRef:
+    """The run's seed candidate, resolved by identity rather than position.
+
+    This is the same resolution the adapter's seed-retaining path makes:
+    the run names its ``initial_candidate_ref``, and the candidate on the
+    Request carrying that reference is the base every evaluation binds.
+    Reading ``candidates[0]`` instead would be silently wrong for any
+    Request whose first candidate is not the seed.
+    """
+    seed_ref = request.run.record.initial_candidate_ref
+    if seed_ref is None:
+        raise OpaqueStepError(
+            "Codex prompt requires the run to name its initial candidate"
+        )
+    for candidate in request.candidates:
+        reference = candidate_reference(candidate)
+        if reference == seed_ref:
+            return reference
+    raise OpaqueStepError(
+        "the run seed candidate is not on the Codex Step Request"
+    )
+
+
+def _expected_model_route(built: list[EvaluateCandidateServer]) -> str:
+    """The one route this Step's evaluation server accepts.
+
+    The value is read off the server that was actually built, so the
+    prompt names the same route the tool schema advertises as a const.
+    A missing server or an unset route is a defect in this runner, not a
+    prompt to degrade: dropping the clause sends the agent back to
+    guessing a route object out of the model and reasoning-effort
+    fields, and every guess is refused after admission -- paying
+    capacity for calls that can never score. Failing here is loud and
+    terminalizes, which is why it raises rather than returning "".
+    """
+    if not built:
+        raise OpaqueStepError(
+            "Codex prompt requires the evaluation server that was built "
+            "for this Step"
+        )
+    route = built[0].expected_model_route
+    if not route:
+        raise OpaqueStepError(
+            "Codex prompt requires the evaluation server's expected "
+            "model route"
+        )
+    return route
+
+
 def _request_base_ref_json(request: OptimStepRequest) -> str:
     """The seed candidate's reference, as the tool argument spells it.
 
@@ -1090,11 +1147,15 @@ def _request_base_ref_json(request: OptimStepRequest) -> str:
     two-field object the agent must reproduce exactly, and it appears
     nowhere in the serialized request, so an agent driving the tool for
     real invents one and has the call refused *after* admission -- paying
-    capacity for a call that can never score.
+    capacity for a call that can never score. A Step Request with no
+    candidate cannot name a base, and silently dropping the clause
+    reintroduces exactly that unguessable-argument failure, so it raises.
+
+    The seed is resolved through the run's ``initial_candidate_ref``, the
+    same identity the adapter's seed-retaining path uses, rather than by
+    position on the Request.
     """
-    if not request.candidates:
-        return ""
-    record_ref = candidate_reference(request.candidates[0]).record_ref
+    record_ref = _seed_candidate_reference(request).record_ref
     return json.dumps(
         {
             "schema_name": record_ref.schema_name,
@@ -1110,15 +1171,26 @@ def _default_prompt(
     tool_name: str,
     lease_token_hash: str,
     max_tool_calls: int,
-    model_route: str = "",
-    base_ref: str = "",
+    model_route: str,
+    base_ref: str,
 ) -> str:
     """The instruction Codex receives.
 
     Evaluating through the Tool is mandatory, not guidance: the artifact
     carries no candidate body, so the only way to return a candidate is to
     name the ``call_id`` of a call that was actually admitted and scored.
+
+    ``model_route`` and ``base_ref`` are required and are the two values
+    the agent can derive from nothing it can see. Their callers resolve
+    them or raise; there is no empty default, because a prompt missing
+    either clause reads as valid and sends the agent back to guessing.
     """
+    if not model_route:
+        raise OpaqueStepError("Codex prompt requires the model route")
+    if not base_ref:
+        raise OpaqueStepError(
+            "Codex prompt requires the seed candidate base_ref"
+        )
     context = json.dumps(
         request.model_dump(mode="json"),
         sort_keys=True,
@@ -1130,28 +1202,20 @@ def _default_prompt(
         "exact candidate base_ref, model route, payload template, Tool "
         "Config, capacity, budget, pools, hyperparameters, and output "
         "contract in the serialized request below.\n"
-        + (
-            # The one value the agent cannot derive from anything it can
-            # see. It is a const on the tool schema too, but a real agent
-            # reads the prompt first and will otherwise assemble a route
-            # object out of the model and reasoning-effort fields in the
-            # serialized request -- which the evaluator refuses, burning a
-            # turn per guess.
-            "The model_route argument is a fixed string and must be "
-            f"exactly {model_route!r}. It is not an object and must not be "
-            "built from any other field.\n"
-            if model_route
-            else ""
-        )
-        + (
-            # Same class of problem as model_route: the seed candidate's
-            # reference is the base every call must bind, and an agent
-            # that invents one has its call refused after admission.
-            "The base_ref argument must be copied verbatim as "
-            f"{base_ref}. Do not construct or modify it.\n"
-            if base_ref
-            else ""
-        )
+        # The one value the agent cannot derive from anything it can
+        # see. It is a const on the tool schema too, but a real agent
+        # reads the prompt first and will otherwise assemble a route
+        # object out of the model and reasoning-effort fields in the
+        # serialized request -- which the evaluator refuses, burning a
+        # turn per guess.
+        + "The model_route argument is a fixed string and must be "
+        f"exactly {model_route!r}. It is not an object and must not be "
+        "built from any other field.\n"
+        # Same class of problem as model_route: the seed candidate's
+        # reference is the base every call must bind, and an agent
+        # that invents one has its call refused after admission.
+        + "The base_ref argument must be copied verbatim as "
+        f"{base_ref}. Do not construct or modify it.\n"
         + "Evaluating through the MCP tool is mandatory. Every candidate you "
         "consider must be submitted to the tool with a call_id you choose; "
         f"you may make at most {max_tool_calls} calls, and every further "

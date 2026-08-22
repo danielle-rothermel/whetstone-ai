@@ -34,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named in the prompt and pinned as schema `const`).
 - Codex web search is disabled through `web_search = "disabled"`; the two
   feature-flag denials it replaced are deprecated no-ops in codex 0.148.
+- A failure while building the Codex prompt now terminalizes the Step
+  instead of stranding its effect lease. Prompt construction runs under
+  the entered MCP host but sat outside the runner's normalized region, so
+  an unexpected Step Request shape or a raising `prompt_builder` escaped
+  `CodexAdapter.invoke` entirely and left the `NO_REDRIVE` effect
+  nonterminal until the lease lapsed.
 
 ## 0.1.7 - 2026-08-22
 

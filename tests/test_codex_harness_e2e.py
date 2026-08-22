@@ -32,9 +32,11 @@ from tests.codex_support import (
 from whetstone.core.identity import TypedRef
 from whetstone.core.leasing import EffectLeaseAuthority, ReplayPolicy
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.adapters import MappingAdapterRegistry
 from whetstone.optim.codex.adapter import (
     CODEX_ADAPTER_KEY,
+    CODEX_EXECUTION_FAILED_CODE,
     CODEX_LEASE_TOKEN_MISMATCH_CODE,
     CODEX_SELECTION_UNEVALUATED_CODE,
     CODEX_UNREPORTED_EVALUATION_CODE,
@@ -63,6 +65,7 @@ from whetstone.optim.tools.facade import (
     ToolCallStore,
 )
 from whetstone.testing.fake_codex_cli import (
+    FAKE_CODEX_PROMPT_EVIDENCE_KEY,
     FAKE_CODEX_TRANSCRIPT_ENV,
     install_fake_codex_binary,
 )
@@ -159,6 +162,7 @@ class _CodexWorld:
         transcript: list[dict],
         *,
         timeout_seconds: float = 180.0,
+        prompt_builder=None,
     ) -> CodexAdapter:
         transcript_document = transcript_json(transcript)
         runner = SubprocessCodexRunner(
@@ -192,6 +196,7 @@ class _CodexWorld:
             extra_environment_keys=frozenset(
                 {FAKE_CODEX_TRANSCRIPT_ENV, "PYTHONPATH"}
             ),
+            prompt_builder=prompt_builder,
         )
         adapter = CodexAdapter(
             runner,
@@ -640,3 +645,112 @@ def test_a_rejected_evaluation_completes_instead_of_stranding_its_admission(
         result.accepted_candidates[0].record_ref.reference
     )
     assert accepted["payload"][TOY_MUTATION_FIELD] == _TEMPLATE_B
+
+
+def test_a_failing_prompt_builder_terminalizes_instead_of_stranding(
+    codex_world,
+) -> None:
+    """Building the prompt is inside the runner's normalized region.
+
+    The prompt is assembled under an entered MCP host, from the Step
+    Request, the built server, and a caller-supplied builder. A raise
+    there is none of the three exceptions ``CodexAdapter.invoke``
+    catches, so it escaped the adapter entirely: the harness runs its
+    effect-lease maintenance only once the adapter returns an
+    ``AdapterOutput``, and under this adapter's ``NO_REDRIVE`` policy the
+    run then could not recover until the lease lapsed.
+
+    The Step must instead come back terminalized under the execution
+    taxonomy, with its lease released and no stranded effect.
+    """
+    world = codex_world()
+
+    def _raising_prompt_builder(request):
+        raise AttributeError("prompt builder blew up")
+
+    adapter = world.adapter(
+        [{"final": {"selected_call_id": None}}],
+        prompt_builder=_raising_prompt_builder,
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    assert result.terminal_failure.code == CODEX_EXECUTION_FAILED_CODE
+    assert "prompt builder blew up" in result.terminal_failure.message
+    assert result.accepted_candidates == ()
+    # The agent never ran, so the Step paid for nothing.
+    assert result.tool_evidence == ()
+    # The proof the lease was released is a state fact: the identical
+    # Step runs again immediately instead of raising EffectBusyError,
+    # which a stranded NO_REDRIVE effect would force.
+    retried, _retry_ref = world.harness(
+        world.adapter(
+            [{"final": {"selected_call_id": None}}],
+            prompt_builder=_raising_prompt_builder,
+        )
+    ).run_step(request)
+    assert retried.status is StepStatus.FAILED
+    assert (
+        retried.terminal_failure is not None
+        and retried.terminal_failure.code == CODEX_EXECUTION_FAILED_CODE
+    )
+
+
+def test_the_runner_emits_the_route_and_base_ref_the_agent_cannot_guess(
+    codex_world,
+) -> None:
+    """The runner's own prompt wiring, asserted on the emitted prompt.
+
+    ``model_route`` is read off the evaluation server this Step built and
+    ``base_ref`` off the run's seed candidate. Both reach the agent only
+    through the prompt the runner assembles, and neither appears in the
+    serialized Step Request. A test that rebuilds those two values and
+    calls ``_default_prompt`` directly proves nothing about that wiring:
+    it would keep passing if the runner fed the builder empty strings.
+
+    So this drives ``SubprocessCodexRunner.run`` end to end and reads the
+    prompt back from the persisted artifact, which the fake CLI echoes
+    into its ``conversation_evidence``.
+    """
+    world = codex_world()
+    adapter = world.adapter(
+        [
+            world.tool_step(_TEMPLATE_A, "c1"),
+            {"final": {"selected_call_id": "c1"}},
+        ]
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.terminal_failure is None, result.terminal_failure
+    snapshot = world.store.get(result.state_ref.reference)
+    artifact = world.store.get(
+        TypedRef.model_validate(
+            snapshot["codex_output_artifact_ref"]
+        ).reference
+    )
+    prompt = artifact["conversation_evidence"]["agent"][
+        FAKE_CODEX_PROMPT_EVIDENCE_KEY
+    ]
+
+    route = world.engine.expected_model_route()
+    seed_ref = candidate_reference(world.candidate).record_ref
+    assert route, "the engine must advertise a route for this to mean anything"
+    assert route in prompt, (
+        "the runner did not put the evaluation server's real model route "
+        "in the prompt, so the agent must guess and every guess is refused"
+    )
+    assert seed_ref.content_hash in prompt, (
+        "the runner did not put the run seed's real content hash in the "
+        "prompt, so the agent invents a base_ref and its calls are refused "
+        "after admission"
+    )
+    assert seed_ref.schema_name in prompt
