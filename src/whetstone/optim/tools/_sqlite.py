@@ -393,11 +393,13 @@ class _SQLiteAdmissionBackend:
     ) -> tuple[ToolCallStoreEntry, ...]:
         """Every entry this scope debited capacity for, in debit order.
 
-        The entry rows are keyed by call id, so the scope columns are not
-        indexed; the namespace narrows the scan and the decoded entry is
-        the authority on which scope it belongs to. Callers use this to
-        reconcile against ``accepted_count``, which counts the same
-        debits from the capacity row.
+        The entry rows are keyed by ``(store_namespace_key, call_id)``,
+        so filtering on the namespace is an index prefix scan rather than
+        a full one. The remaining scope columns are not indexed: the
+        decoded entry is the authority on which scope it belongs to, so
+        the namespace's rows are decoded and narrowed in Python. Callers
+        use this to reconcile against ``accepted_count``, which counts
+        the same debits from the capacity row.
         """
         scope_id = _backend_scope_id(capacity_scope, capacity_scope_id)
         connection = self._connect()
