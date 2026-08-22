@@ -519,6 +519,38 @@ def prepare_codex_run(
             "prepare_codex_run control eval_config_ref must match the "
             "runtime engine eval_config_ref"
         )
+    # Every binding the control pins about what an evaluation is measured
+    # against has to be the binding the runtime will actually evaluate
+    # under. The Tool is built from ``runtime.engine``, but the run's
+    # persisted identity is the control's: where they disagree, the
+    # evaluations run against the engine's policy, model route, and task
+    # split while the recorded optimizer identity claims the control's.
+    # That is a provenance corruption no downstream reader can detect, so
+    # each binding is attested here rather than trusted.
+    engine = runtime.engine
+    for field, expected, actual in (
+        (
+            "evaluation_execution_policy_hash",
+            control.evaluation_execution_policy_hash,
+            engine.execution_policy_identity_hash(),
+        ),
+        (
+            "task_model_identity_hash",
+            control.task_model_identity_hash,
+            engine.task_model_identity_hash(),
+        ),
+        (
+            "internal_task_hashes",
+            control.internal_task_hashes,
+            engine.sampling.task_hashes,
+        ),
+    ):
+        if expected != actual:
+            raise ValueError(
+                f"prepare_codex_run control {field} must match the runtime "
+                f"engine; control has {expected!r} and the engine has "
+                f"{actual!r}"
+            )
     if mutation_field != control.mutation_field:
         raise ValueError(
             "prepare_codex_run mutation_field must match the control "
