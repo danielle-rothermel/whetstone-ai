@@ -433,30 +433,45 @@ def _head_is_later_episode(
     *,
     step_index: int,
     episode_stage_index: int | None,
+    fanin_resume_stage_index: int,
 ) -> bool:
     """True when the bound head has moved past the episode being replayed.
 
     GEPA resumes the same ``step_index`` after each deferral, so one step can
-    own several deferral episodes. ``step_index`` alone therefore cannot order
-    a fan-in against the head: the authoritative episode identity is the
-    optim_step stage index the episode was deferred from, carried by the
-    already-persisted ``OptimWorkState.deferral_optim_step_stage_index`` and
-    mirrored on ``DeferralJoinInput``. It strictly increases as the platform
-    walks stages, so it totally orders episodes within one step.
+    own several deferral episodes; ``step_index`` alone cannot order a fan-in
+    against the head. Episode identity alone cannot either: it lives in
+    ``OptimWorkState.deferral_optim_step_stage_index``, which is *cleared* the
+    moment the newer episode's own fan-in resumes the head. A guard reading
+    only that field re-classifies an older replay as current as soon as the
+    newer episode stops being pending.
+
+    Staleness is therefore decided against ``platform_stage_index``, the
+    head's monotone stage watermark. It only ever increases -- each optim_step
+    advances it, and each deferral parks it on that episode's fan-in barrier
+    -- and, unlike the deferral fields, it survives episode clearing.
+
+    ``fanin_resume_stage_index`` is this fan-in's own barrier stage. Resuming
+    it advances the head to exactly ``fanin_resume_stage_index + 1``, which
+    separates the two replay cases sharply:
+
+    * head at exactly that stage -- this very fan-in already resumed the head,
+      so a re-run is an idempotent retry and must re-report the same successor;
+    * head strictly beyond it -- a later episode or a later step has since
+      moved the head on, so this fan-in is stale.
     """
     if head.step_index > step_index:
         return True
     if head.step_index < step_index:
         return False
-    if episode_stage_index is None:
-        return False
-    head_episode = head.deferral_optim_step_stage_index
-    if head_episode is None:
-        # The head is not parked on a deferral episode. It is only "later" if
-        # it already consumed this step's fan-in and advanced past it, which
-        # the step_index comparison above already covers.
-        return False
-    return head_episode > episode_stage_index
+    if head.deferral_optim_step_stage_index is not None:
+        # The head is parked on a deferral episode. Order the two episodes by
+        # their deferral origins, which strictly increase within one step.
+        if episode_stage_index is None:
+            return False
+        return head.deferral_optim_step_stage_index > episode_stage_index
+    # The head carries no pending episode: it has resumed past some fan-in.
+    # Only a head beyond this fan-in's own resume stage has left it behind.
+    return head.work_input.platform_stage_index > fanin_resume_stage_index + 1
 
 
 def _finalize_deferred_step(
@@ -517,6 +532,7 @@ def _finalize_deferred_step(
             head,
             step_index=step_index,
             episode_stage_index=episode_stage_index,
+            fanin_resume_stage_index=work_state.work_input.platform_stage_index,
         ):
             # Stale replay of an earlier episode. Leave the live head, its
             # step-keyed deferred intents, and its stage index alone. The
@@ -624,26 +640,15 @@ def _complete_fanin_handoff(
         episode_stage_index=join_input.deferral_optim_step_stage_index,
     )
     if isinstance(resumed, _StaleFanin):
-        # A later deferral episode owns the head. Re-report the head exactly as
-        # it stands: no re-persist (which would rebind the head), no
-        # platform_stage_index bump, and no successor that would duplicate or
+        # The head has left this episode behind. Re-report it exactly as it
+        # stands: no re-persist (which would rebind the head), no
+        # platform_stage_index bump, and no successor. Whether the head is
+        # parked mid-episode or has already resumed past this one, the
+        # successor that advances it was enqueued by whichever fan-in the head
+        # actually belongs to; emitting another here would duplicate it or
         # displace the live fan-out. The head's own pending fan-out, and the
         # deferred intents keyed to it, are left untouched.
-        head = resumed.head
-        if head.pending_step_result_ref is not None:
-            # The head is parked mid-episode; its optim_step successor is
-            # already enqueued by that episode's own fan-in.
-            return StageCompletion(output_reference=output_ref, successors=())
-        return StageCompletion(
-            output_reference=output_ref,
-            successors=(
-                StageSuccessor(
-                    stage_key=StageKey("optim_step"),
-                    stage_index=head.work_input.platform_stage_index,
-                    input_reference=resumed.head_ref,
-                ),
-            ),
-        )
+        return StageCompletion(output_reference=output_ref, successors=())
     resumed_stage_index = resumed.work_input.platform_stage_index + 1
     resumed = OptimWorkState(
         work_input=resumed.work_input.model_copy(
