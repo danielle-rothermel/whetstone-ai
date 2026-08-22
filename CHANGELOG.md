@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.6 - 2026-08-22
+
 ### Added
 
 - `EvalRole.HELD_OUT` (`"held_out"`) completes the evaluation-role
