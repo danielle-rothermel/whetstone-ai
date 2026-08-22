@@ -462,9 +462,13 @@ def test_the_step_boundary_turns_the_failure_into_a_paid_terminal_output(
         def skipped_mutations(self):
             return ()
 
-        def search_evidence(self, *, run_id, step_index):
+        def search_evidence(self, *, run_id, step_index, prior_step_result_ref):
             assert run_id == "run-1"
             assert step_index == 3
+            # The failure path must hand the chain head through, so the
+            # evidence it reports is reconciled against what the run already
+            # recorded rather than against the effect cache alone.
+            assert prior_step_result_ref is None
             return paid_evidence
 
     class _Boundary:
@@ -473,6 +477,11 @@ def test_the_step_boundary_turns_the_failure_into_a_paid_terminal_output(
     class _Request:
         run_id = "run-1"
         step_index = 3
+        # The failure path reconciles its evidence against this run's durable
+        # Step chain, so the stub carries the same chain head a real Step
+        # Request does. ``None`` is the initial-Step value: nothing recorded
+        # yet, so everything the search paid for is still owed.
+        prior_step_result_ref = None
 
     output = GepaHarnessAdapter._reflection_failure_output(
         _Boundary(),

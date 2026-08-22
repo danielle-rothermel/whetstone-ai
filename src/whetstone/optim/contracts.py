@@ -687,14 +687,17 @@ class SearchEvidence(BaseModel):
     persists the entry, so the binding is harness-verified rather than
     adapter-attested.
 
-    A Step records exactly the evaluations *it* paid for. An optimizer whose
-    upstream search re-runs from the seed each Step replays the prefix its
-    predecessors already paid for; those replayed evaluations belong to the
-    Steps that executed them and are reached through the durable Step chain
-    (``prior_step_result_ref``), not re-reported here. So every in-search
-    evaluation of a run resolves exactly once, on the Step that caused it,
-    and a run's evidence stays linear in evaluations rather than quadratic
-    in Steps.
+    A Step records exactly the evaluations the run does not already account
+    for. An optimizer whose upstream search re-runs from the seed each Step
+    replays the prefix its predecessors already paid for; that prefix is
+    already recorded on the durable Step chain (``prior_step_result_ref``)
+    and is not re-reported here. An evaluation the search touched but *no*
+    ancestor Step Result recorded -- a crash after the effect cache recorded
+    it but before the Step Result persisted, or a deferral episode whose
+    placeholder result was discarded -- is still reported, replayed or not.
+    So every in-search evaluation of a run resolves exactly once, and a
+    run's evidence stays linear in evaluations rather than quadratic in
+    Steps.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -769,6 +772,46 @@ class SearchEvidence(BaseModel):
             raise ValueError(
                 "search evidence run/step must equal the resolved Optim "
                 "Eval Request binding"
+            )
+        return cls(
+            eval_request_id=(
+                resolution.optim_eval_request.eval_request.request_id
+            ),
+            optim_run_id=optim_run_id,
+            optim_step_index=optim_step_index,
+            candidate=_candidate.candidate_reference(
+                resolution.optim_eval_request.eval_request.candidate
+            ),
+            outcome=resolution.outcome,
+            eval_result_ref=resolution.eval_result_ref,
+            reward_ref=resolution.reward_ref,
+            reward_evidence_refs=resolution.reward_evidence_refs,
+        )
+
+    @classmethod
+    def from_replayed_resolution(
+        cls,
+        resolution: IntentResolution,
+        *,
+        optim_run_id: str,
+        optim_step_index: int,
+    ) -> SearchEvidence:
+        """Project a replayed Intent Resolution onto this Step's evidence.
+
+        Used only for an evaluation the durable Step chain never recorded:
+        the attempt that executed it did not persist a Step Result, so this
+        Step is the first to account for it. The replayed resolution still
+        names the attempt that executed it, so the run/step binding is taken
+        from the reporting Step rather than cross-checked against the
+        recorded request. The evidence refs are the exact recorded refs; no
+        new evaluation was caused and none is claimed.
+        """
+        if str(resolution.optim_eval_request.optim_run_id) != str(
+            optim_run_id
+        ):
+            raise ValueError(
+                "replayed search evidence must belong to the exact "
+                "optimization run"
             )
         return cls(
             eval_request_id=(

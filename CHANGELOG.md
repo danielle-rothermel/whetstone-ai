@@ -226,24 +226,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- A GEPA Step now records search evidence only for the evaluations it
-  actually paid for, instead of also re-reporting the prefix it replayed
-  from the durable effect cache. Upstream `optimize` re-runs from the seed
-  every Step, so the old behaviour made Step *i* carry roughly *i* entries
-  and a run's evidence grow quadratically in Steps while paid evaluations
-  stayed flat: a measured 556-step run produced 155,956 entries for 91
-  distinct evaluations, a 1.73 GB `runtime.sqlite`, and a 766 MB
-  `result.json`. Replayed evaluations are unchanged and undropped -- they
-  resolve on the ancestor Step that paid for them, reached through the
-  durable Step chain (`prior_step_result_ref`), so every in-search
-  evaluation of a run is still reachable and now resolves exactly once. On a
-  60-step fake-transport run this takes total entries from 1,770 to 59
-  (equal to the distinct evaluations) and `result.json` from 3.20 MB to
-  330 KB. No persisted record shape changed; the terminal Pareto-front
-  artifact is per-run and remains complete.
-- `SearchEvidence.from_replayed_resolution` is removed. It existed only to
-  rebind a replayed resolution onto the reporting Step, which is exactly the
-  re-reporting that is no longer done. Per-entry harness verification --
+- A GEPA Step now records search evidence only for the evaluations the run
+  does not already account for, instead of also re-reporting the prefix it
+  replayed from the durable effect cache. Upstream `optimize` re-runs from
+  the seed every Step, so the old behaviour made Step *i* carry roughly *i*
+  entries and a run's evidence grow quadratically in Steps while paid
+  evaluations stayed flat: a measured 556-step run produced 155,956 entries
+  for 91 distinct evaluations, a 1.73 GB `runtime.sqlite`, and a 766 MB
+  `result.json`. On a 60-step fake-transport run the new rule takes total
+  entries from 1,770 to 59 (equal to the distinct evaluations) and
+  `result.json` from 3.20 MB to 330 KB. No persisted record shape changed;
+  the terminal Pareto-front artifact is per-run and remains complete.
+- The rule is *already recorded on an ancestor Step Result*, not *served
+  from the effect cache*. `CanonicalGepaAdapterFactory.search_evidence`
+  walks this run's durable Step chain back through
+  `prior_step_result_ref`, unions the `search_evidence` keys it finds, and
+  reports every evaluation the search touched -- replayed or fresh -- that
+  the chain does not already carry. The two rules differ exactly where it
+  matters: an attempt that crashes after the effect cache durably records an
+  evaluation but before its Step Result persists, and a PLATFORM deferral
+  episode whose placeholder Step Result is discarded when the same
+  `step_index` resumes. In both, the evaluation replays yet sits on no Step
+  Result, so filtering on replay alone would have lost it permanently.
+  Reconciling against the chain keeps it, and each evaluation is still
+  recorded exactly once run-wide.
+- `SearchEvidence.from_replayed_resolution` is retained, and is now used
+  only for an evaluation the durable Step chain never recorded -- the
+  attempt that executed it persisted no Step Result, so the reporting Step
+  is the first to account for it. Per-entry harness verification --
   run/step binding, expected schema, and store resolution -- is unchanged,
   so a dropped or forged entry is still rejected.
 - Pinned dependencies moved in lockstep: dr-exec 0.1.14, dr-store 0.2.6, and

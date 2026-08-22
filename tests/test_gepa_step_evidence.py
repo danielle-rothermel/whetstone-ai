@@ -948,3 +948,189 @@ def test_a_dropped_fresh_evaluation_is_caught_by_the_run_invariant(
     assert _unreported((result,)) == set()
     # ...and the drop is caught, naming the exact vanished evaluation.
     assert _unreported((truncated,)) == {result.search_evidence[0].eval_request_id}
+
+
+def test_a_crashed_step_retry_still_records_its_cached_evaluations(
+    sqlite_store,
+) -> None:
+    """A crash between the effect cache and the Step Result loses nothing.
+
+    A Step can crash after its evaluations are durably recorded in the effect
+    cache but before its own ``OptimStepResult`` persists. The retry then
+    replays those evaluations, and no ancestor Step Result records them --
+    the crashed attempt never produced one. Filtering on *replayed* would
+    drop them from the run for good; filtering on *already recorded by an
+    ancestor Step* keeps them, exactly once.
+    """
+    run_id = "gepa-evidence-crash-retry"
+    experiment, engine, control, adapter, _authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=12
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    first_request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    first, first_ref = harness.run_step(first_request)
+    assert first.status is StepStatus.CONTINUE
+    first_ids = {e.eval_request_id for e in first.search_evidence}
+    assert first_ids
+
+    second_request = builder.build_next(
+        prior=first,
+        prior_ref=first_ref,
+        prior_results=(first,),
+        control=control,
+        mutation_field=TOY_MUTATION_FIELD,
+    )
+
+    # The crashed attempt: step 1 runs far enough to drive -- and durably
+    # cache -- its evaluations, then dies before its Step Result persists.
+    # Driving the adapter directly reproduces exactly that: the effects land
+    # in the cache, and nothing is written to the Step chain.
+    crashed = adapter.invoke(second_request, ())
+    crashed_ids = {e.eval_request_id for e in crashed.search_evidence}
+    fresh_on_the_crashed_attempt = crashed_ids - first_ids
+    assert fresh_on_the_crashed_attempt, (
+        "the crashed attempt paid for no new evaluation, so this test would "
+        "not exercise the crash-retry hole"
+    )
+
+    # The retry of the same Step. Every effect the crashed attempt paid for
+    # now replays from the durable cache, and the only Step Result on the
+    # chain is step 1's.
+    retried, _retried_ref = harness.run_step(second_request)
+    retried_ids = {e.eval_request_id for e in retried.search_evidence}
+
+    # The evaluations the crashed attempt paid for are on this Step Result.
+    assert fresh_on_the_crashed_attempt <= retried_ids
+    # Step 1's prefix is not re-reported: it is already on the chain.
+    assert not (retried_ids & first_ids)
+    # And each one appears exactly once, run-wide.
+    all_ids = [
+        e.eval_request_id
+        for result in (first, retried)
+        for e in result.search_evidence
+    ]
+    assert len(all_ids) == len(set(all_ids))
+
+
+def test_a_discarded_deferral_placeholder_keeps_its_paid_evaluations(
+    sqlite_store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A deferral episode's evaluations survive the placeholder being dropped.
+
+    Under PLATFORM dispatch a GEPA step can defer more than once. On each
+    deferral ``_finalize_deferred_step`` discards the episode's placeholder
+    Step Result and resumes the *same* ``step_index``, so the evaluations
+    that episode paid for are recorded on no Step Result at all -- they only
+    replay from the durable effect cache on the next attempt. Filtering
+    evidence on "was replayed" would drop them for good. This drives that
+    topology directly: an attempt pays for an evaluation and is then
+    interrupted mid-search, producing no Step Result, and the next attempt
+    at the same step must carry what it paid for.
+    """
+    from whetstone.coordination.eval_service import EvalPlatformDeferred
+
+    run_id = "gepa-evidence-deferral-placeholder"
+    experiment, engine, control, adapter, authority = _build_gepa_adapter(
+        sqlite_store, run_id=run_id, max_metric_calls=12
+    )
+    run = _gepa_run(experiment, control, run_id=run_id)
+    harness = _harness(sqlite_store, engine, adapter)
+    bound = harness.bind_run(run)
+    builder = StepRequestBuilder(store=sqlite_store)
+    request = builder.build_first(
+        run=bound,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+
+    # Episode 1 of step 0: the search pays for its first evaluations and is
+    # then deferred to the platform mid-search. The placeholder Step Result
+    # this produces is exactly what ``_finalize_deferred_step`` discards, so
+    # nothing is written to the Step chain.
+    from whetstone.optim.gepa.harness_broker import HarnessGepaEffectBroker
+
+    real_broker_evaluate = HarnessGepaEffectBroker.evaluate
+
+    def deferring_once_the_effect_is_committed(self, request_):
+        # The effect is driven *and durably committed to the effect cache*,
+        # so the evaluation is paid for and replayable. Only then is the
+        # step deferred. That ordering is what strands evidence: the cache
+        # holds the result, while the placeholder Step Result that would
+        # have recorded it is discarded when the same step resumes.
+        real_broker_evaluate(self, request_)
+        raise EvalPlatformDeferred(
+            "deferred to platform eval stages",
+            intent=None,
+        )
+
+    monkeypatch.setattr(
+        HarnessGepaEffectBroker,
+        "evaluate",
+        deferring_once_the_effect_is_committed,
+    )
+    # The adapter turns the deferral into a CONTINUE output carrying a
+    # placeholder Step Result. Under PLATFORM dispatch that placeholder is
+    # what ``_finalize_deferred_step`` discards before resuming the same
+    # step, so it is deliberately never persisted here.
+    deferred_output = adapter.invoke(request, ())
+    assert deferred_output.proposed_status is StepStatus.CONTINUE
+    monkeypatch.undo()
+    # Ground truth for what episode 1 paid for, read off the authority
+    # rather than off any evidence the interrupted attempt reported.
+    paid_in_episode_1 = [
+        str(resolution.optim_eval_request.eval_request.request_id)
+        for resolution in authority.resolved_intents
+    ]
+    assert paid_in_episode_1, (
+        "episode 1 paid for no evaluation, so this test would not exercise "
+        "the discarded-placeholder hole"
+    )
+
+    # Episode 2 resumes the same step_index in a fresh worker -- the shape a
+    # platform resume actually has. Its effect cache is warm from episode 1
+    # and no Step Result exists on the chain, so episode 1's evaluations
+    # come back through the replay path.
+    _experiment2, engine2, _control2, adapter2, authority2 = (
+        _build_gepa_adapter(sqlite_store, run_id=run_id, max_metric_calls=12)
+    )
+    del _experiment2, _control2
+    executed: list[str] = []
+    inner = authority2.evaluate
+
+    def counting(request_):
+        executed.append(request_.identity_hash())
+        return inner(request_)
+
+    authority2.evaluate = counting  # type: ignore[method-assign]
+    harness2 = _harness(sqlite_store, engine2, adapter2)
+    bound2 = harness2.bind_run(run)
+    resume_request = builder.build_first(
+        run=bound2,
+        adapter_key=GEPA_ADAPTER_KEY,
+        initial_candidate=experiment.initial_candidate,
+        control=control,
+    )
+    result, _ref = harness2.run_step(resume_request)
+
+    # Episode 1's evaluations were replayed here, not re-executed: this Step
+    # is the first and only chance to record them.
+    assert any(authority2.replayed_flags), (
+        "nothing replayed, so this test would not exercise the hole"
+    )
+    reported = {e.eval_request_id for e in result.search_evidence}
+
+    # What episode 1 paid for is recorded, on this Step Result, exactly once.
+    assert set(paid_in_episode_1) <= reported
+    ordered = [e.eval_request_id for e in result.search_evidence]
+    assert len(ordered) == len(set(ordered))
+    assert {e.optim_step_index for e in result.search_evidence} == {0}

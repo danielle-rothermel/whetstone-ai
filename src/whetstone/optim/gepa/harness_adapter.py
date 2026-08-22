@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from whetstone.core.identity import ImmutableJsonObject, canonical_json
+from whetstone.core.identity import (
+    ImmutableJsonObject,
+    TypedRef,
+    canonical_json,
+)
 from whetstone.core.leasing import ReplayPolicy
 from whetstone.experiment.candidate import Candidate, candidate_reference
 from whetstone.optim.adapters import AdapterOutput
@@ -154,12 +158,19 @@ class GepaHarnessAdapterFactory:
         *,
         run_id: str,
         step_index: int,
+        prior_step_result_ref: TypedRef | None = None,
     ) -> tuple[SearchEvidence, ...]:
-        """Evidence for every evaluation this Step's search drove."""
+        """Evidence for every evaluation this Step still owes the run.
+
+        ``prior_step_result_ref`` is the head of this run's durable Step
+        chain. It is what decides which evaluations are already accounted
+        for, so it is threaded from the Step Request rather than inferred.
+        """
         return tuple(
             self._factory.search_evidence(
                 run_id=run_id,
                 step_index=step_index,
+                prior_step_result_ref=prior_step_result_ref,
             )
         )
 
@@ -274,11 +285,14 @@ class GepaHarnessAdapter:
             # The Step continues, but the reflections and evaluations it
             # already drove this attempt are paid for. Run cost reaches
             # proposer and task-model rows only through a Step Result's usage
-            # and evidence references, and on resume ``begin_step`` clears the
-            # adapters while the durable effect cache marks those calls
-            # replayed -- so anything not carried here is never recorded at
-            # all. Deferral therefore reports spend on exactly the terms the
-            # reflection-failure and success paths do.
+            # and evidence references, and on resume ``begin_step`` clears
+            # the adapters, so proposer usage not carried here is never
+            # recorded at all. Search evidence is reconciled against the
+            # durable Step chain instead, so a deferral episode whose
+            # placeholder result is discarded has its evaluations re-reported
+            # by the resumed attempt rather than lost. Deferral therefore
+            # reports spend on exactly the terms the reflection-failure and
+            # success paths do.
             intent = deferred.intent
             return AdapterOutput(
                 proposed_status=StepStatus.CONTINUE,
@@ -286,6 +300,7 @@ class GepaHarnessAdapter:
                 search_evidence=self._adapter_factory.search_evidence(
                     run_id=str(request.run_id),
                     step_index=int(request.step_index),
+                    prior_step_result_ref=request.prior_step_result_ref,
                 ),
                 proposer_usage=self._adapter_factory.proposer_usage(),
                 state_delta=_state_delta(
@@ -310,6 +325,7 @@ class GepaHarnessAdapter:
         search_evidence = self._adapter_factory.search_evidence(
             run_id=str(request.run_id),
             step_index=int(request.step_index),
+            prior_step_result_ref=request.prior_step_result_ref,
         )
         proposer_usage = self._adapter_factory.proposer_usage()
         if checkpoint.terminal:
@@ -399,11 +415,10 @@ class GepaHarnessAdapter:
         like a successful one.
 
         It also carries the ``search_evidence`` for every evaluation the Step
-        drove before reflection failed. Run cost reaches task-model rows only
-        through a Step Result's evidence references, so dropping them would
-        silently exclude evaluations that were already persisted and billed --
-        and permanently, since the durable effect cache marks them replayed
-        and a resumed Step will not record them again.
+        drove before reflection failed and that no ancestor Step Result
+        already records. Run cost reaches task-model rows only through a Step
+        Result's evidence references, so dropping them would silently exclude
+        evaluations that were already persisted and billed.
         """
         return AdapterOutput(
             proposed_status=StepStatus.FAILED,
@@ -414,6 +429,7 @@ class GepaHarnessAdapter:
             search_evidence=self._adapter_factory.search_evidence(
                 run_id=str(request.run_id),
                 step_index=int(request.step_index),
+                prior_step_result_ref=request.prior_step_result_ref,
             ),
             proposer_usage=self._adapter_factory.proposer_usage(),
             state_delta=ImmutableJsonObject(
