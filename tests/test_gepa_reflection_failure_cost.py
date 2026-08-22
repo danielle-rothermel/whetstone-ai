@@ -15,6 +15,10 @@ from __future__ import annotations
 import pytest
 
 from whetstone.core.identity import TypedRef
+from whetstone.execution.call_support import (
+    PROVIDER_ERROR_KEY,
+    REJECTED_RESPONSE_KEY,
+)
 from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.contracts import (
@@ -329,6 +333,85 @@ def test_a_reflection_that_got_nothing_back_is_not_recorded_as_a_call(
     # Two calls were driven; only the one that got a response is recorded.
     assert broker.calls == 2
     assert len(adapter.proposer_usage) == 1
+
+
+class _BlankBilledBroker(ScriptedProposalBroker):
+    """A provider that answers blank: billed, but nothing usable came back.
+
+    The provider produced the generation and charged for it, but nothing
+    survived to reach the parser, so the authority reports ``failed=True``
+    with ``rejected_by_parser=False`` and no telemetry at all. The one signal
+    that it was billed is the ``rejected_response`` the transport persisted
+    on the response evidence -- the same signal
+    ``ProposalDraft.call_usage`` reads on the COPRO and MIPROv2 path. Being
+    a non-parser failure it is not retried, so it raises on attempt one.
+    """
+
+    def __init__(self, services, bodies) -> None:
+        super().__init__(services, bodies)
+        self.calls = 0
+
+    def propose(
+        self, request: GepaProposalEffectRequest
+    ) -> tuple[GepaProposalEffectResult, bool]:
+        self.prompts.append(request.rendered_prompt.text)
+        self.calls += 1
+        return (
+            GepaProposalEffectResult(
+                request_hash=request.identity_hash(),
+                failed=True,
+                failure_detail="blank provider generation",
+                response_evidence={
+                    PROVIDER_ERROR_KEY: {
+                        "failure_class": "BLANK_PROVIDER_GENERATION",
+                        REJECTED_RESPONSE_KEY: "",
+                    }
+                },
+            ),
+            False,
+        )
+
+
+def test_a_blank_but_billed_reflection_is_counted_as_a_call() -> None:
+    """The provider answered and charged; only the answer was unusable.
+
+    Dropping it under-reports GEPA proposer spend and -- worse -- leaves the
+    role's ``usd`` looking complete, because the unpriced call that would
+    have withheld it was never recorded.
+    """
+    adapter, _ = _adapter([BAD])
+    broker = _BlankBilledBroker(_services(), [])
+    adapter._broker = broker  # noqa: SLF001
+
+    with pytest.raises(GepaReflectionFailedError):
+        adapter.propose_new_texts({COMPONENT: SEED}, _dataset(), [COMPONENT])
+
+    assert broker.calls == 1
+    usage = adapter.proposer_usage
+    # The blank billed attempt is recorded rather than dropped as unbilled.
+    assert len(usage) == 1
+    assert usage[0].prompt_tokens is None
+    assert usage[0].completion_tokens is None
+    assert usage[0].usd is None
+    assert usage[0].observation().missing_token_breakdown
+
+
+def test_a_blank_billed_reflection_withholds_the_role_usd() -> None:
+    from whetstone.optim.cost import aggregate_role_cost
+
+    adapter, _ = _adapter([BAD])
+    adapter._broker = _BlankBilledBroker(_services(), [])  # noqa: SLF001
+
+    with pytest.raises(GepaReflectionFailedError):
+        adapter.propose_new_texts({COMPONENT: SEED}, _dataset(), [COMPONENT])
+
+    role = aggregate_role_cost(
+        tuple(item.observation() for item in adapter.proposer_usage)
+    )
+
+    assert role.calls == 1
+    assert role.unpriced_calls == 1
+    assert role.usd is None
 
 
 def test_a_non_parser_failure_raises_the_typed_reflection_error() -> None:

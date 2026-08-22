@@ -108,7 +108,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CodexCliProposerTransport` now mints a `logical_call_id` in the same shape
   as the provider transport's, so a COPRO run using the Codex CLI proposer
   reports its invocations as identified, unpriced calls with an unknown token
-  breakdown instead of reporting zero proposer calls for the whole run.
+  breakdown instead of reporting zero proposer calls for the whole run. The
+  identity covers the *invocation*, not the batch slot: one `draft` call is
+  one subprocess run returning every requested body, so a breadth-two COPRO
+  request reports one billed Codex execution rather than two. The batch size
+  participates in the identity, since a differently-sized batch is a
+  different invocation.
 - Retries are counted per billed attempt. When the execution policy retries a
   response-level failure, the rejected response was still generated and still
   charged, so `call_telemetry` sums tokens and price across every attempt
@@ -143,9 +148,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than reading an omitted field as `0`, so a call the provider left without a
   token breakdown becomes a `rows_missing_token_breakdown` row instead of
   inventing a complete zero-token total. A reflection result carrying neither
-  usage, nor a price, nor a parser rejection evidences no billed call and is
-  no longer recorded -- the same rule `ProposalDraft.call_usage` applies on
-  the COPRO and MIPROv2 proposer side.
+  usage, nor a price, nor any evidence the provider answered evidences no
+  billed call and is no longer recorded. A failed reflection that *does*
+  evidence a provider response is counted, even with no telemetry at all:
+  that covers a parser rejection, and it covers a blank or malformed
+  generation that never reached the parser, which the authority reports as a
+  plain failure with `rejected_by_parser=False` and whose only billing signal
+  is the `rejected_response` on its persisted response evidence. GEPA asks
+  `evidences_provider_response` exactly as the COPRO and MIPROv2 side does,
+  so a billed blank reflection is no longer dropped -- which had both
+  under-reported GEPA proposer spend and left the role's `usd` looking
+  complete, because the unpriced call that would have withheld it was never
+  recorded.
 - `usd` is reported only when every contributing call carried a
   provider-reported price, so a partial sum is never presented as a run
   total. When any call lacks a price the field is absent and the
@@ -186,9 +200,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and never replaces the original exception.
 - `ProposerCallUsage.prompt_tokens` and `completion_tokens` are now optional.
   A proposer response that omitted a directional count carries `None` rather
-  than a normalized `0`, and a call missing both counts toward
+  than a normalized `0`, and a call missing *either* count toward
   `rows_missing_token_breakdown`, so an incomplete proposer token total no
-  longer presents itself as complete.
+  longer presents itself as complete. One known direction is not a
+  breakdown: the absent side is carried into the totals as zero, so a call
+  reporting only one direction understates its own tokens and has to be
+  flagged for that understatement to be visible.
 - Proposer-model usage is recorded uniformly on
   `OptimStepResult.proposer_usage` as `ProposerCallUsage`, reported by COPRO,
   GEPA, and MIPROv2 through `AdapterOutput.proposer_usage` rather than three
@@ -239,6 +256,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resumed Step loads the reflection from the durable effect cache, marks it
   replayed, and suppresses its usage — while no Step Result carries the
   original. A run that completes its Steps normally is unaffected.
+- `calls` counts persisted rows, not provider responses. When the execution
+  policy retries a response-level failure, every billed attempt aggregates
+  into the one row's telemetry, so two billed responses report as one call
+  whose tokens and price cover both. The spend is complete; the call count
+  and the `priced_calls`/`unpriced_calls` split describe rows rather than
+  attempts. This is by design — the row is the unit of durable evidence
+  `aggregate_run_cost` reads.
 - Task-model spend from tool-mediated evaluations is not aggregated here.
   `EngineToolEvaluator` stores its `EvalEvidence` refs under
   `OptimStepResult.tool_evidence`, which `aggregate_run_cost` does not

@@ -328,6 +328,9 @@ class CodexCliProposerTransport:
                     ),
                 },
             )
+        invocation_call_id = self._logical_call_id(
+            config=config, request=request, count=count
+        )
         return tuple(
             ProposalDraft(
                 template=body,
@@ -338,12 +341,11 @@ class CodexCliProposerTransport:
                     # like any other, so it carries a logical call identity
                     # even though the CLI reports no tokens and no price.
                     # Without one, run cost would report zero proposer calls
-                    # for an entire COPRO-with-Codex run. Same shape and same
-                    # inputs as the provider transport's, so the identity is
-                    # stable across a re-drive and run cost de-duplicates it.
-                    "logical_call_id": self._logical_call_id(
-                        config=config, request=request, slot=index
-                    ),
+                    # for an entire COPRO-with-Codex run. One invocation
+                    # returns every body, so all of them share the
+                    # invocation's identity and run cost de-duplicates them
+                    # back to the one execution that was actually billed.
+                    "logical_call_id": invocation_call_id,
                 },
                 response_evidence={
                     **process_evidence,
@@ -360,14 +362,22 @@ class CodexCliProposerTransport:
         *,
         config: CodexCliProposerConfig,
         request: ProposalRequest,
-        slot: int,
+        count: int,
     ) -> str:
-        """This Codex invocation's stable provider call identity."""
+        """This Codex invocation's stable provider call identity.
+
+        One ``draft`` call is one subprocess run returning every requested
+        body, so the identity covers the invocation rather than a batch
+        slot: a breadth-two request is one billed Codex execution, not two.
+        ``count`` participates because a differently-sized batch is a
+        different invocation. Same inputs on a re-drive mint the same id, so
+        run cost de-duplicates a replayed Step back to one call.
+        """
         return (
             f"codex-proposer:{config.identity_hash()}:"
             f"{self.execution_policy_hash}:"
             f"{self.prompt_adapter_identity_hash}:"
-            f"{request.identity_hash()}:{slot}"
+            f"{request.identity_hash()}:{count}"
         )
 
 

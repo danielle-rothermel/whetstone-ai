@@ -8,6 +8,10 @@ from typing import Any
 from gepa import EvaluationBatch
 
 from whetstone.core.identity import compute_identity_hash
+from whetstone.execution.call_support import (
+    PROVIDER_ERROR_KEY,
+    evidences_provider_response,
+)
 from whetstone.optim.gepa.contracts import (
     GepaCandidateComponent,
     GepaDataInstance,
@@ -525,15 +529,20 @@ def _proposal_call_usage(
 
     ``None`` when this result evidences no billed call, which run cost then
     records as nothing at all. That is a *failed* result carrying neither
-    usage nor a price and not rejected by the parser: nothing came back from
-    the provider, so nothing was billed, and counting it would add an
-    unpriced call and withhold the role's ``usd`` for spend that never
-    happened.
+    usage, nor a price, nor a provider response: nothing came back from the
+    provider, so nothing was billed, and counting it would add an unpriced
+    call and withhold the role's ``usd`` for spend that never happened.
 
-    A result the parser rejected is counted like any other call even without
-    telemetry: the provider produced the response and charged for it, and
-    only the parser turned it down. So is every successful result -- a
-    reflection came back, so the model ran.
+    A failure that *does* evidence a provider response is counted like any
+    other call even without telemetry, because the provider produced the
+    response and charged for it. That covers a parser rejection, and it
+    covers a blank or malformed generation that never reached the parser:
+    the authority reports the latter as a plain failure, so the only signal
+    it was billed is the ``rejected_response`` the transport persisted on
+    the response evidence. ``evidences_provider_response`` owns that
+    question for both cost roles, which is the same rule
+    ``ProposalDraft.call_usage`` applies on the COPRO and MIPROv2 path. So
+    is every successful result -- a reflection came back, so the model ran.
 
     ``usage`` is a dr-providers ``TokenUsage`` dump, so a directional count
     the provider omitted stays absent rather than reading as zero, which
@@ -556,6 +565,9 @@ def _proposal_call_usage(
     if (
         result.failed
         and not result.rejected_by_parser
+        and not evidences_provider_response(
+            result.response_evidence.get(PROVIDER_ERROR_KEY)
+        )
         and prompt_tokens is None
         and completion_tokens is None
         and result.cost is None

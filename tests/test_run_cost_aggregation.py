@@ -120,6 +120,36 @@ def test_proposer_call_usage_projects_onto_an_observation() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("prompt_tokens", "completion_tokens"),
+    [(11, None), (None, 11)],
+)
+def test_either_absent_token_direction_is_an_incomplete_breakdown(
+    prompt_tokens: int | None, completion_tokens: int | None
+) -> None:
+    """One known direction is not a token breakdown.
+
+    The absent side is carried into the totals as zero, so a call reporting
+    only one direction publishes a token total that understates the call.
+    That has to increment ``rows_missing_token_breakdown`` or the
+    understatement is invisible.
+    """
+    observation = ProposerCallUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        usd=0.5,
+    ).observation()
+
+    assert observation.missing_token_breakdown is True
+    assert aggregate_role_cost((observation,)).rows_missing_token_breakdown == 1
+
+
+def test_both_token_directions_present_is_a_complete_breakdown() -> None:
+    observation = ProposerCallUsage(prompt_tokens=11, completion_tokens=4).observation()
+
+    assert observation.missing_token_breakdown is False
+
+
 def test_report_defaults_to_empty_roles() -> None:
     report = RunCostReport()
     assert report.task_model == RoleCost()

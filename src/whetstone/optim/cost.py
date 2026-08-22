@@ -26,6 +26,15 @@ hit and a replayed GEPA reflection both come back carrying the original
 call's tokens and price; each is reported separately rather than billed
 again, so reuse shows up as a lower cost instead of a higher one.
 
+Known limitation. A logical call is one persisted row, so ``calls`` counts
+rows rather than provider responses. When the execution policy retries a
+response-level failure, every billed attempt's tokens and price aggregate
+into that one row's telemetry (see ``execution.call_support.call_telemetry``),
+so two billed responses report as one call whose totals cover both. The
+spend is complete; the call count and the ``priced_calls``/``unpriced_calls``
+split describe rows, not attempts. This is by design: the row is the unit of
+durable evidence run cost aggregates from.
+
 Known limitation. Counting a replay once relies on the original call's Step
 Result existing. If a GEPA worker dies after ``record_proposal_result``
 persists a paid reflection but before that Step's ``OptimStepResult`` is
@@ -95,8 +104,9 @@ class ProposerCallUsage(BaseModel):
     #: Directional token counts, absent when the provider reported no
     #: breakdown. ``None`` is not zero: a call the provider priced without
     #: splitting tokens by direction has unknown tokens, and normalizing that
-    #: to ``0`` would present an incomplete token total as complete. An
-    #: absent count makes the call a ``rows_missing_token_breakdown`` row.
+    #: to ``0`` would present an incomplete token total as complete. Either
+    #: count being absent makes the call a ``rows_missing_token_breakdown``
+    #: row, since one known direction is not a breakdown.
     prompt_tokens: StrictInt | None = None
     completion_tokens: StrictInt | None = None
     #: Provider-reported price for this call, absent when none was reported.
@@ -113,7 +123,11 @@ class ProposerCallUsage(BaseModel):
         return self
 
     def observation(self) -> UsageObservation:
-        missing = self.prompt_tokens is None and self.completion_tokens is None
+        # Either direction absent makes the breakdown incomplete. The missing
+        # side is carried through as zero, so a call reporting only one
+        # direction contributes a token total that understates it; without
+        # this flag that understatement is invisible in the role totals.
+        missing = self.prompt_tokens is None or self.completion_tokens is None
         return UsageObservation(
             input_tokens=self.prompt_tokens or 0,
             output_tokens=self.completion_tokens or 0,

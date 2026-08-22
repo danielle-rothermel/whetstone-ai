@@ -71,12 +71,18 @@ def test_a_codex_draft_carries_a_logical_call_id(monkeypatch) -> None:
     assert all(draft.logical_call_id for draft in drafts)
 
 
-def test_each_codex_batch_slot_gets_a_distinct_call_id(monkeypatch) -> None:
-    transport = _transport(monkeypatch, ("First.", "Second."))
+def test_a_different_batch_size_is_a_different_codex_invocation(
+    monkeypatch,
+) -> None:
+    # A breadth-two request is a different subprocess run than a breadth-one
+    # request for the same proposal, so it carries its own identity.
+    one = _transport(monkeypatch, ("First.",))
+    two = _transport(monkeypatch, ("First.", "Second."))
 
-    drafts = transport.draft(CodexCliProposerConfig(), _request(), 2)
+    a = one.draft(CodexCliProposerConfig(), _request(), 1)[0]
+    b = two.draft(CodexCliProposerConfig(), _request(), 2)[0]
 
-    assert len({draft.logical_call_id for draft in drafts}) == 2
+    assert a.logical_call_id != b.logical_call_id
 
 
 def test_the_codex_call_id_is_stable_across_a_redrive(monkeypatch) -> None:
@@ -117,21 +123,48 @@ def test_a_codex_draft_is_an_identified_unpriced_call(monkeypatch) -> None:
 
 
 def test_a_codex_run_reports_its_proposer_calls(monkeypatch) -> None:
-    """The end the finding names: a whole Codex proposer side is counted."""
+    """The end the finding names: a whole Codex proposer side is counted.
+
+    A breadth-two request is one subprocess execution, so it reports one
+    unpriced call after run cost de-duplicates the shared identity -- not
+    one per body.
+    """
     from whetstone.optim.cost import aggregate_role_cost
 
     transport = _transport(monkeypatch, ("First.", "Second."))
     drafts = transport.draft(CodexCliProposerConfig(), _request(), 2)
 
-    role = aggregate_role_cost(
-        tuple(
-            usage.observation()
-            for usage in (draft.call_usage() for draft in drafts)
-            if usage is not None
-        )
-    )
+    # The de-duplication ``aggregate_run_cost`` applies to proposer usage,
+    # keyed on the call identity these drafts carry.
+    seen: set[str] = set()
+    observations = []
+    for draft in drafts:
+        usage = draft.call_usage()
+        assert usage is not None
+        if usage.call_id in seen:
+            continue
+        seen.add(usage.call_id)
+        observations.append(usage.observation())
+    role = aggregate_role_cost(tuple(observations))
 
-    assert role.calls == 2
-    assert role.unpriced_calls == 2
-    assert role.rows_missing_token_breakdown == 2
+    assert role.calls == 1
+    assert role.unpriced_calls == 1
+    assert role.rows_missing_token_breakdown == 1
     assert role.usd is None
+
+
+def test_one_codex_invocation_is_one_call_across_all_its_bodies(
+    monkeypatch,
+) -> None:
+    """A batch is one subprocess run, so it is one proposer call.
+
+    ``draft(count=2)`` performs a single ``run_structured_prompt`` that
+    returns both bodies. Minting a per-slot identity would make one Codex
+    execution report two calls, so every body of one invocation shares the
+    invocation's identity and run cost de-duplicates them back to one.
+    """
+    transport = _transport(monkeypatch, ("First.", "Second."))
+
+    drafts = transport.draft(CodexCliProposerConfig(), _request(), 2)
+
+    assert len({draft.logical_call_id for draft in drafts}) == 1
