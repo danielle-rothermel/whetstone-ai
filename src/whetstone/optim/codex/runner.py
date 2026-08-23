@@ -112,6 +112,13 @@ _CODEX_UNBUDGETED_AXES = (
     BudgetAxis.OPEN_FILE_COUNT.value,
     BudgetAxis.DISK_BYTES.value,
 )
+#: The JSONL event type the CLI uses to report a failed turn on stdout.
+_TRANSCRIPT_ERROR_EVENT: Final = "error"
+#: Bounds on the transcript detail quoted into a failure message. The
+#: message is an exception string and the transcript can be megabytes.
+_TRANSCRIPT_MAX_ERROR_ITEMS: Final = 5
+_TRANSCRIPT_MAX_ERROR_CHARS: Final = 500
+_TRANSCRIPT_MAX_EVENT_TYPES: Final = 8
 _DIRECT_EXEC_SOURCE: Final = (
     "import os,sys;os.execv(sys.argv[1],sys.argv[1:])"
 )
@@ -1030,13 +1037,13 @@ class SubprocessCodexRunner:
                         stderr=stderr_bytes,
                         isolation=isolation,
                     ) from exc
-                # The transcript's own error items come first: under
-                # ``--json`` they carry the real cause, while stderr holds
-                # startup advisories that would otherwise read as it.
-                transcript_errors = _transcript_error_messages(stdout)
+                # The transcript comes first: under ``--json`` it carries
+                # the real cause, while stderr holds startup advisories
+                # that would otherwise be read as it.
+                transcript_detail = _transcript_failure_detail(stdout)
                 detail = (
-                    f"{transcript_errors}; stderr tail: {stderr[-2000:]}"
-                    if transcript_errors
+                    f"{transcript_detail}; stderr tail: {stderr[-2000:]}"
+                    if transcript_detail
                     else stderr[-2000:]
                 )
                 raise CodexStructuredExecutionFailure(
@@ -1047,8 +1054,13 @@ class SubprocessCodexRunner:
                     isolation=isolation,
                 )
             if not artifact_path.is_file():
+                # Exit 0 and no artifact: the CLI thought it finished. Its
+                # own transcript is the only account of what it did, so it
+                # travels in the message rather than only on the exception.
+                transcript_detail = _transcript_failure_detail(stdout)
                 raise CodexStructuredExecutionFailure(
-                    "Codex produced no final output artifact",
+                    "Codex produced no final output artifact"
+                    + (f": {transcript_detail}" if transcript_detail else ""),
                     stdout=stdout,
                     stderr=stderr_bytes,
                     isolation=isolation,
@@ -1540,20 +1552,29 @@ def _parse_output_artifact_bytes(
     )
 
 
-def _transcript_error_messages(stdout: bytes) -> str:
-    """The CLI's own ``error`` items, pulled out of the JSONL transcript.
+def _transcript_failure_detail(stdout: bytes) -> str:
+    """What the CLI itself said, read out of its JSONL transcript.
 
     Under ``--json`` the actionable failure -- an expired session, a
     refused model, a dropped stream -- is an ``{"type": "error"}`` item on
     *stdout*. Only advisory noise reaches stderr, so a failure message
     quoting the stderr tail alone can name a warning as the cause while
-    the real one sits unread in stdout. This pulls those messages out so
-    the exit-code failure says what actually went wrong.
+    the real one sits unread in stdout.
 
-    Best effort by construction: the transcript is foreign output, so an
+    Two things come back, because they answer different questions. The
+    ``error`` messages say what went wrong; the trailing event types say
+    how far the turn got, which is what distinguishes "never started"
+    from "died mid-stream" when the CLI exits without an error item at
+    all.
+
+    Both are bounded the way the stderr tail is: this text goes into an
+    exception message, and the transcript can be megabytes.
+
+    Best effort by construction -- the transcript is foreign output, so an
     unparseable line is skipped rather than raised on.
     """
     messages: list[str] = []
+    event_types: list[str] = []
     for line in stdout.splitlines():
         stripped = line.strip()
         if not stripped.startswith(b"{"):
@@ -1562,11 +1583,30 @@ def _transcript_error_messages(stdout: bytes) -> str:
             item = json.loads(stripped)
         except (ValueError, UnicodeDecodeError):
             continue
-        if isinstance(item, dict) and item.get("type") == "error":
+        if not isinstance(item, dict):
+            continue
+        event_type = item.get("type")
+        if isinstance(event_type, str) and event_type:
+            event_types.append(event_type)
+        if event_type == _TRANSCRIPT_ERROR_EVENT:
             message = item.get("message")
             if isinstance(message, str) and message:
                 messages.append(message)
-    return " | ".join(messages)
+
+    parts: list[str] = []
+    if messages:
+        retained = messages[-_TRANSCRIPT_MAX_ERROR_ITEMS:]
+        dropped = len(messages) - len(retained)
+        joined = " | ".join(
+            message[:_TRANSCRIPT_MAX_ERROR_CHARS] for message in retained
+        )
+        if dropped:
+            joined = f"(+{dropped} earlier) {joined}"
+        parts.append(f"transcript errors: {joined}")
+    if event_types:
+        tail = event_types[-_TRANSCRIPT_MAX_EVENT_TYPES:]
+        parts.append(f"last events: {', '.join(tail)}")
+    return "; ".join(parts)
 
 
 def _decode_stderr(stderr: bytes) -> str:

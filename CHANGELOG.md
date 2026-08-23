@@ -25,12 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1)`. The run still succeeded, but the line landed in the stderr tail that
   unrelated failures quote, where it read as their cause.
 
-- A Codex Step that exits non-zero now names the CLI's own error. Under
-  `--json` the actionable cause is an `{"type": "error"}` item on *stdout*,
-  while stderr carries only startup advisories, so a failure message built
-  from the stderr tail alone could report a warning as the cause. The
-  message now leads with the transcript's error items and keeps the stderr
-  tail after them.
+- A failing Codex Step now names the CLI's own error instead of whatever
+  advisory happened to reach stderr. Under `--json` the actionable cause is
+  an `{"type": "error"}` item on *stdout*, while stderr carries startup
+  noise, so a failure message built from the stderr tail alone could report
+  a warning as the cause — which is how a real study-stage failure came to
+  be reported as a skills-loader problem. The message now leads with the
+  transcript's error items, then the last few JSONL event types (which
+  distinguish "never started" from "died mid-stream" when the CLI exits
+  with no error item at all), and keeps the stderr tail after them. Both
+  the `Codex exited N` path and the `produced no final output artifact`
+  path report it, and the transcript detail is bounded the way the stderr
+  tail is.
 
 ## 0.1.9 - 2026-08-22
 

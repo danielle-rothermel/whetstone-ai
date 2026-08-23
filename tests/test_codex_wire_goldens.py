@@ -650,7 +650,7 @@ def test_a_failure_names_the_transcript_error_not_the_startup_noise() -> None:
     study stage was diagnosed as a skills-loader problem when the CLI had
     reported something else entirely on stdout.
     """
-    from whetstone.optim.codex.runner import _transcript_error_messages
+    from whetstone.optim.codex.runner import _transcript_failure_detail
 
     stdout = b"\n".join(
         [
@@ -662,11 +662,48 @@ def test_a_failure_names_the_transcript_error_not_the_startup_noise() -> None:
         ]
     )
 
+    detail = _transcript_failure_detail(stdout)
+
+    assert "transcript errors: 401 Unauthorized | stream closed" in detail
+    # How far the turn got, which is what tells "never started" from
+    # "died mid-stream" when there is no error item at all.
     assert (
-        _transcript_error_messages(stdout)
-        == "401 Unauthorized | stream closed"
+        "last events: thread.started, error, error, turn.completed" in detail
     )
-    # A transcript with no error items adds nothing to the message.
-    assert _transcript_error_messages(b'{"type":"turn.completed"}') == ""
+    # A clean transcript still reports its shape, and names no error.
+    clean = _transcript_failure_detail(b'{"type":"turn.completed"}')
+    assert clean == "last events: turn.completed"
     # Foreign output must never raise out of a failure path.
-    assert _transcript_error_messages(b"\xff\xfe garbage") == ""
+    assert _transcript_failure_detail(b"\xff\xfe garbage") == ""
+
+
+def test_transcript_detail_is_bounded_like_the_stderr_tail() -> None:
+    """This text lands in an exception message, so it cannot be unbounded.
+
+    A real transcript is one JSONL event per turn and can reach megabytes;
+    quoting all of it would move the cause off the top of the error.
+    """
+    from whetstone.optim.codex.runner import (
+        _TRANSCRIPT_MAX_ERROR_CHARS,
+        _TRANSCRIPT_MAX_ERROR_ITEMS,
+        _TRANSCRIPT_MAX_EVENT_TYPES,
+        _transcript_failure_detail,
+    )
+
+    many = b"\n".join(
+        b'{"type":"error","message":"e%d"}' % index for index in range(40)
+    )
+
+    detail = _transcript_failure_detail(many)
+
+    assert detail.count(" | ") == _TRANSCRIPT_MAX_ERROR_ITEMS - 1
+    # The most recent errors are the ones kept, and the drop is stated.
+    assert "e39" in detail
+    assert "(+35 earlier)" in detail
+    assert detail.count("error,") == _TRANSCRIPT_MAX_EVENT_TYPES - 1
+
+    long_message = b'{"type":"error","message":"%s"}' % (b"x" * 4000)
+    assert (
+        "x" * (_TRANSCRIPT_MAX_ERROR_CHARS + 1)
+        not in _transcript_failure_detail(long_message)
+    )

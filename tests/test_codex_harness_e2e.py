@@ -836,3 +836,49 @@ def test_the_runner_emits_the_route_and_base_ref_the_agent_cannot_guess(
         "after admission"
     )
     assert seed_ref.schema_name in prompt
+
+
+def test_a_failed_launch_reports_the_stdout_error_not_the_stderr_noise(
+    codex_world,
+) -> None:
+    """The whole diagnostic bug, end to end through a real spawned CLI.
+
+    The CLI exits non-zero after writing its real cause to stdout as an
+    ``{"type": "error"}`` item and unrelated advisories to stderr. This is
+    the shape a real failing launch has: under ``--json`` the cause is a
+    transcript item, and stderr carries only startup noise.
+
+    Before this was fixed the failure message quoted the stderr tail
+    alone, so it named a skills-loader warning as the cause of a study
+    stage that had actually failed for another reason entirely.
+    """
+    world = codex_world()
+    adapter = world.adapter(
+        [
+            {
+                "stderr": (
+                    "ERROR codex_skills_extension::loader::host: failed to "
+                    "scan skill path file:///home/u/.agents/skills: "
+                    "Operation not permitted (os error 1)"
+                )
+            },
+            {"error": "401 Unauthorized connecting to the model endpoint"},
+            {"exit": 1},
+        ]
+    )
+    request = toy_codex_step_request(
+        control=world.control, run=world.run, candidate=world.candidate
+    )
+
+    result, _ref = world.harness(adapter).run_step(request)
+
+    assert result.status is StepStatus.FAILED
+    assert result.terminal_failure is not None
+    message = result.terminal_failure.message
+    assert "401 Unauthorized connecting to the model endpoint" in message, (
+        "the failure did not name the CLI's own error item, so the real "
+        f"cause is still unreported: {message}"
+    )
+    # The advisory may still travel -- it just must not be the only thing
+    # the message offers as an explanation.
+    assert message.index("401 Unauthorized") < message.index("stderr tail:")
