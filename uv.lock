@@ -1453,7 +1453,7 @@ wheels = [
 
 [[package]]
 name = "whetstone-ai"
-version = "0.1.10"
+version = "0.1.11"
 source = { editable = "." }
 dependencies = [
     { name = "dr-exec" },
