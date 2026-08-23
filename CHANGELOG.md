@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.10 - 2026-08-23
+
 ### Fixed
 - A Codex run no longer reaches the user's `~/.agents` tree. The Codex CLI
   resolves its agent-extension roots — the 0.148 skills loader's
