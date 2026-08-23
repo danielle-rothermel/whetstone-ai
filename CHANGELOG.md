@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The toy run harnesses (`prepare_toy_copro_run`, `prepare_toy_miprov2_run`,
   `prepare_toy_gepa_run`, `prepare_toy_codex_run`) accept `num_seeds`.
 
+
+- The platform step executor hands the launch's `extra_pools` to the opening
+  Step only; later Steps rebuild their state from the prior result, so a
+  stale opening state can no longer override it. (They reach only the opening Step.)
 - MIPROv2 can now run through the platform step path at all. The platform
   step executor built its opening `extra_pools` from scratch and never
   merged the launch's own, so an optimizer whose opening state is larger

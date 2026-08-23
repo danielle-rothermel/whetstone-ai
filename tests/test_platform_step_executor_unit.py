@@ -926,9 +926,7 @@ def test_platform_step_opens_miprov2_from_the_launch_extra_pools(
     )
     assert first.step_index == 0
     # The Step opened from the exact state the launch bound, not a rebuild.
-    opening = Miprov2State.model_validate(
-        first.request.record.pools[MIPROV2_STATE_KEY]
-    )
+    opening = Miprov2State.model_validate(first.request.record.pools[MIPROV2_STATE_KEY])
     assert opening.control.reference() == control.reference()
     assert opening.run.record.run_id == launch.run.run_id
 
@@ -958,15 +956,13 @@ def test_platform_step_drives_miprov2_to_a_terminal_result(
     assert state.terminal, "MIPROv2 reached a terminal platform work state"
 
     results = tuple(
-        OptimStepResult.model_validate(
-            runtime.store.get(ref.record_ref.reference)
-        )
+        OptimStepResult.model_validate(runtime.store.get(ref.record_ref.reference))
         for ref in state.step_result_refs
     )
     assert results[-1].status is StepStatus.COMPLETE
-    assert all(
-        result.status is StepStatus.CONTINUE for result in results[:-1]
-    ), "only the last Step of a completed run may be terminal"
+    assert all(result.status is StepStatus.CONTINUE for result in results[:-1]), (
+        "only the last Step of a completed run may be terminal"
+    )
     final = Miprov2State.model_validate(
         runtime.store.get(results[-1].state_ref.reference)[MIPROV2_STATE_KEY]
     )
@@ -1014,3 +1010,53 @@ def test_platform_step_rejects_a_launch_claiming_the_executor_pool_key(
             input_reference=input_reference,
             stage_index=0,
         )
+
+
+def test_launch_pools_reach_only_the_opening_step(
+    sqlite_store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The launch's pools are opening state; later Steps rebuild their own.
+
+    Re-merging them into ``build_next`` would let a stale opening state
+    override the state the prior Step produced.
+    """
+    from whetstone.platform import step_executor as executor_module
+
+    runtime, launch, control = _miprov2_platform_launch(sqlite_store)
+    runtime.controller.bind_launch(launch)
+    seen: list[tuple[int, frozenset[str]]] = []
+    builder_cls = executor_module.StepRequestBuilder
+    original_first = builder_cls.build_first
+    original_next = builder_cls.build_next
+
+    def first(self, *args, **kwargs):
+        pools = kwargs.get("extra_pools") or {}
+        seen.append((0, frozenset(pools)))
+        return original_first(self, *args, **kwargs)
+
+    def nxt(self, *args, **kwargs):
+        pools = kwargs.get("extra_pools") or {}
+        seen.append((1, frozenset(pools)))
+        return original_next(self, *args, **kwargs)
+
+    monkeypatch.setattr(builder_cls, "build_first", first)
+    monkeypatch.setattr(builder_cls, "build_next", nxt)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.INLINE,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+    for _ in range(4):
+        completion = execute_optim_step_sync(runtime, input_reference=current_ref)
+        current_ref = completion.output_reference
+        if _load_work_state(runtime, current_ref).terminal:
+            break
+
+    opening = [pools for step, pools in seen if step == 0]
+    later = [pools for step, pools in seen if step == 1]
+    assert opening and MIPROV2_STATE_KEY in opening[0]
+    assert later, "the run advanced past its opening Step"
+    assert all(MIPROV2_STATE_KEY not in pools for pools in later)

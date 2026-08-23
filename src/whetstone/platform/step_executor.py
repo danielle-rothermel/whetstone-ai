@@ -654,21 +654,30 @@ def execute_optim_step_sync(
         # EvalEngineService minted inside evaluate().
         bind_evaluation_service(runtime.eval_service)
 
-    # The launch's own opening pools come first: an optimizer whose search
-    # opens from durable state larger than its control -- MIPROv2 carries
-    # its opening Miprov2State at `miprov2_state` -- cannot build its first
-    # Step without them, exactly as the in-process controller passes them.
-    extra_pools = None if launch.extra_pools is None else dict(launch.extra_pools)
     # `platform_stage_index` is executor-owned: only the platform path knows
     # a stage index, so a launch carrying that key is asserting ownership it
     # does not have. Reject it whatever the adapter -- checking only on the
     # path that writes it would let the same bad launch pass silently under
     # another optimizer, and the key would still be in the Step's pools.
-    if extra_pools is not None and _PLATFORM_STAGE_INDEX_POOL_KEY in extra_pools:
+    if launch.extra_pools is not None and (
+        _PLATFORM_STAGE_INDEX_POOL_KEY in launch.extra_pools
+    ):
         raise ValueError(
             f"launch extra_pools may not set {_PLATFORM_STAGE_INDEX_POOL_KEY!r}; "
             "that pool key is owned by the platform step executor"
         )
+    # The launch's own pools are *opening* state: an optimizer whose search
+    # opens from durable state larger than its control -- MIPROv2 carries
+    # its opening Miprov2State at `miprov2_state` -- cannot build its first
+    # Step without them, exactly as the in-process controller passes them.
+    # They reach the first Step only. Later Steps rebuild their state from
+    # the prior result, and re-merging the opening pools there would let a
+    # stale opening state override the current one.
+    extra_pools = (
+        dict(launch.extra_pools)
+        if state.step_index == 0 and launch.extra_pools is not None
+        else None
+    )
     if adapter_key == GEPA_ADAPTER_KEY:
         # Fan-in retry of the same episode keeps this salt and the same
         # request; retry safety is the idempotent step-result / fan-in
