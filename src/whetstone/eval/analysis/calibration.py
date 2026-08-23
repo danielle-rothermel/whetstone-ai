@@ -91,10 +91,21 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed sample count")
     if len(evidence.per_task_values) != len(expected_task_hashes):
         raise ValueError("calibration evidence has incomplete per-task values")
+    # Anchors calibrate the achievable range, so every planned row must have
+    # been observed: ``per_task_counts`` counts *present* rows, so this also
+    # rejects an anchor that silently lost repeats.
     if evidence.per_task_counts != (expected_samples,) * len(
         expected_task_hashes
     ):
         raise ValueError("calibration evidence changed per-task sample counts")
+    # A fully observed task always reduces to a real mean. An unobserved task
+    # would enter the variance decomposition as a *measured* 0.0 and mint a
+    # false hard task, biasing the anchor gap and every MDD on the surface, so
+    # it is rejected here rather than coerced downstream.
+    if any(value is None for value in evidence.per_task_values):
+        raise ValueError(
+            "calibration evidence carries an unobserved per-task value"
+        )
     if evidence.row_accounting.planned != (
         len(expected_task_hashes) * expected_samples
     ):
@@ -228,16 +239,24 @@ def run_anchor_calibration(
     if baseline_evidence.graph_hash != ceiling_evidence.graph_hash:
         raise ValueError("calibration anchors changed graph identity")
 
+    # ``_validate_anchor_evidence`` has already rejected any unobserved task,
+    # so both vectors are fully measured here.
+    baseline_per_task = tuple(
+        value for value in baseline_evidence.per_task_values if value is not None
+    )
+    ceiling_per_task = tuple(
+        value for value in ceiling_evidence.per_task_values if value is not None
+    )
     paired_delta_ci = bootstrap_paired_delta_ci(
-        baseline_evidence.per_task_values,
-        ceiling_evidence.per_task_values,
+        baseline_per_task,
+        ceiling_per_task,
         level=bootstrap_level,
         resamples=bootstrap_resamples,
         seed=bootstrap_seed,
     )
     power = analyze_power(
-        naive_per_task=baseline_evidence.per_task_values,
-        ceiling_per_task=ceiling_evidence.per_task_values,
+        naive_per_task=baseline_per_task,
+        ceiling_per_task=ceiling_per_task,
         pool_ceiling=pool_ceiling,
         anchor_samples=samples,
         config=power_config,

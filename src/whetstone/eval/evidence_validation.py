@@ -403,25 +403,55 @@ class EvalEvidenceValidation:
             )
             for task_hash in outputs.task_hashes
         )
-        expected_per_task_values = tuple(
-            sum(
-                float(row.value or 0.0) if row.is_present else 0.0
-                for row in task.rows
-            )
-            / outputs.num_seeds
+        # The per-task vector and the evaluation-level aggregate must read the
+        # same rows the same way. A task's count is its number of *present*
+        # rows, and its value is the mean over exactly those rows -- never a
+        # sum padded with zeros over ``num_seeds``, which would score an
+        # unobserved repeat as a real zero and never let a count fall below
+        # ``num_seeds``.
+        #
+        # The producer's aggregation policy decides whether a partially
+        # observed task keeps its present-row mean (skip) or withholds a value
+        # (propagate). This validator does not hold that config, so it checks
+        # the two claims every mean policy must satisfy: a value that is
+        # present must be exactly the present-row mean, and a value may be
+        # withheld only when the policy could withhold it -- which requires at
+        # least one non-present row.
+        expected_per_task_counts = tuple(
+            sum(1 for row in task.completed_rows(outputs.num_seeds) if row.is_present)
             for task in task_rows
         )
-        expected_per_task_counts = tuple(
-            outputs.num_seeds for _task in task_rows
-        )
-        if evidence.per_task_values != expected_per_task_values:
-            raise ValueError(
-                "Evaluation Evidence per-task values do not match outputs"
-            )
         if evidence.per_task_counts != expected_per_task_counts:
             raise ValueError(
                 "Evaluation Evidence per-task counts do not match outputs"
             )
+        if len(evidence.per_task_values) != len(task_rows):
+            raise ValueError(
+                "Evaluation Evidence per-task values do not match outputs"
+            )
+        for task, count, value in zip(
+            task_rows, expected_per_task_counts, evidence.per_task_values,
+            strict=True,
+        ):
+            present = tuple(
+                float(row.value)
+                for row in task.completed_rows(outputs.num_seeds)
+                if row.is_present and row.value is not None
+            )
+            if value is None:
+                # Only an incomplete task may withhold a value. A fully present
+                # task always reduces to a real mean, so ``None`` there means
+                # the producer dropped a score it actually held.
+                if count == outputs.num_seeds:
+                    raise ValueError(
+                        "Evaluation Evidence per-task values do not match "
+                        "outputs"
+                    )
+                continue
+            if not present or value != sum(present) / len(present):
+                raise ValueError(
+                    "Evaluation Evidence per-task values do not match outputs"
+                )
 
     def _load_reward(
         self,
