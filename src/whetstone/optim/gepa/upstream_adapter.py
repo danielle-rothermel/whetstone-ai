@@ -221,12 +221,59 @@ class WhetstoneGepaAdapter:
         candidate: dict[str, str],
         capture_traces: bool = False,
     ) -> EvaluationBatch[GepaTrajectoryProjection, Any]:
+        """Evaluate an upstream minibatch, paying once per distinct instance.
+
+        Upstream's ``EpochShuffledBatchSampler`` pads a shuffled epoch up to a
+        multiple of the minibatch size by repeating its least-frequent ids
+        (``gepa/strategies/batch_sampler.py`` lines 50-56), so whenever
+        ``len(trainset) % reflection_minibatch_size != 0`` a minibatch can
+        carry the same instance twice. That is the pinned algorithm, not a
+        defect, so it is reproduced rather than suppressed.
+
+        A Whetstone evaluation request is position-unique by contract, so the
+        duplicated positions are collapsed to their distinct instances, sent
+        as one request, and the rows are then expanded back to the upstream
+        batch shape. GEPA therefore receives exactly the vectors it would have
+        received had every occurrence been evaluated separately: the repeated
+        instance's score, output, and trajectory appear once per occurrence.
+        Preserving the repeat matters because upstream compares
+        ``sum(eval_curr.scores)`` against ``sum(new_scores)`` when accepting a
+        mutation, so a doubled instance must carry double weight on both
+        sides.
+
+        Accounting deliberately splits in two. Logical metric calls stay
+        upstream's: it charges ``len(subsample_ids)`` -- the padded batch
+        length, duplicates included -- at
+        ``gepa/proposer/reflective_mutation/reflective_mutation.py`` line 198,
+        so a ``max_metric_calls`` budget means what it does upstream. Provider
+        rows are billed once per distinct instance, since a repeated instance
+        under a fixed candidate is the same evaluation.
+
+        The collapse and expansion are a pure function of the upstream batch,
+        adding no adapter state, so determinism, replay, and crash-retry are
+        unaffected.
+        """
         self._validate_candidate(candidate)
+        unique_batch: list[GepaDataInstance] = []
+        seen: dict[int, int] = {}
+        expansion: list[int] = []
+        for instance in batch:
+            index = seen.get(instance.upstream_position)
+            if index is None:
+                index = len(unique_batch)
+                seen[instance.upstream_position] = index
+                unique_batch.append(instance)
+            elif unique_batch[index] != instance:
+                raise ValueError(
+                    "GEPA evaluation batch repeats an upstream position with "
+                    "a different instance"
+                )
+            expansion.append(index)
         request = GepaEvaluationEffectRequest(
             slot=self._slot(),
             candidate=_candidate_components(candidate),
             upstream_candidate_index=None,
-            data=tuple(batch),
+            data=tuple(unique_batch),
             capture_traces=capture_traces,
             authority=self._evaluation_authority,
         )
@@ -235,34 +282,35 @@ class WhetstoneGepaAdapter:
             raise ValueError(
                 "GEPA evaluation result belongs to another effect request"
             )
-        if len(result.rows) != len(batch):
+        if len(result.rows) != len(unique_batch):
             raise ValueError(
                 "GEPA evaluation result row count does not match the batch"
             )
-        for expected, row in zip(batch, result.rows, strict=True):
+        for expected, row in zip(unique_batch, result.rows, strict=True):
             if row.data != expected:
                 raise ValueError(
                     "GEPA evaluation rows are not in requested data order"
                 )
+        rows = [result.rows[index] for index in expansion]
         trajectories: list[GepaTrajectoryProjection] | None
         if capture_traces:
-            if any(row.trajectory is None for row in result.rows):
+            if any(row.trajectory is None for row in rows):
                 raise ValueError(
                     "GEPA trace-capturing evaluation omitted a trajectory"
                 )
             trajectories = [
                 row.trajectory
-                for row in result.rows
+                for row in rows
                 if row.trajectory is not None
             ]
         else:
-            if any(row.trajectory is not None for row in result.rows):
+            if any(row.trajectory is not None for row in rows):
                 raise ValueError(
                     "GEPA non-tracing evaluation returned trajectories"
                 )
             trajectories = None
         objective_presence = [
-            row.objective_scores is not None for row in result.rows
+            row.objective_scores is not None for row in rows
         ]
         if any(objective_presence) and not all(objective_presence):
             raise ValueError(
@@ -271,21 +319,21 @@ class WhetstoneGepaAdapter:
         objective_scores = (
             [
                 dict(row.objective_scores)
-                for row in result.rows
+                for row in rows
                 if row.objective_scores is not None
             ]
             if all(objective_presence)
             else None
         )
         return EvaluationBatch(
-            outputs=[row.output for row in result.rows],
+            outputs=[row.output for row in rows],
             scores=[
                 (
                     self.failure_score
                     if row.failure_ref is not None
                     else float(row.score)
                 )
-                for row in result.rows
+                for row in rows
             ],
             trajectories=trajectories,
             objective_scores=objective_scores,

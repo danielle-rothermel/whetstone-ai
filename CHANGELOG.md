@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- GEPA no longer dies with `GEPA evaluation positions must be unique` when the
+  trainset size is not a multiple of `reflection_minibatch_size`. Upstream's
+  `EpochShuffledBatchSampler` pads each shuffled epoch up to a multiple of the
+  minibatch size by repeating its least-frequent ids, so a reflection minibatch
+  legitimately carries the same instance twice — and a Whetstone evaluation
+  request is position-unique by contract, so the run aborted mid-flight. The
+  shapes a protocol actually uses were affected: trainset 4 or 44 with
+  minibatch 3 both fail, while 6/3 and 4/2 divide evenly and never did.
+
+  The padding is the pinned algorithm, not an upstream defect, so it is
+  reproduced rather than suppressed: neither the sampler nor the uniqueness
+  contract changed. `WhetstoneGepaAdapter.evaluate` now evaluates the batch's
+  *distinct* instances in one position-unique request and expands the returned
+  rows back to the upstream batch shape, so GEPA receives the repeated
+  instance's score, output, and trajectory once per occurrence. That repeat is
+  load-bearing: upstream compares `sum(scores)` before and after a mutation, so
+  a doubled instance must carry double weight on both sides.
+
+  Accounting deliberately splits. Logical metric calls remain upstream's —
+  it charges the padded batch length, duplicates included — so a
+  `max_metric_calls` budget keeps its upstream meaning. Provider rows are
+  billed once per distinct instance, since re-evaluating one instance under a
+  fixed candidate is the same evaluation, making a padded run slightly cheaper
+  in provider spend without changing search behaviour. The collapse and
+  expansion are a pure function of the upstream batch and add no adapter state,
+  so determinism, replay, and crash-retry are unaffected and no persisted
+  schema changed.
+
 ## 0.1.11 - 2026-08-23
 
 ### Fixed
