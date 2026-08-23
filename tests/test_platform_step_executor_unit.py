@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import patch
 from uuid import uuid4
@@ -10,11 +11,26 @@ from dr_platform.completion.execution import RunCompletionPayload, StateCount
 from dr_store.content_addressing import format_object_reference
 
 from whetstone.coordination.eval_service import EvalDispatchMode
+from whetstone.optim.contracts import OptimStepResult, StepStatus
+from whetstone.optim.gepa.harness_adapter import GEPA_ADAPTER_KEY
+from whetstone.optim.miprov2.adapter import (
+    MIPROV2_ADAPTER_KEY,
+    MIPROV2_COMPLETE,
+    MIPROV2_STATE_KEY,
+)
+from whetstone.optim.miprov2.runtime import Miprov2State
 from whetstone.testing.runtime import (
+    build_miprov2_adapter,
     build_toy_copro_control,
+    build_toy_gepa_adapter,
+    build_toy_gepa_control,
     prepare_toy_copro_run,
+    prepare_toy_gepa_run,
+    prepare_toy_miprov2_run,
     register_toy_runtime,
 )
+from whetstone.testing.toy.experiment import build_toy_experiment
+from whetstone.testing.toy.miprov2 import build_toy_miprov2_control
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.platform.contracts import (
     OPTIM_PIPELINE_KEY,
@@ -36,6 +52,7 @@ from whetstone.platform.deferred_intents import (
 from whetstone.platform.eval_fanin import execute_eval_fanin_sync, execute_eval_row_sync
 from whetstone.platform.step_executor import (
     RUN_MEMBER_TERMINAL_BINDING_PREFIX,
+    _PLATFORM_STAGE_INDEX_POOL_KEY,
     OptimWorkState,
     _evict_step_result_binding,
     _load_work_state,
@@ -823,3 +840,223 @@ def test_run_completion_for_run_persists_multi_member_aggregate(toy_runtime) -> 
         "whetstone.optim_result:member-a",
         "whetstone.optim_result:member-b",
     )
+
+
+def _gepa_platform_launch(store):
+    """A GEPA run -- the one adapter the executor writes its pool key for."""
+    run_id = f"gepa-platform-{uuid4().hex[:8]}"
+    experiment = build_toy_experiment(num_seeds=1)
+    engine = ReferenceEvalRuntimeConfig().build_engine(store, experiment=experiment)
+    control = build_toy_gepa_control(engine=engine, max_metric_calls=2)
+    adapter = build_toy_gepa_adapter(
+        store=store,
+        engine=engine,
+        control=control,
+        run_id=run_id,
+        initial_candidate=experiment.initial_candidate,
+    )
+    runtime = register_toy_runtime(
+        store=store,
+        engine=engine,
+        copro_control=build_toy_copro_control(engine=engine),
+        extra_adapters={GEPA_ADAPTER_KEY: adapter},
+    )
+    launch = prepare_toy_gepa_run(
+        runtime,
+        run_id=run_id,
+        control=control,
+        experiment=experiment,
+    )
+    return runtime, launch
+
+
+def _miprov2_platform_launch(store):
+    """A MIPROv2 run bound exactly as the platform submit path binds it."""
+    engine = ReferenceEvalRuntimeConfig().build_engine(store)
+    control = build_toy_miprov2_control(engine=engine)
+    adapter = build_miprov2_adapter(store=store, control=control, engine=engine)
+    runtime = register_toy_runtime(
+        store=store,
+        engine=engine,
+        copro_control=build_toy_copro_control(engine=engine),
+        extra_adapters={MIPROV2_ADAPTER_KEY: adapter},
+    )
+    launch = prepare_toy_miprov2_run(
+        runtime,
+        run_id=f"miprov2-platform-{uuid4().hex[:8]}",
+        control=control,
+        engine=engine,
+    )
+    return runtime, launch, control
+
+
+def test_platform_step_opens_miprov2_from_the_launch_extra_pools(
+    sqlite_store,
+) -> None:
+    """MIPROv2 reaches its first Step through the platform executor.
+
+    MIPROv2 is the one optimizer whose opening state is larger than its
+    control: it must arrive at pool key ``miprov2_state``, bound by the
+    launch. The executor builds its own opening pools, so before it merged
+    the launch's, MIPROv2 could not open a Step on the platform path at all
+    -- ``build_first`` raised "MIPROv2 initial step requires the opening
+    state at pool key 'miprov2_state'".
+    """
+    runtime, launch, control = _miprov2_platform_launch(sqlite_store)
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.INLINE,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+
+    completion = execute_optim_step_sync(
+        runtime,
+        input_reference=input_reference,
+        stage_index=0,
+    )
+
+    state = _load_work_state(runtime, completion.output_reference)
+    assert state.step_index == 1, "the opening MIPROv2 Step ran and recorded"
+    assert state.step_result_refs
+    first = OptimStepResult.model_validate(
+        runtime.store.get(state.step_result_refs[0].record_ref.reference)
+    )
+    assert first.step_index == 0
+    # The Step opened from the exact state the launch bound, not a rebuild.
+    opening = Miprov2State.model_validate(first.request.record.pools[MIPROV2_STATE_KEY])
+    assert opening.control.reference() == control.reference()
+    assert opening.run.record.run_id == launch.run.run_id
+
+
+def test_platform_step_drives_miprov2_to_a_terminal_result(
+    sqlite_store,
+) -> None:
+    """The whole MIPROv2 run terminalizes through the platform executor."""
+    runtime, launch, control = _miprov2_platform_launch(sqlite_store)
+    runtime.controller.bind_launch(launch)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.INLINE,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+
+    # INLINE resolves evaluation inside the Step, so each call advances one
+    # Step and the loop ends on the recorded terminal state -- no waiting.
+    for _ in range(64):
+        completion = execute_optim_step_sync(runtime, input_reference=current_ref)
+        current_ref = completion.output_reference
+        if _load_work_state(runtime, current_ref).terminal:
+            break
+    state = _load_work_state(runtime, current_ref)
+    assert state.terminal, "MIPROv2 reached a terminal platform work state"
+
+    results = tuple(
+        OptimStepResult.model_validate(runtime.store.get(ref.record_ref.reference))
+        for ref in state.step_result_refs
+    )
+    assert results[-1].status is StepStatus.COMPLETE
+    assert all(result.status is StepStatus.CONTINUE for result in results[:-1]), (
+        "only the last Step of a completed run may be terminal"
+    )
+    final = Miprov2State.model_validate(
+        runtime.store.get(results[-1].state_ref.reference)[MIPROV2_STATE_KEY]
+    )
+    assert final.phase == MIPROV2_COMPLETE
+    assert final.terminal_result is not None
+
+
+def test_platform_step_rejects_a_launch_claiming_the_executor_pool_key(
+    sqlite_store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`platform_stage_index` is executor-owned; a launch may not bind it.
+
+    Merging the launch's pools must not let a launch silently overwrite the
+    salt that keeps a deferred GEPA CONTINUE from being replayed, so the
+    collision is loud rather than resolved by precedence. The rejection is
+    adapter-agnostic -- checking only where the key is written would let the
+    same bad launch through under another optimizer, still carrying the key
+    into the Step's pools.
+    """
+    runtime, launch = _gepa_platform_launch(sqlite_store)
+    control = launch.control
+    assert control is not None
+    # Launch bindings are immutable, so serve the colliding launch at the
+    # load seam the executor actually reads.
+    colliding = replace(
+        launch,
+        extra_pools={_PLATFORM_STAGE_INDEX_POOL_KEY: 99},
+    )
+    monkeypatch.setattr(
+        "whetstone.platform.step_executor._load_launch",
+        lambda runtime_arg, run_id: colliding,
+    )
+    work_input = OptimWorkInput(
+        run_id=colliding.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.PLATFORM,
+    )
+    input_reference = persist_work_input(runtime.store, work_input)
+
+    with pytest.raises(ValueError, match="owned by the platform step executor"):
+        execute_optim_step_sync(
+            runtime,
+            input_reference=input_reference,
+            stage_index=0,
+        )
+
+
+def test_launch_pools_reach_only_the_opening_step(
+    sqlite_store,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The launch's pools are opening state; later Steps rebuild their own.
+
+    Re-merging them into ``build_next`` would let a stale opening state
+    override the state the prior Step produced.
+    """
+    from whetstone.platform import step_executor as executor_module
+
+    runtime, launch, control = _miprov2_platform_launch(sqlite_store)
+    runtime.controller.bind_launch(launch)
+    seen: list[tuple[int, frozenset[str]]] = []
+    builder_cls = executor_module.StepRequestBuilder
+    original_first = builder_cls.build_first
+    original_next = builder_cls.build_next
+
+    def first(self, *args, **kwargs):
+        pools = kwargs.get("extra_pools") or {}
+        seen.append((0, frozenset(pools)))
+        return original_first(self, *args, **kwargs)
+
+    def nxt(self, *args, **kwargs):
+        pools = kwargs.get("extra_pools") or {}
+        seen.append((1, frozenset(pools)))
+        return original_next(self, *args, **kwargs)
+
+    monkeypatch.setattr(builder_cls, "build_first", first)
+    monkeypatch.setattr(builder_cls, "build_next", nxt)
+    work_input = OptimWorkInput(
+        run_id=launch.run.run_id,
+        controller_identity_hash=runtime.controller.runtime_hash,
+        control_identity_hash=control.identity_hash(),
+        dispatch_mode=EvalDispatchMode.INLINE,
+    )
+    current_ref = persist_work_input(runtime.store, work_input)
+    for _ in range(4):
+        completion = execute_optim_step_sync(runtime, input_reference=current_ref)
+        current_ref = completion.output_reference
+        if _load_work_state(runtime, current_ref).terminal:
+            break
+
+    opening = [pools for step, pools in seen if step == 0]
+    later = [pools for step, pools in seen if step == 1]
+    assert opening and MIPROV2_STATE_KEY in opening[0]
+    assert later, "the run advanced past its opening Step"
+    assert all(MIPROV2_STATE_KEY not in pools for pools in later)

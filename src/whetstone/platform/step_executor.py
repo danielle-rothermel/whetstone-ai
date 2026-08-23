@@ -58,6 +58,10 @@ from whetstone.platform.contracts import (
 OPTIM_WORK_STATE_SCHEMA = "whetstone.optim_work_state"
 OPTIM_WORK_STATE_SCHEMA_VERSION = 1
 RUN_MEMBER_TERMINAL_BINDING_PREFIX = "whetstone.run_member_terminal:"
+#: The one pool key the platform step executor owns. Only the platform path
+#: knows a stage index, so no launch may bind this key; the executor merges
+#: it into the launch's own opening pools and rejects a collision.
+_PLATFORM_STAGE_INDEX_POOL_KEY = "platform_stage_index"
 
 
 class OptimWorkState:
@@ -650,13 +654,37 @@ def execute_optim_step_sync(
         # EvalEngineService minted inside evaluate().
         bind_evaluation_service(runtime.eval_service)
 
-    extra_pools = None
+    # `platform_stage_index` is executor-owned: only the platform path knows
+    # a stage index, so a launch carrying that key is asserting ownership it
+    # does not have. Reject it whatever the adapter -- checking only on the
+    # path that writes it would let the same bad launch pass silently under
+    # another optimizer, and the key would still be in the Step's pools.
+    if launch.extra_pools is not None and (
+        _PLATFORM_STAGE_INDEX_POOL_KEY in launch.extra_pools
+    ):
+        raise ValueError(
+            f"launch extra_pools may not set {_PLATFORM_STAGE_INDEX_POOL_KEY!r}; "
+            "that pool key is owned by the platform step executor"
+        )
+    # The launch's own pools are *opening* state: an optimizer whose search
+    # opens from durable state larger than its control -- MIPROv2 carries
+    # its opening Miprov2State at `miprov2_state` -- cannot build its first
+    # Step without them, exactly as the in-process controller passes them.
+    # They reach the first Step only. Later Steps rebuild their state from
+    # the prior result, and re-merging the opening pools there would let a
+    # stale opening state override the current one.
+    extra_pools = (
+        dict(launch.extra_pools)
+        if state.step_index == 0 and launch.extra_pools is not None
+        else None
+    )
     if adapter_key == GEPA_ADAPTER_KEY:
         # Fan-in retry of the same episode keeps this salt and the same
         # request; retry safety is the idempotent step-result / fan-in
         # binding. The salt distinguishes successive deferral episodes
         # inside one step_index so the deferred CONTINUE is not replayed.
-        extra_pools = {"platform_stage_index": current_stage_index}
+        extra_pools = extra_pools or {}
+        extra_pools[_PLATFORM_STAGE_INDEX_POOL_KEY] = current_stage_index
     if state.step_index == 0:
         step_request = step_builder.build_first(
             run=bound,
