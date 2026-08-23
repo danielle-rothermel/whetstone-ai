@@ -127,6 +127,10 @@ class EngineToolEvaluator:
             "output_artifact_ref": evidence.outputs_ref.model_dump(
                 mode="json"
             ),
+            # An unobserved task crosses the wire as JSON ``null``, not 0.0:
+            # the reading agent must be able to tell a task that scored zero
+            # from one that was never measured. ``per_task_counts`` reads 0
+            # for exactly those tasks.
             "per_task_values": list(evidence.per_task_values),
             "per_task_counts": list(evidence.per_task_counts),
             "row_accounting": evidence.row_accounting.model_dump(mode="json"),

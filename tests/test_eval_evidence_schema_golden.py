@@ -49,7 +49,7 @@ EXPECTED_EVIDENCE_FIELDS = (
 
 def test_persisted_schema_names_and_versions_are_pinned() -> None:
     assert EVAL_EVIDENCE_SCHEMA == "whetstone.eval_evidence"
-    assert EVAL_EVIDENCE_SCHEMA_VERSION == 5
+    assert EVAL_EVIDENCE_SCHEMA_VERSION == 6
     assert EVAL_OUTPUTS_SCHEMA == "whetstone.eval_outputs"
     assert EVAL_OUTPUTS_SCHEMA_VERSION == 5
     assert EVAL_TRACES_SCHEMA == "whetstone.eval_component_traces"

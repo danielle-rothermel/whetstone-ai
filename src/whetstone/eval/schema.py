@@ -43,7 +43,7 @@ EVAL_TRACES_SCHEMA = "whetstone.eval_component_traces"
 EVAL_TRACES_SCHEMA_VERSION = 2
 EVAL_OUTPUTS_SCHEMA = "whetstone.eval_outputs"
 EVAL_OUTPUTS_SCHEMA_VERSION = 5
-EVAL_EVIDENCE_SCHEMA_VERSION = 5
+EVAL_EVIDENCE_SCHEMA_VERSION = 6
 
 
 class RowAccounting(BaseModel):
@@ -410,7 +410,7 @@ class EvalEvidence(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[5]
+    schema_version: Literal[6]
     candidate: CandidateRef
     eval_config_ref: EvalConfigRef
     eval_role: EvalRole
@@ -425,7 +425,14 @@ class EvalEvidence(BaseModel):
     dataset_hash: StrictStr
     task_hashes: tuple[str, ...]
     num_seeds: StrictInt
-    per_task_values: tuple[float, ...]
+    #: One entry per task hash, in ``task_hashes`` order. Each is the mean
+    #: over that task's *present* rows, or ``None`` when no present row backs
+    #: the task. ``None`` means unobserved, not scored zero -- a consumer that
+    #: coerces it to 0.0 mints a task that was never measured.
+    per_task_values: tuple[float | None, ...]
+    #: Count of present rows behind each ``per_task_values`` entry. It reads
+    #: zero exactly where the score is ``None`` for want of data, and below
+    #: ``num_seeds`` wherever a task lost repeats.
     per_task_counts: tuple[int, ...]
     row_accounting: RowAccounting
     traces_ref: TypedRef

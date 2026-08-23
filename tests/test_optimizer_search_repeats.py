@@ -25,7 +25,11 @@ import pytest
 
 from whetstone.coordination.harness_run_controller import RunRequest
 from whetstone.core.identity import ImmutableJsonObject
-from whetstone.eval.aggregate import RowValue, TaskRows
+from whetstone.eval.aggregate import (
+    RowValue,
+    TaskRows,
+    aggregation_definition,
+)
 from whetstone.eval.drivers.eval_result import per_task_count, per_task_score
 from whetstone.eval.metadata import PURPOSE_METADATA_KEY
 from whetstone.eval.protocol import EvalRequest
@@ -184,6 +188,18 @@ def test_planned_rows_are_tasks_times_repeats(sqlite_store) -> None:
 # --- the reduction is the repeat mean -------------------------------------
 
 
+def _aggregation_config(missing_data: str):
+    """A mean aggregation config under the named missing-row policy."""
+
+    return aggregation_definition("test.per_task.aggregation").materialize(
+        {"reduction": "mean", "missing_data": missing_data}
+    )
+
+
+SKIP_CONFIG = _aggregation_config("skip")
+PROPAGATE_CONFIG = _aggregation_config("propagate")
+
+
 def test_per_task_score_is_the_mean_over_repeats() -> None:
     """The canonical reduction averages a task's repeat rows."""
 
@@ -191,8 +207,80 @@ def test_per_task_score_is_the_mean_over_repeats() -> None:
         task_hash="a" * 64,
         rows=(RowValue(value=1.0), RowValue(value=0.0)),
     )
-    assert per_task_score(task, 2) == pytest.approx(0.5)
+    assert per_task_score(task, 2, SKIP_CONFIG) == pytest.approx(0.5)
     assert per_task_count(task, 2) == 2
+
+
+# --- the three row shapes --------------------------------------------------
+#
+# ``per_task_score`` means over *present* rows and ``per_task_count`` counts
+# them. A lost repeat is skipped, never scored 0.0, and a task with no present
+# row is ``None`` (unobserved) rather than a measured zero.
+
+
+def test_per_task_all_rows_present_is_the_plain_mean() -> None:
+    task = TaskRows(
+        task_hash="a" * 64,
+        rows=(RowValue(value=1.0), RowValue(value=0.5)),
+    )
+    assert per_task_score(task, 2, SKIP_CONFIG) == pytest.approx(0.75)
+    assert per_task_count(task, 2) == 2
+
+
+@pytest.mark.parametrize(
+    "lost",
+    [
+        RowValue(failed=True),
+        RowValue(missing=True),
+        RowValue(invalid=True),
+    ],
+    ids=["failed", "missing", "invalid"],
+)
+def test_per_task_some_rows_missing_skips_them(lost: RowValue) -> None:
+    """A lost repeat is skipped, not averaged in as a zero.
+
+    Scoring it 0.0 over ``num_seeds`` would report 0.5 here -- the exact
+    disagreement with the tolerant evaluation-level aggregate this contract
+    removes.
+    """
+
+    task = TaskRows(task_hash="a" * 64, rows=(RowValue(value=1.0), lost))
+    assert per_task_score(task, 2, SKIP_CONFIG) == pytest.approx(1.0)
+    assert per_task_count(task, 2) == 1
+
+
+def test_per_task_short_row_tuple_counts_only_present_rows() -> None:
+    """A repeat that never produced a row is padded in as missing."""
+
+    task = TaskRows(task_hash="a" * 64, rows=(RowValue(value=1.0),))
+    assert per_task_score(task, 2, SKIP_CONFIG) == pytest.approx(1.0)
+    assert per_task_count(task, 2) == 1
+
+
+@pytest.mark.parametrize(
+    "config", [SKIP_CONFIG, PROPAGATE_CONFIG], ids=["skip", "propagate"]
+)
+def test_per_task_all_rows_missing_is_unobserved_not_zero(config) -> None:
+    """A fully lost task has no score under either policy."""
+
+    task = TaskRows(
+        task_hash="a" * 64,
+        rows=(RowValue(failed=True), RowValue(missing=True)),
+    )
+    assert per_task_score(task, 2, config) is None
+    assert per_task_count(task, 2) == 0
+
+
+def test_per_task_propagate_policy_withholds_a_partial_task() -> None:
+    """Under ``propagate`` a lost repeat withholds the task's score."""
+
+    task = TaskRows(
+        task_hash="a" * 64,
+        rows=(RowValue(value=1.0), RowValue(failed=True)),
+    )
+    assert per_task_score(task, 2, PROPAGATE_CONFIG) is None
+    # The count still reports the one row that was actually observed.
+    assert per_task_count(task, 2) == 1
 
 
 # --- COPRO -----------------------------------------------------------------

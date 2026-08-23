@@ -48,7 +48,10 @@ def aggregate_rollout_outputs(
         aggregate=aggregate,
         reward=reward,
         per_task_scores=tuple(
-            per_task_score(task_row, num_seeds) for task_row in task_rows
+            per_task_score(
+                task_row, num_seeds, matrix_plan.aggregation_config
+            )
+            for task_row in task_rows
         ),
         per_task_counts=tuple(
             per_task_count(task_row, num_seeds) for task_row in task_rows

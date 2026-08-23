@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The per-task vector and the evaluation-level aggregate now read the same
+  rows the same way. `per_task_score` scored every non-present row as 0.0 and
+  divided by `num_seeds`, while the aggregate applied the plan's own
+  missing-row policy, so the two disagreed off identical evidence: under a
+  tolerant policy a task with three present rows at 1.0 and one failed repeat
+  reported 0.75 in the vector beside 1.0 in the aggregate.
+
+  `per_task_score` is now the mean over a task's **present** rows, obtained by
+  calling the same `aggregate` entry point on the same rows the aggregate
+  uses, so there is one definition of a task's score rather than two that can
+  drift. A lost repeat is skipped rather than scored zero, and a task with no
+  present row is `None` — *unobserved*, not *scored 0.0*.
+
+  Two consequences of the old zero-padding are fixed with it. A fully lost
+  task entered anchor calibration (`analyze_power` via `per_task_values`) as a
+  measured hard task at 0.0, biasing the anchor gap and every MDD on the
+  power surface; calibration now rejects an anchor carrying an unobserved
+  task, which its existing full-observation requirement already implied. And
+  GEPA no longer coerces an absent score to 0.0: a task with no present row is
+  projected as the failed row it already had a path for.
+
+### Changed
+- `per_task_count` counts a task's **present** rows. It previously returned
+  `len(completed_rows(num_seeds))`, and `completed_rows` pads missing repeats
+  *in*, so it always equalled `num_seeds` — leaving any downstream
+  row-completeness weighting built on `per_task_counts` inert. It now drops
+  below `num_seeds` exactly when a task lost repeats, and reads zero precisely
+  where the score is unobserved for want of data.
+- `EvalEvidence.schema_version` is **6**: `per_task_values` widens to
+  `tuple[float | None, ...]` so consumers can distinguish a task that scored
+  zero from one that was never observed. `per_task_counts` keeps its type and
+  changes meaning as above. `EvalOutputsRecord` is unaffected and stays at
+  version 5.
+- `per_task_score` takes the plan's `AggregationConfig`, since the reduction
+  is now the plan's own policy rather than a second hardcoded one. Under a
+  propagating policy a partially observed task withholds its score (`None`)
+  while its count still reports the rows actually observed.
+- Evidence validation no longer re-derives the per-task vector as
+  `sum(...)/num_seeds`. It checks the claims every mean policy must satisfy: a
+  reported value equals the present-row mean exactly, and a value may be
+  withheld only for a task that actually lost a row.
+
 ## 0.1.12 - 2026-08-23
 
 ### Fixed

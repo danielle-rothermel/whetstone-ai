@@ -378,6 +378,34 @@ def _load_component_trace_index(
     return index
 
 
+def _gepa_row_score(
+    value: float | None,
+    *,
+    all_repeats_failed: bool,
+) -> float:
+    """The score GEPA's search plane carries for one task.
+
+    ``None`` in ``per_task_values`` means the task has no present row, so
+    there is no measured score to carry. GEPA projects that task as a *failed*
+    row, and a failed row carries no score, so the number returned here is
+    inert -- 0.0 stands in only for a row the row validator forbids from
+    reporting a score at all.
+
+    A ``None`` beside a task that did *not* lose every repeat would mean the
+    aggregation policy withheld a score GEPA is nonetheless about to treat as
+    a real measurement. That is the false-hard-task bug this contract exists
+    to prevent, so it is rejected rather than silently read as 0.0.
+    """
+    if value is None:
+        if not all_repeats_failed:
+            raise ValueError(
+                "GEPA cannot score a task whose canonical per-task value is "
+                "withheld while some repeat is present"
+            )
+        return 0.0
+    return float(value)
+
+
 class CanonicalGepaEvalAuthority:
     def __init__(
         self,
@@ -783,17 +811,23 @@ class CanonicalGepaEvalAuthority:
         # the representative output and trace while the *score* is the
         # already-reduced per-task mean over every repeat.
         #
-        # Row semantics under repeats. ``per_task_score`` scores a failed
-        # repeat as 0.0 and averages over the completed ones, so a task with
-        # any completed repeat has a real, generally nonzero mean. A projected
-        # row must therefore be:
+        # Row semantics under repeats. ``per_task_score`` is the mean over a
+        # task's *present* repeats -- a lost repeat is skipped, not scored 0.0
+        # -- so a task with any present repeat has a real mean, and a task
+        # with none has no score at all (``None``). A projected row must
+        # therefore be:
         #
-        # * a *scored* row whenever at least one repeat completed -- it
+        # * a *scored* row whenever at least one repeat is present -- it
         #   carries that mean, and ``failed_repeats`` records how many
         #   repeats failed behind it; and
-        # * a *failed* row only when every repeat failed, which is the only
-        #   case whose canonical mean is 0.0 and so the only case that can
-        #   satisfy ``GepaEvaluationRow``'s "failed rows carry no score" rule.
+        # * a *failed* row only when the task has no present repeat, which is
+        #   the only case with no canonical score and so the only case that
+        #   can satisfy ``GepaEvaluationRow``'s "failed rows carry no score"
+        #   rule.
+        #
+        # GEPA's search plane cannot represent an unobserved task, and an
+        # unobserved task is exactly a totally-failed one here, so ``None``
+        # is projected as that failed row rather than coerced to 0.0.
         #
         # Taking repeat 0 unconditionally conflated these: one flaky repeat 0
         # beside a successful repeat 1 minted a failure_ref while carrying the
@@ -817,7 +851,10 @@ class CanonicalGepaEvalAuthority:
                     request=request,
                     data=request.data[index],
                     raw=representative,
-                    score=float(evidence.per_task_values[index]),
+                    score=_gepa_row_score(
+                        evidence.per_task_values[index],
+                        all_repeats_failed=all_failed,
+                    ),
                     evidence_refs=common_refs,
                     candidate_id=candidate.record.candidate_id,
                     failed_repeats=failed_repeats,
