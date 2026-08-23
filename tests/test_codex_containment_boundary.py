@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import sys
+
 import pytest
 
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
@@ -262,6 +264,10 @@ def test_the_mcp_server_accepts_its_own_run_binding(
     assert build_server_from_env(mine) is not None
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="the Codex sandbox is macOS sandbox-exec only",
+)
 def test_the_run_points_home_at_its_own_scratch_directory(
     tmp_path, sqlite_store
 ) -> None:

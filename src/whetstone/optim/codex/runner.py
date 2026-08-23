@@ -119,6 +119,7 @@ _TRANSCRIPT_ERROR_EVENT: Final = "error"
 _TRANSCRIPT_MAX_ERROR_ITEMS: Final = 5
 _TRANSCRIPT_MAX_ERROR_CHARS: Final = 500
 _TRANSCRIPT_MAX_EVENT_TYPES: Final = 8
+_TRANSCRIPT_MAX_EVENT_TYPE_CHARS: Final = 64
 _DIRECT_EXEC_SOURCE: Final = (
     "import os,sys;os.execv(sys.argv[1],sys.argv[1:])"
 )
@@ -1587,7 +1588,10 @@ def _transcript_failure_detail(stdout: bytes) -> str:
             continue
         event_type = item.get("type")
         if isinstance(event_type, str) and event_type:
-            event_types.append(event_type)
+            # A newer or malformed CLI may put anything in ``type``; the
+            # persisted failure message bounds each entry as well as the
+            # count.
+            event_types.append(event_type[:_TRANSCRIPT_MAX_EVENT_TYPE_CHARS])
         if event_type == _TRANSCRIPT_ERROR_EVENT:
             message = item.get("message")
             if isinstance(message, str) and message:
