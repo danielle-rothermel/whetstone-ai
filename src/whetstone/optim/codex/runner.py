@@ -54,6 +54,8 @@ from whetstone.optim.codex.adapter import (
     codex_run_lease_binding,
 )
 from whetstone.optim.codex.containment import (
+    CODEX_AGENT_HOME_DIR_NAME,
+    CODEX_AGENT_HOME_ENV_KEY,
     CODEX_AUTH_FILENAMES,
     CODEX_CONTAINMENT_PROFILE,
     CODEX_DEFAULT_MAX_OUTPUT_BYTES,
@@ -859,9 +861,17 @@ class SubprocessCodexRunner:
             codex_home = root / "codex-home"
             codex_home.mkdir()
             self.stage_auth(codex_home)
+            # The agent's HOME is its own empty scratch directory, so the
+            # CLI's startup scan of ``~/.agents`` finds nothing instead of
+            # reaching the real home. See ``containment.py``: no config
+            # key disables that scan, and the scanned entries symlink into
+            # the dotfiles repository.
+            agent_home = root / CODEX_AGENT_HOME_DIR_NAME
+            agent_home.mkdir()
             isolated_environment = {
                 **self._environment,
                 "CODEX_HOME": str(codex_home),
+                CODEX_AGENT_HOME_ENV_KEY: str(agent_home),
             }
             if mcp_endpoint is not None:
                 # The only MCP material the agent gets: a bearer token for
@@ -1020,8 +1030,17 @@ class SubprocessCodexRunner:
                         stderr=stderr_bytes,
                         isolation=isolation,
                     ) from exc
+                # The transcript's own error items come first: under
+                # ``--json`` they carry the real cause, while stderr holds
+                # startup advisories that would otherwise read as it.
+                transcript_errors = _transcript_error_messages(stdout)
+                detail = (
+                    f"{transcript_errors}; stderr tail: {stderr[-2000:]}"
+                    if transcript_errors
+                    else stderr[-2000:]
+                )
                 raise CodexStructuredExecutionFailure(
-                    f"Codex exited {return_code}: {stderr[-2000:]}",
+                    f"Codex exited {return_code}: {detail}",
                     stdout=stdout,
                     stderr=stderr_bytes,
                     artifact_bytes=artifact_bytes,
@@ -1081,10 +1100,12 @@ class SubprocessCodexRunner:
             raw = self._environment.get(key)
             if raw:
                 paths.add(Path(raw).resolve())
-        # Read-only, and only what the caller already chose to grant: a
-        # PYTHONPATH entry is in the environment because the allowlist
-        # admitted it, and the profile must let the interpreter reach it.
-        # Nothing here becomes writable.
+        # Read-only, and only what the caller already chose to grant.
+        # Production never reaches this: the environment allowlist in
+        # ``__init__`` drops ``PYTHONPATH`` unless a caller names it in
+        # ``extra_environment_keys``, which only the scripted-CLI tests do
+        # -- so the profile a real run generates is invariant to the
+        # ambient ``PYTHONPATH``. Nothing here becomes writable.
         for entry in self._environment.get("PYTHONPATH", "").split(os.pathsep):
             if entry:
                 paths.add(Path(entry).resolve())
@@ -1517,6 +1538,35 @@ def _parse_output_artifact_bytes(
     return artifact.model_copy(
         update={"conversation_evidence": process_evidence}
     )
+
+
+def _transcript_error_messages(stdout: bytes) -> str:
+    """The CLI's own ``error`` items, pulled out of the JSONL transcript.
+
+    Under ``--json`` the actionable failure -- an expired session, a
+    refused model, a dropped stream -- is an ``{"type": "error"}`` item on
+    *stdout*. Only advisory noise reaches stderr, so a failure message
+    quoting the stderr tail alone can name a warning as the cause while
+    the real one sits unread in stdout. This pulls those messages out so
+    the exit-code failure says what actually went wrong.
+
+    Best effort by construction: the transcript is foreign output, so an
+    unparseable line is skipped rather than raised on.
+    """
+    messages: list[str] = []
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(b"{"):
+            continue
+        try:
+            item = json.loads(stripped)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(item, dict) and item.get("type") == "error":
+            message = item.get("message")
+            if isinstance(message, str) and message:
+                messages.append(message)
+    return " | ".join(messages)
 
 
 def _decode_stderr(stderr: bytes) -> str:

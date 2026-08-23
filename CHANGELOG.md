@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A Codex run no longer reaches the user's `~/.agents` tree. The Codex CLI
+  resolves its agent-extension roots — the 0.148 skills loader's
+  `~/.agents/skills` among them — from `HOME`, and scans them at startup
+  before reading any config; no `skills` config key and no `--disable`
+  feature flag suppresses that scan. Each run now points `HOME` at its own
+  scratch directory, so the scan finds an empty directory the agent already
+  owns. The real home holds dotfiles, credentials, and the trees
+  `~/.agents/skills` symlinks into, and the agent's single MCP tool is meant
+  to be its only capability. Granting the sandbox profile read access to the
+  scanned paths was measured and rejected: the entries symlink into the
+  dotfiles repository.
+
+  Under `(deny default)` the un-redirected scan failed with `EPERM` and
+  logged `failed to scan skill path ... Operation not permitted (os error
+  1)`. The run still succeeded, but the line landed in the stderr tail that
+  unrelated failures quote, where it read as their cause.
+
+- A Codex Step that exits non-zero now names the CLI's own error. Under
+  `--json` the actionable cause is an `{"type": "error"}` item on *stdout*,
+  while stderr carries only startup advisories, so a failure message built
+  from the stderr tail alone could report a warning as the cause. The
+  message now leads with the transcript's error items and keeps the stderr
+  tail after them.
+
 ## 0.1.9 - 2026-08-22
 
 ### Fixed

@@ -43,6 +43,35 @@ CODEX_AUTH_ENV_KEY = "OPENAI_API_KEY"
 CODEX_WEB_SEARCH_CONFIG_KEY = "web_search"
 CODEX_WEB_SEARCH_DISABLED = "disabled"
 
+#: The Codex CLI resolves agent-extension roots -- the skills loader's
+#: ``~/.agents/skills`` among them -- from ``HOME``, and it scans them at
+#: startup before it reads any config. Nothing in the CLI's configuration
+#: turns that scan off: ``skills.config=[]``,
+#: ``skills.bundled.enabled=false``, ``skills.include_instructions=false``,
+#: and the ``skill_search`` / ``skill_mcp_dependency_install`` feature
+#: denials were each measured against the real 0.148 binary and left the
+#: scan running.
+#:
+#: So the run moves the root instead of trying to silence the scan. Each
+#: run points ``HOME`` at its own scratch directory, which makes the
+#: agent's home an empty directory it already owns. This is containment,
+#: not cosmetics: the real home holds the user's dotfiles, credentials,
+#: and the skill trees that ``~/.agents/skills`` symlinks into, and the
+#: agent's single MCP tool is meant to be its only capability.
+#:
+#: The alternative -- granting the profile a read rule over the scanned
+#: paths -- was measured and rejected: the entries are symlinks into the
+#: dotfiles repository, so satisfying the scan would have handed the
+#: untrusted agent read access to that tree.
+#:
+#: Under ``(deny default)`` the un-redirected scan also failed with EPERM
+#: and logged a ``failed to scan skill path`` ERROR line. The run still
+#: succeeded, but the line landed in the stderr tail quoted by unrelated
+#: failures, where it read like their cause.
+CODEX_AGENT_HOME_ENV_KEY = "HOME"
+#: The scratch subdirectory ``HOME`` points at, relative to a run's root.
+CODEX_AGENT_HOME_DIR_NAME = "agent-home"
+
 #: Default cap on the retained Codex stdout+stderr payload. Codex emits one
 #: JSONL event per turn, so a run that overruns this is producing output the
 #: adapter would not read anyway.
@@ -88,6 +117,8 @@ CODEX_DENIED_FEATURES: tuple[str, ...] = tuple(
 
 
 __all__ = [
+    "CODEX_AGENT_HOME_DIR_NAME",
+    "CODEX_AGENT_HOME_ENV_KEY",
     "CODEX_CONTAINMENT_PROFILE",
     "CODEX_DEFAULT_MAX_OUTPUT_BYTES",
     "CODEX_DENIED_FEATURES",

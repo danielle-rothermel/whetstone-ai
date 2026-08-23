@@ -186,6 +186,92 @@ def test_rung2_real_auth_preflight_proves_a_session(real_codex_world) -> None:
     )
 
 
+def test_rung2_the_preflight_is_invariant_to_pythonpath_and_cwd(
+    tmp_path, monkeypatch
+) -> None:
+    """The preflight must not depend on how the caller was launched.
+
+    The study path reaches this through an in-process CLI under pytest,
+    so its ambient ``PYTHONPATH`` and working directory differ from a
+    direct call's. A preflight that passed one way and failed the other
+    made a real study stage refuse after it had already been paid for.
+
+    This runs the *production* construction -- the same executor, runner,
+    and ``codex_auth_preflight`` the study path uses -- under a deliberately
+    foreign ``PYTHONPATH`` and working directory.
+    """
+    from whetstone.optim.codex.executor import build_codex_executor
+    from whetstone.optim.codex.preflight import codex_auth_preflight
+    from whetstone.optim.codex.runner import SubprocessCodexRunner
+
+    foreign = tmp_path / "foreign-pythonpath"
+    foreign.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.setenv("PYTHONPATH", str(foreign))
+    monkeypatch.chdir(elsewhere)
+
+    executor = build_codex_executor(run_root=tmp_path / "codex-preflight")
+    runner = SubprocessCodexRunner(
+        executor=executor,
+        codex_binary=real_codex_binary(),
+        model="",
+        timeout_seconds=RUNG_WALL_SECONDS,
+        environment=None,
+    )
+    granted = runner.codex_process_environment()
+    assert "PYTHONPATH" not in granted
+    assert "HOME" not in granted
+
+    # Raises CodexPreflightError on failure, which is the whole rung.
+    codex_auth_preflight(
+        executor=executor,
+        codex_binary=real_codex_binary(),
+        environment=granted,
+        wall_seconds=RUNG_WALL_SECONDS,
+    )
+
+
+def test_rung2_a_real_run_never_scans_the_users_agent_extension_roots(
+    real_codex_world,
+) -> None:
+    """The real CLI must not reach the user's ``~/.agents`` tree.
+
+    The 0.148 skills loader scans ``~/.agents/skills`` at startup and no
+    config key disables it, so the run points ``HOME`` at its own scratch
+    directory. Under the sandbox an un-redirected scan also failed with
+    EPERM and logged a ``failed to scan skill path`` ERROR line into the
+    stderr tail that unrelated failures quote.
+
+    Asserted against the real binary's own transcript: the run must
+    neither name the real home nor report a failed skill scan.
+    """
+    from pathlib import Path as _Path
+
+    world = real_codex_world()
+    runner = world.runner(timeout_seconds=RUNG_WALL_SECONDS)
+
+    execution = runner.run_structured_prompt(
+        prompt='Reply with the JSON object {"ready": true} and nothing else.',
+        output_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["ready"],
+            "properties": {"ready": {"type": "boolean", "const": True}},
+        },
+    )
+
+    transcript = execution.stdout.decode("utf-8", errors="replace")
+    transcript += execution.stderr
+    assert "failed to scan skill path" not in transcript, (
+        "the real Codex CLI still scanned an agent-extension root it "
+        f"could not read:\n{transcript[-2000:]}"
+    )
+    assert str(_Path.home() / ".agents") not in transcript, (
+        "the real Codex run reached the user's agent-extension tree"
+    )
+
+
 def test_rung2_the_agent_environment_carries_no_task_model_key(
     real_codex_world,
 ) -> None:

@@ -7,9 +7,12 @@ facts live in :mod:`tests.test_codex_sandbox_profile`.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
+from whetstone.optim.codex.containment import CODEX_AGENT_HOME_DIR_NAME
 from whetstone.optim.codex.mcp_environment import McpEnvironmentKey
 from whetstone.optim.codex.runner import SubprocessCodexRunner
 from whetstone.testing.toy.experiment import (
@@ -257,3 +260,112 @@ def test_the_mcp_server_accepts_its_own_run_binding(
     mine = _server_environment(tmp_path, sqlite_store, run_id="run-mine")
 
     assert build_server_from_env(mine) is not None
+
+
+def test_the_run_points_home_at_its_own_scratch_directory(
+    tmp_path, sqlite_store
+) -> None:
+    """Each run gives the agent an empty ``HOME`` it owns.
+
+    The Codex CLI scans ``~/.agents`` at startup and no config key turns
+    that scan off, so the run moves the root: ``HOME`` names a fresh
+    scratch directory per run. Without it the CLI resolves the *account's*
+    home -- ``HOME`` need not even be set -- and scans the real one.
+
+    The job dr-exec is handed is where this is decided, so the test reads
+    the grant off that job rather than trusting the construction-time
+    environment, which never carries ``HOME``.
+    """
+    captured: dict[str, str] = {}
+
+    class _CapturingExecutor:
+        def run_blocking(self, job):
+            captured.update({var.name: var.value for var in job.env.variables})
+            raise _StopBeforeSpawn
+
+    runner = SubprocessCodexRunner(
+        executor=_CapturingExecutor(),
+        codex_binary="/usr/bin/true",
+        model="",
+        timeout_seconds=30.0,
+        environment={"PATH": "/usr/bin:/bin"},
+    )
+    with pytest.raises(_StopBeforeSpawn):
+        runner.run_structured_prompt(
+            prompt="ping",
+            output_schema={
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["ready"],
+                "properties": {"ready": {"type": "boolean"}},
+            },
+        )
+
+    assert "HOME" in captured, (
+        "the run granted no HOME, so the Codex CLI resolves the account's "
+        "real home and scans its agent-extension roots"
+    )
+    agent_home = Path(captured["HOME"])
+    assert agent_home != Path.home()
+    assert Path.home() not in agent_home.parents
+    # Inside the run's own scratch root, which is the only tree the
+    # sandbox profile lets the agent write.
+    assert agent_home.name == CODEX_AGENT_HOME_DIR_NAME
+    assert Path(captured["CODEX_HOME"]).parent == agent_home.parent
+
+
+class _StopBeforeSpawn(RuntimeError):
+    """Raised by the capturing executor so no Codex process is spawned."""
+
+
+def test_the_agent_never_receives_the_real_home_directory(
+    tmp_path, sqlite_store
+) -> None:
+    """``HOME`` is not inheritable, so the agent cannot reach the real one.
+
+    The Codex CLI resolves its agent-extension roots -- ``~/.agents`` and
+    the skills loader beneath it -- from ``HOME``. The real home holds the
+    user's dotfiles, credentials, and the trees ``~/.agents/skills``
+    symlinks into, and the agent's single MCP tool is meant to be its only
+    capability, so a caller's ``HOME`` must not travel into the run.
+    """
+    real_home = "/Users/somebody"
+    runner = _runner(
+        tmp_path,
+        sqlite_store,
+        environment={"PATH": "/usr/bin:/bin", "HOME": real_home},
+    )
+
+    granted = runner.codex_process_environment()
+
+    assert "HOME" not in granted, (
+        "the caller's HOME reached the agent's environment, so the CLI "
+        "would scan the real home's agent-extension roots"
+    )
+    assert real_home not in granted.values()
+
+
+def test_the_agent_environment_is_invariant_to_pythonpath(
+    tmp_path, sqlite_store
+) -> None:
+    """``PYTHONPATH`` cannot change what the agent process is granted.
+
+    The study path runs the launcher in-process under pytest, so the
+    ambient ``PYTHONPATH`` differs from a direct call's. That difference
+    must not reach the agent: the environment allowlist decides the grant,
+    and ``PYTHONPATH`` is not on it.
+    """
+    without = _runner(
+        tmp_path, sqlite_store, environment={"PATH": "/usr/bin:/bin"}
+    ).codex_process_environment()
+    with_pythonpath = _runner(
+        tmp_path,
+        sqlite_store,
+        environment={
+            "PATH": "/usr/bin:/bin",
+            "PYTHONPATH": "/tmp/one:/tmp/two",
+        },
+    ).codex_process_environment()
+
+    assert without == with_pythonpath
+    assert "PYTHONPATH" not in with_pythonpath

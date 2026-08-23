@@ -639,3 +639,34 @@ def test_the_advertised_tool_schema_pins_the_model_route(tmp_path) -> None:
         route_schema = schema["properties"]["model_route"]
         assert route_schema["const"] == engine.expected_model_route()
         assert route_schema["type"] == "string"
+
+
+def test_a_failure_names_the_transcript_error_not_the_startup_noise() -> None:
+    """The exit-code failure must quote the CLI's own error items.
+
+    Under ``--json`` the actionable cause is an ``{"type": "error"}`` item
+    on *stdout*; stderr carries startup advisories. A message built from
+    the stderr tail alone therefore named a warning as the cause -- a real
+    study stage was diagnosed as a skills-loader problem when the CLI had
+    reported something else entirely on stdout.
+    """
+    from whetstone.optim.codex.runner import _transcript_error_messages
+
+    stdout = b"\n".join(
+        [
+            b'{"type":"thread.started","thread_id":"t1"}',
+            b'{"type":"error","message":"401 Unauthorized"}',
+            b"not json at all",
+            b'{"type":"error","message":"stream closed"}',
+            b'{"type":"turn.completed"}',
+        ]
+    )
+
+    assert (
+        _transcript_error_messages(stdout)
+        == "401 Unauthorized | stream closed"
+    )
+    # A transcript with no error items adds nothing to the message.
+    assert _transcript_error_messages(b'{"type":"turn.completed"}') == ""
+    # Foreign output must never raise out of a failure path.
+    assert _transcript_error_messages(b"\xff\xfe garbage") == ""
