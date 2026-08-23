@@ -391,6 +391,7 @@ def test_replay_matches_live_optuna_after_tpe_starts_and_across_promotions(
         run_id=run.record.run_id,
         validation_task_hashes=valset,
         validation_eval_source=control.validation_eval_source,
+        validation_num_seeds=control.num_seeds,
         reward_policy_hash=control.reward_policy_hash,
         optimizer_config=control.reference(),
         prompt_adapter_identity_hash=control.prompt_adapter_identity_hash,

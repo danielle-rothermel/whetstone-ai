@@ -201,6 +201,7 @@ def prepare_toy_copro_run(
     initial_candidate: Candidate | None = None,
     terminal_top_k: int = 1,
     experiment: Experiment | None = None,
+    num_seeds: int = 1,
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
 ) -> OptimRunLaunch:
@@ -208,7 +209,7 @@ def prepare_toy_copro_run(
         runtime,
         run_id=run_id,
         control=control,
-        experiment=experiment or build_toy_experiment(num_seeds=1),
+        experiment=experiment or build_toy_experiment(num_seeds=num_seeds),
         render_contract=render_contract or toy_template_render_contract(),
         mutation_field=mutation_field or TOY_MUTATION_FIELD,
         initial_candidate=initial_candidate,
@@ -274,6 +275,7 @@ def prepare_toy_miprov2_run(
     engine: EvalEngine,
     initial_candidate: Candidate | None = None,
     experiment: Experiment | None = None,
+    num_seeds: int = 1,
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
     initial_state: Miprov2State | None = None,
@@ -288,7 +290,7 @@ def prepare_toy_miprov2_run(
     from whetstone.optim.miprov2.adapter import MIPROV2_ADAPTER_KEY
     from whetstone.testing.toy.miprov2 import build_toy_miprov2_state
 
-    resolved = experiment or build_toy_experiment(num_seeds=1)
+    resolved = experiment or build_toy_experiment(num_seeds=num_seeds)
     candidate = initial_candidate or control.base_candidate.record
     if (
         mutation_field is not None
@@ -453,6 +455,7 @@ def prepare_toy_gepa_run(
     control: GepaControl,
     initial_candidate: Candidate | None = None,
     experiment: Experiment | None = None,
+    num_seeds: int = 1,
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
 ) -> OptimRunLaunch:
@@ -462,7 +465,7 @@ def prepare_toy_gepa_run(
         runtime,
         run_id=run_id,
         control=control,
-        experiment=experiment or build_toy_experiment(num_seeds=1),
+        experiment=experiment or build_toy_experiment(num_seeds=num_seeds),
         render_contract=render_contract or toy_template_render_contract(),
         mutation_field=mutation_field or TOY_MUTATION_FIELD,
         initial_candidate=initial_candidate,
@@ -532,6 +535,7 @@ def prepare_toy_codex_run(
     control: CodexControl,
     initial_candidate: Candidate | None = None,
     experiment: Experiment | None = None,
+    num_seeds: int = 1,
     render_contract: TemplateRenderContract | None = None,
     mutation_field: str | None = None,
     preflight: Callable[[], None] = scripted_codex_preflight,
@@ -542,7 +546,7 @@ def prepare_toy_codex_run(
         runtime,
         run_id=run_id,
         control=control,
-        experiment=experiment or build_toy_experiment(num_seeds=1),
+        experiment=experiment or build_toy_experiment(num_seeds=num_seeds),
         render_contract=render_contract or toy_template_render_contract(),
         mutation_field=mutation_field or TOY_MUTATION_FIELD,
         initial_candidate=initial_candidate,

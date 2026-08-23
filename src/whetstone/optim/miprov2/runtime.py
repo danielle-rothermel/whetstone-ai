@@ -862,9 +862,11 @@ class Miprov2State(BaseModel):
         for effect in self.completed_effects:
             if (
                 effect.kind == "bootstrap_generations"
-                and effect.task_rows != 1
+                and effect.task_rows != self.control.num_seeds
             ):
-                raise ValueError("bootstrap ledger entries require one task")
+                raise ValueError(
+                    "bootstrap ledger entries require one task per repeat"
+                )
             if effect.kind == "evaluations" and effect.task_rows <= 0:
                 raise ValueError("evaluation ledger entries require tasks")
         if self.completed_effects != replay.completed_effects:
@@ -1611,7 +1613,7 @@ def _canonical_completed_effects(
         Miprov2CompletedEffect(
             kind="bootstrap_generations",
             identity_hash=event.attempt.identity_hash(),
-            task_rows=1,
+            task_rows=state.control.num_seeds,
         )
         for event in state.bootstrap_evidence
     ]
@@ -1634,7 +1636,9 @@ def _canonical_completed_effects(
             Miprov2CompletedEffect(
                 kind="evaluations",
                 identity_hash=binding.effect_identity_hash,
-                task_rows=len(binding.task_batch_hashes),
+                task_rows=(
+                    len(binding.task_batch_hashes) * state.control.num_seeds
+                ),
             )
             for binding in bindings
         )
@@ -1644,7 +1648,9 @@ def _canonical_completed_effects(
             Miprov2CompletedEffect(
                 kind="evaluations",
                 identity_hash=binding.effect_identity_hash,
-                task_rows=len(binding.task_batch_hashes),
+                task_rows=(
+                    len(binding.task_batch_hashes) * state.control.num_seeds
+                ),
             )
         )
     return tuple(effects)
@@ -1868,6 +1874,7 @@ def _canonical_eval_binding_request(
                 bootstrap_attempt=attempt,
             ),
             task_batch_hashes=(attempt.task_hash,),
+            num_seeds=state.control.num_seeds,
         )
     spec = state.pending_evaluation_spec
     if spec is None:
@@ -1886,6 +1893,7 @@ def _canonical_eval_binding_request(
         effect_identity_hash=spec.identity_hash(),
         execution_policy=spec.execution_policy,
         task_batch_hashes=spec.task_batch_hashes,
+        num_seeds=state.control.num_seeds,
     )
 
 
@@ -2339,7 +2347,7 @@ class Miprov2Driver:
                     Miprov2CompletedEffect(
                         kind="bootstrap_generations",
                         identity_hash=attempt.identity_hash(),
-                        task_rows=1,
+                        task_rows=state.control.num_seeds,
                     ),
                 ),
             }
@@ -2562,6 +2570,7 @@ class Miprov2Driver:
                     bootstrap_attempt=attempt,
                 ),
                 task_batch_hashes=(attempt.task_hash,),
+                num_seeds=state.control.num_seeds,
             )
             planned = state.model_copy(
                 update={
@@ -2830,6 +2839,7 @@ class Miprov2Driver:
                 effect_identity_hash=spec.identity_hash(),
                 execution_policy=spec.execution_policy,
                 task_batch_hashes=spec.task_batch_hashes,
+                num_seeds=state.control.num_seeds,
             )
             updates: dict[str, Any] = {
                 "pending_evaluation_spec": spec,
@@ -2907,6 +2917,7 @@ class Miprov2Driver:
             run_id=state.run_id,
             validation_task_hashes=state.control.valset_task_hashes,
             validation_eval_source=state.control.validation_eval_source,
+            validation_num_seeds=state.control.num_seeds,
             reward_policy_hash=state.control.reward_policy_hash,
             optimizer_config=state.control.reference(),
             prompt_adapter_identity_hash=(

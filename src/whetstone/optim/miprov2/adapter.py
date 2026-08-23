@@ -283,7 +283,8 @@ class Miprov2Adapter:
             assert plan.eval_binding is not None
             self._preflight_task_rows(
                 request.budget,
-                len(plan.eval_binding.task_batch_hashes),
+                len(plan.eval_binding.task_batch_hashes)
+                * state.control.num_seeds,
             )
             binding = self._eval_config_resolver.resolve(
                 plan.eval_binding
@@ -328,7 +329,9 @@ class Miprov2Adapter:
             assert plan.state.resolved_eval_binding is not None
             assert plan.state.pending_bootstrap_candidate is not None
             attempt = plan.bootstrap_generation
-            self._preflight_task_rows(request.budget, 1)
+            self._preflight_task_rows(
+                request.budget, state.control.num_seeds
+            )
             teacher_candidate = plan.state.pending_bootstrap_candidate
             intent_id = (
                 f"{request.run_id}:miprov2:bootstrap:{attempt.identity_hash()}"
@@ -342,6 +345,7 @@ class Miprov2Adapter:
                 intent_id=intent_id,
                 candidate=teacher_candidate,
                 task_batch_hashes=(attempt.task_hash,),
+                num_seeds=state.control.num_seeds,
                 eval_config=plan.state.resolved_eval_binding.eval_config,
                 eval_binding=plan.state.resolved_eval_binding,
                 eval_role=state.control.eval_role,
@@ -378,7 +382,10 @@ class Miprov2Adapter:
                 proposed_candidates=(teacher_candidate.record,),
                 optim_eval_requests=(optim_eval_request,),
                 budget_delta=BudgetDelta(
-                    consumed={"bootstrap_generations": 1, "task_rows": 1}
+                    consumed={
+                        "bootstrap_generations": 1,
+                        "task_rows": state.control.num_seeds,
+                    }
                 ),
                 state_delta={
                     MIPROV2_STATE_KEY: plan.state.model_dump(mode="json"),
@@ -391,7 +398,7 @@ class Miprov2Adapter:
         effect = plan.evaluation
         self._preflight_task_rows(
             request.budget,
-            len(effect.task_batch_hashes),
+            len(effect.task_batch_hashes) * state.control.num_seeds,
         )
         if plan.state.resolved_eval_binding is None:
             raise ValueError("evaluation has no exact Eval Config binding")
@@ -412,6 +419,7 @@ class Miprov2Adapter:
             intent_id=intent_id,
             candidate=candidate_reference(effect.candidate),
             task_batch_hashes=effect.task_batch_hashes,
+            num_seeds=state.control.num_seeds,
             eval_config=effect.eval_config,
             eval_binding=plan.state.resolved_eval_binding,
             eval_role=state.control.eval_role,
@@ -448,7 +456,10 @@ class Miprov2Adapter:
             budget_delta=BudgetDelta(
                 consumed={
                     "evaluations": 1,
-                    "task_rows": len(effect.task_batch_hashes),
+                    "task_rows": (
+                        len(effect.task_batch_hashes)
+                        * state.control.num_seeds
+                    ),
                 }
             ),
             state_delta={

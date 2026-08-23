@@ -54,7 +54,7 @@ from whetstone.optim.miprov2.eval_config import (
 from whetstone.optim.miprov2.study import EvalObservation
 
 MIPROV2_INTENT_CONTEXT_SCHEMA = "whetstone.miprov2_intent_context"
-MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION = 2
+MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION = 3
 MIPROV2_SELECTED_COMPONENT_STEP_SCHEMA = (
     "whetstone.miprov2_selected_component_step"
 )
@@ -109,7 +109,7 @@ class Miprov2IntentContext(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: Literal[2] = MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION
+    schema_version: Literal[3] = MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION
     control_identity_hash: StrictStr
     run_id: StrictStr
     effect_kind: Literal["bootstrap", "baseline", "sample", "promotion"]
@@ -117,6 +117,9 @@ class Miprov2IntentContext(BaseModel):
     intent_id: StrictStr
     candidate: CandidateRef
     task_batch_hashes: tuple[StrictStr, ...]
+    #: Repeats per task in this evaluation. Rows are task x repeat, and the
+    #: score MIPROv2 consumes is the mean over these repeats.
+    num_seeds: StrictInt = 1
     eval_config: EvalConfigRef
     eval_binding: EvalBinding
     eval_role: EvalRole
@@ -155,7 +158,7 @@ class Miprov2IntentContext(BaseModel):
             or request.purpose != expected_purpose
             or request.effect_identity_hash != self.effect_identity_hash
             or request.task_batch_hashes != self.task_batch_hashes
-            or request.num_seeds != 1
+            or request.num_seeds != self.num_seeds
             or request.execution_policy != self.execution_policy
             or self.eval_binding.eval_config != self.eval_config
             or self.eval_role is not EvalRole.INTERNAL
@@ -394,7 +397,7 @@ class Miprov2EvidenceResolver:
             context.provider_execution_policy_ref,
             resolution.optim_eval_request.eval_request.metadata,
             context.task_batch_hashes,
-            1,
+            context.num_seeds,
         ):
             raise ValueError(
                 "evaluation evidence conflicts with exact MIPROv2 context"
@@ -402,7 +405,8 @@ class Miprov2EvidenceResolver:
         if evidence.eval_role is not EvalRole.INTERNAL:
             raise ValueError("MIPROv2 requires internal evaluation")
         accounting = _row_accounting(evidence)
-        if accounting.planned != len(context.task_batch_hashes):
+        planned_rows = len(context.task_batch_hashes) * context.num_seeds
+        if accounting.planned != planned_rows:
             raise ValueError("evaluation row plan conflicts with task batch")
 
         traces_ref = evidence.traces_ref
@@ -610,22 +614,41 @@ class Miprov2EvidenceResolver:
         if context.effect_kind != "bootstrap":
             raise ValueError("resolution is not a MIPROv2 bootstrap effect")
         accounting = resolved.row_accounting
+        # A bootstrap evaluates exactly one task, repeated ``num_seeds``
+        # times, so the planned matrix is one row per repeat and every one
+        # of them must have succeeded for the demo to be trustworthy.
+        repeats = context.num_seeds
         if (
-            accounting.planned != 1
-            or accounting.present != 1
+            accounting.planned != repeats
+            or accounting.present != repeats
             or accounting.missing
             or accounting.failed
             or accounting.invalid
         ):
-            raise ValueError("bootstrap requires exactly one successful row")
-        if len(resolved.component_traces.rows) != 1:
             raise ValueError(
-                "bootstrap requires exactly one component trace row"
+                "bootstrap requires every repeat of its one task to succeed"
             )
-        row = resolved.component_traces.rows[0]
+        if len(resolved.component_traces.rows) != repeats:
+            raise ValueError(
+                "bootstrap requires one component trace row per repeat"
+            )
+        # DSPy bootstraps a demo from a *single* sampled trace, so repeats
+        # cannot be averaged into one. Repeat 0 is the demo's trace, chosen
+        # deterministically so a replay of the same run reproduces the same
+        # demo; the repeats still pay for the demo's ``score`` below, which
+        # is the reward over the whole reduced evaluation (the repeat mean).
+        selected_rows = tuple(
+            candidate_row
+            for candidate_row in resolved.component_traces.rows
+            if candidate_row.seed_index == 0
+        )
+        if len(selected_rows) != 1:
+            raise ValueError(
+                "bootstrap requires exactly one repeat-0 component trace row"
+            )
+        row = selected_rows[0]
         if (
             row.task_hash != context.task_batch_hashes[0]
-            or row.seed_index != 0
             or row.trace.row_state.value != "success"
         ):
             raise ValueError(

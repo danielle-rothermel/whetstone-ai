@@ -101,12 +101,14 @@ GEPA_PROPOSAL_ATTEMPT_EVIDENCE_SCHEMA = (
 GEPA_WHOLE_CALL_EVIDENCE_BOUNDARY = "whole_call"
 GEPA_EVALUATION_RESPONSE_PARSER_IDENTITY_HASH = compute_identity_hash(
     schema="whetstone.gepa.evaluation_response_projection",
-    schema_version=1,
+    schema_version=2,
     payload={
         "evaluation_evidence_schema": EVAL_EVIDENCE_SCHEMA,
         "outputs_schema": EVAL_OUTPUTS_SCHEMA,
         "ordered_rows": True,
-        "num_seeds": 1,
+        # One projected row per task at any repeat count: the score is the
+        # per-task mean over repeats and repeat 0 is the projected output.
+        "repeat_reduction": "per_task_mean/representative_seed_0",
         "trace_projection": "ordered_native_component_steps/v1",
     },
 )
@@ -411,9 +413,13 @@ class CanonicalGepaEvalAuthority:
                 "GEPA evaluation engine conflicts with reward policy"
             )
 
-        if engine.sampling.num_seeds != 1:
+        # Repeats are a property of the bound split, not of GEPA. Every
+        # instance score GEPA sees is the mean over that split's repeats
+        # (``EvalEvidence.per_task_values``), so the search consumes one
+        # reduced score per task at any repeat count.
+        if engine.sampling.num_seeds < 1:
             raise ValueError(
-                "GEPA evaluation engine must use a single-repeat plan"
+                "GEPA evaluation engine requires at least one repeat"
             )
         expected_task_hashes = tuple(
             dict.fromkeys(
@@ -727,13 +733,15 @@ class CanonicalGepaEvalAuthority:
         evidence = EvalEvidence.model_validate(
             self._store.get(evidence_ref.reference)
         )
+        num_seeds = self._engine.sampling.num_seeds
         if (
             evidence.candidate != candidate
             or evidence.task_hashes
             != tuple(item.task_hash for item in request.data)
-            or evidence.num_seeds != 1
+            or evidence.num_seeds != num_seeds
             or len(evidence.per_task_values) != len(request.data)
-            or evidence.row_accounting.planned != len(request.data)
+            or evidence.row_accounting.planned
+            != len(request.data) * num_seeds
         ):
             raise ValueError(
                 "canonical evaluation evidence conflicts with GEPA request"
@@ -751,9 +759,8 @@ class CanonicalGepaEvalAuthority:
                 "GEPA evaluation output record names another candidate"
             )
         raw_rows = output_record.get("outputs")
-        if not isinstance(raw_rows, list) or len(raw_rows) != len(
-            request.data
-        ):
+        expected_rows = len(request.data) * num_seeds
+        if not isinstance(raw_rows, list) or len(raw_rows) != expected_rows:
             raise ValueError(
                 "GEPA evaluation outputs do not align with requested data"
             )
@@ -771,23 +778,31 @@ class CanonicalGepaEvalAuthority:
             self._store,
             cast(dict[str, object], output_record),
         )
+        # Output rows are ordered ``task_index * num_seeds + seed_index``.
+        # GEPA reflects on one execution per instance, so repeat 0 supplies
+        # the representative output and trace while the *score* is the
+        # already-reduced per-task mean over every repeat.
         rows = tuple(
             self._project_row(
                 request=request,
                 data=request.data[index],
-                raw=raw,
+                raw=raw_rows[index * num_seeds],
                 score=float(evidence.per_task_values[index]),
                 evidence_refs=common_refs,
                 candidate_id=candidate.record.candidate_id,
                 trace_steps=trace_index.get(
                     (
-                        cast(dict[str, object], raw).get("task_hash"),
-                        cast(dict[str, object], raw).get("seed_index"),
+                        cast(
+                            dict[str, object], raw_rows[index * num_seeds]
+                        ).get("task_hash"),
+                        cast(
+                            dict[str, object], raw_rows[index * num_seeds]
+                        ).get("seed_index"),
                     ),
                     (),
                 ),
             )
-            for index, raw in enumerate(raw_rows)
+            for index in range(len(request.data))
         )
         return GepaEvaluationEffectResult(
             request_hash=request.identity_hash(),
