@@ -779,37 +779,113 @@ class CanonicalGepaEvalAuthority:
             cast(dict[str, object], output_record),
         )
         # Output rows are ordered ``task_index * num_seeds + seed_index``.
-        # GEPA reflects on one execution per instance, so repeat 0 supplies
+        # GEPA reflects on one execution per instance, so one repeat supplies
         # the representative output and trace while the *score* is the
         # already-reduced per-task mean over every repeat.
-        rows = tuple(
-            self._project_row(
-                request=request,
-                data=request.data[index],
-                raw=raw_rows[index * num_seeds],
-                score=float(evidence.per_task_values[index]),
-                evidence_refs=common_refs,
-                candidate_id=candidate.record.candidate_id,
-                trace_steps=trace_index.get(
-                    (
-                        cast(
-                            dict[str, object], raw_rows[index * num_seeds]
-                        ).get("task_hash"),
-                        cast(
-                            dict[str, object], raw_rows[index * num_seeds]
-                        ).get("seed_index"),
-                    ),
-                    (),
-                ),
+        #
+        # Row semantics under repeats. ``per_task_score`` scores a failed
+        # repeat as 0.0 and averages over the completed ones, so a task with
+        # any completed repeat has a real, generally nonzero mean. A projected
+        # row must therefore be:
+        #
+        # * a *scored* row whenever at least one repeat completed -- it
+        #   carries that mean, and ``failed_repeats`` records how many
+        #   repeats failed behind it; and
+        # * a *failed* row only when every repeat failed, which is the only
+        #   case whose canonical mean is 0.0 and so the only case that can
+        #   satisfy ``GepaEvaluationRow``'s "failed rows carry no score" rule.
+        #
+        # Taking repeat 0 unconditionally conflated these: one flaky repeat 0
+        # beside a successful repeat 1 minted a failure_ref while carrying the
+        # nonzero mean, and the row validator rejected the pair -- wedging the
+        # whole GEPA evaluation on a single flaky repeat.
+        #
+        # The representative repeat is the lowest completed ``seed_index``,
+        # which is deterministic under replay.
+        projected_rows: list[GepaEvaluationRow] = []
+        for index in range(len(request.data)):
+            representative, failed_repeats, all_failed = (
+                self._representative_repeat(
+                    raw_rows=raw_rows,
+                    index=index,
+                    num_seeds=num_seeds,
+                    expected_task_hash=request.data[index].task_hash,
+                )
             )
-            for index in range(len(request.data))
-        )
+            projected_rows.append(
+                self._project_row(
+                    request=request,
+                    data=request.data[index],
+                    raw=representative,
+                    score=float(evidence.per_task_values[index]),
+                    evidence_refs=common_refs,
+                    candidate_id=candidate.record.candidate_id,
+                    failed_repeats=failed_repeats,
+                    all_repeats_failed=all_failed,
+                    trace_steps=trace_index.get(
+                        (
+                            representative.get("task_hash"),
+                            representative.get("seed_index"),
+                        ),
+                        (),
+                    ),
+                )
+            )
+        rows = tuple(projected_rows)
         return GepaEvaluationEffectResult(
             request_hash=request.identity_hash(),
             rows=rows,
             logical_metric_calls=len(rows),
             resolution=resolution,
         )
+
+    @staticmethod
+    def _representative_repeat(
+        *,
+        raw_rows: list[Any],
+        index: int,
+        num_seeds: int,
+        expected_task_hash: str,
+    ) -> tuple[dict[str, object], int, bool]:
+        """Pick the repeat GEPA reflects on, plus this task's failure counts.
+
+        Returns the lowest-``seed_index`` *completed* repeat, the number of
+        failed repeats behind the task, and whether every repeat failed. When
+        all repeats failed there is no completed row to represent the task, so
+        repeat 0 stands in and the caller projects a failed row.
+
+        The block belongs to exactly one task and is verified to say so:
+        misaligned outputs would otherwise attribute one task's generation and
+        trace to another task's score, silently and unrecoverably.
+        """
+
+        block: list[dict[str, object]] = []
+        for seed_index in range(num_seeds):
+            row = raw_rows[index * num_seeds + seed_index]
+            if not isinstance(row, dict):
+                raise ValueError(
+                    "GEPA evaluation output row must be an object"
+                )
+            if row.get("seed_index") != seed_index:
+                raise ValueError(
+                    "GEPA evaluation output rows are not ordered "
+                    "task-major by seed_index"
+                )
+            if row.get("task_hash") != expected_task_hash:
+                raise ValueError(
+                    "GEPA evaluation output row belongs to another task"
+                )
+            block.append(row)
+
+        def _failed(row: dict[str, object]) -> bool:
+            failure_code = row.get("failure_code")
+            return type(failure_code) is str and bool(failure_code)
+
+        failed_repeats = sum(1 for row in block if _failed(row))
+        completed = [row for row in block if not _failed(row)]
+        if not completed:
+            return block[0], failed_repeats, True
+        return completed[0], failed_repeats, False
 
     def _project_row(
         self,
@@ -820,6 +896,8 @@ class CanonicalGepaEvalAuthority:
         score: float,
         evidence_refs: tuple[TypedRef, ...],
         candidate_id: str,
+        failed_repeats: int = 0,
+        all_repeats_failed: bool | None = None,
         trace_steps: tuple[dict[str, object], ...] = (),
     ) -> GepaEvaluationRow:
         if not isinstance(raw, dict):
@@ -836,16 +914,33 @@ class CanonicalGepaEvalAuthority:
             raise ValueError(
                 "GEPA reflection input record conflicts with data identity"
             )
+        # The representative repeat need not be repeat 0 -- it is the lowest
+        # *completed* one -- but it must still be this candidate's row for
+        # this task, and a real planned repeat.
+        seed_index = raw.get("seed_index")
         if (
             raw.get("candidate_id") != candidate_id
             or raw.get("task_id") != data.data_id
             or raw.get("task_hash") != data.task_hash
-            or raw.get("seed_index") != 0
+            or not isinstance(seed_index, int)
+            or isinstance(seed_index, bool)
+            or seed_index < 0
         ):
             raise ValueError(
                 "GEPA evaluation output row order/identity drifted"
             )
-        failed = type(failure_code) is str and bool(failure_code)
+        row_failed = type(failure_code) is str and bool(failure_code)
+        # A task counts as failed only when *every* repeat failed. With any
+        # completed repeat the canonical per-task score is the mean over the
+        # completed ones, which is a real score, and the row carries it.
+        failed = (
+            row_failed if all_repeats_failed is None else all_repeats_failed
+        )
+        if failed and not row_failed:
+            raise ValueError(
+                "GEPA representative repeat must be a failed row when every "
+                "repeat failed"
+            )
         submission_field = self._submission_projector.submission_result_field()
         submission_result = raw.get(submission_field)
         if submission_result is None and submission_field != "submission_result":
@@ -919,10 +1014,16 @@ class CanonicalGepaEvalAuthority:
                         source_refs=row_evidence_refs,
                     )
                 )
-        generated_outputs = {
+        generated_outputs: dict[str, object] = {
             "output_text": output_text,
             "failure_code": failure_code,
         }
+        if failed_repeats:
+            # The score beside this output is the mean over the repeats that
+            # completed; say how many did not, so reflection is not told a
+            # partly-failed task went cleanly.
+            generated_outputs["failed_repeats"] = failed_repeats
+            generated_outputs["representative_seed_index"] = seed_index
         projected = self._submission_projector.test_results(
             submission=submission_result
         )

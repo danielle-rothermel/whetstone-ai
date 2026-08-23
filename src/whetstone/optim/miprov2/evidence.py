@@ -588,7 +588,11 @@ class Miprov2EvidenceResolver:
             reward_ref=None,
             normalized_score=0.0,
         )
-        rows = len(context.task_batch_hashes)
+        # The planned matrix is task x repeat, matching the canonical
+        # replay in ``_canonical_completed_effects``. Counting tasks alone
+        # would under-report the rows this failed evaluation already
+        # debited and desynchronize the ledger from the replay.
+        rows = len(context.task_batch_hashes) * context.num_seeds
         return Miprov2ResolvedEvaluation(
             context=context,
             reward_value=0.0,

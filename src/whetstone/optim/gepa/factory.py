@@ -507,6 +507,10 @@ def build_gepa_harness_adapter(
         trainset=trainset,
         valset=valset,
         adapter_factory=GepaHarnessAdapterFactory(factory=factory),
+        # The repeat count this run's evaluations actually resolve to, taken
+        # from the bound engine so the run record states it rather than
+        # leaving an audit to infer it from row counts.
+        validation_num_seeds=engine.sampling.num_seeds,
     )
 
 

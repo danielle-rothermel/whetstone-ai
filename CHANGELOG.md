@@ -44,14 +44,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over the whole reduced evaluation. Every repeat of a bootstrap's one task
   must still succeed.
 - GEPA projects one row per task at any repeat count: the Pareto score stays
-  the per-task mean over repeats, and repeat 0 supplies the representative
-  output and trace the reflection reads. A GEPA metric call remains one
-  candidate-task evaluation, matching what `gepa_auto_budget` already counts
-  (valset size plus minibatch sizes, in task units), so a `max_metric_calls`
-  budget pinned in metric calls keeps its meaning under repeats — repeats
-  multiply provider rows, not metric calls. The evaluation-response
-  projection identity now states its repeat reduction instead of pinning
-  `num_seeds` to 1.
+  the per-task mean over repeats, and the lowest-`seed_index` repeat that
+  *completed* supplies the representative output and trace the reflection
+  reads. A task projects a scored row whenever at least one repeat completed,
+  carrying that mean plus the count of failed repeats, and a failed row only
+  when every repeat failed; a single flaky repeat therefore no longer wedges
+  the evaluation. A GEPA metric call remains one candidate-task evaluation,
+  matching what `gepa_auto_budget` already counts (valset size plus minibatch
+  sizes, in task units), so a `max_metric_calls` budget pinned in metric calls
+  keeps its meaning under repeats — a repeated evaluation bills K_REPEAT times
+  as many provider rows, while its metric-call count is unchanged. The GEPA
+  run record now states the repeat count it resolved to
+  (`GepaDetailedResult.validation_num_seeds`, mirroring MIPROv2's
+  `validation_num_seeds`), so an audit can diff a run against the envs
+  manifest without walking evidence. The evaluation-response projection
+  identity now states its repeat reduction instead of pinning `num_seeds`
+  to 1.
+- A failed MIPROv2 in-search evaluation now debits its whole `tasks x repeats`
+  row matrix. `resolve_evaluation_failure` counted tasks only, while the
+  canonical replay recomputes `len(task_batch_hashes) * num_seeds`, so at more
+  than one repeat folding a non-COMPLETED evaluation wedged the run with
+  `completed-effect ledger is not the canonical evidence replay` and
+  under-reported rows the evaluation had already paid for.
 - The toy run harnesses (`prepare_toy_copro_run`, `prepare_toy_miprov2_run`,
   `prepare_toy_gepa_run`, `prepare_toy_codex_run`) accept `num_seeds`.
 

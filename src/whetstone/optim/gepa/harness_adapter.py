@@ -215,6 +215,7 @@ class GepaHarnessAdapter:
         trainset: tuple[GepaDataInstance, ...],
         valset: tuple[GepaDataInstance, ...] | None,
         adapter_factory: GepaHarnessAdapterFactory,
+        validation_num_seeds: int = 1,
     ) -> None:
         ordered_seed = dict(seed_candidate)
         if tuple(ordered_seed) != control.component_names:
@@ -226,6 +227,9 @@ class GepaHarnessAdapter:
         self._trainset = trainset
         self._valset = valset
         self._adapter_factory = adapter_factory
+        if validation_num_seeds < 1:
+            raise ValueError("GEPA validation_num_seeds must be at least 1")
+        self._validation_num_seeds = validation_num_seeds
         self.invocations = 0
 
     @property
@@ -280,6 +284,7 @@ class GepaHarnessAdapter:
                 valset=self._valset,
                 adapter=engine_adapter,
                 checkpoint=checkpoint,
+                validation_num_seeds=self._validation_num_seeds,
             )
         except EvalPlatformDeferred as deferred:
             # The Step continues, but the reflections and evaluations it
