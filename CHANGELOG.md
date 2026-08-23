@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.11 - 2026-08-23
+
 ### Fixed
 - MIPROv2 and GEPA can now evaluate candidates at more than one repeat per
   task. Both refused a multi-repeat evaluation plan outright — MIPROv2 with
