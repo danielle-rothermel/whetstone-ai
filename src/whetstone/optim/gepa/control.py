@@ -39,7 +39,7 @@ GEPA_DSPY_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 GEPA_CONTROL_SCHEMA = "whetstone.gepa_optimizer_config"
 GEPA_CONTROL_SCHEMA_VERSION = 2
 GEPA_ADAPTER_SCHEMA_VERSION = "whetstone.gepa_upstream_adapter/v1"
-GEPA_RESULT_SCHEMA_VERSION = "whetstone.gepa_detailed_result/v1"
+GEPA_RESULT_SCHEMA_VERSION = "whetstone.gepa_detailed_result/v2"
 GEPA_AUTO_CANDIDATES: dict[str, int] = {
     "light": 6,
     "medium": 12,

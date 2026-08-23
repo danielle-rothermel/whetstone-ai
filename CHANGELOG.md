@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   count `tasks x repeats` rather than tasks.
 
 ### Changed
+- `GEPA_RESULT_SCHEMA_VERSION` is `whetstone.gepa_detailed_result/v2`: the
+  detailed result now carries `validation_num_seeds`, so a v1 consumer with
+  `extra="forbid"` must refuse it rather than read it as v1.
 - `Miprov2Control` gains `num_seeds`, the repeats every in-search evaluation
   of the run pays for, and records it in the control's identity payload: a
   control that evaluates each task three times is a materially different
