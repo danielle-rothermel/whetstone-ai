@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.13 - 2026-08-23
+
 ### Fixed
 - The per-task vector and the evaluation-level aggregate now read the same
   rows the same way. `per_task_score` scored every non-present row as 0.0 and
