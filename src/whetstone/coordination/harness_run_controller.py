@@ -82,6 +82,11 @@ class OptimRunLaunch:
     #: control -- MIPROv2 opens with a labeled trainset, rendered proposal
     #: examples, and an RNG checkpoint -- carries that state here so the
     #: first Step reads exactly what was bound, not a rebuild of it.
+    #:
+    #: Both drive paths pass these through to the step contract: the
+    #: in-process controller here, and the platform step executor, which
+    #: merges them with its own pools. `platform_stage_index` is owned by
+    #: that executor and is rejected here rather than silently overwritten.
     extra_pools: Mapping[str, Any] | None = None
 
 

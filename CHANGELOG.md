@@ -72,6 +72,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The toy run harnesses (`prepare_toy_copro_run`, `prepare_toy_miprov2_run`,
   `prepare_toy_gepa_run`, `prepare_toy_codex_run`) accept `num_seeds`.
 
+- MIPROv2 can now run through the platform step path at all. The platform
+  step executor built its opening `extra_pools` from scratch and never
+  merged the launch's own, so an optimizer whose opening state is larger
+  than its control lost that state on the way to its first Step. MIPROv2
+  binds its opening `Miprov2State` at pool key `miprov2_state`, so every
+  MIPROv2 run through `execute_optim_step_sync` failed at step 0 with
+  "MIPROv2 initial step requires the opening state at pool key
+  'miprov2_state'". The in-process controller had always passed
+  `launch.extra_pools` through; only the platform path dropped them.
+
+  The executor now merges the launch's pools with its own.
+  `platform_stage_index` — the GEPA deferral salt, which only the platform
+  path can know — stays executor-owned: a launch binding that key is
+  rejected rather than silently winning or losing, since overwriting the
+  launch's pool would corrupt bound opening state and overwriting the salt
+  would replay a deferred CONTINUE. COPRO, GEPA, and Codex were unaffected,
+  as none binds launch pools.
+
 ## 0.1.10 - 2026-08-23
 
 ### Fixed
