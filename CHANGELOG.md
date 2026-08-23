@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.12 - 2026-08-23
+
 ### Fixed
 - GEPA no longer dies with `GEPA evaluation positions must be unique` when the
   trainset size is not a multiple of `reflection_minibatch_size`. Upstream's
