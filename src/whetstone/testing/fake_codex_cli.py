@@ -31,6 +31,11 @@ Transcript format -- a JSON list of steps::
 A ``hang`` step blocks forever, so the caller's wall budget is what ends
 the process -- the way a real agent that overruns its budget ends.
 
+An ``error`` step writes an ``{"type": "error", "message": ...}`` item to
+stdout, and a ``stderr`` step writes a line to stderr, which together
+reproduce a real failing launch: the cause on stdout, advisories on
+stderr.
+
 A ``final`` step supplies the fields the harness does not already know;
 ``run_id``, ``lease_token_hash``, and ``evaluated_call_ids`` are filled in
 from the CLI arguments and the calls actually made unless the transcript
@@ -61,6 +66,11 @@ FAKE_CODEX_PROMPT_EVIDENCE_KEY = "fake_codex_prompt"
 _EVENT_TYPE_KEY = "type"
 _EVENT_TOOL_CALL = "tool_call"
 _EVENT_FINAL = "final"
+#: The real CLI reports an unrecoverable turn failure as an ``error``
+#: item on *stdout* under ``--json``, not on stderr. A transcript emits
+#: one so the runner's failure path can be tested against the shape the
+#: real binary produces.
+_EVENT_ERROR = "error"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,6 +103,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif "final" in step:
             final_overrides = dict(step["final"])
+        elif "error" in step:
+            # An ``error`` item on stdout, the way the real CLI reports a
+            # failed turn under ``--json``.
+            _emit(
+                {_EVENT_TYPE_KEY: _EVENT_ERROR, "message": str(step["error"])}
+            )
+        elif "stderr" in step:
+            # Startup advisories the real CLI writes to stderr. These are
+            # the noise a failure message must not mistake for its cause.
+            sys.stderr.write(str(step["stderr"]) + "\n")
+            sys.stderr.flush()
         elif "exit" in step:
             exit_code = int(step["exit"])
         elif "hang" in step:

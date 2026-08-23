@@ -54,6 +54,8 @@ from whetstone.optim.codex.adapter import (
     codex_run_lease_binding,
 )
 from whetstone.optim.codex.containment import (
+    CODEX_AGENT_HOME_DIR_NAME,
+    CODEX_AGENT_HOME_ENV_KEY,
     CODEX_AUTH_FILENAMES,
     CODEX_CONTAINMENT_PROFILE,
     CODEX_DEFAULT_MAX_OUTPUT_BYTES,
@@ -110,6 +112,14 @@ _CODEX_UNBUDGETED_AXES = (
     BudgetAxis.OPEN_FILE_COUNT.value,
     BudgetAxis.DISK_BYTES.value,
 )
+#: The JSONL event type the CLI uses to report a failed turn on stdout.
+_TRANSCRIPT_ERROR_EVENT: Final = "error"
+#: Bounds on the transcript detail quoted into a failure message. The
+#: message is an exception string and the transcript can be megabytes.
+_TRANSCRIPT_MAX_ERROR_ITEMS: Final = 5
+_TRANSCRIPT_MAX_ERROR_CHARS: Final = 500
+_TRANSCRIPT_MAX_EVENT_TYPES: Final = 8
+_TRANSCRIPT_MAX_EVENT_TYPE_CHARS: Final = 64
 _DIRECT_EXEC_SOURCE: Final = (
     "import os,sys;os.execv(sys.argv[1],sys.argv[1:])"
 )
@@ -859,9 +869,17 @@ class SubprocessCodexRunner:
             codex_home = root / "codex-home"
             codex_home.mkdir()
             self.stage_auth(codex_home)
+            # The agent's HOME is its own empty scratch directory, so the
+            # CLI's startup scan of ``~/.agents`` finds nothing instead of
+            # reaching the real home. See ``containment.py``: no config
+            # key disables that scan, and the scanned entries symlink into
+            # the dotfiles repository.
+            agent_home = root / CODEX_AGENT_HOME_DIR_NAME
+            agent_home.mkdir()
             isolated_environment = {
                 **self._environment,
                 "CODEX_HOME": str(codex_home),
+                CODEX_AGENT_HOME_ENV_KEY: str(agent_home),
             }
             if mcp_endpoint is not None:
                 # The only MCP material the agent gets: a bearer token for
@@ -1020,16 +1038,30 @@ class SubprocessCodexRunner:
                         stderr=stderr_bytes,
                         isolation=isolation,
                     ) from exc
+                # The transcript comes first: under ``--json`` it carries
+                # the real cause, while stderr holds startup advisories
+                # that would otherwise be read as it.
+                transcript_detail = _transcript_failure_detail(stdout)
+                detail = (
+                    f"{transcript_detail}; stderr tail: {stderr[-2000:]}"
+                    if transcript_detail
+                    else stderr[-2000:]
+                )
                 raise CodexStructuredExecutionFailure(
-                    f"Codex exited {return_code}: {stderr[-2000:]}",
+                    f"Codex exited {return_code}: {detail}",
                     stdout=stdout,
                     stderr=stderr_bytes,
                     artifact_bytes=artifact_bytes,
                     isolation=isolation,
                 )
             if not artifact_path.is_file():
+                # Exit 0 and no artifact: the CLI thought it finished. Its
+                # own transcript is the only account of what it did, so it
+                # travels in the message rather than only on the exception.
+                transcript_detail = _transcript_failure_detail(stdout)
                 raise CodexStructuredExecutionFailure(
-                    "Codex produced no final output artifact",
+                    "Codex produced no final output artifact"
+                    + (f": {transcript_detail}" if transcript_detail else ""),
                     stdout=stdout,
                     stderr=stderr_bytes,
                     isolation=isolation,
@@ -1081,10 +1113,12 @@ class SubprocessCodexRunner:
             raw = self._environment.get(key)
             if raw:
                 paths.add(Path(raw).resolve())
-        # Read-only, and only what the caller already chose to grant: a
-        # PYTHONPATH entry is in the environment because the allowlist
-        # admitted it, and the profile must let the interpreter reach it.
-        # Nothing here becomes writable.
+        # Read-only, and only what the caller already chose to grant.
+        # Production never reaches this: the environment allowlist in
+        # ``__init__`` drops ``PYTHONPATH`` unless a caller names it in
+        # ``extra_environment_keys``, which only the scripted-CLI tests do
+        # -- so the profile a real run generates is invariant to the
+        # ambient ``PYTHONPATH``. Nothing here becomes writable.
         for entry in self._environment.get("PYTHONPATH", "").split(os.pathsep):
             if entry:
                 paths.add(Path(entry).resolve())
@@ -1517,6 +1551,66 @@ def _parse_output_artifact_bytes(
     return artifact.model_copy(
         update={"conversation_evidence": process_evidence}
     )
+
+
+def _transcript_failure_detail(stdout: bytes) -> str:
+    """What the CLI itself said, read out of its JSONL transcript.
+
+    Under ``--json`` the actionable failure -- an expired session, a
+    refused model, a dropped stream -- is an ``{"type": "error"}`` item on
+    *stdout*. Only advisory noise reaches stderr, so a failure message
+    quoting the stderr tail alone can name a warning as the cause while
+    the real one sits unread in stdout.
+
+    Two things come back, because they answer different questions. The
+    ``error`` messages say what went wrong; the trailing event types say
+    how far the turn got, which is what distinguishes "never started"
+    from "died mid-stream" when the CLI exits without an error item at
+    all.
+
+    Both are bounded the way the stderr tail is: this text goes into an
+    exception message, and the transcript can be megabytes.
+
+    Best effort by construction -- the transcript is foreign output, so an
+    unparseable line is skipped rather than raised on.
+    """
+    messages: list[str] = []
+    event_types: list[str] = []
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(b"{"):
+            continue
+        try:
+            item = json.loads(stripped)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(item, dict):
+            continue
+        event_type = item.get("type")
+        if isinstance(event_type, str) and event_type:
+            # A newer or malformed CLI may put anything in ``type``; the
+            # persisted failure message bounds each entry as well as the
+            # count.
+            event_types.append(event_type[:_TRANSCRIPT_MAX_EVENT_TYPE_CHARS])
+        if event_type == _TRANSCRIPT_ERROR_EVENT:
+            message = item.get("message")
+            if isinstance(message, str) and message:
+                messages.append(message)
+
+    parts: list[str] = []
+    if messages:
+        retained = messages[-_TRANSCRIPT_MAX_ERROR_ITEMS:]
+        dropped = len(messages) - len(retained)
+        joined = " | ".join(
+            message[:_TRANSCRIPT_MAX_ERROR_CHARS] for message in retained
+        )
+        if dropped:
+            joined = f"(+{dropped} earlier) {joined}"
+        parts.append(f"transcript errors: {joined}")
+    if event_types:
+        tail = event_types[-_TRANSCRIPT_MAX_EVENT_TYPES:]
+        parts.append(f"last events: {', '.join(tail)}")
+    return "; ".join(parts)
 
 
 def _decode_stderr(stderr: bytes) -> str:
