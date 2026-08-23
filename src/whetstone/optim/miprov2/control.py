@@ -55,7 +55,7 @@ MIPROV2_ALGORITHM_VERSION = "dspy_miprov2/v2"
 MIPROV2_REFERENCE_COMMIT = "6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"
 MIPROV2_OPTUNA_VERSION = "4.8.0"
 MIPROV2_CONTROL_SCHEMA = "whetstone.miprov2_optimizer_config"
-MIPROV2_CONTROL_SCHEMA_VERSION = 7
+MIPROV2_CONTROL_SCHEMA_VERSION = 8
 MIPROV2_COMPONENT_SPEC_SCHEMA = "whetstone.miprov2_component_spec"
 MIPROV2_COMPONENT_SPEC_SCHEMA_VERSION = 1
 MIPROV2_PROGRAM_LAYOUT_SCHEMA = "whetstone.miprov2_program_layout"
@@ -335,6 +335,12 @@ class Miprov2Control(BaseModel):
     num_trials: StrictInt
     max_errors: StrictInt
     seed: StrictInt
+    #: Repeats per (candidate, task) for every in-search evaluation this
+    #: control drives -- bootstrap generations, minibatch trials, and full
+    #: validation evaluations alike. It must equal the repeat count of the
+    #: split the bound eval engine samples; the engine is the authority and
+    #: this field records the count the control was resolved against.
+    num_seeds: StrictInt = 1
     init_temperature: float
     verbose: StrictBool
     track_stats: StrictBool
@@ -637,6 +643,7 @@ class Miprov2Control(BaseModel):
             "num_trials": self.num_trials,
             "max_errors": self.max_errors,
             "seed": self.seed,
+            "num_seeds": self.num_seeds,
             "init_temperature": self.init_temperature,
             "verbose": self.verbose,
             "track_stats": self.track_stats,
@@ -917,6 +924,7 @@ def _validate_resolved_numeric_controls(control: Miprov2Control) -> None:
     _require_positive_int(control.num_trials, field="num_trials")
     _require_positive_int(control.max_errors, field="max_errors")
     _require_strict_int(control.seed, field="seed")
+    _require_positive_int(control.num_seeds, field="num_seeds")
     _require_finite(control.init_temperature, field="init_temperature")
     if control.metric_threshold is not None:
         _require_finite(control.metric_threshold, field="metric_threshold")
@@ -1116,6 +1124,7 @@ def configure_miprov2(
     minibatch: bool = True,
     minibatch_size: int = 35,
     minibatch_full_eval_steps: int = 5,
+    num_seeds: int = 1,
     program_aware_proposer: bool = True,
     data_aware_proposer: bool = True,
     view_data_batch_size: int = 10,
@@ -1388,6 +1397,7 @@ def configure_miprov2(
         minibatch=resolved_minibatch,
         minibatch_size=minibatch_size,
         minibatch_full_eval_steps=minibatch_full_eval_steps,
+        num_seeds=num_seeds,
         program_aware_proposer=program_aware_proposer,
         data_aware_proposer=data_aware_proposer,
         view_data_batch_size=view_data_batch_size,

@@ -51,9 +51,15 @@ class FakeEvalDriver:
         mutation_field: str = TOY_MUTATION_FIELD,
         render_contract: TemplateRenderContract | None = None,
         aggregate_name: str = "score",
+        vary_score_by_repeat: bool = False,
     ) -> None:
         self._mutation_field = mutation_field
         self._aggregate_name = aggregate_name
+        # Off by default so every existing toy golden and pinned control
+        # hash keeps its exact values. On, each repeat of a task scores
+        # differently, which is what makes a repeat-mean assertion
+        # non-vacuous.
+        self._vary_score_by_repeat = vary_score_by_repeat
         if render_contract is None:
             from whetstone.testing.toy.experiment import toy_template_render_contract
 
@@ -129,6 +135,9 @@ class FakeEvalDriver:
                     generation=generation,
                     gold=_task_gold(task),
                     task_id=_task_id(task),
+                    seed_index=(
+                        seed_index if self._vary_score_by_repeat else None
+                    ),
                 )
                 outputs.append(
                     RolloutRowOutput(

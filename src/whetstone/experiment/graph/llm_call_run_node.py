@@ -18,7 +18,10 @@ from whetstone.eval.drivers.graph_execution import (
     GenerationNodeError,
     single_node_input,
 )
-from whetstone.eval.eval_procedure import EvalProcedureRunner
+from whetstone.eval.eval_procedure import (
+    EvalProcedureRunner,
+    accepts_seed_index,
+)
 from whetstone.eval.protocol import EvalTaskView
 from whetstone.experiment.graph.nodes import (
     EVAL_NODE_TYPE,
@@ -65,6 +68,13 @@ class LlmCallRunNodeDeps:
 class EvalRunNodeDeps:
     runner: EvalProcedureRunner
     task: EvalTaskView
+    #: Which repeat of ``task`` this row is. The ``EvalProcedureRunner``
+    #: protocol does not take it -- a real eval procedure scores one
+    #: generation and must not depend on which repeat produced it. It is
+    #: carried here so a runner that opts in (``SeedAwareEvalProcedureRunner``,
+    #: the toy scorer used to make repeat-mean assertions non-vacuous) can
+    #: read it. Runners that do not opt in are called exactly as before.
+    seed_index: int = 0
 
 
 def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
@@ -134,12 +144,22 @@ def build_eval_run_node(deps: EvalRunNodeDeps) -> RunNode:
                 f"expected node type {EVAL_NODE_TYPE!r}, got {node.node_type!r}"
             )
         procedure_hash = eval_node_procedure_hash(node.variables)
-        score, submission_result, extra_metadata = deps.runner.run_eval_node(
-            node_id=node.node_id,
-            node_inputs=node_inputs,
-            evaluation_procedure_config_hash=procedure_hash,
-            task=deps.task,
-        )
+        runner = deps.runner
+        if accepts_seed_index(runner):
+            score, submission_result, extra_metadata = runner.run_eval_node(
+                node_id=node.node_id,
+                node_inputs=node_inputs,
+                evaluation_procedure_config_hash=procedure_hash,
+                task=deps.task,
+                seed_index=deps.seed_index,
+            )
+        else:
+            score, submission_result, extra_metadata = runner.run_eval_node(
+                node_id=node.node_id,
+                node_inputs=node_inputs,
+                evaluation_procedure_config_hash=procedure_hash,
+                task=deps.task,
+            )
         metadata = dict(extra_metadata)
         if submission_result is not None:
             metadata[METADATA_SUBMISSION_RESULT_KEY] = submission_result

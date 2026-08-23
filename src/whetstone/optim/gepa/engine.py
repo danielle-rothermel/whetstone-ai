@@ -125,6 +125,15 @@ class GepaDetailedResult(BaseModel):
     total_metric_calls: StrictInt | None = None
     num_full_val_evals: StrictInt | None = None
     seed: StrictInt
+    #: Repeats per (candidate, task) every in-search evaluation of this run
+    #: ran under, resolved from ``engine.sampling.num_seeds``. Mirrors
+    #: MIPROv2's ``validation_num_seeds``: recorded so an audit can diff the
+    #: run against the envs manifest's pre-registered ``K_REPEAT`` directly,
+    #: instead of walking evidence and inferring it from row counts.
+    #:
+    #: Repeats multiply provider rows, not metric calls, so this is
+    #: deliberately *not* a term in ``total_metric_calls``.
+    validation_num_seeds: StrictInt = 1
     best_idx: StrictInt
     control_identity_hash: StrictStr
     source_manifest_hash: StrictStr = GEPA_SOURCE_MANIFEST_HASH
@@ -179,6 +188,7 @@ def _project_result(
     result: Any,
     *,
     control: GepaControl,
+    validation_num_seeds: int = 1,
 ) -> GepaDetailedResult:
     val_subscores = tuple(
         {
@@ -230,6 +240,7 @@ def _project_result(
         total_metric_calls=result.total_metric_calls,
         num_full_val_evals=result.num_full_val_evals,
         seed=control.seed,
+        validation_num_seeds=validation_num_seeds,
         best_idx=result.best_idx,
         control_identity_hash=control.identity_hash(),
     )
@@ -327,6 +338,7 @@ def run_gepa_engine[DataInst](
     valset: Sequence[DataInst] | None,
     adapter: GepaEngineAdapter,
     logger: _Logger | None = None,
+    validation_num_seeds: int = 1,
 ) -> GepaDetailedResult:
 
     verify_installed_gepa_source()
@@ -368,7 +380,9 @@ def run_gepa_engine[DataInst](
         callbacks=None,
         **control.upstream_kwargs(),
     )
-    return _project_result(result, control=control)
+    return _project_result(
+        result, control=control, validation_num_seeds=validation_num_seeds
+    )
 
 
 __all__ = [

@@ -52,7 +52,7 @@ from whetstone.optim.miprov2.render import candidate_from_components
 from whetstone.optim.proposal.mutation import diff_check
 
 MIPROV2_STUDY_SCHEMA = "whetstone.miprov2_study_transcript"
-MIPROV2_STUDY_SCHEMA_VERSION = 6
+MIPROV2_STUDY_SCHEMA_VERSION = 7
 OPTUNA_VERSION = MIPROV2_OPTUNA_VERSION
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA = "whetstone.miprov2_candidate_assembly"
 MIPROV2_CANDIDATE_ASSEMBLY_SCHEMA_VERSION = 4
@@ -843,7 +843,7 @@ class StudyTranscript(_IdentityRecord):
     schema_name: Literal["whetstone.miprov2_study_transcript"] = (
         MIPROV2_STUDY_SCHEMA
     )
-    schema_version: Literal[6] = MIPROV2_STUDY_SCHEMA_VERSION
+    schema_version: Literal[7] = MIPROV2_STUDY_SCHEMA_VERSION
     algorithm_version: Literal["dspy_miprov2/v2"] = MIPROV2_ALGORITHM_VERSION
     reference_commit: Literal["6f68dcdb3ef46d70bf0c12596699ebc44e82d6b0"] = (
         MIPROV2_REFERENCE_COMMIT
@@ -857,6 +857,10 @@ class StudyTranscript(_IdentityRecord):
     run_id: StrictStr
     validation_task_hashes: tuple[StrictStr, ...]
     validation_eval_source: EvalConfigRef
+    #: Repeats per (candidate, task) every in-search evaluation of this study
+    #: ran under. Recorded so an audit can confirm the study evaluated at the
+    #: pre-registered repeat count instead of inferring it from row counts.
+    validation_num_seeds: StrictInt = 1
     reward_policy_hash: StrictStr
     optimizer_config: IdentityRef
     prompt_adapter_identity_hash: StrictStr
@@ -886,6 +890,7 @@ class StudyTranscript(_IdentityRecord):
             "validation_eval_source": self.validation_eval_source.model_dump(
                 mode="json"
             ),
+            "validation_num_seeds": self.validation_num_seeds,
             "reward_policy_hash": self.reward_policy_hash,
             "optimizer_config": self.optimizer_config.model_dump(mode="json"),
             "prompt_adapter_identity_hash": (
@@ -1161,7 +1166,7 @@ class StudyTranscript(_IdentityRecord):
             or request.purpose != expected_derivation_purpose
             or request.effect_identity_hash != binding.effect_identity_hash
             or request.task_batch_hashes != expected_tasks
-            or request.num_seeds != 1
+            or request.num_seeds != self.validation_num_seeds
         ):
             raise ValueError(
                 "evaluation derivation does not match the persisted "
@@ -1451,6 +1456,7 @@ class Miprov2Study:
         run_id: str,
         validation_task_hashes: tuple[str, ...],
         validation_eval_source: EvalConfigRef,
+        validation_num_seeds: int,
         reward_policy_hash: str,
         optimizer_config: IdentityRef,
         prompt_adapter_identity_hash: str,
@@ -1465,6 +1471,7 @@ class Miprov2Study:
         self.run_id = run_id
         self.validation_task_hashes = validation_task_hashes
         self.validation_eval_source = validation_eval_source
+        self.validation_num_seeds = validation_num_seeds
         self.reward_policy_hash = reward_policy_hash
         self.optimizer_config = optimizer_config
         self.prompt_adapter_identity_hash = prompt_adapter_identity_hash
@@ -1509,6 +1516,7 @@ class Miprov2Study:
             run_id=self.run_id,
             validation_task_hashes=self.validation_task_hashes,
             validation_eval_source=self.validation_eval_source,
+            validation_num_seeds=self.validation_num_seeds,
             reward_policy_hash=self.reward_policy_hash,
             optimizer_config=self.optimizer_config,
             prompt_adapter_identity_hash=self.prompt_adapter_identity_hash,
@@ -1822,7 +1830,7 @@ class Miprov2Study:
             or request.purpose != expected_purpose.removeprefix("miprov2_")
             or request.effect_identity_hash != binding.effect_identity_hash
             or request.task_batch_hashes != expected_tasks
-            or request.num_seeds != 1
+            or request.num_seeds != self.validation_num_seeds
         ):
             raise ValueError(
                 "evaluation derivation does not match the persisted "

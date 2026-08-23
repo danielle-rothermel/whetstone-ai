@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- MIPROv2 and GEPA can now evaluate candidates at more than one repeat per
+  task. Both refused a multi-repeat evaluation plan outright — MIPROv2 with
+  `engine sampling repeats (N) do not match the requested num_seeds (1)`
+  because `EvalBindingRequest.num_seeds` defaulted to 1 and no construction
+  site set it, and GEPA with `GEPA evaluation engine must use a single-repeat
+  plan`. A protocol that pre-registers a repeat count for *every* evaluation,
+  in-search ones included, could therefore not run either optimizer at all.
+  COPRO was already repeat-transparent and is unchanged in behaviour.
+
+  The repeat count is a property of the bound eval engine's split, which was
+  already the authority; the optimizers now carry it rather than asserting it
+  away. The score each search consumes is unchanged in kind: it is the
+  existing canonical reduction — the per-task mean over repeats
+  (`whetstone.eval.drivers.eval_result.per_task_score`, surfaced as
+  `EvalEvidence.per_task_values`) — and no second reduction was introduced.
+  MIPROv2's row budget (`task_rows`) and its completed-effect ledger now
+  count `tasks x repeats` rather than tasks.
+
+### Changed
+- `GEPA_RESULT_SCHEMA_VERSION` is `whetstone.gepa_detailed_result/v2`: the
+  detailed result now carries `validation_num_seeds`, so a v1 consumer with
+  `extra="forbid"` must refuse it rather than read it as v1.
+- `Miprov2Control` gains `num_seeds`, the repeats every in-search evaluation
+  of the run pays for, and records it in the control's identity payload: a
+  control that evaluates each task three times is a materially different
+  control from one that evaluates it once. `MIPROV2_CONTROL_SCHEMA_VERSION`
+  is now 8.
+- The persisted MIPROv2 study contract records `validation_num_seeds`, so an
+  audit reads the repeat count off the run record instead of inferring it
+  from row counts. `MIPROV2_STUDY_SCHEMA_VERSION` is now 7, and
+  `MIPROV2_INTENT_CONTEXT_SCHEMA_VERSION` is now 3 for the matching per-intent
+  field.
+- MIPROv2 bootstraps a demo from repeat 0's execution trace, chosen
+  deterministically so a replay reproduces the same demo. DSPy bootstraps a
+  demo from a single sampled trace, so repeats cannot be averaged into one;
+  the repeats still inform the demo's recorded score, which is the reward
+  over the whole reduced evaluation. Every repeat of a bootstrap's one task
+  must still succeed.
+- GEPA projects one row per task at any repeat count: the Pareto score stays
+  the per-task mean over repeats, and the lowest-`seed_index` repeat that
+  *completed* supplies the representative output and trace the reflection
+  reads. A task projects a scored row whenever at least one repeat completed,
+  carrying that mean plus the count of failed repeats, and a failed row only
+  when every repeat failed; a single flaky repeat therefore no longer wedges
+  the evaluation. A GEPA metric call remains one candidate-task evaluation,
+  matching what `gepa_auto_budget` already counts (valset size plus minibatch
+  sizes, in task units), so a `max_metric_calls` budget pinned in metric calls
+  keeps its meaning under repeats — a repeated evaluation bills K_REPEAT times
+  as many provider rows, while its metric-call count is unchanged. The GEPA
+  run record now states the repeat count it resolved to
+  (`GepaDetailedResult.validation_num_seeds`, mirroring MIPROv2's
+  `validation_num_seeds`), so an audit can diff a run against the envs
+  manifest without walking evidence. The evaluation-response projection
+  identity now states its repeat reduction instead of pinning `num_seeds`
+  to 1.
+- A failed MIPROv2 in-search evaluation now debits its whole `tasks x repeats`
+  row matrix. `resolve_evaluation_failure` counted tasks only, while the
+  canonical replay recomputes `len(task_batch_hashes) * num_seeds`, so at more
+  than one repeat folding a non-COMPLETED evaluation wedged the run with
+  `completed-effect ledger is not the canonical evidence replay` and
+  under-reported rows the evaluation had already paid for.
+- The toy run harnesses (`prepare_toy_copro_run`, `prepare_toy_miprov2_run`,
+  `prepare_toy_gepa_run`, `prepare_toy_codex_run`) accept `num_seeds`.
+
 ## 0.1.10 - 2026-08-23
 
 ### Fixed

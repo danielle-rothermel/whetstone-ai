@@ -105,7 +105,11 @@ def _rollout_row_output_for_request(
             split_role=request.split_role,
             request_identity_sink=row_identities,
         ),
-        eval_deps=EvalRunNodeDeps(runner=eval_runner, task=task),  # type: ignore[arg-type]
+        eval_deps=EvalRunNodeDeps(
+            runner=eval_runner,  # type: ignore[arg-type]
+            task=task,  # type: ignore[arg-type]
+            seed_index=request.seed_index,
+        ),
     )
     result = execute_rollout_graph(
         graph=request.parsed_graph_config,

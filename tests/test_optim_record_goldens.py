@@ -320,3 +320,10 @@ def test_superseded_failure_codes_key_is_pinned() -> None:
     assert (
         SUPERSEDED_FAILURE_CODES_KEY == GOLDEN_SUPERSEDED_FAILURE_CODES_KEY
     )
+
+
+def test_the_gepa_detailed_result_schema_version_is_pinned() -> None:
+    """A persisted-format string has one owner and one pinned literal."""
+    from whetstone.optim.gepa.control import GEPA_RESULT_SCHEMA_VERSION
+
+    assert GEPA_RESULT_SCHEMA_VERSION == "whetstone.gepa_detailed_result/v2"

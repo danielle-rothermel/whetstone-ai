@@ -56,6 +56,7 @@ def run_one_gepa_iteration[DataInst](
     valset: tuple[DataInst, ...] | None,
     adapter: GepaEngineAdapter,
     checkpoint: GepaStepCheckpoint | None,
+    validation_num_seeds: int = 1,
 ) -> tuple[GepaDetailedResult, GepaStepCheckpoint]:
     current = checkpoint or GepaStepCheckpoint()
     if control.resolved_max_metric_calls == 0:
@@ -70,6 +71,7 @@ def run_one_gepa_iteration[DataInst](
             per_val_instance_best_candidates={},
             discovery_eval_counts=(0,),
             seed=control.seed,
+            validation_num_seeds=validation_num_seeds,
             best_idx=0,
             control_identity_hash=control.identity_hash(),
             total_metric_calls=0,
@@ -102,7 +104,9 @@ def run_one_gepa_iteration[DataInst](
         callbacks=None,
         **kwargs,
     )
-    detailed = _project_result(result, control=control)
+    detailed = _project_result(
+        result, control=control, validation_num_seeds=validation_num_seeds
+    )
     consumed = (
         detailed.total_metric_calls
         if detailed.total_metric_calls is not None

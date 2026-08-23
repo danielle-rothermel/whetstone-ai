@@ -132,6 +132,9 @@ def build_toy_miprov2_control(
     return configure_miprov2(
         base_candidate=base_candidate,
         program_layout=layout,
+        # The bound engine's split is the repeat authority; the control
+        # records the count it was resolved against.
+        num_seeds=engine.sampling.num_seeds,
         trainset=task_hashes[:1],
         valset=task_hashes[1:],
         max_bootstrapped_demos=bootstrapped,
