@@ -203,6 +203,52 @@ def test_copro_contracts_are_unchanged(copro_launch) -> None:
     assert not request.pools["attempt_history"]
 
 
+def test_copro_finalize_names_a_search_dependent_terminal_count(
+    copro_launch,
+) -> None:
+    """COPRO's finalizing step names ``terminal_proposal_count`` explicitly.
+
+    Finalize selects out of measured history that includes the run's own
+    seed, so the search may honestly find nothing better than the baseline
+    and retain the seed instead of accepting a proposal. Only a contract that
+    names a search-dependent terminal cardinality admits that outcome.
+
+    Fails before this change: the finalizing step passed the run's terminal
+    contract through verbatim, leaving ``terminal_proposal_count`` unset, so
+    the harness rejected every honest seed-retaining completion.
+    """
+    runtime, launch = copro_launch
+    control = launch.control
+    bound = runtime.harness.bind_run(launch.run)
+    builder = StepRequestBuilder(store=runtime.store)
+    first = builder.build_first(
+        run=bound,
+        adapter_key=COPRO_ADAPTER_KEY,
+        initial_candidate=launch.initial_candidate,
+        control=control,
+    )
+    result, result_ref = runtime.harness.run_step(first)
+    assert result.status is StepStatus.CONTINUE
+
+    finalizing = builder.build_next(
+        prior=result,
+        prior_ref=result_ref,
+        prior_results=(result,),
+        control=control,
+        mutation_field=str(bound.record.mutation_field),
+    )
+
+    terminal = launch.run.terminal_output_contract
+    assert finalizing.kind_label == "copro_finalize"
+    contract = finalizing.step_output_contract
+    assert contract.terminal_proposal_count == terminal.accepted_count_for(
+        StepStatus.COMPLETE
+    )
+    # Still the run's own terminal cardinality and distinct-base rule, so a
+    # COMPLETE step under it satisfies ``honors_terminal``.
+    assert contract.honors_terminal(terminal)
+
+
 # --- honoring the run terminal contract -----------------------------------
 
 
@@ -795,15 +841,17 @@ def _step_request_for(run, *, contract: OutputContract, experiment):
     )
 
 
-def test_a_copro_style_contract_cannot_retain_the_seed() -> None:
+def test_an_unconditional_contract_cannot_retain_the_seed() -> None:
     """Unconditional terminal cardinality admits no seed-retained exemption.
 
     Without this gate any adapter could zero out its own terminal proposal
-    cardinality just by setting ``seed_retained``.
+    cardinality just by setting ``seed_retained``. Every shipped optimizer
+    names ``terminal_proposal_count`` on the steps that may terminalize, so
+    this is the gate a contract that does *not* name it still enforces.
     """
     experiment = build_toy_experiment(num_seeds=1)
     contract = OutputContract(returned_proposal_count=1)
-    run = _distinct_base_run("copro-style-seed", contract)
+    run = _distinct_base_run("unconditional-seed", contract)
     request = _step_request_for(
         run, contract=contract, experiment=experiment
     )
