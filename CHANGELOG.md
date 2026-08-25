@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.15 - 2026-08-25
+
 ### Changed
 - **A blank generation is now a scored, failing sample rather than an
   unscoreable row.** An empty or whitespace-only provider generation is an
@@ -129,6 +131,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `4` for the new `OutputContract` wire key. The run version is an identity
   input, since `OptimRun.identity_hash` embeds the serialized terminal
   contract.
+- **A MIPROv2 state's replay self-verification is paid once per distinct
+  state content rather than once per construction.** `Miprov2State`
+  re-derives its whole history from the canonical RNG cursor on every
+  construction, and the driver constructs states about ten times per step —
+  `model_copy`, `model_validate`, rebuilds from the store — nearly all
+  content-identical to a state the same process had just verified. The check
+  was linear in history but a run paid it quadratically in steps: a 20-step
+  run drove 209 replays across 41 distinct states.
+
+  Verification is now memoized on state *content*. The state is frozen and
+  the replay is a pure function of its fields, so content that already
+  passed cannot reach a different verdict. Every distinct state — including
+  every persisted state and every step boundary — is still replay-verified
+  in full, and a state differing anywhere misses the memo. The memo is
+  process-local and bounded at 512 states, evicting oldest-first; an evicted
+  entry costs a replay, never a missed check. The per-field `TypeAdapter`
+  that detaching revalidation rebuilt on every call is likewise built once
+  per field, since the compiled schema depends only on the annotation.
 
 ## 0.1.14 - 2026-08-24
 
