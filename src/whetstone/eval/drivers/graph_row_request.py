@@ -252,6 +252,22 @@ def rollout_row_output_from_worker_payload(
             else float(payload["provider_cost"])  # type: ignore[arg-type]
         ),
         cache_hit=payload.get("cache_hit") is True,
+        error_type=(
+            None
+            if payload.get("error_type") is None
+            else str(payload["error_type"])
+        ),
+        error_message=(
+            None
+            if payload.get("error_message") is None
+            else str(payload["error_message"])
+        ),
+        failed_node_id=(
+            None
+            if payload.get("failed_node_id") is None
+            else str(payload["failed_node_id"])
+        ),
+        row_attempts=int(payload.get("row_attempts") or 1),
         submission_result=payload.get("submission_result"),
     )
 

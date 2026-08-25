@@ -1088,6 +1088,10 @@ class RuntimeEvalEngine:
                     completion_tokens=output.completion_tokens,
                     provider_cost=output.provider_cost,
                     cache_hit=output.cache_hit,
+                    error_type=output.error_type,
+                    error_message=output.error_message,
+                    failed_node_id=output.failed_node_id,
+                    row_attempts=output.row_attempts,
                     submission_result=self._driver.submission_result_record(
                         output.submission_result
                     ),

@@ -7,6 +7,7 @@ from dr_graph import GraphRunResult, NodeOutcomeStatus
 
 from whetstone.eval.drivers.graph_execution import (
     METADATA_SUBMISSION_RESULT_KEY,
+    bounded_node_error_message,
     cache_marks_from_metadata,
     graph_run_cancelled,
     metadata_prompt,
@@ -127,6 +128,9 @@ def graph_result_to_row_fields(
             completion_tokens=telemetry.completion_tokens,
             provider_cost=telemetry.provider_cost,
             cache_hit=cache_marks_from_metadata(error.metadata).cache_hit,
+            error_type=error.error_type,
+            error_message=bounded_node_error_message(error.message),
+            failed_node_id=llm_node_id,
         )
 
     output_text: str | None = None
@@ -155,6 +159,9 @@ def graph_result_to_row_fields(
     submission_result: object | None = None
     row_state = ExecutedRowState.SUCCESS
     failure_code = ""
+    error_type: str | None = None
+    error_message: str | None = None
+    failed_node_id: str | None = None
 
     if eval_outcome is None:
         row_state = ExecutedRowState.MISSING
@@ -163,6 +170,9 @@ def graph_result_to_row_fields(
         error = require_node_error(eval_outcome)
         row_state = node_error_row_state(error)
         failure_code = node_error_failure_code(error)
+        error_type = error.error_type
+        error_message = bounded_node_error_message(error.message)
+        failed_node_id = eval_node_id
     elif eval_outcome.status is NodeOutcomeStatus.SUCCESS:
         eval_output = require_node_success(eval_outcome)
         raw_score = eval_output.values.get(eval_output_field)
@@ -193,4 +203,7 @@ def graph_result_to_row_fields(
         provider_cost=provider_cost,
         cache_hit=cache_hit,
         submission_result=submission_result,
+        error_type=error_type,
+        error_message=error_message,
+        failed_node_id=failed_node_id,
     )

@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- A row whose graph node raised was persisted as `failed` with
+  `failure_code="node_execution_error"` and nothing else: no exception type,
+  no message, no node name, on the row, the evidence record, or the component
+  trace. The cause of a lost row was unrecoverable once the run ended. Two
+  real Stage-0 attempts each lost exactly one row this way (~1 in 700), and
+  because the task then carried 3 of 4 repeats, anchor calibration refused the
+  whole evaluation.
+
+  The root cause was that a **blank provider generation** — a normal,
+  scoreable outcome — was being reported as an infrastructure node error.
+  `provider_result_text` flattened the provider's semantic failure class into
+  prose and raised a bare `ValueError`, so the `blank-provider-generation`
+  code never reached row attribution, which already maps it to
+  `empty-output` → `invalid`. Such a row is now scored `invalid` per the eval
+  contract rather than failing the row and voiding the evaluation.
+
+### Added
+- Node-failure diagnostics on every evaluation row: `error_type`,
+  `error_message` (bounded to 2000 characters), and `failed_node_id` are
+  persisted on the output row and carried through the subprocess worker, so a
+  row that fails inside the graph stays explainable after the run.
+- A bounded row-level retry. A row whose node failed for a reason the eval
+  contract does not attribute is re-executed (3 attempts by default, via
+  `max_row_attempts`) before being marked failed. Each attempt uses its
+  attempt index as `drive_ordinal`, which is part of the prompt cache key, so
+  a retry is a genuinely fresh provider call rather than a replay of the
+  cached failure. Terminal outcomes — provider refusals, blank generations,
+  and budget outcomes — are never retried. `row_attempts` records the count,
+  and a retried row reports the summed usage of every attempt it executed,
+  because each executed call is billed.
+- `ExecutedRowState.INVALID`, so a driver can express the `invalid` accounting
+  cell the row schema and attribution table already defined.
+
 ## 0.1.13 - 2026-08-23
 
 ### Fixed

@@ -16,6 +16,7 @@ __all__ = [
     "AccountingCell",
     "AttributedOutcome",
     "attribute_generated_row",
+    "attribute_generated_row_cell",
     "attribute_outcome",
     "attribute_published_row",
     "require_exclusive_row_state",
@@ -94,14 +95,41 @@ def _unscored_row_value(outcome: AttributedOutcome) -> RowValue:
     )
 
 
+#: Failure codes the eval contract attributes to a specific outcome. A code
+#: absent here has no contract attribution and is infrastructure.
+_OUTCOME_BY_FAILURE_CODE: Mapping[str, AttributedOutcome] = MappingProxyType(
+    {
+        SemanticFailureClass.PROVIDER_REJECTION.value: (
+            AttributedOutcome.SEMANTIC_REJECTION
+        ),
+        SemanticFailureClass.BLANK_PROVIDER_GENERATION.value: (
+            AttributedOutcome.EMPTY_OUTPUT
+        ),
+    }
+)
+
+
 def _outcome_for_generated_failure(
     failure_code: str | None,
 ) -> AttributedOutcome:
-    if failure_code == SemanticFailureClass.PROVIDER_REJECTION.value:
-        return AttributedOutcome.SEMANTIC_REJECTION
-    if failure_code == SemanticFailureClass.BLANK_PROVIDER_GENERATION.value:
-        return AttributedOutcome.EMPTY_OUTPUT
-    return AttributedOutcome.INFRASTRUCTURE
+    if failure_code is None:
+        return AttributedOutcome.INFRASTRUCTURE
+    return _OUTCOME_BY_FAILURE_CODE.get(
+        failure_code, AttributedOutcome.INFRASTRUCTURE
+    )
+
+
+def attribute_generated_row_cell(failure_code: str) -> AccountingCell | None:
+    """Return the accounting cell one failure code attributes to.
+
+    ``None`` means the code carries no contract attribution, leaving the
+    decision to the caller's own fallback rather than silently claiming the
+    row is an infrastructure failure.
+    """
+    outcome = _OUTCOME_BY_FAILURE_CODE.get(failure_code)
+    if outcome is None:
+        return None
+    return attribute_outcome(outcome)
 
 
 def attribute_generated_row(
