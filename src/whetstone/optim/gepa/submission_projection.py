@@ -20,7 +20,7 @@ class GepaSubmissionProjector(Protocol):
     def submission_result_field(self) -> str: ...
 
     def prediction_failed(
-        self, *, failure_code: object, submission: object
+        self, *, row_failed: bool, submission: object
     ) -> bool: ...
 
     def feedback_text(self, *, score: float, submission: object) -> str: ...
@@ -65,9 +65,19 @@ class DefaultGepaSubmissionProjector:
         )
 
     def prediction_failed(
-        self, *, failure_code: object, submission: object
+        self, *, row_failed: bool, submission: object
     ) -> bool:
-        if type(failure_code) is str and bool(failure_code):
+        """Whether reflection should treat this prediction as a failure.
+
+        ``row_failed`` is the caller's canonical row verdict -- a row is
+        failed exactly when it carries no score. It deliberately replaces the
+        old ``failure_code`` test: a scored row may carry a code as
+        explanation without having failed, and a blank generation is exactly
+        that. A blank output must reach reflection as a completed, failing
+        prediction, because the blank *is* the signal reflection should learn
+        from.
+        """
+        if row_failed:
             return True
         score = _parse_score_record(submission)
         if score is None:

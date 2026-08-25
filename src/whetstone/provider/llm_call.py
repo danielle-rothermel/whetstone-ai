@@ -23,8 +23,8 @@ from whetstone.execution.prompt_cache import (
     PromptResultCache,
     execute_call,
 )
-from whetstone.provider.driver import Clock, Sleep, TransportCall
 from whetstone.provider.classification import SemanticFailureClass
+from whetstone.provider.driver import Clock, Sleep, TransportCall
 from whetstone.provider.language_model import (
     OUTPUT_FIELD_TEXT,
     PlainPromptAdapter,

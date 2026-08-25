@@ -1032,9 +1032,16 @@ def test_gepa_representative_repeat_is_the_lowest_completed_seed(
     from whetstone.optim.gepa.authorities import CanonicalGepaEvalAuthority
 
     task_hash = "t" * 64
+    # A failed repeat is one carrying no score -- the same rule the eval
+    # plane uses for presence.
     block = [
-        {"seed_index": 0, "task_hash": task_hash, "failure_code": "provider_error"},
-        {"seed_index": 1, "task_hash": task_hash, "failure_code": ""},
+        {
+            "seed_index": 0,
+            "task_hash": task_hash,
+            "score": None,
+            "failure_code": "provider_error",
+        },
+        {"seed_index": 1, "task_hash": task_hash, "score": 0.5, "failure_code": ""},
     ]
     representative, failed_repeats, all_failed = (
         CanonicalGepaEvalAuthority._representative_repeat(  # noqa: SLF001
@@ -1051,8 +1058,18 @@ def test_gepa_representative_repeat_is_the_lowest_completed_seed(
     # Every repeat failed: there is no completed row, so the task is failed
     # and repeat 0 stands in as the representative.
     all_bad = [
-        {"seed_index": 0, "task_hash": task_hash, "failure_code": "provider_error"},
-        {"seed_index": 1, "task_hash": task_hash, "failure_code": "provider_error"},
+        {
+            "seed_index": 0,
+            "task_hash": task_hash,
+            "score": None,
+            "failure_code": "provider_error",
+        },
+        {
+            "seed_index": 1,
+            "task_hash": task_hash,
+            "score": None,
+            "failure_code": "provider_error",
+        },
     ]
     representative, failed_repeats, all_failed = (
         CanonicalGepaEvalAuthority._representative_repeat(  # noqa: SLF001
@@ -1128,9 +1145,10 @@ def test_gepa_flaky_repeat_zero_still_projects_a_scored_row(
         {
             "seed_index": 0,
             "task_hash": task_hash,
+            "score": None,
             "failure_code": "provider_error",
         },
-        {"seed_index": 1, "task_hash": task_hash, "failure_code": ""},
+        {"seed_index": 1, "task_hash": task_hash, "score": 0.5, "failure_code": ""},
     ]
     representative, failed_repeats, all_failed = (
         CanonicalGepaEvalAuthority._representative_repeat(  # noqa: SLF001
@@ -1182,6 +1200,173 @@ def test_gepa_flaky_repeat_zero_still_projects_a_scored_row(
                 content_hash="f" * 64,
             ),
         )
+
+
+# --- a blank repeat is a completed, scored repeat -------------------------
+
+
+def test_gepa_blank_repeat_is_a_completed_scored_repeat() -> None:
+    """A blank generation is a sample GEPA reflects on, not a failed repeat.
+
+    Fails before: ``_representative_repeat`` keyed "failed" off any non-empty
+    ``failure_code``, so a blank row -- which now completes with a real score
+    while retaining ``blank-provider-generation`` as explanation -- was
+    counted in ``failed_repeats`` and excluded from being the representative.
+    That hid from reflection exactly the blank-output signal it should learn
+    from.
+    """
+
+    from whetstone.optim.gepa.authorities import CanonicalGepaEvalAuthority
+
+    task_hash = "b" * 64
+    # Repeat 0 is blank: scored at the family floor, code retained.
+    block = [
+        {
+            "seed_index": 0,
+            "task_hash": task_hash,
+            "score": 0.0,
+            "output_text": "",
+            "failure_code": "blank-provider-generation",
+        },
+        {"seed_index": 1, "task_hash": task_hash, "score": 0.6, "failure_code": ""},
+    ]
+    representative, failed_repeats, all_failed = (
+        CanonicalGepaEvalAuthority._representative_repeat(  # noqa: SLF001
+            raw_rows=block,
+            index=0,
+            num_seeds=REPEATS,
+            expected_task_hash=task_hash,
+        )
+    )
+
+    # The blank repeat completed, so it is representative-eligible and, being
+    # the lowest completed seed, it *is* the representative.
+    assert representative["seed_index"] == 0
+    assert representative["failure_code"] == "blank-provider-generation"
+    # It is not counted as a failed repeat.
+    assert failed_repeats == 0
+    assert all_failed is False
+
+
+def test_gepa_all_blank_task_is_scored_not_wedged() -> None:
+    """Every repeat blank: a real 0.0 score, no failure, no wedge.
+
+    Fails before: all-blank set ``all_repeats_failed=True`` while the
+    canonical per-task score was a real 0.0. That pairing only survived
+    because blanks happen to score exactly 0.0 -- any eval family whose blank
+    score is nonzero would hard-wedge the GEPA evaluation on
+    ``GepaEvaluationRow._validate``.
+    """
+
+    from whetstone.optim.gepa.authorities import (
+        CanonicalGepaEvalAuthority,
+        _gepa_row_score,
+    )
+
+    task_hash = "a" * 64
+    all_blank = [
+        {
+            "seed_index": 0,
+            "task_hash": task_hash,
+            "score": 0.0,
+            "failure_code": "blank-provider-generation",
+        },
+        {
+            "seed_index": 1,
+            "task_hash": task_hash,
+            "score": 0.0,
+            "failure_code": "blank-provider-generation",
+        },
+    ]
+    representative, failed_repeats, all_failed = (
+        CanonicalGepaEvalAuthority._representative_repeat(  # noqa: SLF001
+            raw_rows=all_blank,
+            index=0,
+            num_seeds=REPEATS,
+            expected_task_hash=task_hash,
+        )
+    )
+    assert failed_repeats == 0
+    assert all_failed is False
+
+    # The task carries its measured mean rather than the inert failed-row
+    # stand-in, and asking for the score does not raise.
+    assert _gepa_row_score(0.0, all_repeats_failed=all_failed) == 0.0
+
+
+def test_gepa_all_blank_task_does_not_wedge_at_a_nonzero_blank_score() -> None:
+    """The wedge the old predicate hid: a nonzero blank score.
+
+    An eval family whose empty-output score is not 0.0 would, under the old
+    ``failure_code`` predicate, mint ``all_repeats_failed=True`` beside a
+    nonzero canonical score -- and ``_gepa_row_score`` raises on exactly that
+    combination. Score-based failure makes the family's floor irrelevant.
+    """
+
+    from whetstone.optim.gepa.authorities import (
+        CanonicalGepaEvalAuthority,
+        _gepa_row_score,
+    )
+
+    task_hash = "9" * 64
+    # A family that floors empty output at 0.25 rather than 0.0.
+    all_blank = [
+        {
+            "seed_index": seed,
+            "task_hash": task_hash,
+            "score": 0.25,
+            "failure_code": "blank-provider-generation",
+        }
+        for seed in range(REPEATS)
+    ]
+    _representative, failed_repeats, all_failed = (
+        CanonicalGepaEvalAuthority._representative_repeat(  # noqa: SLF001
+            raw_rows=all_blank,
+            index=0,
+            num_seeds=REPEATS,
+            expected_task_hash=task_hash,
+        )
+    )
+    assert failed_repeats == 0
+    assert all_failed is False
+    # Before the fix this raised "cannot score a task whose canonical
+    # per-task value is withheld" / minted a failure_ref beside 0.25.
+    assert _gepa_row_score(0.25, all_repeats_failed=all_failed) == 0.25
+
+
+def test_gepa_blank_prediction_reaches_reflection_as_a_failing_prediction() -> None:
+    """A blank output is a *completed* row whose prediction still failed.
+
+    Reflection must see the blank as a failing prediction -- that is the
+    signal to learn from -- without the row being treated as a lost repeat.
+    """
+
+    from whetstone.optim.gepa.submission_projection import (
+        DefaultGepaSubmissionProjector,
+    )
+
+    projector = DefaultGepaSubmissionProjector()
+
+    # The row completed (row_failed=False) but its submission did not pass.
+    assert (
+        projector.prediction_failed(
+            row_failed=False,
+            submission={"score": {"passed": False}},
+        )
+        is True
+    )
+    # A row carrying no score is failed outright.
+    assert (
+        projector.prediction_failed(row_failed=True, submission=None) is True
+    )
+    # A completed, passing row is not a failed prediction.
+    assert (
+        projector.prediction_failed(
+            row_failed=False,
+            submission={"score": {"passed": True}},
+        )
+        is False
+    )
 
 
 # --- GEPA records the repeat count it ran under --------------------------

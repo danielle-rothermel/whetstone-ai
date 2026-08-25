@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping
 from typing import Any, cast
 
 from dr_store import ObjectStore
@@ -376,6 +377,24 @@ def _load_component_trace_index(
             tuple(step for step in steps if isinstance(step, dict)),
         )
     return index
+
+
+def _row_is_failed(row: Mapping[str, object]) -> bool:
+    """Whether one evaluation output row failed, by the eval side's rule.
+
+    This is GEPA's single definition of a failed repeat, and it is the *same*
+    definition the eval plane uses: a row is present exactly when it carries
+    a score, so a row failed exactly when it does not.
+
+    It deliberately does **not** key on ``failure_code``. A scored row may
+    carry a code as explanation without having failed -- a blank generation
+    is an empty model output, which is an observed sample that scores at its
+    eval family's floor. Treating such a row as failed would count a repeat
+    that completed, exclude the blank output from being the repeat reflection
+    sees, and mint a ``failure_ref`` beside a real score, which the row
+    validator forbids.
+    """
+    return row.get("score") is None
 
 
 def _gepa_row_score(
@@ -914,12 +933,8 @@ class CanonicalGepaEvalAuthority:
                 )
             block.append(row)
 
-        def _failed(row: dict[str, object]) -> bool:
-            failure_code = row.get("failure_code")
-            return type(failure_code) is str and bool(failure_code)
-
-        failed_repeats = sum(1 for row in block if _failed(row))
-        completed = [row for row in block if not _failed(row)]
+        failed_repeats = sum(1 for row in block if _row_is_failed(row))
+        completed = [row for row in block if not _row_is_failed(row)]
         if not completed:
             return block[0], failed_repeats, True
         return completed[0], failed_repeats, False
@@ -966,7 +981,7 @@ class CanonicalGepaEvalAuthority:
             raise ValueError(
                 "GEPA evaluation output row order/identity drifted"
             )
-        row_failed = type(failure_code) is str and bool(failure_code)
+        row_failed = _row_is_failed(raw)
         # A task counts as failed only when *every* repeat failed. With any
         # completed repeat the canonical per-task score is the mean over the
         # completed ones, which is a real score, and the row carries it.
@@ -983,7 +998,7 @@ class CanonicalGepaEvalAuthority:
         if submission_result is None and submission_field != "submission_result":
             submission_result = raw.get("submission_result")
         prediction_failed = self._submission_projector.prediction_failed(
-            failure_code=failure_code,
+            row_failed=row_failed,
             submission=submission_result,
         )
         failure_ref = None

@@ -15,7 +15,22 @@ __all__ = [
 
 @runtime_checkable
 class EvalProcedureRunner(Protocol):
-    """Runs one whetstone.eval/v1 node: upstream outputs -> score + submission."""
+    """Runs one whetstone.eval/v1 node: upstream outputs -> score + submission.
+
+    **Empty generations must be scored, at the eval family's floor.** A blank
+    or whitespace-only generation is an *observed model output* -- the model
+    was asked, it answered, and the answer was nothing. That is a result, and
+    one that cannot possibly pass, so the runner scores it like any other
+    output rather than refusing it or returning ``None``. Returning ``None``
+    for empty text would make the row unobserved and reintroduce the loss
+    this contract exists to prevent.
+
+    Concretely: normalized exact match against a non-empty gold scores empty
+    text 0.0; a verdict extractor finds no verdict in empty text and fails it.
+    Neither needs a special case -- the floor falls out of the family's own
+    scoring rule. ``None`` remains reserved for "this procedure could not
+    produce a measurement at all", which is not what an empty output is.
+    """
 
     def run_eval_node(
         self,

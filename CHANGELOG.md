@@ -55,6 +55,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now count as present failing samples and never reduce presence, so the
   floor and the balancing handle only genuine infrastructure loss.
 
+### Fixed
+- **GEPA's failed-repeat predicate now matches the eval plane's definition of
+  presence.** It keyed off any non-empty `failure_code`, which disagrees with
+  the eval side's rule that *a row is present exactly when it carries a
+  score*. Under the new blank semantics a blank row is scored but retains its
+  code, so GEPA counted a completed repeat as failed. Consequences: a task
+  whose repeats were all blank set `all_repeats_failed=True` beside a real
+  score — surviving only because blanks happen to score exactly `0.0`, so any
+  eval family with a non-zero blank score would hard-wedge the GEPA
+  evaluation on `GepaEvaluationRow._validate` — and on mixed tasks the blank
+  output was excluded from being the representative repeat, hiding from
+  reflection exactly the blank-output signal it should learn from.
+
+  There is now one definition, `_row_is_failed` (score is `None`), used by
+  `_representative_repeat`, `_project_row`, and
+  `DefaultGepaSubmissionProjector.prediction_failed`, whose `failure_code`
+  parameter is replaced by the caller's canonical `row_failed` verdict. A
+  blank repeat is now representative-eligible, is not counted in
+  `failed_repeats`, mints no `failure_ref`, and still reaches reflection as a
+  *failing prediction*.
+
+- Pinned the blank-score contract: `EvalProcedureRunner` now documents that
+  eval procedures must score empty output at the eval family's floor rather
+  than refusing it or returning `None`, with contract tests covering every
+  runner shipped in this repo and the reference runtime end to end.
+
 ## 0.1.14 - 2026-08-24
 
 ### Fixed
