@@ -64,6 +64,7 @@ __all__ = [
     "cancelled_row_state",
     "external_input_field",
     "graph_run_cancelled",
+    "metadata_failure_code",
     "metadata_prompt",
     "node_error_failure_code",
     "MAX_NODE_ERROR_MESSAGE_CHARS",
@@ -160,10 +161,13 @@ def node_error_row_state(error: NodeError) -> ExecutedRowState:
     """Attribute one node failure to the row state the contract assigns it.
 
     The failure *code* is consulted before the failure *class*. A provider
-    that returns a blank generation or refuses the request has not failed
-    infrastructurally: the eval contract scores those rows ``invalid``. Only
-    codes with no contract attribution fall back to the raised class, and
-    finally to ``infrastructure``.
+    that refuses the request has not failed infrastructurally: the eval
+    contract scores that row ``invalid``. Only codes with no contract
+    attribution fall back to the raised class, and finally to
+    ``infrastructure``.
+
+    A blank generation never reaches here: an empty model output is an
+    observed sample, so its node *succeeds* and the row is scored.
     """
     code = error.metadata.get(METADATA_FAILURE_CODE_KEY)
     if isinstance(code, str) and code:
@@ -189,6 +193,20 @@ def node_error_failure_code(error: NodeError) -> str:
     if isinstance(code, str) and code:
         return code
     return _NODE_EXECUTION_FAILURE_CODE
+
+
+def metadata_failure_code(metadata: Mapping[str, Any]) -> str:
+    """Read the failure code a *successful* node attached to its output.
+
+    A node that succeeded can still have something to say about what it
+    observed -- a blank generation is an empty model output, which is a real
+    sample rather than a lost one. This carries that marker onto the row as
+    explanation; the row's state is decided by its score, not by this code.
+    """
+    code = metadata.get(METADATA_FAILURE_CODE_KEY)
+    if isinstance(code, str) and code:
+        return code
+    return ""
 
 
 #: Longest exception message persisted on a row. A node failure's message is

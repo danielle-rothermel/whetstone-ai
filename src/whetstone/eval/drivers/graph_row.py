@@ -10,6 +10,7 @@ from whetstone.eval.drivers.graph_execution import (
     bounded_node_error_message,
     cache_marks_from_metadata,
     graph_run_cancelled,
+    metadata_failure_code,
     metadata_prompt,
     node_error_failure_code,
     node_error_row_state,
@@ -140,9 +141,14 @@ def graph_result_to_row_fields(
     completion_tokens: int | None = None
     provider_cost: float | None = None
     cache_hit = False
+    #: Marks a generation the provider returned blank. The LLM node still
+    #: succeeded -- an empty output is an observed sample -- so this rides
+    #: onto the scored row as explanation, not as row state.
+    generation_failure_code = ""
     if llm_outcome is not None and llm_outcome.status is NodeOutcomeStatus.SUCCESS:
         llm_output = require_node_success(llm_outcome)
         output_text = node_text(llm_output, field=llm_output_field)
+        generation_failure_code = metadata_failure_code(llm_output.metadata)
         telemetry = telemetry_from_metadata(llm_output.metadata)
         finish_reason = telemetry.finish_reason
         provider_error = (
@@ -158,7 +164,7 @@ def graph_result_to_row_fields(
     score: float | None = None
     submission_result: object | None = None
     row_state = ExecutedRowState.SUCCESS
-    failure_code = ""
+    failure_code = generation_failure_code
     error_type: str | None = None
     error_message: str | None = None
     failed_node_id: str | None = None

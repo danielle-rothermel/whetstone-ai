@@ -13,6 +13,7 @@ from whetstone.core.identity import (
     identity_ref_from_config_variable,
 )
 from whetstone.eval.drivers.graph_execution import (
+    METADATA_FAILURE_CODE_KEY,
     METADATA_PROMPT_KEY,
     METADATA_SUBMISSION_RESULT_KEY,
     GenerationNodeError,
@@ -120,13 +121,21 @@ def build_llm_call_run_node(deps: LlmCallRunNodeDeps) -> RunNode:
                 split_role=deps.split_role,
                 request_identity_sink=deps.request_identity_sink,
             )
-            text = provider_result_text(execution.result)
+            text, generation_failure_code = provider_result_text(
+                execution.result
+            )
         except (GenerationNodeError, ValueError) as exc:
             metadata = getattr(exc, "metadata", {})
             raise GenerationNodeError(str(exc), metadata=metadata) from exc
         output_field = node.output_field or PROVIDER_GENERATION_OUTPUT_FIELD
         metadata = call_execution_metadata(execution)
         metadata[METADATA_PROMPT_KEY] = prompt
+        if generation_failure_code:
+            # The node succeeded -- it observed a model output. The code
+            # records that the output was blank so the row stays
+            # explainable; it does not make the row a failure, because a
+            # blank generation is a real sample that simply cannot pass.
+            metadata[METADATA_FAILURE_CODE_KEY] = generation_failure_code
         return NodeOutput(
             values={output_field: text},
             metadata=metadata,

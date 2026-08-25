@@ -3,6 +3,10 @@
 Covers the Stage-0 defect where a row failed with ``node_execution_error``
 and the store recorded no exception type, message, or node name -- so the
 cause of a lost row was unrecoverable after the fact.
+
+Also pins the blank-generation contract: an empty model output is an
+observed, scored, failing sample rather than an unscoreable row. It is a
+result -- just one that cannot possibly pass.
 """
 
 from __future__ import annotations
@@ -143,20 +147,31 @@ def test_node_error_row_records_exception_cause_and_node() -> None:
     assert "blew up" in row.error_message
 
 
-def test_blank_generation_is_a_scored_invalid_row_not_a_node_error() -> None:
-    """An empty generation is an ``invalid`` row per the eval contract."""
+def test_blank_generation_is_an_observed_scored_failing_row() -> None:
+    """An empty generation is a result -- one that cannot possibly pass.
+
+    The model was asked and it answered nothing. That is an observed sample,
+    so the row is *present* and carries the failing score the eval family
+    gives empty output, rather than being withheld as unscoreable.
+    """
     row = _run_row(lambda _request: "", max_row_attempts=1)
-    assert row.row_state is ExecutedRowState.INVALID
-    assert row.invalid is True
+    assert row.row_state is ExecutedRowState.SUCCESS
+    assert row.invalid is False
     assert row.failed is False
-    assert row.score is None
+    assert row.missing is False
+    # Scored, and scored at the family's floor for empty output.
+    assert row.score == 0.0
+    assert row.output_text == ""
+    # The blank marker is retained as explanation, not as row state.
     assert row.failure_code == "blank-provider-generation"
 
 
-def test_whitespace_generation_is_a_scored_invalid_row() -> None:
+def test_whitespace_generation_is_an_observed_scored_failing_row() -> None:
     row = _run_row(lambda _request: "   \n  ", max_row_attempts=1)
-    assert row.row_state is ExecutedRowState.INVALID
-    assert row.invalid is True
+    assert row.row_state is ExecutedRowState.SUCCESS
+    assert row.invalid is False
+    assert row.score == 0.0
+    assert row.failure_code == "blank-provider-generation"
 
 
 def test_node_error_row_is_retried_and_succeeds() -> None:
@@ -242,7 +257,12 @@ def test_retry_is_bounded_and_reports_its_attempt_count() -> None:
 
 
 def test_blank_generation_is_terminal_and_never_retried() -> None:
-    """A blank generation is a contract outcome, not an execution accident."""
+    """A blank generation is a sample, not an execution accident.
+
+    Retrying it would resample until the model happened to say something,
+    which silently discards an observed failure and biases the measurement.
+    A sample is a sample: it is scored once and kept.
+    """
 
     class _Blank:
         def __init__(self, policy) -> None:
@@ -258,7 +278,8 @@ def test_blank_generation_is_terminal_and_never_retried() -> None:
     transport = _Blank(_policy().transport_policy)
     row = _run_with_transport(transport, max_row_attempts=3)
     assert transport.calls == 1
-    assert row.row_state is ExecutedRowState.INVALID
+    assert row.row_state is ExecutedRowState.SUCCESS
+    assert row.score == 0.0
     assert row.row_attempts == 1
 
 

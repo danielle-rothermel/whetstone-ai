@@ -164,6 +164,7 @@ def run_baseline_preview(
     )
     calibration = run_anchor_calibration(
         engine=engine,
+        store=store,
         baseline_candidate=baseline_candidate,
         ceiling_candidate=ceiling_candidate,
         baseline_purpose=baseline_purpose,

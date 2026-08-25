@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from dr_store import ObjectStore
+
 from whetstone.core.roles import EvalRole
 from whetstone.eval.analysis.power import (
     PowerConfig,
@@ -23,15 +25,32 @@ from whetstone.eval.protocol import (
     eval_is_rejected,
     eval_is_success,
 )
-from whetstone.eval.schema import EvalEvidence, EvalFailureEvidence
+from whetstone.eval.preview.persisted import load_evaluation_outputs
+from whetstone.eval.schema import (
+    EvalEvidence,
+    EvalFailureEvidence,
+    EvalOutputsRecord,
+)
 from whetstone.eval.config_ref import EvalConfigRef
 from whetstone.experiment.candidate import Candidate
 from whetstone.experiment.sampling import evaluation_role_for_split
 
 __all__ = [
+    "MIN_ANCHOR_PRESENCE_FRACTION",
     "AnchorCalibrationResult",
+    "BalancedAnchorSubset",
+    "anchor_samples_per_task",
+    "balanced_anchor_subset",
     "run_anchor_calibration",
 ]
+
+
+#: Lowest overall present-row fraction an anchor evaluation may carry and
+#: still calibrate. Real infrastructure loses rows; demanding perfection from
+#: it makes a whole calibration hostage to a single lost sample. This is the
+#: repo's completeness-floor convention (0.9), applied here as "expect a high
+#: presence percentage, then balance", not "require every planned row".
+MIN_ANCHOR_PRESENCE_FRACTION = 0.9
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +70,11 @@ class AnchorCalibrationResult:
     ceiling: EvalEvidenceWithRef
     paired_delta_ci: BootstrapCI
     power: PowerResult
+    #: Samples per task the calibration actually reduced to. It equals the
+    #: planned ``num_seeds`` when nothing was lost, and drops to the worst
+    #: task's present count when infrastructure lost rows. Both anchors are
+    #: balanced to the same ``k`` so the paired delta stays paired.
+    samples_per_task: int
 
 
 def _require_success_eval(
@@ -91,17 +115,43 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed sample count")
     if len(evidence.per_task_values) != len(expected_task_hashes):
         raise ValueError("calibration evidence has incomplete per-task values")
-    # Anchors calibrate the achievable range, so every planned row must have
-    # been observed: ``per_task_counts`` counts *present* rows, so this also
-    # rejects an anchor that silently lost repeats.
-    if evidence.per_task_counts != (expected_samples,) * len(
-        expected_task_hashes
-    ):
-        raise ValueError("calibration evidence changed per-task sample counts")
-    # A fully observed task always reduces to a real mean. An unobserved task
-    # would enter the variance decomposition as a *measured* 0.0 and mint a
-    # false hard task, biasing the anchor gap and every MDD on the surface, so
-    # it is rejected here rather than coerced downstream.
+    if len(evidence.per_task_counts) != len(expected_task_hashes):
+        raise ValueError("calibration evidence has incomplete per-task counts")
+    if any(count > expected_samples for count in evidence.per_task_counts):
+        raise ValueError(
+            "calibration evidence reports more present rows than planned "
+            "samples"
+        )
+    # Anchors calibrate the achievable range, so presence must be high --
+    # but not perfect. Infrastructure loses rows, and refusing the whole
+    # calibration over one lost sample is a bar real runs cannot clear. The
+    # floor keeps the anchor honest; balanced subsetting downstream keeps
+    # every task contributing the same number of samples.
+    planned = expected_samples * len(expected_task_hashes)
+    present = sum(evidence.per_task_counts)
+    presence = present / planned if planned else 0.0
+    if presence < MIN_ANCHOR_PRESENCE_FRACTION:
+        raise ValueError(
+            "calibration evidence presence "
+            f"{presence:.3f} ({present}/{planned} rows) is below the "
+            f"required floor of {MIN_ANCHOR_PRESENCE_FRACTION:.2f}"
+        )
+    # A task with no present row cannot be balanced against the others at
+    # any k: it would enter the variance decomposition as a *measured* 0.0
+    # and mint a false hard task, biasing the anchor gap and every MDD on
+    # the surface. It is rejected here rather than coerced downstream.
+    unobserved = tuple(
+        task_hash
+        for task_hash, count in zip(
+            expected_task_hashes, evidence.per_task_counts, strict=True
+        )
+        if count == 0
+    )
+    if unobserved:
+        raise ValueError(
+            "calibration evidence carries an unobserved task with zero "
+            f"present rows: {unobserved!r}"
+        )
     if any(value is None for value in evidence.per_task_values):
         raise ValueError(
             "calibration evidence carries an unobserved per-task value"
@@ -130,9 +180,111 @@ def _validate_anchor_evidence(
         raise ValueError("calibration evidence changed its Reward Policy")
 
 
+@dataclass(frozen=True, slots=True)
+class BalancedAnchorSubset:
+    """One anchor's per-task values reduced to a common sample count.
+
+    ``samples_per_task`` is the ``k`` every task contributes. ``per_task``
+    holds each task's mean over exactly its first ``k`` present rows, in
+    ``task_hashes`` order.
+    """
+
+    samples_per_task: int
+    per_task: tuple[float, ...]
+
+
+def _present_rows_by_task(
+    outputs: EvalOutputsRecord,
+    *,
+    task_hashes: tuple[str, ...],
+) -> tuple[tuple[tuple[int, float], ...], ...]:
+    """Group present rows per task as ``(seed_index, score)``, seed-ordered.
+
+    A row is present exactly when it carries a score. A blank generation now
+    scores as the failing sample it is, so it is present here and never
+    reduces a task's usable count; only genuine infrastructure loss does.
+    """
+    by_task: dict[str, list[tuple[int, float]]] = {
+        task_hash: [] for task_hash in task_hashes
+    }
+    for row in outputs.outputs:
+        if row.score is None:
+            continue
+        bucket = by_task.get(row.task_hash)
+        if bucket is None:
+            raise ValueError(
+                "calibration outputs carry a row outside the anchor task set"
+            )
+        bucket.append((row.seed_index, float(row.score)))
+    return tuple(
+        tuple(sorted(by_task[task_hash])) for task_hash in task_hashes
+    )
+
+
+def anchor_samples_per_task(
+    outputs: EvalOutputsRecord,
+    *,
+    task_hashes: tuple[str, ...],
+) -> int:
+    """The largest ``k`` every task in this anchor can supply.
+
+    That is the smallest present-row count across tasks: any larger ``k``
+    would leave some task short, and balancing exists precisely so no task
+    is weighted more heavily merely because infrastructure happened to lose
+    fewer of its rows.
+    """
+    present = _present_rows_by_task(outputs, task_hashes=task_hashes)
+    counts = tuple(len(rows) for rows in present)
+    if not counts or min(counts) < 1:
+        raise ValueError(
+            "balanced anchor subsetting requires every task to have at "
+            "least one present row"
+        )
+    return min(counts)
+
+
+def balanced_anchor_subset(
+    outputs: EvalOutputsRecord,
+    *,
+    task_hashes: tuple[str, ...],
+    samples_per_task: int,
+) -> BalancedAnchorSubset:
+    """Reduce every task to exactly ``samples_per_task`` present samples.
+
+    Which rows are kept is decided by **lowest seed index among present
+    rows** -- deterministic and outcome-blind. Selecting on score would let
+    the subset choose its own answer: dropping the worst rows would inflate
+    an anchor and bias every downstream MDD. Seed index is fixed before any
+    generation exists, so the same evidence always yields the same subset.
+    """
+    if samples_per_task < 1:
+        raise ValueError("samples_per_task must be at least 1")
+    present = _present_rows_by_task(outputs, task_hashes=task_hashes)
+    short = tuple(
+        task_hash
+        for task_hash, rows in zip(task_hashes, present, strict=True)
+        if len(rows) < samples_per_task
+    )
+    if short:
+        raise ValueError(
+            f"tasks {short!r} carry fewer than {samples_per_task} present "
+            "rows and cannot be balanced at that sample count"
+        )
+    per_task = tuple(
+        sum(score for _seed, score in rows[:samples_per_task])
+        / samples_per_task
+        for rows in present
+    )
+    return BalancedAnchorSubset(
+        samples_per_task=samples_per_task,
+        per_task=per_task,
+    )
+
+
 def run_anchor_calibration(
     *,
     engine: EvalEngine,
+    store: ObjectStore,
     baseline_candidate: Candidate,
     ceiling_candidate: Candidate,
     baseline_purpose: str,
@@ -155,6 +307,14 @@ def run_anchor_calibration(
     the split owns, which makes an accidentally mis-bound engine a loud error
     rather than a silently relabelled calibration. Both anchors are validated
     against the same role, Eval Config, task identity, and sample count.
+
+    Presence is required to be high but not perfect: each anchor must clear
+    :data:`MIN_ANCHOR_PRESENCE_FRACTION` overall with no wholly unobserved
+    task. Both anchors are then reduced to one common samples-per-task ``k``
+    so every task contributes equally, and the delta stays paired.
+    ``store`` is read for the row-level outputs that balancing needs; the
+    aggregated ``per_task_values`` are means over *all* present rows and
+    cannot be re-balanced after the fact.
     """
     split_role = engine.sampling.split_role
     expected_eval_role = evaluation_role_for_split(split_role)
@@ -239,14 +399,42 @@ def run_anchor_calibration(
     if baseline_evidence.graph_hash != ceiling_evidence.graph_hash:
         raise ValueError("calibration anchors changed graph identity")
 
-    # ``_validate_anchor_evidence`` has already rejected any unobserved task,
-    # so both vectors are fully measured here.
-    baseline_per_task = tuple(
-        value for value in baseline_evidence.per_task_values if value is not None
+    # ``_validate_anchor_evidence`` has cleared the presence floor and
+    # rejected any wholly unobserved task, so every task here has at least
+    # one present row to balance on.
+    #
+    # Balance both anchors to one common k. Each anchor's own worst task
+    # sets its k, and the pair takes the smaller of the two: the delta is
+    # paired across arms, so an arm carrying more samples than its partner
+    # would compare unequal amounts of evidence per task.
+    baseline_outputs = load_evaluation_outputs(store, baseline_evidence)
+    ceiling_outputs = load_evaluation_outputs(store, ceiling_evidence)
+    samples_per_task = min(
+        anchor_samples_per_task(
+            baseline_outputs, task_hashes=calibrated_task_hashes
+        ),
+        anchor_samples_per_task(
+            ceiling_outputs, task_hashes=calibrated_task_hashes
+        ),
     )
-    ceiling_per_task = tuple(
-        value for value in ceiling_evidence.per_task_values if value is not None
+    baseline_subset = balanced_anchor_subset(
+        baseline_outputs,
+        task_hashes=calibrated_task_hashes,
+        samples_per_task=samples_per_task,
     )
+    ceiling_subset = balanced_anchor_subset(
+        ceiling_outputs,
+        task_hashes=calibrated_task_hashes,
+        samples_per_task=samples_per_task,
+    )
+    if log is not None and samples_per_task != samples:
+        log(
+            "Balanced anchors to "
+            f"{samples_per_task} sample(s) per task "
+            f"(planned {samples}); infrastructure lost rows"
+        )
+    baseline_per_task = baseline_subset.per_task
+    ceiling_per_task = ceiling_subset.per_task
     paired_delta_ci = bootstrap_paired_delta_ci(
         baseline_per_task,
         ceiling_per_task,
@@ -258,7 +446,7 @@ def run_anchor_calibration(
         naive_per_task=baseline_per_task,
         ceiling_per_task=ceiling_per_task,
         pool_ceiling=pool_ceiling,
-        anchor_samples=samples,
+        anchor_samples=samples_per_task,
         config=power_config,
     )
     return AnchorCalibrationResult(
@@ -269,4 +457,5 @@ def run_anchor_calibration(
         ceiling=ceiling,
         paired_delta_ci=paired_delta_ci,
         power=power,
+        samples_per_task=samples_per_task,
     )

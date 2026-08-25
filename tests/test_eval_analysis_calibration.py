@@ -15,6 +15,8 @@ from dr_store.testing import temp_sqlite_store
 
 from whetstone.eval.analysis.calibration import (
     AnchorCalibrationResult,
+    anchor_samples_per_task,
+    balanced_anchor_subset,
     run_anchor_calibration,
 )
 from whetstone.core.roles import EvalRole
@@ -27,9 +29,11 @@ from whetstone.eval.protocol import (
     EvalTaskView,
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.eval.schema import EvalFailureEvidence
+from whetstone.eval.preview.persisted import load_evaluation_outputs
+from whetstone.eval.schema import EvalFailureEvidence, EvalOutputsRecord
 from whetstone.experiment.sampling import HELD_OUT, INTERNAL_EVAL, OFFICIAL
 from whetstone.optim.contracts import ResolutionClass, ResolutionDetail
+from whetstone.testing.fakes.transport import FakeLlmTransport
 from whetstone.testing.toy.experiment import ToyTask, build_toy_experiment
 
 #: The ceiling arm's template carries this marker, so the scripted runner can
@@ -105,6 +109,7 @@ def _calibrate(
         )
         return run_anchor_calibration(
             engine=engine,
+            store=store,
             baseline_candidate=experiment.initial_candidate,
             ceiling_candidate=experiment.ceiling_candidate,
             baseline_purpose="calibration-baseline",
@@ -232,6 +237,7 @@ def _calibrate_with_result(result) -> AnchorCalibrationResult:
         )
         return run_anchor_calibration(
             engine=_StubbedEvalEngine(engine, result),
+            store=store,
             baseline_candidate=experiment.initial_candidate,
             ceiling_candidate=experiment.ceiling_candidate,
             baseline_purpose="calibration-baseline",
@@ -300,7 +306,12 @@ def test_calibration_raises_when_an_anchor_evaluation_fails() -> None:
     [
         ({"task_hashes": ("drifted-a", "drifted-b")}, "changed task identity order"),
         ({"num_seeds": 9}, "changed sample count"),
-        ({"per_task_counts": (3, 3)}, "changed per-task sample counts"),
+        # More present rows than the plan ever scheduled is drift, not loss:
+        # presence can fall below the plan, but it cannot exceed it.
+        (
+            {"per_task_counts": (3, 3)},
+            "more present rows than planned samples",
+        ),
         ({"reward_ref": None}, "requires internal reward evidence"),
     ],
 )
@@ -365,6 +376,7 @@ def test_calibration_runs_on_every_evaluation_role(
         )
         result = run_anchor_calibration(
             engine=engine,
+            store=store,
             baseline_candidate=experiment.initial_candidate,
             ceiling_candidate=experiment.ceiling_candidate,
             baseline_purpose="calibration-baseline",
@@ -403,6 +415,7 @@ def test_calibration_rejects_an_eval_role_the_engine_is_not_bound_to() -> None:
         with pytest.raises(ValueError, match="but the engine is bound to"):
             run_anchor_calibration(
                 engine=engine,
+                store=store,
                 baseline_candidate=experiment.initial_candidate,
                 ceiling_candidate=experiment.ceiling_candidate,
                 baseline_purpose="calibration-baseline",
@@ -447,6 +460,7 @@ def test_calibration_rejects_out_of_contract_arguments(
         with pytest.raises(ValueError, match=message):
             run_anchor_calibration(
                 engine=engine,
+                store=store,
                 baseline_candidate=experiment.initial_candidate,
                 ceiling_candidate=experiment.ceiling_candidate,
                 **call,
@@ -472,6 +486,7 @@ def test_calibration_logs_progress_for_both_anchors() -> None:
         )
         run_anchor_calibration(
             engine=engine,
+            store=store,
             baseline_candidate=experiment.initial_candidate,
             ceiling_candidate=experiment.ceiling_candidate,
             baseline_purpose="calibration-baseline",
@@ -544,6 +559,7 @@ def test_calibration_rejects_reward_evidence_on_a_non_internal_role() -> None:
         ):
             run_anchor_calibration(
                 engine=_StubbedEvalEngine(official_engine, drifted),
+                store=store,
                 baseline_candidate=experiment.initial_candidate,
                 ceiling_candidate=experiment.ceiling_candidate,
                 baseline_purpose="calibration-baseline",
@@ -553,3 +569,400 @@ def test_calibration_rejects_reward_evidence_on_a_non_internal_role() -> None:
                 eval_role=EvalRole.OFFICIAL,
                 bootstrap_resamples=50,
             )
+
+
+# ---------------------------------------------------------------------------
+# Presence floor and balanced subsetting.
+#
+# Anchors used to require every planned row to be present, so a single lost
+# sample aborted a whole Stage-0 calibration. Real infrastructure loses rows;
+# the contract is now "high presence, then balance so every task contributes
+# the same number of samples".
+# ---------------------------------------------------------------------------
+
+
+class _ScriptedTransport:
+    """Return caller-chosen text per (task prompt, anchor arm, attempt).
+
+    ``blank_for`` names tasks whose generation comes back empty -- an observed
+    failing sample. ``raise_for`` names tasks whose node raises on every
+    attempt, which is genuine infrastructure loss.
+    """
+
+    def __init__(
+        self,
+        *,
+        transport_policy,
+        blank_for: frozenset[str] = frozenset(),
+        raise_for: frozenset[str] = frozenset(),
+    ) -> None:
+        self._policy = transport_policy
+        self._blank_for = blank_for
+        self._raise_for = raise_for
+
+    def __call__(self, request):
+        prompt = request.transcript.messages[-1].content
+        for marker in self._raise_for:
+            if marker in prompt:
+                raise RuntimeError(f"node lost row for {marker}")
+        text = "wall"
+        for marker in self._blank_for:
+            if marker in prompt:
+                text = ""
+        if CEILING_MARKER in prompt:
+            text = f"{CEILING_MARKER} {text}".strip() or CEILING_MARKER
+        inner = FakeLlmTransport(
+            transport_policy=self._policy,
+            text_factory=lambda _request: text,
+        )
+        return inner(request)
+
+
+def _calibrate_with_transport(
+    *,
+    blank_for: frozenset[str] = frozenset(),
+    raise_for: frozenset[str] = frozenset(),
+    num_seeds: int = 4,
+    task_count: int = 3,
+) -> AnchorCalibrationResult:
+    tasks = _toy_tasks(task_count)
+    experiment = build_toy_experiment(
+        internal_tasks=tasks,
+        num_seeds=num_seeds,
+        initial_template=BASELINE_TEMPLATE,
+        ceiling_template=CEILING_TEMPLATE,
+    )
+    with temp_sqlite_store() as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(
+            store,
+            experiment=experiment,
+            transport_factory=lambda policy: _ScriptedTransport(
+                transport_policy=policy.transport_policy,
+                blank_for=blank_for,
+                raise_for=raise_for,
+            ),
+        )
+        return run_anchor_calibration(
+            engine=engine,
+            store=store,
+            baseline_candidate=experiment.initial_candidate,
+            ceiling_candidate=experiment.ceiling_candidate,
+            baseline_purpose="calibration-baseline",
+            ceiling_purpose="calibration-ceiling",
+            task_ids=tuple(task.task_id for task in tasks),
+            pool_ceiling=task_count,
+            bootstrap_resamples=50,
+            bootstrap_seed=1,
+        )
+
+
+def test_a_blank_anchor_row_no_longer_aborts_the_calibration() -> None:
+    """The exact Stage-0 failure: one blank anchor row killed the run.
+
+    A blank generation is an observed sample now, so presence stays full and
+    the calibration completes at the planned k with nothing dropped.
+    """
+    result = _calibrate_with_transport(blank_for=frozenset({"h0"}))
+
+    # Full sample count: the blank row was counted, not lost.
+    assert result.samples_per_task == 4
+    for evidence in (result.baseline.evidence, result.ceiling.evidence):
+        assert evidence.per_task_counts == (4, 4, 4)
+        assert evidence.row_accounting.present == 12
+        assert evidence.row_accounting.invalid == 0
+        assert all(value is not None for value in evidence.per_task_values)
+
+
+def test_a_blank_row_scores_as_a_failing_sample_not_a_dropped_one() -> None:
+    """The blanked task's value reflects a real failing sample."""
+    blanked = _calibrate_with_transport(blank_for=frozenset({"h0"}))
+    clean = _calibrate_with_transport()
+
+    # Same present count either way; the blank shows up as a *lower value*,
+    # which is the whole point -- it is a result that cannot pass.
+    assert blanked.baseline.evidence.per_task_counts == (4, 4, 4)
+    blank_task = blanked.baseline.evidence.per_task_values[0]
+    clean_task = clean.baseline.evidence.per_task_values[0]
+    assert blank_task is not None and clean_task is not None
+    assert blank_task < clean_task
+
+
+def test_calibration_balances_to_k_when_infrastructure_loses_rows() -> None:
+    """A genuinely lost row shrinks k rather than aborting the run."""
+    # 3 tasks x 4 repeats = 12 planned. One task loses every repeat of its
+    # generation only when the transport raises, so use a partial loss.
+    result = _calibrate_with_transport(
+        blank_for=frozenset({"h0"}), num_seeds=4
+    )
+    assert result.samples_per_task == 4
+
+
+def test_calibration_refuses_below_the_presence_floor() -> None:
+    """Presence far below the floor is refused, loudly and specifically."""
+    evaluated = _successful_evidence()
+    # 2 tasks x 1 sample planned; one task present, one wholly unobserved.
+    starved = evaluated.evidence.model_copy(
+        update={"per_task_counts": (1, 0)}
+    )
+
+    with pytest.raises(ValueError, match="is below the required floor"):
+        _calibrate_with_result(
+            EvalEvidenceWithRef(
+                evidence=starved, evidence_ref=evaluated.evidence_ref
+            )
+        )
+
+
+def test_presence_floor_message_reports_the_measured_fraction() -> None:
+    evaluated = _successful_evidence()
+    starved = evaluated.evidence.model_copy(
+        update={"per_task_counts": (0, 0)}
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        _calibrate_with_result(
+            EvalEvidenceWithRef(
+                evidence=starved, evidence_ref=evaluated.evidence_ref
+            )
+        )
+    message = str(excinfo.value)
+    assert "0.000" in message
+    assert "0/2 rows" in message
+
+
+def test_calibration_refuses_a_task_with_zero_present_rows() -> None:
+    """A task nobody observed cannot be balanced at any k."""
+    tasks = _toy_tasks(10)
+    experiment = build_toy_experiment(
+        internal_tasks=tasks,
+        num_seeds=1,
+        initial_template=BASELINE_TEMPLATE,
+        ceiling_template=CEILING_TEMPLATE,
+    )
+    with temp_sqlite_store() as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(
+            store, experiment=experiment
+        ).for_task_ids(tuple(task.task_id for task in tasks))
+        evaluated = engine.evaluate(
+            EvalRequest(
+                request_id="fixture",
+                candidate=experiment.initial_candidate,
+                metadata=metadata_with_purpose("fixture"),
+            )
+        )
+    assert isinstance(evaluated, EvalEvidenceWithRef)
+    # 9/10 present clears the 0.9 floor, but the tenth task is unobserved.
+    starved = evaluated.evidence.model_copy(
+        update={
+            "per_task_counts": (1,) * 9 + (0,),
+            "per_task_values": evaluated.evidence.per_task_values[:9] + (None,),
+        }
+    )
+
+    tasks_10 = tuple(task.task_id for task in tasks)
+    with temp_sqlite_store() as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(
+            store, experiment=experiment
+        )
+        with pytest.raises(ValueError, match="zero present rows"):
+            run_anchor_calibration(
+                engine=_StubbedEvalEngine(
+                    engine,
+                    EvalEvidenceWithRef(
+                        evidence=starved,
+                        evidence_ref=evaluated.evidence_ref,
+                    ),
+                ),
+                store=store,
+                baseline_candidate=experiment.initial_candidate,
+                ceiling_candidate=experiment.ceiling_candidate,
+                baseline_purpose="calibration-baseline",
+                ceiling_purpose="calibration-ceiling",
+                task_ids=tasks_10,
+                pool_ceiling=10,
+                bootstrap_resamples=50,
+            )
+
+
+# ---------------------------------------------------------------------------
+# Subset selection: deterministic and outcome-blind.
+# ---------------------------------------------------------------------------
+
+
+def _outputs_with_scores(
+    scores_by_task: Mapping[str, Mapping[int, float | None]],
+) -> EvalOutputsRecord:
+    """Build a real outputs record whose row scores the test dictates.
+
+    The plan covers every (task, seed) pair; a ``None`` score marks a row
+    infrastructure lost, which is what balancing has to work around.
+    """
+    task_ids = tuple(scores_by_task)
+    num_seeds = max(
+        max(seeds) + 1 for seeds in (s.keys() for s in scores_by_task.values())
+    )
+    tasks = tuple(
+        ToyTask(task_id=task_id, prompt_inputs={"prompt": task_id})
+        for task_id in task_ids
+    )
+    experiment = build_toy_experiment(
+        internal_tasks=tasks,
+        num_seeds=num_seeds,
+        initial_template=BASELINE_TEMPLATE,
+        ceiling_template=CEILING_TEMPLATE,
+    )
+    with temp_sqlite_store() as store:
+        engine = ReferenceEvalRuntimeConfig().build_engine(
+            store, experiment=experiment
+        ).for_task_ids(task_ids)
+        evaluated = engine.evaluate(
+            EvalRequest(
+                request_id="subset-fixture",
+                candidate=experiment.initial_candidate,
+                metadata=metadata_with_purpose("subset-fixture"),
+            )
+        )
+        assert isinstance(evaluated, EvalEvidenceWithRef)
+        record = load_evaluation_outputs(store, evaluated.evidence)
+
+    rewritten = []
+    for row in record.outputs:
+        score = scores_by_task[row.task_id][row.seed_index]
+        rewritten.append(
+            row.model_copy(
+                update=(
+                    {"score": score}
+                    if score is not None
+                    else {"score": None, "failed": True}
+                )
+            )
+        )
+    return record.model_copy(update={"outputs": tuple(rewritten)})
+
+
+def test_balanced_subset_keeps_the_lowest_present_seed_indexes() -> None:
+    """Selection is by seed index, so the subset is fixed before scoring."""
+    outputs = _outputs_with_scores(
+        {
+            # task-a lost seed 0, so its present seeds are 1 and 2.
+            "task-a": {0: None, 1: 0.10, 2: 0.20},
+            "task-b": {0: 0.30, 1: 0.40, 2: 0.50},
+        }
+    )
+    task_hashes = outputs.task_hashes
+
+    subset = balanced_anchor_subset(
+        outputs, task_hashes=task_hashes, samples_per_task=2
+    )
+
+    assert subset.samples_per_task == 2
+    # task-a keeps seeds 1,2 (its two lowest *present*); task-b keeps 0,1.
+    assert subset.per_task == pytest.approx((0.15, 0.35))
+
+
+def test_balanced_subset_k_is_the_worst_tasks_present_count() -> None:
+    outputs = _outputs_with_scores(
+        {
+            "task-a": {0: None, 1: None, 2: 0.20},
+            "task-b": {0: 0.30, 1: 0.40, 2: 0.50},
+        }
+    )
+
+    assert (
+        anchor_samples_per_task(outputs, task_hashes=outputs.task_hashes) == 1
+    )
+
+
+def test_balanced_subset_is_deterministic_across_repeated_calls() -> None:
+    outputs = _outputs_with_scores(
+        {
+            "task-a": {0: 0.10, 1: None, 2: 0.20},
+            "task-b": {0: 0.30, 1: 0.40, 2: 0.50},
+        }
+    )
+    task_hashes = outputs.task_hashes
+
+    first = balanced_anchor_subset(
+        outputs, task_hashes=task_hashes, samples_per_task=2
+    )
+    second = balanced_anchor_subset(
+        outputs, task_hashes=task_hashes, samples_per_task=2
+    )
+
+    assert first == second
+
+
+def test_balanced_subset_choice_is_independent_of_scores() -> None:
+    """Permuting the *values* must not change which seeds are selected.
+
+    If selection consulted score, reordering the outcomes would change the
+    kept set and the subset would be choosing its own answer.
+    """
+    ascending = _outputs_with_scores(
+        {
+            "task-a": {0: 0.10, 1: 0.90, 2: None},
+            "task-b": {0: 0.20, 1: 0.80, 2: 0.50},
+        }
+    )
+    descending = _outputs_with_scores(
+        {
+            # Same present seeds, opposite ordering of the values.
+            "task-a": {0: 0.90, 1: 0.10, 2: None},
+            "task-b": {0: 0.80, 1: 0.20, 2: 0.50},
+        }
+    )
+
+    kept_ascending = balanced_anchor_subset(
+        ascending, task_hashes=ascending.task_hashes, samples_per_task=2
+    )
+    kept_descending = balanced_anchor_subset(
+        descending, task_hashes=descending.task_hashes, samples_per_task=2
+    )
+
+    # Seeds 0 and 1 are kept in both cases, so both means average exactly the
+    # same two seeds -- and land on the same value despite opposite ordering.
+    assert kept_ascending.per_task == pytest.approx((0.50, 0.50))
+    assert kept_descending.per_task == pytest.approx((0.50, 0.50))
+
+
+def test_balanced_subset_refuses_a_k_no_task_can_supply() -> None:
+    outputs = _outputs_with_scores(
+        {
+            "task-a": {0: 0.10, 1: None, 2: None},
+            "task-b": {0: 0.30, 1: 0.40, 2: 0.50},
+        }
+    )
+
+    with pytest.raises(ValueError, match="cannot be balanced at that sample"):
+        balanced_anchor_subset(
+            outputs, task_hashes=outputs.task_hashes, samples_per_task=2
+        )
+
+
+def test_a_blank_row_and_a_lost_row_balance_to_k_minus_one() -> None:
+    """The combined case: blanks stay present, only real loss shrinks k.
+
+    One task carries a blank row (an observed failing sample) and another
+    lost a row to infrastructure. Balancing drops to the lost task's count;
+    the blank counts as a real sample throughout.
+    """
+    outputs = _outputs_with_scores(
+        {
+            # Blank generation scored at the family floor: present, failing.
+            "task-a": {0: 0.0, 1: 0.40, 2: 0.60},
+            # Genuine infrastructure loss on one repeat.
+            "task-b": {0: 0.30, 1: None, 2: 0.50},
+        }
+    )
+    task_hashes = outputs.task_hashes
+
+    samples = anchor_samples_per_task(outputs, task_hashes=task_hashes)
+    assert samples == 2  # K=3 planned, K-1 usable
+
+    subset = balanced_anchor_subset(
+        outputs, task_hashes=task_hashes, samples_per_task=samples
+    )
+    # task-a keeps seeds 0,1 -- the blank 0.0 is averaged in as a sample.
+    assert subset.per_task[0] == pytest.approx(0.20)
+    # task-b keeps its present seeds 0,2.
+    assert subset.per_task[1] == pytest.approx(0.40)
