@@ -681,16 +681,29 @@ class OptimHarness(OptimRunStore):
                     "a seed-retaining Step must retain the exact run initial "
                     "candidate"
                 )
-        expected_count = (
-            0
-            if output.seed_retained
-            else contract.accepted_count_for(output.proposed_status)
-        )
-        if len(output.accepted_candidates) != expected_count:
+        accepted_count = len(output.accepted_candidates)
+        if output.seed_retained:
+            if accepted_count != 0:
+                raise ValueError(
+                    "adapter violated returned proposal cardinality: expected "
+                    f"0, got {accepted_count}"
+                )
+        elif not contract.admits_accepted_count(
+            output.proposed_status, accepted_count
+        ):
+            expected_count = contract.accepted_count_for(
+                output.proposed_status
+            )
+            floor = contract.min_returned_proposal_count
+            allowed = (
+                str(expected_count)
+                if floor is None
+                or output.proposed_status is not StepStatus.CONTINUE
+                else f"{floor}..{expected_count}"
+            )
             raise ValueError(
                 "adapter violated returned proposal cardinality: expected "
-                f"{expected_count}, got "
-                f"{len(output.accepted_candidates)}"
+                f"{allowed}, got {accepted_count}"
             )
         if contract.require_distinct_bases:
             bases = [

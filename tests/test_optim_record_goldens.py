@@ -50,8 +50,8 @@ GOLDEN_SCHEMA_NAMES = {
 }
 
 GOLDEN_SCHEMA_VERSIONS = {
-    "optim_run": 3,
-    "step_request": 3,
+    "optim_run": 4,
+    "step_request": 4,
     "step_result": 4,
     "optim_result": 3,
 }
@@ -60,6 +60,7 @@ GOLDEN_OUTPUT_CONTRACT_KEYS = frozenset(
     {
         "returned_proposal_count",
         "terminal_proposal_count",
+        "min_returned_proposal_count",
         "require_distinct_bases",
     }
 )
