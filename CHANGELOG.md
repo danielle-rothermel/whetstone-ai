@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.16 - 2026-08-25
+
 ### Fixed
 - **A COPRO run whose seed wins the terminal ranking now retains the seed
   instead of dying.** COPRO measures the run's initial candidate alongside
