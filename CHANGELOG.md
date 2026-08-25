@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A COPRO run whose seed wins the terminal ranking now retains the seed
+  instead of dying.** COPRO measures the run's initial candidate alongside
+  its proposals — the seed round carries it as an occurrence — so the seed
+  sits in ranked history like any other measured candidate and can take the
+  top rank. Terminal selection sliced it straight out of that ranking and
+  returned it as an *accepted proposal*, but the seed binds the consumer's
+  root candidate as its base rather than a candidate the finalizing Step was
+  asked about, so the harness correctly rejected it and killed the run.
+
+  Terminal selection now excludes the seed from the accepted slice. When the
+  seed is the top-ranked candidate the Step completes with `seed_retained`,
+  retaining the run's initial candidate and accepting nothing — the shape
+  MIPROv2 and GEPA already use. When the seed ranks below the top under
+  `terminal_top_k > 1` it is simply excluded and real proposals fill the
+  slice; seed retention is all-or-nothing. The same guard applies to a round
+  that realizes no usable proposal and terminalizes on best-so-far.
+
+  COPRO's finalizing step contract now names `terminal_proposal_count`
+  explicitly, matching its continuing rounds and GEPA. Terminal cardinality
+  is unchanged — it is still the run's own COMPLETE count — but naming it
+  marks the cardinality as search-dependent, which is what permits an honest
+  seed-retaining completion.
+
+  Ties are the common case rather than an edge case: ranking is a stable sort
+  on descending reward across the whole history, so the seed only trails
+  proposals from its own round, and exact-match rewards quantize to `k/N`.
+
 ## 0.1.15 - 2026-08-25
 
 ### Changed

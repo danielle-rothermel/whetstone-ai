@@ -700,6 +700,51 @@ def _normalize_initial_candidate(
     return candidate
 
 
+def _seed_won(
+    *,
+    ranked: tuple[CoproAttempt, ...],
+    request: OptimStepRequest,
+) -> bool:
+    """Whether the run's own seed is the top-ranked measured candidate.
+
+    The seed is measured alongside the proposals, so the search can honestly
+    conclude that nothing it proposed beat the baseline. That outcome is a
+    retained seed, not an accepted proposal: the seed binds the consumer's
+    root candidate as its base rather than a candidate this Step was asked
+    about, so returning it as a proposal violates the harness base check.
+    """
+    seed_ref = request.run.record.initial_candidate_ref
+    if seed_ref is None or not ranked:
+        return False
+    return candidate_reference(ranked[0].candidate.record) == seed_ref
+
+
+def _accepted_without_seed(
+    *,
+    ranked: tuple[CoproAttempt, ...],
+    request: OptimStepRequest,
+    required: int,
+) -> tuple[Candidate, ...] | None:
+    """The top ``required`` ranked *proposals*, or ``None`` if too few exist.
+
+    The seed sits in ranked history like any other measured occurrence, so a
+    seed below rank 0 under ``terminal_top_k > 1`` would otherwise be handed
+    back as an accepted proposal. Seed retention is all-or-nothing -- it
+    describes a search that found nothing better at all -- so a seed the run
+    did not terminalize on is simply excluded from the slice.
+    """
+    seed_ref = request.run.record.initial_candidate_ref
+    proposals = [
+        entry.candidate.record
+        for entry in ranked
+        if seed_ref is None
+        or candidate_reference(entry.candidate.record) != seed_ref
+    ]
+    if len(proposals) < required:
+        return None
+    return tuple(proposals[:required])
+
+
 def _validate_attempt_placeholders(
     attempts: tuple[CoproAttempt, ...],
     request: OptimStepRequest,
@@ -890,16 +935,44 @@ class CoproAdapter:
                         ),
                     ),
                 )
-            selected = ranked[:required]
-            accepted = tuple(entry.candidate.record for entry in selected)
+            state_delta = {
+                "copro_finalization": finalization.model_dump(mode="json"),
+            }
+            if _seed_won(ranked=ranked, request=request):
+                return AdapterOutput(
+                    proposed_status=StepStatus.COMPLETE,
+                    seed_retained=True,
+                    retained_candidate=initial,
+                    budget_delta=BudgetDelta(),
+                    state_delta=state_delta,
+                )
+            accepted = _accepted_without_seed(
+                ranked=ranked, request=request, required=required
+            )
+            if accepted is None:
+                # The seed occupies a rank but is not a proposal, so a run
+                # with just enough ranked candidates may still have too few
+                # proposals to fill the terminal slice.
+                return AdapterOutput(
+                    proposed_status=StepStatus.FAILED,
+                    terminal_failure=TerminalFailure(
+                        code="copro_insufficient_ranked_candidates",
+                        message=(
+                            "COPRO finalization ranked "
+                            f"{len(ranked)} candidates but too few are "
+                            "proposals; the terminal contract requires "
+                            f"{required}"
+                        ),
+                    ),
+                    budget_delta=BudgetDelta(),
+                    state_delta=state_delta,
+                )
             return AdapterOutput(
                 proposed_candidates=accepted,
                 accepted_candidates=accepted,
                 proposed_status=StepStatus.COMPLETE,
                 budget_delta=BudgetDelta(),
-                state_delta={
-                    "copro_finalization": finalization.model_dump(mode="json"),
-                },
+                state_delta=state_delta,
             )
         iteration = request.hyperparameters.get("round_index")
         if type(iteration) is not int:
@@ -1066,11 +1139,14 @@ class CoproAdapter:
             )
 
         # The seed round carries the run's initial candidate as its LAST
-        # occurrence. Ranking is a stable sort on descending reward, so the
-        # seed placed last loses every tie against a proposal that matched
-        # it -- which is what keeps a tie from terminalizing on the seed. The
-        # seed is not a proposal and binds no request candidate as its base,
-        # so returning it as one would violate the harness base check.
+        # occurrence. That placement decides nothing about ties beyond round
+        # 0: ranking is a stable sort on descending reward over the whole
+        # history, so a seed at ordinal 5 outranks a tying proposal from a
+        # later round. Exact-match rewards quantize to k/N, which makes ties
+        # common rather than exotic. The seed is not a proposal and binds the
+        # consumer's root candidate as its base rather than a request
+        # candidate, so it is excluded here and terminal selection retains it
+        # as the seed instead of accepting it as a proposal.
         if plan.include_initial_candidate:
             occurrences.append((next_ordinal, initial))
             next_ordinal += 1
@@ -1148,6 +1224,7 @@ class CoproAdapter:
             return self._terminalize_without_proposals(
                 request=request,
                 config=config,
+                initial=initial,
                 ranked=ranked,
                 plan=plan,
                 rejected=rejected,
@@ -1212,6 +1289,7 @@ class CoproAdapter:
         *,
         request: OptimStepRequest,
         config: CoproConfig,
+        initial: Candidate,
         ranked: tuple[CoproAttempt, ...],
         plan: CoproRoundPlan,
         rejected: list[dict[str, Any]],
@@ -1262,8 +1340,38 @@ class CoproAdapter:
                 budget_delta=budget_delta,
                 state_delta=state_delta,
             )
-        selected = ranked[:required]
-        accepted = tuple(entry.candidate.record for entry in selected)
+        if _seed_won(ranked=ranked, request=request):
+            return AdapterOutput(
+                proposed_status=StepStatus.COMPLETE,
+                seed_retained=True,
+                retained_candidate=initial,
+                proposer_usage=proposer_usage,
+                budget_delta=budget_delta,
+                state_delta=state_delta,
+            )
+        accepted = _accepted_without_seed(
+            ranked=ranked, request=request, required=required
+        )
+        if accepted is None:
+            return AdapterOutput(
+                proposed_status=StepStatus.FAILED,
+                proposer_usage=proposer_usage,
+                terminal_failure=TerminalFailure(
+                    code="copro_proposal_round_empty",
+                    message=(
+                        "COPRO proposal round realized no candidates and the "
+                        "run has too few measured proposals to terminalize"
+                    ),
+                    details={
+                        "expected_occurrences": config.breadth,
+                        "actual_occurrences": 0,
+                        "ranked_candidates": len(ranked),
+                        "required_terminal_candidates": required,
+                    },
+                ),
+                budget_delta=budget_delta,
+                state_delta=state_delta,
+            )
         return AdapterOutput(
             proposed_candidates=accepted,
             accepted_candidates=accepted,

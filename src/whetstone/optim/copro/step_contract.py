@@ -108,6 +108,31 @@ def _continuing_contract(
     )
 
 
+def _finalizing_contract(*, run: OptimRunRef) -> OutputContract:
+    """The output contract binding COPRO's finalizing step.
+
+    Terminal cardinality is the run's own COMPLETE count, but it is named
+    through ``terminal_proposal_count`` rather than inherited implicitly from
+    ``returned_proposal_count``. COPRO's finalize selects out of measured
+    history that includes the run's own seed, so the search can honestly find
+    nothing better than the baseline and retain the seed instead of accepting
+    a proposal. Only a contract that names a search-dependent terminal
+    cardinality admits that outcome; a contract that leaves the field unset
+    binds terminal cardinality unconditionally and rejects every honest
+    seed-retaining completion. This matches ``_continuing_contract`` -- which
+    already names it, because a continuing round may terminalize early -- and
+    GEPA's ``gepa_step_output_contract``.
+    """
+    terminal = run.record.terminal_output_contract
+    return OutputContract(
+        returned_proposal_count=terminal.returned_proposal_count,
+        terminal_proposal_count=terminal.accepted_count_for(
+            StepStatus.COMPLETE
+        ),
+        require_distinct_bases=terminal.require_distinct_bases,
+    )
+
+
 def copro_completed_rounds(
     *,
     control: CoproControl,
@@ -236,7 +261,7 @@ class CoproStepContractProvider:
             ),
             budget=prior.budget,
             step_output_contract=(
-                prior.request.record.run.record.terminal_output_contract
+                _finalizing_contract(run=prior.request.record.run)
                 if finalizing
                 else _continuing_contract(
                     run=prior.request.record.run,
