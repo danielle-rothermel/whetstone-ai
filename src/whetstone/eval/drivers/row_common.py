@@ -39,6 +39,16 @@ class RolloutRowOutput:
     #: result. The replayed usage above is the *original* call's, so run
     #: cost must report this row separately rather than bill it again.
     cache_hit: bool = False
+    #: What raised inside the graph, when a node failed. Without these a
+    #: node failure persists only ``failure_code``, which cannot say why a
+    #: row was lost once the run is over.
+    error_type: str | None = None
+    error_message: str | None = None
+    failed_node_id: str | None = None
+    #: How many times this row's graph was executed. Attempts beyond the
+    #: first are node-failure re-executions; each one issued its own
+    #: provider call and is billed.
+    row_attempts: int = 1
 
     @property
     def failed(self) -> bool:
@@ -50,7 +60,7 @@ class RolloutRowOutput:
 
     @property
     def invalid(self) -> bool:
-        return False
+        return self.row_state is ExecutedRowState.INVALID
 
 
 class ProcessTask(BaseModel):

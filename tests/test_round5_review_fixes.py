@@ -80,23 +80,30 @@ def test_for_task_seed_synthesizes_logical_seed_without_provenance(
         request_id="logical-seed-synthesis",
         candidate=engine.experiment.initial_candidate,
     )
-    captured: list[int] = []
+    # The patched run node yields no real graph outcome, so each row reads
+    # as an unattributed node failure and is re-executed up to the row
+    # attempt bound. Group the captured seeds by the row that produced
+    # them: the claim under test is that distinct seed *indices* derive
+    # distinct seeds, not how many attempts one row happened to make.
+    per_row_seeds: list[set[int]] = []
 
     def capture_run_node(*, llm_deps, eval_deps):
-        captured.append(llm_deps.rng_seed)
+        per_row_seeds[-1].add(llm_deps.rng_seed)
         return MagicMock()
 
     with patch(
         "whetstone.eval.drivers.graph_rollout.build_run_node",
         side_effect=capture_run_node,
     ):
-        engine.for_task_seed(task_id, 0).evaluate_row(request)
-        engine.for_task_seed(task_id, 1).evaluate_row(request)
+        for seed_index in (0, 1):
+            per_row_seeds.append(set())
+            engine.for_task_seed(task_id, seed_index).evaluate_row(request)
 
-    assert len(captured) >= 2
-    assert captured[0] != captured[1]
-    assert captured[0] == derive_rng_seed(task_hash, 0)
-    assert captured[1] == derive_rng_seed(task_hash, 1)
+    # A row's every attempt reuses that row's one derived seed; only
+    # drive_ordinal varies across attempts.
+    assert per_row_seeds[0] == {derive_rng_seed(task_hash, 0)}
+    assert per_row_seeds[1] == {derive_rng_seed(task_hash, 1)}
+    assert per_row_seeds[0] != per_row_seeds[1]
 
 
 def test_for_task_ids_synthesizes_missing_provenance_entries(sqlite_store) -> None:

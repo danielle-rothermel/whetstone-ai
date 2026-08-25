@@ -8,6 +8,9 @@ test agree with any drift it was meant to catch.
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from whetstone.core.roles import EvalRole
 from whetstone.eval.schema import (
     EVAL_EVIDENCE_SCHEMA_VERSION,
@@ -117,9 +120,111 @@ EXPECTED_OUTPUT_ROW_FIELDS = (
     "completion_tokens",
     "provider_cost",
     "cache_hit",
+    "error_type",
+    "error_message",
+    "failed_node_id",
+    "row_attempts",
 )
 
 
 def test_eval_output_row_wire_fields_are_pinned() -> None:
     """Output rows carry the task-model usage run cost is derived from."""
     assert tuple(EvalOutputRow.model_fields) == EXPECTED_OUTPUT_ROW_FIELDS
+
+
+#: The node-failure diagnostics wire keys. A row that fails inside the graph
+#: is only explainable after the run if these exact keys persist, so they are
+#: pinned by name rather than derived from the model.
+EXPECTED_NODE_DIAGNOSTIC_FIELDS = (
+    "error_type",
+    "error_message",
+    "failed_node_id",
+    "row_attempts",
+)
+
+
+def test_node_failure_diagnostic_wire_fields_are_pinned() -> None:
+    """A node failure persists what raised, where, and how many attempts."""
+    for field in EXPECTED_NODE_DIAGNOSTIC_FIELDS:
+        assert field in EvalOutputRow.model_fields
+
+
+def test_node_failure_diagnostics_default_to_absent() -> None:
+    """A row that never hit a node failure carries no diagnostics."""
+    row = EvalOutputRow(
+        candidate_id="cand",
+        task_id="task",
+        task_hash="h" * 64,
+        task_index=0,
+        seed_index=0,
+        rendered_prompt="prompt",
+        output_text="text",
+        score=1.0,
+        failed=False,
+        missing=False,
+        invalid=False,
+        failure_code="",
+        finish_reason="stop",
+        provider_error=None,
+        max_budget=None,
+        over_budget=None,
+    )
+    assert row.error_type is None
+    assert row.error_message is None
+    assert row.failed_node_id is None
+    assert row.row_attempts == 1
+
+
+def test_node_failure_diagnostics_round_trip_on_the_wire() -> None:
+    """The diagnostics survive serialization with their exact values."""
+    row = EvalOutputRow(
+        candidate_id="cand",
+        task_id="task",
+        task_hash="h" * 64,
+        task_index=0,
+        seed_index=0,
+        rendered_prompt="prompt",
+        output_text=None,
+        score=None,
+        failed=True,
+        missing=False,
+        invalid=False,
+        failure_code="node_execution_error",
+        finish_reason=None,
+        provider_error=None,
+        max_budget=None,
+        over_budget=None,
+        error_type="builtins.RuntimeError",
+        error_message="node blew up",
+        failed_node_id="generate",
+        row_attempts=3,
+    )
+    payload = row.model_dump(mode="json")
+    assert payload["error_type"] == "builtins.RuntimeError"
+    assert payload["error_message"] == "node blew up"
+    assert payload["failed_node_id"] == "generate"
+    assert payload["row_attempts"] == 3
+    assert EvalOutputRow.model_validate(payload) == row
+
+
+def test_row_attempts_must_be_at_least_one() -> None:
+    with pytest.raises(ValidationError):
+        EvalOutputRow(
+            candidate_id="cand",
+            task_id="task",
+            task_hash="h" * 64,
+            task_index=0,
+            seed_index=0,
+            rendered_prompt="prompt",
+            output_text="text",
+            score=1.0,
+            failed=False,
+            missing=False,
+            invalid=False,
+            failure_code="",
+            finish_reason="stop",
+            provider_error=None,
+            max_budget=None,
+            over_budget=None,
+            row_attempts=0,
+        )

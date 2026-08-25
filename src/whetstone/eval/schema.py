@@ -138,6 +138,15 @@ class EvalOutputRow(BaseModel):
     #: then the *original* call's, replayed verbatim, so run cost reports the
     #: row as a cache hit instead of billing it a second time.
     cache_hit: StrictBool = False
+    #: What raised, when a graph node failed this row. Persisted so a lost
+    #: row stays explainable after the run: ``failure_code`` alone cannot
+    #: distinguish one node error from another.
+    error_type: StrictStr | None = None
+    error_message: StrictStr | None = None
+    failed_node_id: StrictStr | None = None
+    #: Graph executions this row consumed. Attempts beyond the first are
+    #: node-failure re-executions; each issued its own billed provider call.
+    row_attempts: StrictInt = 1
 
     @model_validator(mode="after")
     def _validate_contract(self) -> EvalOutputRow:
@@ -156,6 +165,8 @@ class EvalOutputRow(BaseModel):
                 raise ValueError(f"{name} must be non-negative")
         if self.provider_cost is not None and self.provider_cost < 0:
             raise ValueError("provider_cost must be non-negative")
+        if self.row_attempts < 1:
+            raise ValueError("row_attempts must be at least one")
         require_exclusive_row_state(
             scored=self.score is not None,
             failed=self.failed,

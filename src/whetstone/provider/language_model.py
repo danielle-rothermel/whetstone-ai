@@ -18,6 +18,8 @@ from dr_providers import (
 )
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 
+from whetstone.execution.call_metadata import METADATA_FAILURE_CODE_KEY
+from whetstone.provider.classification import SemanticFailureClass
 from whetstone.provider.failures.exceptions import (
     EmptyProviderGenerationError,
     EvalFailureError,
@@ -51,7 +53,12 @@ def require_provider_generation_text(
     if text is None or not text.strip():
         raise EmptyProviderGenerationError(
             f"empty generation for output field {output_field!r}",
-            metadata={"output_field": output_field},
+            metadata={
+                "output_field": output_field,
+                METADATA_FAILURE_CODE_KEY: (
+                    SemanticFailureClass.BLANK_PROVIDER_GENERATION.value
+                ),
+            },
         )
     return text
 

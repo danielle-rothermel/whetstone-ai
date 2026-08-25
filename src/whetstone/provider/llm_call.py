@@ -12,6 +12,7 @@ from dr_providers import (
 )
 
 from whetstone.execution.call_metadata import (
+    METADATA_FAILURE_CODE_KEY,
     cache_marks_metadata,
     telemetry_metadata,
 )
@@ -34,6 +35,7 @@ from whetstone.provider.policy import ProviderExecutionPolicy
 
 __all__ = [
     "LlmCallContext",
+    "ProviderSemanticFailureError",
     "build_provider_request",
     "call_execution_metadata",
     "derive_rng_seed",
@@ -41,6 +43,21 @@ __all__ = [
     "execute_llm_call",
     "provider_result_text",
 ]
+
+
+class ProviderSemanticFailureError(ValueError):
+    """A provider call produced no usable generation.
+
+    Carries the ``failure_code`` metadata the row attribution table keys on,
+    so the accepting/rejecting decision stays owned by the classification
+    layer rather than being re-derived from the message text.
+    """
+
+    def __init__(
+        self, message: str, *, metadata: Mapping[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.metadata: dict[str, Any] = dict(metadata or {})
 
 
 def derive_rng_seed(*parts: str | int) -> int:
@@ -229,12 +246,21 @@ def provider_result_text(
     *,
     output_field: str = OUTPUT_FIELD_TEXT,
 ) -> str:
+    """Return this call's generation, or raise carrying its failure class.
+
+    The semantic failure class is attached to the raised error rather than
+    flattened into prose. It is the value the row attribution table keys on
+    to decide whether the outcome is an infrastructure failure or a scored
+    ``invalid`` row, so losing it here turns a blank generation -- a normal,
+    scoreable outcome -- into an unexplained node error.
+    """
     if result.provider_generation is None:
         failure = result.semantic_failure
         assert failure is not None
-        raise ValueError(
+        raise ProviderSemanticFailureError(
             f"provider call failed with {failure.failure_class.value}: "
-            f"{failure.message}"
+            f"{failure.message}",
+            metadata={METADATA_FAILURE_CODE_KEY: failure.failure_class.value},
         )
     return require_provider_generation_text(
         result.provider_generation.text,

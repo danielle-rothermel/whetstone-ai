@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from dr_providers import ProviderCallConfig
 
 from whetstone.core.identity import IdentityRef
+from whetstone.eval.attribution import attribute_generated_row_cell
 from whetstone.eval.drivers.graph_row import (
     execute_rollout_graph,
     graph_result_to_row_fields,
@@ -44,7 +45,11 @@ from whetstone.provider.language_model import (
 from whetstone.provider.llm_call import LlmCallContext, resolve_eval_rng_seed
 from whetstone.provider.policy import ProviderExecutionPolicy
 
-__all__ = ["GraphRolloutEvalDriver", "run_rollout_row"]
+__all__ = [
+    "DEFAULT_MAX_ROW_ATTEMPTS",
+    "GraphRolloutEvalDriver",
+    "run_rollout_row",
+]
 
 
 def _task_id(task: object) -> str:
@@ -72,6 +77,73 @@ def _default_provider_config_resolver(
     return resolve
 
 
+#: How many times one row's graph may be executed when a node fails.
+#: A node failure is an execution accident, not a verdict about the task, so
+#: the row is re-executed rather than lost. Provider refusals, blank
+#: generations, and budget outcomes are terminal by contract and are never
+#: retried here -- they already carry their own row state.
+DEFAULT_MAX_ROW_ATTEMPTS = 3
+
+
+def _sum_optional(left: int | None, right: int | None) -> int | None:
+    """Add two optional counters, treating "absent" as contributing nothing."""
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
+def _sum_optional_cost(left: float | None, right: float | None) -> float | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
+def _with_accumulated_attempt_usage(
+    output: RolloutRowOutput,
+    *,
+    previous: RolloutRowOutput | None,
+    attempts: int,
+) -> RolloutRowOutput:
+    """Carry every executed attempt's usage onto the row it produced.
+
+    Each attempt issued its own provider call and each was billed, so the
+    row must report their sum. Reporting only the surviving attempt's usage
+    would silently under-count a retried row's real spend, and the per-call
+    ledger (the partial log) would then disagree with the row aggregate.
+    """
+    if previous is None:
+        return replace(output, row_attempts=attempts)
+    return replace(
+        output,
+        row_attempts=attempts,
+        prompt_tokens=_sum_optional(
+            previous.prompt_tokens, output.prompt_tokens
+        ),
+        completion_tokens=_sum_optional(
+            previous.completion_tokens, output.completion_tokens
+        ),
+        provider_cost=_sum_optional_cost(
+            previous.provider_cost, output.provider_cost
+        ),
+    )
+
+
+def _row_is_retryable(output: RolloutRowOutput) -> bool:
+    """Only an unattributed node failure earns a re-execution.
+
+    ``failed`` alone is too broad: it also covers outcomes the contract has
+    already judged. The failure code carrying no contract attribution is
+    exactly the "the node raised and we cannot say why" case.
+    """
+    if output.row_state is not ExecutedRowState.FAILED:
+        return False
+    return attribute_generated_row_cell(output.failure_code) is None
+
+
 def run_rollout_row(
     *,
     experiment: Experiment,
@@ -89,47 +161,70 @@ def run_rollout_row(
     resolve_provider_call_config: ProviderCallConfigResolver,
     graph_external_input_field: str = "prompt",
     request_identity_sink: list[str] | None = None,
+    max_row_attempts: int = DEFAULT_MAX_ROW_ATTEMPTS,
 ) -> RolloutRowOutput:
+    """Execute one row, re-executing it when a node fails unattributably.
+
+    Each attempt uses its attempt index as ``drive_ordinal``. That value is
+    part of the prompt cache key, so a retry cannot be served the failing
+    attempt's cached result -- it is a genuinely fresh provider call, and
+    each executed call is billed.
+    """
+    if max_row_attempts < 1:
+        raise ValueError("max_row_attempts must be at least 1")
     task_id = _task_id(task)
     template = candidate.payload[mutation_field]
     rendered = render_contract.render(template, _task_prompt_inputs(task))
     rollout_graph = experiment.rollout_graph
-    run_node = build_run_node(
-        llm_deps=LlmCallRunNodeDeps(
-            context=llm_context,
-            resolve_provider_call_config=resolve_provider_call_config,
-            graph_hash=rollout_graph.graph_hash,
-            rng_seed=resolve_eval_rng_seed(
-                candidate_id=candidate.candidate_id,
-                task_id=task_id,
-                task_hash=task_hash,
-                seed_index=seed_index,
-                seed_plan=seed_plan,
-            ),
-            task_id=task_id,
-            seed_index=seed_index,
-            drive_ordinal=0,
-            phase=split_role,
-            unit=candidate.candidate_id,
-            split_role=split_role,
-            request_identity_sink=request_identity_sink,
-        ),
-        eval_deps=EvalRunNodeDeps(
-            runner=eval_runner, task=task, seed_index=seed_index
-        ),
-    )
-    result = execute_rollout_graph(
-        graph=rollout_graph.graph_config,
-        inputs={graph_external_input_field: rendered},
-        run_node=run_node,
-    )
-    return graph_result_to_row_fields(
-        result,
+    rng_seed = resolve_eval_rng_seed(
         candidate_id=candidate.candidate_id,
         task_id=task_id,
-        task_index=task_index,
+        task_hash=task_hash,
         seed_index=seed_index,
+        seed_plan=seed_plan,
     )
+
+    output: RolloutRowOutput | None = None
+    previous: RolloutRowOutput | None = None
+    for attempt_index in range(max_row_attempts):
+        run_node = build_run_node(
+            llm_deps=LlmCallRunNodeDeps(
+                context=llm_context,
+                resolve_provider_call_config=resolve_provider_call_config,
+                graph_hash=rollout_graph.graph_hash,
+                rng_seed=rng_seed,
+                task_id=task_id,
+                seed_index=seed_index,
+                drive_ordinal=attempt_index,
+                phase=split_role,
+                unit=candidate.candidate_id,
+                split_role=split_role,
+                request_identity_sink=request_identity_sink,
+            ),
+            eval_deps=EvalRunNodeDeps(
+                runner=eval_runner, task=task, seed_index=seed_index
+            ),
+        )
+        result = execute_rollout_graph(
+            graph=rollout_graph.graph_config,
+            inputs={graph_external_input_field: rendered},
+            run_node=run_node,
+        )
+        output = graph_result_to_row_fields(
+            result,
+            candidate_id=candidate.candidate_id,
+            task_id=task_id,
+            task_index=task_index,
+            seed_index=seed_index,
+        )
+        output = _with_accumulated_attempt_usage(
+            output, previous=previous, attempts=attempt_index + 1
+        )
+        if not _row_is_retryable(output):
+            return output
+        previous = output
+    assert output is not None
+    return output
 
 
 def _deadline_missing_row(
@@ -183,7 +278,11 @@ class GraphRolloutEvalDriver:
         graph_external_input_field: str = "prompt",
         aggregate_name: str = "score",
         prompt_adapter: PlainPromptAdapter | StructuredPromptAdapter | None = None,
+        max_row_attempts: int = DEFAULT_MAX_ROW_ATTEMPTS,
     ) -> None:
+        if max_row_attempts < 1:
+            raise ValueError("max_row_attempts must be at least 1")
+        self._max_row_attempts = max_row_attempts
         self._eval_runner = eval_runner
         self._mutation_field = mutation_field
         self._render_contract = render_contract
@@ -297,6 +396,7 @@ class GraphRolloutEvalDriver:
                 resolve_provider_call_config=resolve_provider_call_config,
                 graph_external_input_field=self._graph_external_input_field,
                 request_identity_sink=row_identities,
+                max_row_attempts=self._max_row_attempts,
             )
             return output, tuple(row_identities)
 

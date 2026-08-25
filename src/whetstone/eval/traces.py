@@ -45,6 +45,10 @@ class ExecutedRowState(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
     MISSING = "missing"
+    #: The row produced a generation the eval contract cannot score -- a
+    #: blank generation or a provider refusal. It executed and is billed,
+    #: but it carries no measured value, so it is not a present row.
+    INVALID = "invalid"
 
 
 class _JsonByteCounter:

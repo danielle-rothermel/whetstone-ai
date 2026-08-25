@@ -13,6 +13,7 @@ from dr_graph import (
 from whetstone.eval.attribution import (
     AccountingCell,
     AttributedOutcome,
+    attribute_generated_row_cell,
     attribute_outcome,
 )
 from whetstone.eval.traces import ExecutedRowState
@@ -65,6 +66,8 @@ __all__ = [
     "graph_run_cancelled",
     "metadata_prompt",
     "node_error_failure_code",
+    "MAX_NODE_ERROR_MESSAGE_CHARS",
+    "bounded_node_error_message",
     "node_error_redrivable",
     "node_error_row_state",
     "node_text",
@@ -146,7 +149,29 @@ def cancelled_row_state() -> ExecutedRowState:
     return _row_state_for_outcome_kind(AttributedOutcome.CANCELLATION)
 
 
+_ROW_STATE_BY_ACCOUNTING_CELL = {
+    AccountingCell.FAILED: ExecutedRowState.FAILED,
+    AccountingCell.MISSING: ExecutedRowState.MISSING,
+    AccountingCell.INVALID: ExecutedRowState.INVALID,
+}
+
+
 def node_error_row_state(error: NodeError) -> ExecutedRowState:
+    """Attribute one node failure to the row state the contract assigns it.
+
+    The failure *code* is consulted before the failure *class*. A provider
+    that returns a blank generation or refuses the request has not failed
+    infrastructurally: the eval contract scores those rows ``invalid``. Only
+    codes with no contract attribution fall back to the raised class, and
+    finally to ``infrastructure``.
+    """
+    code = error.metadata.get(METADATA_FAILURE_CODE_KEY)
+    if isinstance(code, str) and code:
+        cell = attribute_generated_row_cell(code)
+        if cell is not None:
+            row_state = _ROW_STATE_BY_ACCOUNTING_CELL.get(cell)
+            if row_state is not None:
+                return row_state
     kind = AttributedOutcome.INFRASTRUCTURE
     if error.failure_class is not None:
         try:
@@ -164,6 +189,19 @@ def node_error_failure_code(error: NodeError) -> str:
     if isinstance(code, str) and code:
         return code
     return _NODE_EXECUTION_FAILURE_CODE
+
+
+#: Longest exception message persisted on a row. A node failure's message is
+#: diagnostic evidence, not a payload: bounding it keeps one pathological
+#: error from dominating an evidence object that holds hundreds of rows.
+MAX_NODE_ERROR_MESSAGE_CHARS = 2000
+
+
+def bounded_node_error_message(message: str) -> str:
+    """Truncate one node error message to its persisted bound."""
+    if len(message) <= MAX_NODE_ERROR_MESSAGE_CHARS:
+        return message
+    return message[:MAX_NODE_ERROR_MESSAGE_CHARS] + "...[truncated]"
 
 
 def node_error_redrivable(error: NodeError) -> bool:
