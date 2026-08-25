@@ -3,6 +3,9 @@
 The mutated field is per-experiment configuration, not a fixed name. A
 run whose field is not the toy default must bootstrap exactly like one
 that uses it.
+
+The run is the expensive part and the assertions only read it, so each
+demo mode is driven once for the whole module.
 """
 
 from __future__ import annotations
@@ -34,22 +37,25 @@ from tests.test_miprov2_harness_e2e import BOOTSTRAP_PURPOSE, _Run
 ALTERNATE_MUTATION_FIELD = "prompt_template"
 
 
-@pytest.mark.parametrize(
-    "demo_mode", list(Miprov2DemoMode), ids=lambda mode: mode.value
+@pytest.fixture(
+    scope="module",
+    params=list(Miprov2DemoMode),
+    ids=lambda mode: mode.value,
 )
-def test_bootstrap_reads_the_controls_mutation_field(
-    tmp_path, demo_mode
-) -> None:
-    assert ALTERNATE_MUTATION_FIELD != TOY_MUTATION_FIELD
+def alternate_field_run(request, tmp_path_factory):
+    """One completed run per demo mode under the alternate mutation field."""
+
+    demo_mode: Miprov2DemoMode = request.param
     run_id = f"mf-{demo_mode.value}"
     experiment = build_toy_experiment(
         num_seeds=1, mutation_field=ALTERNATE_MUTATION_FIELD
     )
-    assert (
-        ALTERNATE_MUTATION_FIELD in experiment.initial_candidate.payload
-    ), "the toy experiment must carry the alternate field"
+    assert ALTERNATE_MUTATION_FIELD in experiment.initial_candidate.payload, (
+        "the toy experiment must carry the alternate field"
+    )
 
-    with open_sqlite(str(tmp_path / f"{run_id}.sqlite")) as store:
+    directory = tmp_path_factory.mktemp(f"mutation-{demo_mode.value}")
+    with open_sqlite(str(directory / f"{run_id}.sqlite")) as store:
         engine = ReferenceEvalRuntimeConfig().build_engine(
             store,
             experiment=experiment,
@@ -81,7 +87,7 @@ def test_bootstrap_reads_the_controls_mutation_field(
                 control_identity_hash=control.identity_hash(),
             )
         )
-        run = _Run(
+        yield _Run(
             store=store,
             runtime=runtime,
             control=control,
@@ -89,10 +95,18 @@ def test_bootstrap_reads_the_controls_mutation_field(
             run_id=run_id,
         )
 
-        assert run.intents_for(BOOTSTRAP_PURPOSE), (
-            f"{demo_mode.value} must bootstrap through the eval engine "
-            "under the alternate mutation field"
-        )
-        assert run.final_state.bootstrap_plans
-        teacher = run.final_state.control.teacher_candidate
-        assert ALTERNATE_MUTATION_FIELD in teacher.record.payload
+
+def test_bootstrap_reads_the_controls_mutation_field(
+    alternate_field_run,
+) -> None:
+    assert ALTERNATE_MUTATION_FIELD != TOY_MUTATION_FIELD
+    run = alternate_field_run
+    demo_mode = run.control.demo_mode
+
+    assert run.intents_for(BOOTSTRAP_PURPOSE), (
+        f"{demo_mode.value} must bootstrap through the eval engine "
+        "under the alternate mutation field"
+    )
+    assert run.final_state.bootstrap_plans
+    teacher = run.final_state.control.teacher_candidate
+    assert ALTERNATE_MUTATION_FIELD in teacher.record.payload
