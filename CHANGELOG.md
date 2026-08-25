@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **A blank generation is now a scored, failing sample rather than an
+  unscoreable row.** An empty or whitespace-only provider generation is an
+  *observed model output*: the model was asked, it answered, and the answer
+  was nothing. That is a result — just one that cannot possibly pass. Such a
+  row is now **present**: it counts in `per_task_count`, contributes to
+  `per_task_score`, and appears in row accounting as an observed sample.
+
+  The empty text is routed through the eval procedure like any other
+  generation, so the eval family's own scorer fails it on its own terms
+  (normalized exact match against a non-empty gold scores 0; a verdict
+  extractor finds no verdict). Nothing hard-codes a floor score. The row
+  still records `failure_code="blank-provider-generation"` so it stays
+  explainable, but that marker is informational and no longer determines row
+  state. A blank generation remains **never retried** — resampling an
+  observed failure until the model happens to speak would discard real
+  evidence and bias the measurement.
+
+  This replaces the 0.1.14 behavior, where a blank generation became a
+  terminal `invalid` row with no score. Provider refusals
+  (`provider-rejection`) are unchanged and remain `invalid`.
+
+- **Anchor calibration no longer requires 100% sample presence.** Requiring
+  every planned row to be present made a whole calibration hostage to a
+  single lost sample, which is not a bar real infrastructure clears. An
+  anchor must now clear a high presence floor
+  (`MIN_ANCHOR_PRESENCE_FRACTION`, 0.9) with no wholly unobserved task; the
+  anchors are then **balanced** so every task contributes the same number of
+  samples `k`, where `k` is the smallest present-row count across tasks and
+  across both arms.
+
+  Which rows are kept is chosen by **lowest seed index among present rows** —
+  deterministic and outcome-blind. Selecting on score would let the subset
+  choose its own answer: dropping the worst rows would inflate an anchor and
+  bias every downstream MDD. `AnchorCalibrationResult.samples_per_task`
+  reports the `k` actually used, and the power analysis is computed over the
+  balanced subset. Refusals name the measured presence fraction, or the
+  specific task with zero present rows.
+
+  Because balancing needs row-level scores — the aggregated
+  `per_task_values` are means over *all* present rows and cannot be
+  re-balanced after the fact — `run_anchor_calibration` now takes a `store`
+  argument and reads each anchor's persisted output rows.
+
+  Together with the blank-generation change these are complementary: blanks
+  now count as present failing samples and never reduce presence, so the
+  floor and the balancing handle only genuine infrastructure loss.
+
+### Fixed
+- **GEPA's failed-repeat predicate now matches the eval plane's definition of
+  presence.** It keyed off any non-empty `failure_code`, which disagrees with
+  the eval side's rule that *a row is present exactly when it carries a
+  score*. Under the new blank semantics a blank row is scored but retains its
+  code, so GEPA counted a completed repeat as failed. Consequences: a task
+  whose repeats were all blank set `all_repeats_failed=True` beside a real
+  score — surviving only because blanks happen to score exactly `0.0`, so any
+  eval family with a non-zero blank score would hard-wedge the GEPA
+  evaluation on `GepaEvaluationRow._validate` — and on mixed tasks the blank
+  output was excluded from being the representative repeat, hiding from
+  reflection exactly the blank-output signal it should learn from.
+
+  There is now one definition, `_row_is_failed` (score is `None`), used by
+  `_representative_repeat`, `_project_row`, and
+  `DefaultGepaSubmissionProjector.prediction_failed`, whose `failure_code`
+  parameter is replaced by the caller's canonical `row_failed` verdict. A
+  blank repeat is now representative-eligible, is not counted in
+  `failed_repeats`, mints no `failure_ref`, and still reaches reflection as a
+  *failing prediction*.
+
+- Pinned the blank-score contract: `EvalProcedureRunner` now documents that
+  eval procedures must score empty output at the eval family's floor rather
+  than refusing it or returning `None`, with contract tests covering every
+  runner shipped in this repo and the reference runtime end to end.
+
 ## 0.1.14 - 2026-08-24
 
 ### Fixed

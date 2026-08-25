@@ -45,9 +45,11 @@ class ExecutedRowState(StrEnum):
     SUCCESS = "success"
     FAILED = "failed"
     MISSING = "missing"
-    #: The row produced a generation the eval contract cannot score -- a
-    #: blank generation or a provider refusal. It executed and is billed,
-    #: but it carries no measured value, so it is not a present row.
+    #: The row produced no generation the eval contract can score -- a
+    #: provider refusal. It executed and is billed, but it carries no
+    #: measured value, so it is not a present row. A *blank* generation is
+    #: not invalid: an empty model output is an observed sample and is
+    #: scored as the failing result it is.
     INVALID = "invalid"
 
 

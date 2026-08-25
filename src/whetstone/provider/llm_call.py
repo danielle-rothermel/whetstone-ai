@@ -23,6 +23,7 @@ from whetstone.execution.prompt_cache import (
     PromptResultCache,
     execute_call,
 )
+from whetstone.provider.classification import SemanticFailureClass
 from whetstone.provider.driver import Clock, Sleep, TransportCall
 from whetstone.provider.language_model import (
     OUTPUT_FIELD_TEXT,
@@ -245,24 +246,39 @@ def provider_result_text(
     result: Any,
     *,
     output_field: str = OUTPUT_FIELD_TEXT,
-) -> str:
-    """Return this call's generation, or raise carrying its failure class.
+) -> tuple[str, str]:
+    """Return this call's generation text and the failure code marking it.
 
-    The semantic failure class is attached to the raised error rather than
-    flattened into prose. It is the value the row attribution table keys on
-    to decide whether the outcome is an infrastructure failure or a scored
-    ``invalid`` row, so losing it here turns a blank generation -- a normal,
-    scoreable outcome -- into an unexplained node error.
+    An empty generation is an *observed model output*, not a failure to
+    observe one: the model was asked, it answered, and the answer was
+    nothing. That is a result -- just one that cannot possibly pass. So a
+    blank generation is returned as the empty string and routed through the
+    eval procedure like any other output, where the family scorer fails it
+    on its own terms. The returned failure code is informational: it records
+    *that* the generation was blank so the row stays explainable, without
+    determining the row's state.
+
+    Every other semantic failure class means no generation exists to score.
+    Those still raise carrying their failure class, which is the value the
+    row attribution table keys on to separate an infrastructure failure from
+    a contract-rejected ``invalid`` row.
     """
     if result.provider_generation is None:
         failure = result.semantic_failure
         assert failure is not None
+        if failure.failure_class is SemanticFailureClass.BLANK_PROVIDER_GENERATION:
+            # The provider answered; the answer was empty. Hand the empty
+            # text to the eval procedure rather than aborting the row.
+            return "", failure.failure_class.value
         raise ProviderSemanticFailureError(
             f"provider call failed with {failure.failure_class.value}: "
             f"{failure.message}",
             metadata={METADATA_FAILURE_CODE_KEY: failure.failure_class.value},
         )
-    return require_provider_generation_text(
-        result.provider_generation.text,
-        output_field=output_field,
+    return (
+        require_provider_generation_text(
+            result.provider_generation.text,
+            output_field=output_field,
+        ),
+        "",
     )

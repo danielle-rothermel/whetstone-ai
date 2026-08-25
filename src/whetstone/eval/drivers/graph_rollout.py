@@ -79,9 +79,11 @@ def _default_provider_config_resolver(
 
 #: How many times one row's graph may be executed when a node fails.
 #: A node failure is an execution accident, not a verdict about the task, so
-#: the row is re-executed rather than lost. Provider refusals, blank
-#: generations, and budget outcomes are terminal by contract and are never
-#: retried here -- they already carry their own row state.
+#: the row is re-executed rather than lost. Provider refusals and budget
+#: outcomes are terminal by contract and are never retried here -- they
+#: already carry their own row state. A blank generation is likewise never
+#: retried, but for a different reason: it is an observed sample whose node
+#: succeeded, so there is nothing to re-execute.
 DEFAULT_MAX_ROW_ATTEMPTS = 3
 
 
