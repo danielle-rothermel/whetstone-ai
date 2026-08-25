@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.14 - 2026-08-24
+
 ### Fixed
 - A row whose graph node raised was persisted as `failed` with
   `failure_code="node_execution_error"` and nothing else: no exception type,
