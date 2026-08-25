@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Self, cast
@@ -589,6 +590,101 @@ class Miprov2PendingSample(BaseModel):
         return self
 
 
+class _VerifiedStateMemo:
+    """Remembers which exact state contents already passed replay.
+
+    ``Miprov2State`` re-derives its whole history from the canonical RNG
+    cursor on every construction, and the driver constructs states far
+    more often than it advances them: one driven step builds around ten
+    states, nearly all of them content-identical to a state the same
+    process already verified. Replaying an unchanged history again cannot
+    reach a different verdict -- the state is frozen and the replay is a
+    pure function of its fields -- so the second and later constructions
+    of the same content pay nothing.
+
+    What is remembered is *content*, never object identity: a state
+    reconstructed from the store, or rebuilt field by field, hits the
+    memo only if every field compares equal to a state that already
+    passed. Any state whose content differs anywhere -- one more evidence
+    item, a moved cursor, a different pending effect -- misses and is
+    replayed in full. The memo therefore removes repeated work, not any
+    verification: every distinct state a run produces, including every
+    state persisted to the store and every step boundary, is still
+    replay-verified exactly as before.
+
+    The memo is process-local and holds at most ``_CAPACITY`` *states*,
+    evicting the oldest first. Dropping an entry costs a replay, never a
+    missed check, so the bound is a memory limit rather than a
+    correctness parameter.
+    """
+
+    #: The number of remembered states, counted individually. Comfortably
+    #: more than the distinct states one driven run reaches, while
+    #: keeping a long-lived process from retaining history forever.
+    _CAPACITY = 512
+
+    def __init__(self) -> None:
+        # ``_entries`` is the authoritative FIFO of remembered states and
+        # the thing ``_CAPACITY`` counts. ``_buckets`` only indexes it,
+        # so that a lookup compares against the few states sharing a
+        # bucket key instead of all of them.
+        self._entries: deque[tuple[tuple[Any, ...], Miprov2State]] = deque()
+        self._buckets: dict[tuple[Any, ...], list[Miprov2State]] = {}
+
+    @staticmethod
+    def _bucket_key(state: Miprov2State) -> tuple[Any, ...]:
+        """Cheap scalars that differ between almost all distinct states."""
+
+        return (
+            state.run_id,
+            state.phase,
+            state.bootstrap_plan_index,
+            len(state.bootstrap_evidence),
+            len(state.completed_effects),
+            len(state.demo_candidates),
+            state.input_data_identity_hash,
+        )
+
+    def verified(self, state: Miprov2State) -> bool:
+        bucket = self._buckets.get(self._bucket_key(state))
+        if bucket is None:
+            return False
+        return any(candidate == state for candidate in bucket)
+
+    def record(self, state: Miprov2State) -> None:
+        key = self._bucket_key(state)
+        self._entries.append((key, state))
+        self._buckets.setdefault(key, []).append(state)
+        self._evict()
+
+    def _evict(self) -> None:
+        """Drop oldest states until the memo holds at most ``_CAPACITY``.
+
+        Every recorded state counts, including ones that share a bucket
+        key with a state already held -- otherwise a run whose states all
+        land in one bucket would grow without bound.
+        """
+
+        while len(self._entries) > self._CAPACITY:
+            key, evicted = self._entries.popleft()
+            bucket = self._buckets[key]
+            for index, candidate in enumerate(bucket):
+                if candidate is evicted:
+                    del bucket[index]
+                    break
+            if not bucket:
+                del self._buckets[key]
+
+    def clear(self) -> None:
+        self._entries.clear()
+        self._buckets.clear()
+
+
+#: Process-local; see ``_VerifiedStateMemo``. Tests that count replays
+#: clear it so each driven run is measured from a cold memo.
+_VERIFIED_STATES = _VerifiedStateMemo()
+
+
 class Miprov2State(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -706,6 +802,24 @@ class Miprov2State(BaseModel):
 
     @model_validator(mode="after")
     def _validate_state(self) -> Miprov2State:
+        """Verify the state, skipping content this process already verified.
+
+        ``_verify_canonical_state`` is a pure function of this frozen
+        state's fields, so re-running it over content that already passed
+        cannot reach a different verdict. The memo exists only because
+        the driver rebuilds the same content many times per step; see
+        ``_VerifiedStateMemo``. A state whose content differs anywhere --
+        notably one carrying newly appended evidence -- misses the memo
+        and is verified in full, replay included.
+        """
+
+        if _VERIFIED_STATES.verified(self):
+            return self
+        self._verify_canonical_state()
+        _VERIFIED_STATES.record(self)
+        return self
+
+    def _verify_canonical_state(self) -> None:
         if not self.run_id:
             raise ValueError("MIPROv2 run_id cannot be empty")
         if self.run.record.run_id != self.run_id:
@@ -1036,7 +1150,6 @@ class Miprov2State(BaseModel):
             raise ValueError("failed state requires detail")
         if self.phase != "failed" and self.failure is not None:
             raise ValueError("only failed state carries failure detail")
-        return self
 
     def identity_hash(self) -> str:
         return compute_identity_hash(

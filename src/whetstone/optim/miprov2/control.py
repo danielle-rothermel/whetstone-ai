@@ -4,6 +4,7 @@ import math
 import random
 from collections.abc import Mapping
 from copy import deepcopy
+from functools import cache
 from typing import Any, Literal, Self
 
 from pydantic import (
@@ -127,6 +128,26 @@ def _deep_revalidate_json[ValidatedValue](
     )
 
 
+@cache
+def _field_adapter(
+    model_type: type[BaseModel],
+    field_name: str,
+) -> TypeAdapter[Any] | None:
+    """The detaching adapter for one model field, built once per field.
+
+    Building a ``TypeAdapter`` compiles the field's whole schema, and the
+    schema is a property of the annotation alone -- it does not depend on
+    the value being validated. Rebuilding it per call made every state
+    copy recompile every field's schema. Caching the adapter changes
+    which schema work is repeated, not which values are accepted.
+    """
+
+    field = model_type.model_fields.get(field_name)
+    if field is None:
+        return None
+    return TypeAdapter(field.rebuild_annotation())
+
+
 def _deep_revalidate_model[ValidatedModel: BaseModel](
     model_type: type[ValidatedModel],
     values: Mapping[str, Any],
@@ -135,14 +156,9 @@ def _deep_revalidate_model[ValidatedModel: BaseModel](
 
     normalized: dict[str, Any] = {}
     for field_name, value in values.items():
-        field = model_type.model_fields.get(field_name)
+        adapter = _field_adapter(model_type, field_name)
         normalized[field_name] = (
-            value
-            if field is None
-            else _deep_revalidate_json(
-                TypeAdapter(field.rebuild_annotation()),
-                value,
-            )
+            value if adapter is None else _deep_revalidate_json(adapter, value)
         )
     return model_type.model_validate(normalized)
 
