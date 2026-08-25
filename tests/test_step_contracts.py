@@ -173,7 +173,12 @@ def test_gepa_contract_derives_the_terminal_cardinality(tmp_path) -> None:
 
 
 def test_copro_contracts_are_unchanged(copro_launch) -> None:
-    """COPRO's seed round still asks for breadth - 1 proposals."""
+    """COPRO's seed round still asks for breadth - 1 proposals.
+
+    The requested count is the pre-registered design quantity and stays
+    ``breadth - 1``. The shortfall floor is what admits a round that realized
+    fewer than it asked for; it does not change what was requested.
+    """
     runtime, launch = copro_launch
     bound = runtime.harness.bind_run(launch.run)
     control = launch.control
@@ -185,11 +190,16 @@ def test_copro_contracts_are_unchanged(copro_launch) -> None:
         control=control,
     )
 
+    terminal = launch.run.terminal_output_contract
     assert request.kind_label == "seed_proposal"
     assert request.step_output_contract == OutputContract(
         returned_proposal_count=control.breadth - 1,
+        min_returned_proposal_count=1,
+        terminal_proposal_count=terminal.accepted_count_for(
+            StepStatus.COMPLETE
+        ),
+        require_distinct_bases=terminal.require_distinct_bases,
     )
-    assert request.step_output_contract.terminal_proposal_count is None
     assert not request.pools["attempt_history"]
 
 

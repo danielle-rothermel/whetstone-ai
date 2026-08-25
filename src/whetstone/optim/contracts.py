@@ -108,9 +108,9 @@ __all__ = [
 INTENT_RESOLUTION_SCHEMA = "whetstone.optim_intent_resolution"
 INTENT_RESOLUTION_SCHEMA_VERSION = -1
 OPTIM_RUN_SCHEMA = "whetstone.optim_run"
-OPTIM_RUN_SCHEMA_VERSION = 3
+OPTIM_RUN_SCHEMA_VERSION = 4
 STEP_REQUEST_SCHEMA = "whetstone.optim_step_request"
-STEP_REQUEST_SCHEMA_VERSION = 3
+STEP_REQUEST_SCHEMA_VERSION = 4
 STEP_RESULT_SCHEMA = "whetstone.optim_step_result"
 STEP_RESULT_SCHEMA_VERSION = 4
 OPTIM_RESULT_SCHEMA = "whetstone.optim_result"
@@ -184,13 +184,50 @@ class OutputContract(BaseModel):
     accepted candidates are a sub-multiset of proposed, and a COMPLETE Step
     must ``honors_terminal`` the run contract -- which compares this flag.
     Duplicate-based terminal proposals are therefore already unreachable.
+
+    ``min_returned_proposal_count`` admits a *stochastic shortfall* on a
+    continuing Step. A search whose proposals come from a provider cannot
+    guarantee that every requested draft becomes a usable candidate: a call
+    can fail in the infrastructure, and a returned draft can be rejected by
+    the proposal contract or collide with a template already proposed. Left
+    unset, the contract binds ``returned_proposal_count`` exactly, which
+    turns one unusable draft out of many into a whole-run contract
+    violation. Set, it names the smallest realized count the Step may return
+    while still continuing, and ``returned_proposal_count`` remains the
+    *requested* cardinality -- the pre-registered design quantity -- rather
+    than becoming whatever the provider happened to deliver.
+
+    This is a continuing-Step allowance only. Terminal cardinality stays
+    exact: a COMPLETE Step selects from measured history, which is a
+    deterministic choice over what the search already has.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     returned_proposal_count: NonNegativeInt
     terminal_proposal_count: NonNegativeInt | None = None
+    #: Smallest realized proposal count a continuing Step may return when the
+    #: requested count could not be filled. ``None`` binds
+    #: ``returned_proposal_count`` exactly.
+    min_returned_proposal_count: NonNegativeInt | None = None
     require_distinct_bases: StrictBool = False
+
+    @model_validator(mode="after")
+    def _validate_shortfall_floor(self) -> OutputContract:
+        floor = self.min_returned_proposal_count
+        if floor is None:
+            return self
+        if floor > self.returned_proposal_count:
+            raise ValueError(
+                "min_returned_proposal_count cannot exceed the requested "
+                "returned_proposal_count"
+            )
+        if floor < 1:
+            raise ValueError(
+                "min_returned_proposal_count must be at least 1: a round that "
+                "realized nothing has no proposals to continue on"
+            )
+        return self
 
     def accepted_count_for(self, status: StepStatus) -> int:
         """Accepted-candidate cardinality this contract binds for ``status``."""
@@ -203,12 +240,28 @@ class OutputContract(BaseModel):
             return self.terminal_proposal_count
         return self.returned_proposal_count
 
+    def admits_accepted_count(self, status: StepStatus, count: int) -> bool:
+        """Whether ``count`` accepted candidates satisfies this contract.
+
+        Exact everywhere except a continuing Step under a contract that names
+        a shortfall floor, where any realized count from the floor up to the
+        requested count is admitted.
+        """
+        expected = self.accepted_count_for(status)
+        if (
+            status is StepStatus.CONTINUE
+            and self.min_returned_proposal_count is not None
+        ):
+            return self.min_returned_proposal_count <= count <= expected
+        return count == expected
+
     def honors_terminal(self, terminal: OutputContract) -> bool:
         """Whether a COMPLETE Step under this contract satisfies ``terminal``.
 
         A step contract may differ from the run terminal contract in how it
         binds a *continuing* step, but it must terminalize on the run's own
-        terminal cardinality and distinct-base rule.
+        terminal cardinality and distinct-base rule. A shortfall floor is a
+        continuing-step allowance and so is deliberately not compared here.
         """
         return (
             self.accepted_count_for(StepStatus.COMPLETE)
@@ -1270,12 +1323,13 @@ class OptimStepResult(BaseModel):
             )
         if self.status is not StepStatus.FAILED:
             contract = request.step_output_contract
-            expected_accepted = (
-                0
+            accepted = len(self.accepted_candidates)
+            admitted = (
+                accepted == 0
                 if self.seed_retained
-                else contract.accepted_count_for(self.status)
+                else contract.admits_accepted_count(self.status, accepted)
             )
-            if len(self.accepted_candidates) != expected_accepted:
+            if not admitted:
                 raise ValueError(
                     "Step Result violates returned proposal cardinality"
                 )

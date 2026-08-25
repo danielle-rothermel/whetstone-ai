@@ -80,6 +80,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eval procedures must score empty output at the eval family's floor rather
   than refusing it or returning `None`, with contract tests covering every
   runner shipped in this repo and the reference runtime end to end.
+- A COPRO proposal round required every requested draft to become a usable
+  candidate. One bad draft out of `breadth` — a proposer call that failed in
+  the infrastructure, a draft the proposal contract rejected, or a draft that
+  duplicated a template already proposed — ended the entire optimization run
+  with `copro_proposal_cardinality`. At a pinned breadth 6 / depth 3 that is
+  15 proposer calls per run, so even a low per-draft failure rate made losing
+  a whole run the likely outcome rather than the exceptional one. This was a
+  perfection requirement on stochastic infrastructure.
+
+  A round that realizes at least one usable proposal now proceeds with what
+  it has. `copro_proposal_cardinality` is retained for what it actually
+  names: a malformed protocol interaction, where the transport returns more
+  drafts than the round paid for or the round yields more occurrences than
+  its requested breadth. Both shipped proposer transports fill every
+  requested slot — a failed call becomes a failed draft in place — so an
+  underfilled batch is always a measurement, never a contract breach.
+
+  A round that realizes *no* new proposal terminalizes honestly: with
+  measured history the run completes on its best-so-far at the run's own
+  terminal cardinality, and only a run with too little measured history to
+  terminalize fails, under the new `copro_proposal_round_empty` code.
+
+### Added
+- `OutputContract.min_returned_proposal_count`, the smallest realized
+  proposal count a *continuing* Step may return when the requested count
+  could not be filled. `returned_proposal_count` keeps naming the requested
+  cardinality, so a pre-registered breadth stays a design quantity and the
+  realized count is measurement. Terminal cardinality is unaffected: a
+  COMPLETE Step selects from measured history and stays exact.
+- `proposal_shortfall` on every COPRO round's persisted state and history
+  snapshots, recording requested versus realized proposal counts, the number
+  of returned drafts, and the per-draft rejection dispositions, so audits can
+  see exactly what a round lost instead of inferring it.
+
+### Changed
+- COPRO occurrence ordinals and round folding are keyed to *realized* round
+  sizes rather than a fixed `breadth` stride, so a round shortened by a
+  dropped proposal restores and finalizes as the one complete round it was.
+- `OPTIM_RUN_SCHEMA_VERSION` and `STEP_REQUEST_SCHEMA_VERSION` are bumped to
+  `4` for the new `OutputContract` wire key. The run version is an identity
+  input, since `OptimRun.identity_hash` embeds the serialized terminal
+  contract.
 
 ## 0.1.14 - 2026-08-24
 

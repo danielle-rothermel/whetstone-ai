@@ -36,6 +36,7 @@ from whetstone.experiment.candidate import (
 )
 from whetstone.experiment.reward import RewardRef
 from whetstone.optim.adapters import AdapterOutput
+from whetstone.optim.cost import ProposerCallUsage
 from whetstone.optim.contracts import (
     BudgetDelta,
     OptimEvalRequest,
@@ -357,6 +358,40 @@ def rank_attempt_history(
     return tuple(sorted(unique, key=lambda entry: -entry.reward))
 
 
+def _rounds_by_index(
+    attempts: tuple[CoproAttempt, ...],
+) -> tuple[tuple[CoproAttempt, ...], ...]:
+    """Split measured occurrences into rounds on ``round_index``.
+
+    A round is however many occurrences it realized, so a round shortened by
+    a dropped proposal groups correctly instead of bleeding into the next.
+    Round indices must appear in contiguous ascending runs: history is
+    recorded in evaluation order, and a repeated or out-of-order index means
+    the history is not the ordered record it claims to be.
+    """
+    groups: list[tuple[CoproAttempt, ...]] = []
+    current: list[CoproAttempt] = []
+    seen: set[int] = set()
+    for attempt in attempts:
+        if current and attempt.round_index != current[-1].round_index:
+            groups.append(tuple(current))
+            current = []
+        if not current:
+            if attempt.round_index in seen:
+                raise ValueError(
+                    "COPRO attempt history revisits an earlier round index"
+                )
+            if seen and attempt.round_index <= max(seen):
+                raise ValueError(
+                    "COPRO attempt history round indices must ascend"
+                )
+            seen.add(attempt.round_index)
+        current.append(attempt)
+    if current:
+        groups.append(tuple(current))
+    return tuple(groups)
+
+
 def _score_summary(scores: list[float]) -> tuple[float, float, float, float]:
     if not scores:
         raise ValueError("COPRO statistics require measured scores")
@@ -436,17 +471,23 @@ class CoproDriver:
         attempts: tuple[CoproAttempt, ...],
     ) -> CoproState:
 
-        if len(state.attempts) != state.completed_rounds * self.config.breadth:
-            raise ValueError(
-                "COPRO state occurrence count does not match completed rounds"
-            )
         if state.completed_rounds >= self.config.depth:
             raise ValueError("COPRO state already contains configured depth")
-        if len(attempts) != self.config.breadth:
+        # A round returns at most ``breadth`` occurrences and at least one.
+        # Fewer than breadth is a realized shortfall -- a proposer draft that
+        # failed in the infrastructure, was rejected by the proposal
+        # contract, or duplicated a template already proposed -- which the
+        # search continues on rather than treating as a contract violation.
+        # More than breadth is a genuine protocol violation.
+        if len(attempts) > self.config.breadth:
             raise ValueError(
-                "COPRO round requires exactly breadth measured occurrences"
+                "COPRO round exceeded breadth measured occurrences"
             )
-        start = state.completed_rounds * self.config.breadth
+        if not attempts:
+            raise ValueError(
+                "COPRO round requires at least one measured occurrence"
+            )
+        start = len(state.attempts)
         prior_intent_ids = {attempt.intent_id for attempt in state.attempts}
         expected_run_id = (
             state.attempts[0].run_id if state.attempts else attempts[0].run_id
@@ -539,20 +580,18 @@ class CoproDriver:
         attempts: tuple[CoproAttempt, ...],
         mutation_field: str,
     ) -> CoproState:
+        """Refold measured history into state, grouping by realized round.
 
-        if len(attempts) % self.config.breadth:
-            raise ValueError(
-                "COPRO history ends with a partial evaluation round"
-            )
+        Rounds are delimited by ``round_index`` rather than by a fixed
+        ``breadth`` stride, so a round that realized fewer proposals than it
+        requested restores as the one complete round it was.
+        """
         state = self.initial_state(
             initial_candidate,
             mutation_field=mutation_field,
         )
-        for start in range(0, len(attempts), self.config.breadth):
-            state = self.fold_round(
-                state,
-                attempts[start : start + self.config.breadth],
-            )
+        for group in _rounds_by_index(attempts):
+            state = self.fold_round(state, group)
         return state
 
     def advance(self, state: CoproState) -> CoproRoundPlan:
@@ -591,10 +630,7 @@ class CoproDriver:
             )
         if state.completed_rounds != self.config.depth:
             raise ValueError("COPRO cannot finalize before configured depth")
-        rounds = tuple(
-            state.attempts[start : start + self.config.breadth]
-            for start in range(0, len(state.attempts), self.config.breadth)
-        )
+        rounds = _rounds_by_index(state.attempts)
         return CoproFinalization(
             ranked_attempts=self.terminal_ranking(state.attempts),
             total_calls=state.total_calls,
@@ -617,10 +653,13 @@ class CoproDriver:
         best_summaries: list[tuple[float, float, float, float]] = []
         total_calls = 0
         for round_entries in rounds:
-            if len(round_entries) != self.config.breadth:
+            # Each round contributes its realized occurrences: a round
+            # shortened by a dropped proposal is summarized over what it
+            # actually measured rather than voiding the statistics.
+            if len(round_entries) > self.config.breadth:
                 raise ValueError(
-                    "COPRO statistics require one breadth-sized batch "
-                    "per depth"
+                    "COPRO statistics require at most one breadth-sized "
+                    "batch per depth"
                 )
             measured_scores = [entry.reward for entry in round_entries]
             total_calls += len(round_entries)
@@ -1012,7 +1051,7 @@ class CoproAdapter:
             )
 
         if plan.include_initial_candidate:
-            occurrences.append((round_start + config.breadth - 1, initial))
+            occurrences.append((0, initial))
         for index in range(len(drafts), plan.proposal_count):
             occurrence_ordinal = round_start + index
             evidence.append(
@@ -1029,25 +1068,48 @@ class CoproAdapter:
                     "cost": None,
                 }
             )
+        # Occurrence ordinals number what the round actually realized, in
+        # evaluation order and contiguously from this round's start. A
+        # dropped draft leaves no hole for measured history to trip over.
+        occurrences = [
+            (round_start + position, candidate)
+            for position, (_, candidate) in enumerate(occurrences)
+        ]
         proposed = [
             candidate
             for _, candidate in occurrences
             if candidate is not initial
         ]
-        if (
-            len(drafts) != plan.proposal_count
-            or len(occurrences) != config.breadth
-        ):
+        realized = len(occurrences)
+        shortfall = {
+            "requested_proposal_count": plan.proposal_count,
+            "requested_occurrences": config.breadth,
+            "realized_occurrences": realized,
+            "dropped_occurrences": config.breadth - realized,
+            "returned_drafts": len(drafts),
+            "rejected": rejected,
+        }
+        # A transport that returned MORE drafts than the round paid for, or
+        # occurrences exceeding the requested breadth, is a malformed
+        # protocol interaction rather than a stochastic outcome: the round
+        # would carry candidates nobody asked for. Both shipped transports
+        # fill every requested slot -- a failed call becomes a failed draft
+        # in place -- so an underfilled batch reaches here only as drafts
+        # that could not become candidates, which is a measurement, not a
+        # contract violation.
+        if len(drafts) > plan.proposal_count or realized > config.breadth:
             return AdapterOutput(
                 proposed_candidates=tuple(proposed),
                 proposed_status=StepStatus.FAILED,
                 proposer_usage=proposer_usage,
                 terminal_failure=TerminalFailure(
                     code="copro_proposal_cardinality",
-                    message="COPRO proposer failed to fill its round",
+                    message="COPRO proposer overfilled its round",
                     details={
                         "expected_occurrences": config.breadth,
-                        "actual_occurrences": len(occurrences),
+                        "actual_occurrences": realized,
+                        "requested_proposal_count": plan.proposal_count,
+                        "returned_drafts": len(drafts),
                     },
                 ),
                 budget_delta=BudgetDelta(
@@ -1058,7 +1120,26 @@ class CoproAdapter:
                     "rejected": rejected,
                     "round_plan": plan.model_dump(mode="json"),
                     "proposer_evidence": evidence,
+                    "proposal_shortfall": shortfall,
                 },
+            )
+        if not proposed:
+            # The round produced no new candidate. A seed round still carries
+            # the run's initial candidate, but carrying the seed forward is
+            # not a proposal, and the Step contract counts proposals. If
+            # earlier rounds measured candidates the run terminalizes
+            # honestly on its best-so-far instead of dying as a contract
+            # violation; with no measured history there is nothing to
+            # terminalize on.
+            return self._terminalize_without_proposals(
+                request=request,
+                config=config,
+                ranked=ranked,
+                plan=plan,
+                rejected=rejected,
+                evidence=evidence,
+                shortfall=shortfall,
+                proposer_usage=proposer_usage,
             )
 
         optim_eval_requests: list[OptimEvalRequest] = []
@@ -1098,6 +1179,7 @@ class CoproAdapter:
                     item.model_dump(mode="json") for item in ranked
                 ],
                 "proposer_evidence": evidence,
+                "proposal_shortfall": shortfall,
             },
             history_delta={
                 "prior_entries": [
@@ -1107,7 +1189,74 @@ class CoproAdapter:
                     candidate.candidate_id for candidate in proposed
                 ],
                 "occurrence_ordinals": [ordinal for ordinal, _ in occurrences],
+                "proposal_shortfall": shortfall,
             },
+        )
+
+    @staticmethod
+    def _terminalize_without_proposals(
+        *,
+        request: OptimStepRequest,
+        config: CoproConfig,
+        ranked: tuple[CoproAttempt, ...],
+        plan: CoproRoundPlan,
+        rejected: list[dict[str, Any]],
+        evidence: list[dict[str, Any]],
+        shortfall: dict[str, Any],
+        proposer_usage: tuple[ProposerCallUsage, ...],
+    ) -> AdapterOutput:
+        """Terminalize a round that realized no usable proposal at all.
+
+        With measured history the run keeps its best-so-far and completes on
+        the run's own terminal cardinality: the search ran, it simply found
+        nothing new this round, which is a legitimate optimizer outcome
+        rather than a broken contract. With no measured history there is
+        nothing to select, so the round is a genuine terminal failure.
+        """
+        contract = request.run.record.terminal_output_contract
+        required = contract.accepted_count_for(StepStatus.COMPLETE)
+        state_delta: dict[str, Any] = {
+            "reason": "proposal round realized no candidates",
+            "rejected": rejected,
+            "round_plan": plan.model_dump(mode="json"),
+            "proposer_evidence": evidence,
+            "proposal_shortfall": shortfall,
+            "terminal_ranking": [
+                item.model_dump(mode="json") for item in ranked
+            ],
+        }
+        budget_delta = BudgetDelta(
+            consumed={"proposal_calls": plan.proposal_count}
+        )
+        if len(ranked) < required:
+            return AdapterOutput(
+                proposed_status=StepStatus.FAILED,
+                proposer_usage=proposer_usage,
+                terminal_failure=TerminalFailure(
+                    code="copro_proposal_round_empty",
+                    message=(
+                        "COPRO proposal round realized no candidates and the "
+                        "run has too little measured history to terminalize"
+                    ),
+                    details={
+                        "expected_occurrences": config.breadth,
+                        "actual_occurrences": 0,
+                        "ranked_candidates": len(ranked),
+                        "required_terminal_candidates": required,
+                    },
+                ),
+                budget_delta=budget_delta,
+                state_delta=state_delta,
+            )
+        selected = ranked[:required]
+        accepted = tuple(entry.candidate.record for entry in selected)
+        return AdapterOutput(
+            proposed_candidates=accepted,
+            accepted_candidates=accepted,
+            proposed_status=StepStatus.COMPLETE,
+            proposer_usage=proposer_usage,
+            budget_delta=budget_delta,
+            state_delta=state_delta,
         )
 
 

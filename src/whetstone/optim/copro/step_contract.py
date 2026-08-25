@@ -15,6 +15,7 @@ from whetstone.optim.contracts import (
     OptimStepResult,
     OutputContract,
     StepKind,
+    StepStatus,
 )
 from whetstone.optim.copro.adapter import COPRO_ADAPTER_KEY
 
@@ -45,12 +46,19 @@ def copro_attempt_history(
     control: CoproControl,
     mutation_field: str,
 ) -> tuple[Any, ...]:
+    """COPRO's measured occurrences across prior rounds, in evaluation order.
+
+    Occurrence ordinals are assigned by *realized* position rather than by a
+    fixed ``breadth`` stride. A round that realized fewer proposals than it
+    requested still contributes contiguous ordinals, so the resulting history
+    folds without a gap where a dropped draft used to be.
+    """
     from whetstone.optim.copro.adapter import CoproAttempt
 
     attempts: list[CoproAttempt] = []
+    round_start = 0
     for prior in prior_results:
         round_index = prior.step_index
-        round_start = round_index * control.breadth
         for offset, resolution in enumerate(prior.resolved_intents):
             attempts.append(
                 CoproAttempt.from_resolution(
@@ -69,7 +77,35 @@ def copro_attempt_history(
                     mutation_field=mutation_field,
                 )
             )
+        round_start += len(prior.resolved_intents)
     return tuple(attempts)
+
+
+def _continuing_contract(
+    *,
+    run: OptimRunRef,
+    returned_proposal_count: int,
+) -> OutputContract:
+    """The output contract binding one continuing COPRO round.
+
+    ``returned_proposal_count`` is the requested cardinality -- the
+    pre-registered design quantity -- and ``min_returned_proposal_count``
+    admits a round that realized fewer usable proposals than it asked for.
+
+    The round also carries ``terminal_proposal_count`` because it may
+    terminalize ahead of the configured depth: a round that realizes no new
+    proposal at all completes on the run's best-so-far rather than failing,
+    and that COMPLETE must satisfy the run's own terminal cardinality.
+    """
+    terminal = run.record.terminal_output_contract
+    return OutputContract(
+        returned_proposal_count=returned_proposal_count,
+        min_returned_proposal_count=1,
+        terminal_proposal_count=terminal.accepted_count_for(
+            StepStatus.COMPLETE
+        ),
+        require_distinct_bases=terminal.require_distinct_bases,
+    )
 
 
 def copro_completed_rounds(
@@ -77,13 +113,25 @@ def copro_completed_rounds(
     control: CoproControl,
     attempt_history: tuple[Any, ...],
 ) -> int:
-    if len(attempt_history) % control.breadth:
-        raise ValueError("COPRO attempt history ends with a partial round")
-    return len(attempt_history) // control.breadth
+    """How many rounds this history completed.
+
+    Counted by distinct ``round_index`` rather than by dividing the
+    occurrence count by ``breadth``: a round that realized fewer proposals
+    than requested is still one completed round.
+    """
+    del control
+    return len({attempt.round_index for attempt in attempt_history})
 
 
 class CoproStepContractProvider:
-    """COPRO returns ``breadth`` proposals per round and top-k at the end."""
+    """COPRO requests ``breadth`` proposals per round and top-k at the end.
+
+    A round asks for ``breadth`` proposals but may realize fewer: drafts are
+    dropped when a proposer call fails, when the proposal contract rejects a
+    template, or when a template duplicates one already proposed. The
+    requested count stays the pre-registered design quantity; the realized
+    count is recorded as measurement.
+    """
 
     @property
     def adapter_key(self) -> str:
@@ -130,7 +178,8 @@ class CoproStepContractProvider:
                     }
                 ),
             ),
-            step_output_contract=OutputContract(
+            step_output_contract=_continuing_contract(
+                run=run,
                 returned_proposal_count=control.breadth - 1,
             ),
         )
@@ -190,7 +239,8 @@ class CoproStepContractProvider:
             step_output_contract=(
                 prior.request.record.run.record.terminal_output_contract
                 if finalizing
-                else OutputContract(
+                else _continuing_contract(
+                    run=prior.request.record.run,
                     returned_proposal_count=control.breadth,
                 )
             ),
