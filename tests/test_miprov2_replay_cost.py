@@ -15,7 +15,11 @@ through it.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from typing import Any, get_args
+
 import pytest
+from pydantic import BaseModel
 
 from dr_store.sync import open_sqlite
 
@@ -236,7 +240,9 @@ def test_the_memo_answers_only_for_content_it_recorded(driven_run) -> None:
     assert not memo.verified(_with_changed_failure(state))
 
 
-def _with_changed_failure(state: Miprov2State) -> Miprov2State:
+def _with_changed_failure(
+    state: Miprov2State, *, detail: str = "not the recorded content"
+) -> Miprov2State:
     """A content-different state, built without re-running validation.
 
     ``model_copy`` would revalidate and reject the mutation, and the
@@ -246,7 +252,7 @@ def _with_changed_failure(state: Miprov2State) -> Miprov2State:
 
     altered = object.__new__(type(state))
     fields = dict(state.__dict__)
-    fields["failure"] = "not the recorded content"
+    fields["failure"] = detail
     object.__setattr__(altered, "__dict__", fields)
     object.__setattr__(
         altered, "__pydantic_fields_set__", set(state.__pydantic_fields_set__)
@@ -254,3 +260,155 @@ def _with_changed_failure(state: Miprov2State) -> Miprov2State:
     object.__setattr__(altered, "__pydantic_extra__", None)
     object.__setattr__(altered, "__pydantic_private__", None)
     return altered
+
+
+def test_the_memo_bound_counts_states_not_bucket_keys(driven_run) -> None:
+    """The capacity limits remembered states, including within a bucket.
+
+    The bucket key is only a prefilter, so many distinct states can share
+    one. An eviction policy that counted bucket *keys* would let a run
+    whose states all land in one bucket grow without limit -- the memo
+    would still be correct, but no longer bounded, which is the whole
+    claim that makes it safe to keep in a long-lived process.
+    """
+
+    memo = runtime_module._VerifiedStateMemo()  # noqa: SLF001
+    capacity = memo._CAPACITY  # noqa: SLF001
+    state = driven_run.final_state
+
+    # Every one of these shares a bucket key with the last: same run, same
+    # phase, same cursors. Only full content comparison separates them.
+    crowded = [
+        _with_changed_failure(state, detail=f"variant {index}")
+        for index in range(capacity * 3)
+    ]
+    for variant in crowded:
+        memo.record(variant)
+
+    held = len(memo._entries)  # noqa: SLF001
+    assert held == capacity, (
+        f"memo holds {held} states against a capacity of {capacity}; "
+        "eviction is not counting states that share a bucket key"
+    )
+    # The index must not outlive what it indexes.
+    indexed = sum(len(bucket) for bucket in memo._buckets.values())  # noqa: SLF001
+    assert indexed == capacity
+
+    # Oldest out, newest in -- eviction is FIFO, so the memo keeps the
+    # states a run is most likely to ask about again.
+    assert not memo.verified(crowded[0])
+    assert memo.verified(crowded[-1])
+
+
+# --- the memo's safety rests on a property of the model graph ------------
+
+
+def _reachable_model_types() -> tuple[type[BaseModel], ...]:
+    """Every Pydantic model reachable from ``Miprov2State`` by field type."""
+
+    seen: dict[type[BaseModel], None] = {}
+
+    def annotations(annotation: Any) -> Iterator[Any]:
+        yield annotation
+        for argument in get_args(annotation):
+            yield from annotations(argument)
+
+    def walk(model_type: type[BaseModel]) -> None:
+        if model_type in seen:
+            return
+        seen[model_type] = None
+        for field in model_type.model_fields.values():
+            for annotation in annotations(field.rebuild_annotation()):
+                if isinstance(annotation, type) and issubclass(
+                    annotation, BaseModel
+                ):
+                    walk(annotation)
+
+    walk(Miprov2State)
+    return tuple(seen)
+
+
+def test_the_state_graph_keeps_the_properties_the_memo_relies_on() -> None:
+    """The memo is only sound while state equality stays trustworthy.
+
+    ``_VerifiedStateMemo`` answers "this exact content already passed
+    replay" using ``==`` on ``Miprov2State``. That is safe only while
+    equality is at least as fine-grained as the comparison surface the
+    replay itself checks -- if two states can compare equal while
+    differing in anything the replay would have caught, the memo starts
+    silently skipping a real verification rather than a redundant one.
+
+    Four properties of the reachable model graph are what make equality
+    that fine, and today they hold by convention rather than by
+    construction. This test turns the convention into a checked
+    contract, so that adding a mutable model, an excluded field, a
+    participating private attribute, or a custom ``__eq__`` anywhere in
+    the graph fails here instead of quietly weakening the memo:
+
+    1. Every model is frozen. A mutable state could be verified and then
+       edited, leaving the memo vouching for content that no longer
+       exists.
+    2. No field sets ``exclude=True``. Pydantic equality compares
+       ``__dict__``, so an excluded field would still participate here --
+       but it would drop out of the dumps the replay comparison and the
+       store round-trip through, which is exactly the kind of asymmetry
+       between "equal" and "identical" that makes a memo unsafe to
+       reason about.
+    3. No private attributes. They sit outside the compared ``__dict__``,
+       so any state they carried would be invisible to ``==``.
+    4. No custom ``__eq__``. Pydantic's field-wise comparison is what
+       makes equality total over content; an override could narrow it to
+       an id, a hash, or a subset of fields.
+    """
+
+    model_types = _reachable_model_types()
+    # A floor, not the exact count: the graph grows as MIPROv2 does, and
+    # this only guards against the walk silently finding nothing.
+    assert len(model_types) > 50, (
+        f"only {len(model_types)} model types reachable from Miprov2State; "
+        "the walk is probably not traversing the graph"
+    )
+    assert Miprov2State in model_types
+
+    mutable = sorted(
+        model_type.__name__
+        for model_type in model_types
+        if not model_type.model_config.get("frozen", False)
+    )
+    assert mutable == [], (
+        f"these states reachable from Miprov2State are mutable: {mutable}. "
+        "A state the memo has vouched for could then be edited underneath "
+        "it."
+    )
+
+    excluded = sorted(
+        f"{model_type.__name__}.{field_name}"
+        for model_type in model_types
+        for field_name, field in model_type.model_fields.items()
+        if field.exclude
+    )
+    assert excluded == [], (
+        f"these fields are excluded from serialization: {excluded}. The "
+        "memo compares content that the replay and the store would not "
+        "round-trip identically."
+    )
+
+    private = sorted(
+        f"{model_type.__name__}.{name}"
+        for model_type in model_types
+        for name in model_type.__private_attributes__
+    )
+    assert private == [], (
+        f"these private attributes sit outside compared content: {private}. "
+        "Anything they carry is invisible to the equality the memo uses."
+    )
+
+    overridden = sorted(
+        model_type.__name__
+        for model_type in model_types
+        if "__eq__" in model_type.__dict__
+    )
+    assert overridden == [], (
+        f"these types override __eq__: {overridden}. The memo needs "
+        "Pydantic's field-wise equality, which compares all content."
+    )

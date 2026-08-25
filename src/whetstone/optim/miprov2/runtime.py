@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Self, cast
@@ -611,18 +612,24 @@ class _VerifiedStateMemo:
     state persisted to the store and every step boundary, is still
     replay-verified exactly as before.
 
-    The memo is bounded and process-local. Dropping an entry costs a
-    replay, never a missed check, so the bound is a memory limit rather
-    than a correctness parameter.
+    The memo is process-local and holds at most ``_CAPACITY`` *states*,
+    evicting the oldest first. Dropping an entry costs a replay, never a
+    missed check, so the bound is a memory limit rather than a
+    correctness parameter.
     """
 
-    #: Comfortably more than the distinct states one driven run reaches,
-    #: while keeping a long-lived process from retaining history forever.
+    #: The number of remembered states, counted individually. Comfortably
+    #: more than the distinct states one driven run reaches, while
+    #: keeping a long-lived process from retaining history forever.
     _CAPACITY = 512
 
     def __init__(self) -> None:
+        # ``_entries`` is the authoritative FIFO of remembered states and
+        # the thing ``_CAPACITY`` counts. ``_buckets`` only indexes it,
+        # so that a lookup compares against the few states sharing a
+        # bucket key instead of all of them.
+        self._entries: deque[tuple[tuple[Any, ...], Miprov2State]] = deque()
         self._buckets: dict[tuple[Any, ...], list[Miprov2State]] = {}
-        self._order: list[tuple[Any, ...]] = []
 
     @staticmethod
     def _bucket_key(state: Miprov2State) -> tuple[Any, ...]:
@@ -646,21 +653,31 @@ class _VerifiedStateMemo:
 
     def record(self, state: Miprov2State) -> None:
         key = self._bucket_key(state)
-        bucket = self._buckets.get(key)
-        if bucket is None:
-            self._buckets[key] = [state]
-            self._order.append(key)
-            self._evict()
-            return
-        bucket.append(state)
+        self._entries.append((key, state))
+        self._buckets.setdefault(key, []).append(state)
+        self._evict()
 
     def _evict(self) -> None:
-        while len(self._order) > self._CAPACITY:
-            del self._buckets[self._order.pop(0)]
+        """Drop oldest states until the memo holds at most ``_CAPACITY``.
+
+        Every recorded state counts, including ones that share a bucket
+        key with a state already held -- otherwise a run whose states all
+        land in one bucket would grow without bound.
+        """
+
+        while len(self._entries) > self._CAPACITY:
+            key, evicted = self._entries.popleft()
+            bucket = self._buckets[key]
+            for index, candidate in enumerate(bucket):
+                if candidate is evicted:
+                    del bucket[index]
+                    break
+            if not bucket:
+                del self._buckets[key]
 
     def clear(self) -> None:
+        self._entries.clear()
         self._buckets.clear()
-        self._order.clear()
 
 
 #: Process-local; see ``_VerifiedStateMemo``. Tests that count replays
