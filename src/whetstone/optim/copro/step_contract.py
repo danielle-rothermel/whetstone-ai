@@ -127,10 +127,9 @@ class CoproStepContractProvider:
     """COPRO requests ``breadth`` proposals per round and top-k at the end.
 
     A round asks for ``breadth`` proposals but may realize fewer: drafts are
-    dropped when a proposer call fails, when the proposal contract rejects a
-    template, or when a template duplicates one already proposed. The
-    requested count stays the pre-registered design quantity; the realized
-    count is recorded as measurement.
+    dropped when a proposer call fails and when the proposal contract rejects
+    a template. The requested count stays the pre-registered design quantity;
+    the realized count is recorded as measurement.
     """
 
     @property

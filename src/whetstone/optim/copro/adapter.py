@@ -475,10 +475,9 @@ class CoproDriver:
             raise ValueError("COPRO state already contains configured depth")
         # A round returns at most ``breadth`` occurrences and at least one.
         # Fewer than breadth is a realized shortfall -- a proposer draft that
-        # failed in the infrastructure, was rejected by the proposal
-        # contract, or duplicated a template already proposed -- which the
-        # search continues on rather than treating as a contract violation.
-        # More than breadth is a genuine protocol violation.
+        # failed in the infrastructure, or was rejected by the proposal
+        # contract -- which the search continues on rather than treating as a
+        # contract violation. More than breadth is a protocol violation.
         if len(attempts) > self.config.breadth:
             raise ValueError(
                 "COPRO round exceeded breadth measured occurrences"
@@ -989,7 +988,13 @@ class CoproAdapter:
         occurrences: list[tuple[int, Candidate]] = []
         rejected: list[dict[str, Any]] = []
         evidence: list[dict[str, Any]] = []
-        round_start = iteration * config.breadth
+        # Occurrence ordinals number *realized* occurrences, continuing from
+        # however many prior rounds actually measured rather than striding by
+        # the requested breadth. A round shortened by a dropped draft would
+        # otherwise leave a permanent gap that widens with every shortfall,
+        # and the contiguity check in ``fold_round`` must hold against the
+        # persisted stream directly.
+        round_start = len(history)
         reserved_candidate_ids = {initial.candidate_id}
         # A draft that made no provider call reports no usage, so a
         # scripted underfill never becomes a priced zero-dollar call.
@@ -998,12 +1003,15 @@ class CoproAdapter:
             for usage in (draft.call_usage() for draft in drafts)
             if usage is not None
         )
+        next_ordinal = round_start
         for index, draft in enumerate(drafts):
-            occurrence_ordinal = round_start + index
+            # The ordinal a draft would take if it lands. A dropped draft
+            # never consumes one, so identity and recorded history stay the
+            # same contiguous stream.
+            occurrence_ordinal = next_ordinal
             candidate_id = f"copro:{request.run_id}:{occurrence_ordinal}"
             while candidate_id in reserved_candidate_ids:
                 candidate_id += ":generated"
-            reserved_candidate_ids.add(candidate_id)
 
             template = draft.template.strip('"').strip()
             disposition = "accepted"
@@ -1029,16 +1037,23 @@ class CoproAdapter:
                 reason = str(exc)
                 rejected.append(
                     {
-                        "occurrence_ordinal": occurrence_ordinal,
-                        "candidate_id": candidate_id,
+                        # A dropped draft holds no occurrence, so it names
+                        # the slot it was drafted for rather than an ordinal
+                        # some later occurrence will own.
+                        "draft_index": index,
                         "disposition": disposition,
                         "reason": reason,
                     }
                 )
+                occurrence_ordinal = None
+                candidate_id = None
             else:
+                reserved_candidate_ids.add(candidate_id)
                 occurrences.append((occurrence_ordinal, candidate))
+                next_ordinal += 1
             evidence.append(
                 {
+                    "draft_index": index,
                     "occurrence_ordinal": occurrence_ordinal,
                     "candidate_id": candidate_id,
                     "disposition": disposition,
@@ -1050,16 +1065,22 @@ class CoproAdapter:
                 }
             )
 
+        # The seed round carries the run's initial candidate as its LAST
+        # occurrence. Ranking is a stable sort on descending reward, so the
+        # seed placed last loses every tie against a proposal that matched
+        # it -- which is what keeps a tie from terminalizing on the seed. The
+        # seed is not a proposal and binds no request candidate as its base,
+        # so returning it as one would violate the harness base check.
         if plan.include_initial_candidate:
-            occurrences.append((0, initial))
+            occurrences.append((next_ordinal, initial))
+            next_ordinal += 1
+
         for index in range(len(drafts), plan.proposal_count):
-            occurrence_ordinal = round_start + index
             evidence.append(
                 {
-                    "occurrence_ordinal": occurrence_ordinal,
-                    "candidate_id": (
-                        f"copro:{request.run_id}:{occurrence_ordinal}"
-                    ),
+                    "draft_index": index,
+                    "occurrence_ordinal": None,
+                    "candidate_id": None,
                     "disposition": "missing",
                     "reason": "transport returned no draft for paid slot",
                     "request": {},
@@ -1068,13 +1089,6 @@ class CoproAdapter:
                     "cost": None,
                 }
             )
-        # Occurrence ordinals number what the round actually realized, in
-        # evaluation order and contiguously from this round's start. A
-        # dropped draft leaves no hole for measured history to trip over.
-        occurrences = [
-            (round_start + position, candidate)
-            for position, (_, candidate) in enumerate(occurrences)
-        ]
         proposed = [
             candidate
             for _, candidate in occurrences

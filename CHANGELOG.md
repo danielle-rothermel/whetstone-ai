@@ -82,8 +82,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runner shipped in this repo and the reference runtime end to end.
 - A COPRO proposal round required every requested draft to become a usable
   candidate. One bad draft out of `breadth` — a proposer call that failed in
-  the infrastructure, a draft the proposal contract rejected, or a draft that
-  duplicated a template already proposed — ended the entire optimization run
+  the infrastructure, or a draft the proposal contract rejected — ended the
+  entire optimization run
   with `copro_proposal_cardinality`. At a pinned breadth 6 / depth 3 that is
   15 proposer calls per run, so even a low per-draft failure rate made losing
   a whole run the likely outcome rather than the exceptional one. This was a
@@ -115,9 +115,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   see exactly what a round lost instead of inferring it.
 
 ### Changed
-- COPRO occurrence ordinals and round folding are keyed to *realized* round
-  sizes rather than a fixed `breadth` stride, so a round shortened by a
-  dropped proposal restores and finalizes as the one complete round it was.
+- COPRO occurrence ordinals number *realized* occurrences rather than
+  striding by the requested `breadth`, so a round shortened by a dropped
+  proposal restores and finalizes as the one complete round it was. A
+  dropped draft no longer consumes an ordinal: candidate IDs, evaluation
+  request IDs, and the persisted `occurrence_ordinals` are one contiguous
+  stream, so the ordinals a round records are exactly the ones its
+  identities embed. Previously these diverged on any shortfall round, and a
+  gap opened at each round boundary that widened as shortfalls accumulated.
+  Per-draft proposer evidence now keys on `draft_index` and carries a null
+  `occurrence_ordinal` for a draft that was dropped or never returned.
 - `OPTIM_RUN_SCHEMA_VERSION` and `STEP_REQUEST_SCHEMA_VERSION` are bumped to
   `4` for the new `OutputContract` wire key. The run version is an identity
   input, since `OptimRun.identity_hash` embeds the serialized terminal

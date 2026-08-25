@@ -2,11 +2,10 @@
 
 A COPRO round asks the proposer for ``breadth`` (or ``breadth - 1``)
 instructions. Some of those drafts do not become usable candidates: a
-provider call fails in the infrastructure, a returned draft violates the
-proposal contract, or a draft duplicates a template already proposed.
-Requiring every requested draft to land turns one bad draft out of many
-into a whole-run terminal failure, which is a perfection requirement on
-stochastic infrastructure.
+provider call fails in the infrastructure, or a returned draft violates the
+proposal contract. Requiring every requested draft to land turns one bad
+draft out of many into a whole-run terminal failure, which is a perfection
+requirement on stochastic infrastructure.
 
 These tests pin the tolerance and its measurement: a round that realizes at
 least one usable proposal continues on what it has, records requested versus
@@ -102,6 +101,13 @@ def _proposal_step(result):
     return result.step_results[0]
 
 
+def _history(runtime, step_result):
+    """The history snapshot a step persisted."""
+    history_ref = step_result.record.history_ref
+    assert history_ref is not None
+    return runtime.store.get(history_ref.reference)
+
+
 # --- a dropped draft no longer kills the run ------------------------------
 
 
@@ -186,6 +192,118 @@ def test_the_requested_breadth_is_unchanged_by_a_shortfall(
     contract = _proposal_step(result).record.request.record.step_output_contract
     assert contract.returned_proposal_count == control.breadth - 1
     assert contract.min_returned_proposal_count == 1
+
+
+# --- ordinals stay one contiguous stream across a shortfall round --------
+
+
+def test_ordinals_are_contiguous_across_a_partial_round_boundary(
+    sqlite_store,
+) -> None:
+    """A short round 0 does not leave a permanent gap before round 1.
+
+    Fails before this change: ``round_start`` strided by the *requested*
+    breadth, so a round that realized 5 of 6 occurrences ended at ordinal 4
+    and the next round still began at ``1 * breadth == 6``, leaving a hole
+    at 5 that widened with every shortfall round.
+
+    The ordinals a round persists and the ordinals its candidate IDs embed
+    must be one stream, so a consumer folding the persisted history directly
+    sees exactly the occurrences the run minted.
+    """
+    bodies = (GOOD_BODIES[0], REJECTED_TEMPLATE) + GOOD_BODIES[1:4]
+    runtime, control = _runtime_with_bodies(
+        sqlite_store, bodies, breadth=6, depth=2
+    )
+
+    result = _drive(runtime, control)
+
+    assert result.terminal_failure is None
+    rounds = [
+        _history(runtime, step)
+        for step in result.step_results
+        if step.record.history_ref is not None
+        and _history(runtime, step).get("occurrence_ordinals")
+    ]
+    assert len(rounds) == 2
+
+    # Round 0 dropped one draft, so it realized breadth - 1 occurrences.
+    assert rounds[0]["occurrence_ordinals"] == [0, 1, 2, 3, 4]
+    # Round 1 resumes at the next realized ordinal, not at 1 * breadth.
+    assert rounds[1]["occurrence_ordinals"] == [5, 6, 7, 8]
+
+    ordinals = [
+        ordinal
+        for record in rounds
+        for ordinal in record["occurrence_ordinals"]
+    ]
+    assert ordinals == list(range(len(ordinals)))
+
+
+def test_candidate_ids_embed_the_ordinals_the_round_recorded(
+    sqlite_store,
+) -> None:
+    """Identity and recorded history are the same ordinal stream.
+
+    Fails before this change: a dropped draft still consumed an ordinal for
+    ID minting, so a round recorded ordinals ``[0, 1, 2, 3, 4]`` while its
+    accepted candidates embedded ``0, 2, 3, 4`` -- two divergent streams
+    over the same occurrences.
+    """
+    bodies = (GOOD_BODIES[0], REJECTED_TEMPLATE) + GOOD_BODIES[1:4]
+    runtime, control = _runtime_with_bodies(
+        sqlite_store, bodies, breadth=6, depth=2
+    )
+
+    result = _drive(runtime, control)
+
+    for step in result.step_results:
+        if step.record.history_ref is None:
+            continue
+        record = _history(runtime, step)
+        ordinals = record.get("occurrence_ordinals")
+        if not ordinals:
+            continue
+        minted = [
+            int(candidate_id.rsplit(":", 1)[-1])
+            for candidate_id in record["proposed_candidate_ids"]
+        ]
+        # Every proposal's ID embeds an ordinal this round recorded. The
+        # seed round also records the initial candidate, which is an
+        # occurrence but not a proposal, so proposals are a subset.
+        assert set(minted) <= set(ordinals)
+        assert minted == sorted(minted)
+
+
+def test_the_persisted_ordinals_satisfy_the_contiguity_check_directly(
+    sqlite_store,
+) -> None:
+    """The recorded stream folds as-is, with no renumbering in between.
+
+    ``copro_attempt_history`` assigns ordinals by realized position, which
+    would mask a gap in what the rounds actually persisted. This asserts
+    against the persisted ``occurrence_ordinals`` themselves: they must be
+    contiguous from zero across the round boundary, which is exactly what
+    ``fold_round`` requires of measured history.
+
+    Fails before this change: the rounds persisted ``[0..4]`` then
+    ``[6..9]``, so the concatenated stream skipped 5 and would not satisfy
+    the contiguity check without being renumbered first.
+    """
+    bodies = (GOOD_BODIES[0], REJECTED_TEMPLATE) + GOOD_BODIES[1:4]
+    runtime, control = _runtime_with_bodies(
+        sqlite_store, bodies, breadth=6, depth=2
+    )
+
+    result = _drive(runtime, control)
+
+    persisted = [
+        ordinal
+        for step in result.step_results
+        if step.record.history_ref is not None
+        for ordinal in _history(runtime, step).get("occurrence_ordinals", [])
+    ]
+    assert persisted == list(range(len(persisted)))
 
 
 # --- a round that realizes nothing terminalizes honestly ------------------
