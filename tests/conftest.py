@@ -11,7 +11,6 @@ from whetstone.testing.runtime import (
     register_toy_runtime,
 )
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.optim.contracts import OPTIM_RESULT_SCHEMA
 
 
 @pytest.fixture

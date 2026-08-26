@@ -11,7 +11,6 @@ from whetstone.core.identity import (
 )
 from whetstone.eval.metadata import metadata_with_purpose
 from whetstone.eval.protocol import EvalRequest
-from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import candidate_reference
 from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.cost import ProposerCallUsage

@@ -29,7 +29,7 @@ from whetstone.eval.protocol import (
     EvalRequest,
     EvalEngine,
 )
-from whetstone.eval.row_slice import RowEvalCompletion, RowEvalOutcome, RowEvalSlice
+from whetstone.eval.row_slice import RowEvalOutcome, RowEvalSlice
 from whetstone.eval.evidence_validation import (
     EvalEvidenceValidation,
 )

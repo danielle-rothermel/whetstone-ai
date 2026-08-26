@@ -27,7 +27,6 @@ from whetstone.core.identity import (
     compute_identity_hash,
     typed_ref_for_record,
 )
-from whetstone.core.roles import EvalRole
 from whetstone.eval.schema_names import (
     EVAL_EVIDENCE_SCHEMA as _EVAL_EVIDENCE_SCHEMA,
 )

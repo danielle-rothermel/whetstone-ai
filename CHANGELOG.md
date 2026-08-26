@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Ruff is now configured and gated in CI (dev tooling).** The repo had no
+  `[tool.ruff]` section and no lint gate, so 34 violations — almost all stale
+  `F401` imports left behind by earlier refactors — had accumulated on the
+  bare default ruleset. All of them are fixed: the unused names were dead in
+  every case (none appeared in an `__all__`, and every consumer imported them
+  from their canonical module rather than through the flagged one), so they
+  are removed rather than re-exported or suppressed. No blanket `noqa` was
+  added, and no per-file ignore proved necessary.
+
+  `ruff` is pinned into the dev dependency group so local and CI runs agree;
+  the newer pinned version flagged five further violations that the ambient
+  one predated, which are fixed too. Lint runs as its own fast CI job ahead of
+  the test matrix, and `scripts/pre-check.sh` runs `ruff check` alongside the
+  test suites.
+
+  Selection is the default `F`/`E` correctness rules plus the families the
+  repo already satisfies. `E501` and the import-ordering, `PL`, `ARG`, `S`,
+  and `TRY` families are deliberately not selected: they are only reachable
+  after a `ruff format` pass, which would rewrite 205 files and is left as a
+  possible later change so this one stays reviewable. `UP047` is ignored for a
+  stated reason recorded beside it in `pyproject.toml`.
+
 ## 0.1.16 - 2026-08-25
 
 ### Fixed

@@ -26,12 +26,6 @@ from whetstone.eval.attribution import (
     require_exhaustive_row_accounting,
 )
 from whetstone.eval.task_trial import TaskTrialKey
-from whetstone.eval.schema_names import (
-    EVAL_EVIDENCE_SCHEMA as _EVAL_EVIDENCE_SCHEMA,
-)
-from whetstone.eval.schema_names import (
-    EVAL_FAILURE_SCHEMA as _EVAL_FAILURE_SCHEMA,
-)
 from whetstone.eval.traces import ExecutedComponentTracePayload
 from whetstone.eval.config_ref import EvalConfigRef
 from whetstone.experiment.candidate import CandidateRef

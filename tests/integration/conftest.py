@@ -11,7 +11,6 @@ from sqlalchemy import Engine, create_engine, make_url, text
 from dr_platform._core.ledger.schema import LedgerSchema
 from dr_platform.runtime.database.migrate import upgrade_platform_schema
 
-from tests.integration.platform_helpers import NOW
 
 pytest.importorskip("dr_platform")
 

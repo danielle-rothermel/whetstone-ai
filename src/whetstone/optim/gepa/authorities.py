@@ -24,7 +24,6 @@ from whetstone.core.identity import (
     require_full_hash,
     typed_ref_for_record,
 )
-from whetstone.core.roles import EvalRole
 from whetstone.eval.metadata import PURPOSE_METADATA_KEY
 from whetstone.eval.protocol import EvalRequest, EvalEngine
 from whetstone.eval.schema import (
@@ -34,7 +33,6 @@ from whetstone.eval.schema import (
     EvalOutputsRecord,
 )
 from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
-from whetstone.experiment.binding import EvalConfigRef
 from whetstone.experiment.candidate import (
     Candidate,
     CandidateRef,

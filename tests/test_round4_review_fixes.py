@@ -346,7 +346,6 @@ def test_supplemental_reaggregation_is_order_independent(sqlite_store) -> None:
 
 def test_gepa_build_next_zero_budget_binds_the_step_contract(tmp_path) -> None:
     from tests.test_gepa_harness_adapter import _toy_gepa_control
-    from whetstone.coordination.step_request_builder import StepRequestBuilder
     from dr_store.sync import open_sqlite
     from whetstone.core.identity import TypedRef
     from whetstone.optim.contracts import (
@@ -354,7 +353,6 @@ def test_gepa_build_next_zero_budget_binds_the_step_contract(tmp_path) -> None:
         OptimRun,
         OptimStepResult,
         OutputContract,
-        StepKind,
         StepMode,
         optimization_run_reference,
         step_request_reference,

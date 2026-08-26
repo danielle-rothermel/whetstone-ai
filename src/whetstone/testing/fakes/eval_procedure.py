@@ -27,7 +27,7 @@ class FakeEvalProcedureRunner:
         text = generation if isinstance(generation, str) else str(generation or "")
         gold = ""
         if hasattr(task, "gold"):
-            raw_gold = getattr(task, "gold")
+            raw_gold = task.gold
             gold = raw_gold if isinstance(raw_gold, str) else ""
         score = score_generation(
             generation=text,
@@ -63,7 +63,7 @@ class RepeatVaryingEvalProcedureRunner:
         text = generation if isinstance(generation, str) else str(generation or "")
         gold = ""
         if hasattr(task, "gold"):
-            raw_gold = getattr(task, "gold")
+            raw_gold = task.gold
             gold = raw_gold if isinstance(raw_gold, str) else ""
         score = score_generation(
             generation=text,

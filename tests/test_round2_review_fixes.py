@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from whetstone.eval.protocol import EvalRequest
 from whetstone.experiment.reward import apply_reward_policy

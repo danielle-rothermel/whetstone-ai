@@ -6,11 +6,9 @@ import pytest
 
 from dr_store.sync import open_sqlite
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
-from whetstone.experiment.candidate import Candidate
 from whetstone.coordination.eval_service import EvalPlatformDeferred
 from whetstone.eval.schema_names import EVAL_EVIDENCE_SCHEMA
 from whetstone.experiment.candidate import candidate_reference
-from whetstone.optim.adapters import AdapterOutput
 from whetstone.optim.contracts import IntentOutcome, SearchEvidence
 from whetstone.optim.cost import ProposerCallUsage
 from whetstone.core.identity import ImmutableJsonObject, TypedRef

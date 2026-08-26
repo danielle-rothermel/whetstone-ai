@@ -41,11 +41,11 @@ def _execute(database_url: str, *statements: str) -> None:
 
 
 def _assert_structured(error: object, *, table: str, aspect: str) -> None:
-    assert getattr(error, "table") == table
-    assert getattr(error, "aspect") == aspect
-    assert getattr(error, "expected") != getattr(error, "actual")
-    assert repr(getattr(error, "expected")) in str(error)
-    assert repr(getattr(error, "actual")) in str(error)
+    assert error.table == table
+    assert error.aspect == aspect
+    assert error.expected != error.actual
+    assert repr(error.expected) in str(error)
+    assert repr(error.actual) in str(error)
 
 
 def test_tool_admission_postgres_wrong_column_raises_domain_error(

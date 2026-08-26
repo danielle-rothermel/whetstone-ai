@@ -15,7 +15,6 @@ from whetstone.optim.contracts import OptimStepResult
 from whetstone.platform.contracts import (
     STAGE_EVAL_FANIN,
     STAGE_EVAL_ROW,
-    STAGE_OPTIM_STEP,
     OptimWorkInput,
     persist_work_input,
 )

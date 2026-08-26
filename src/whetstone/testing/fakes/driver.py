@@ -10,7 +10,6 @@ from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.schema import SubmissionResultRecord
 from whetstone.eval.traces import ExecutedRowState
 from whetstone.eval.aggregate import RowValue, TaskRows, unweighted_task_mean
-from whetstone.eval.driver import EvalDriver
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache
 from whetstone.experiment.candidate import Candidate, TemplateRenderContract
