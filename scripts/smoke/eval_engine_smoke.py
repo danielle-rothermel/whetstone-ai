@@ -9,22 +9,16 @@ import sys
 from dataclasses import dataclass
 from typing import Any
 
-from whetstone.core.identity import IdentityRef, TypedRef
-from whetstone.core.roles import EvalRole
+from whetstone.core.identity import IdentityRef
 from whetstone.eval.metadata import metadata_with_purpose
 from whetstone.eval.protocol import (
     EvalRequest,
     EvalResult,
     EvalEngine,
     EvalPlanSnapshot,
-    EvalSplitView,
-    EvalTaskView,
     eval_is_success,
 )
 from whetstone.experiment.binding import EvalConfigRef
-from whetstone.experiment.candidate import Candidate
-from whetstone.optim.tools.contracts import ToolCall, ToolConfig
-from whetstone.optim.tools.evaluator import EngineToolEvaluator
 
 OPTIONAL_EXTRA_MODULES = frozenset(
     {

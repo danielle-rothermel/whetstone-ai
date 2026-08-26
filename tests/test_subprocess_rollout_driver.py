@@ -36,7 +36,7 @@ from whetstone.eval.drivers.subprocess_graph_rollout import (
     RowWorkerError,
     SubprocessGraphRolloutEvalDriver,
 )
-from whetstone.eval.protocol import EvalRequest, EvalTaskView, eval_is_success
+from whetstone.eval.protocol import EvalRequest, eval_is_success
 from whetstone.eval.metadata import metadata_with_purpose
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.eval.runtime_engine import RuntimeEvalEngine

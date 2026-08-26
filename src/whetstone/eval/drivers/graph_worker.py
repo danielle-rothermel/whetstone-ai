@@ -13,7 +13,6 @@ from whetstone.eval.drivers.graph_row_request import (
 )
 from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.eval_procedure import EvalProcedureRunner
-from whetstone.eval.protocol import EvalTaskView
 from dr_store.localfs import ensure_private_directory
 from whetstone.execution.partials import PartialLog
 from whetstone.execution.prompt_cache import PromptResultCache

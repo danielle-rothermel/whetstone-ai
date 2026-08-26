@@ -13,7 +13,6 @@ from whetstone.core.identity import (
     TypedRef,
     typed_ref_for_record,
 )
-from whetstone.experiment.binding import EVAL_CONFIG_RECORD_SCHEMA
 from whetstone.experiment.candidate import (
     CANDIDATE_RECORD_SCHEMA,
     Candidate,

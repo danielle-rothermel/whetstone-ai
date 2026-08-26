@@ -36,6 +36,7 @@ platform = [
 dev = [
     "rich>=15.0.0",
     "pytest>=8.0",
+    "ruff>=0.15.18",
 ]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -59,3 +60,42 @@ build-backend = "hatchling.build"
 only-include = ["src"]
 [tool.hatch.build.targets.wheel]
 packages = ["src/whetstone"]
+
+[tool.ruff]
+include = ["scripts/**/*.py", "src/**/*.py", "tests/**/*.py"]
+# Matches requires-python (>=3.13).
+target-version = "py313"
+
+[tool.ruff.lint]
+# The default F/E correctness rules plus the lint families this repo
+# already satisfies. Formatting-driven families (I, E501) and the
+# large refactor families (PL, ARG, S, TRY, ...) are deliberately not
+# selected yet: they are only reachable after a `ruff format` pass,
+# which would be a repo-wide diff. See CHANGELOG.
+select = [
+    "B",
+    "C4",
+    "E",
+    "F",
+    "FA",
+    "FLY",
+    "ICN",
+    "LOG",
+    "PIE",
+    "RSE",
+    "T10",
+    "UP",
+    "W",
+    "YTT",
+]
+ignore = [
+    # The one default-E rule left off: the repo is not `ruff format`-clean,
+    # so its 26 violations are almost all long import lines that the
+    # formatter would rewrap on its own terms. Adopting the formatter later
+    # is what should enable this.
+    "E501",
+    # PEP 695 type parameters. The sole violation is a core identity helper
+    # bound to a module-level TypeVar shared with other annotations, so this
+    # is a typing-style migration rather than a local fix.
+    "UP047",
+]

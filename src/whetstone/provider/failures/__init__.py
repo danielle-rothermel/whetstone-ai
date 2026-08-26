@@ -1,5 +1,3 @@
-from dr_providers import ProviderFailureError, RecoverabilityClass
-
 from whetstone.provider.failures.exceptions import (
     RECOVERABLE_FAILURE_CLASSES,
     RETRYABLE_FAILURE_CLASSES,

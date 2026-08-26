@@ -4,7 +4,6 @@ import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dr_platform.admission.runner import AdmissionPayload
     from dr_platform.completion.execution import RunCompletionPayload
     from whetstone.coordination.runtime_bootstrap import RegisteredRuntime
 

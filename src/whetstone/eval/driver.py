@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from whetstone.eval.drivers.eval_result import InternalEvalResult
-from whetstone.eval.drivers.row_common import RolloutRowOutput
 from whetstone.eval.protocol import EvalRequest
 from whetstone.eval.schema import SubmissionResultRecord
 from whetstone.execution.partials import PartialLog

@@ -169,7 +169,7 @@ def test_prepare_codex_run_propagates_a_failed_preflight(tmp_path) -> None:
 
         # No launch was bound, so no capacity or eval budget was
         # committed for this run.
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="launch is not bound"):
             load_launch(store, _PREFLIGHT_RUN_ID)
 
 

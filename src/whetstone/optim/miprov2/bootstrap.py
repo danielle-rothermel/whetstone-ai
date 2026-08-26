@@ -676,9 +676,7 @@ def initial_compiler_state(
         raise ValueError("only bootstrap candidates have compiler state")
     return BootstrapCompilerState(
         plan_identity_hash=plan.identity_hash(),
-        augmented_demos={
-            component_id: () for component_id in plan.component_ids
-        },
+        augmented_demos=dict.fromkeys(plan.component_ids, ()),
     )
 
 
@@ -1173,9 +1171,7 @@ def _validate_state_for_plan(
         error_count=0,
         attempt_count=0,
         bootstrapped_task_indices=(),
-        augmented_demos={
-            component_id: () for component_id in plan.component_ids
-        },
+        augmented_demos=dict.fromkeys(plan.component_ids, ()),
         evidence=(),
         terminal_failure=None,
     )

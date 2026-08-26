@@ -522,7 +522,7 @@ def test_gepa_runs_its_search_at_multiple_repeats(sqlite_store) -> None:
         for entry in result.search_evidence
     ]
     assert entries, "the GEPA search recorded no evidence entries"
-    assert len(entries) == len(set(entry.eval_request_id for entry in entries))
+    assert len(entries) == len({entry.eval_request_id for entry in entries})
 
 
 def test_gepa_metric_calls_stay_in_task_units_under_repeats(
@@ -1475,10 +1475,7 @@ def test_gepa_run_record_states_the_resolved_repeat_count(
 
     detailed, checkpoint = run_one_gepa_iteration(
         control=control,
-        seed_candidate={
-            name: experiment.initial_candidate.payload[TOY_MUTATION_FIELD]
-            for name in control.component_names
-        },
+        seed_candidate=dict.fromkeys(control.component_names, experiment.initial_candidate.payload[TOY_MUTATION_FIELD]),
         trainset=(),
         valset=None,
         adapter=adapter,

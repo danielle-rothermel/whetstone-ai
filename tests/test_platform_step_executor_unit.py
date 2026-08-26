@@ -241,12 +241,12 @@ def test_platform_continue_without_eval_not_treated_as_deferral(
                 step_index=step_request.step_index,
             )
             return result, result_ref
-        raise _ReachedRunStep()
+        raise _ReachedRunStep
 
     def persist_with_crash(runtime_arg, state):
         if not crashed["done"]:
             crashed["done"] = True
-            raise _CrashBeforePersist()
+            raise _CrashBeforePersist
         return original_persist(runtime_arg, state)
 
     monkeypatch.setattr(runtime.harness, "run_step", continue_without_eval)
@@ -333,7 +333,7 @@ def test_platform_deferral_recovers_via_head_pointer_after_emit_crash(
     real_evict_step_result = _evict_step_result_binding
 
     def crash_before_step_result_evict(*args, **kwargs):
-        raise _CrashBeforeStepResultEvict()
+        raise _CrashBeforeStepResultEvict
 
     monkeypatch.setattr(
         "whetstone.platform.step_executor._evict_step_result_binding",
@@ -388,7 +388,7 @@ def test_platform_deferral_recovers_after_emit_crash_via_persisted_intents(
     input_reference = persist_work_input(runtime.store, work_input)
 
     def crash_before_step_result_evict(*args, **kwargs):
-        raise _CrashBeforeStepResultEvict()
+        raise _CrashBeforeStepResultEvict
 
     monkeypatch.setattr(
         "whetstone.platform.step_executor._evict_step_result_binding",
@@ -509,7 +509,7 @@ def test_platform_deferral_recovers_from_persisted_binding_after_crash_window(
     real_deferred_successors = _platform_deferred_successors
 
     def crash_before_emit(*args, **kwargs):
-        raise _CrashBeforeDeferralEmit()
+        raise _CrashBeforeDeferralEmit
 
     monkeypatch.setattr(
         "whetstone.platform.step_executor._platform_deferred_successors",
@@ -584,7 +584,7 @@ def test_platform_deferral_recovers_from_work_state_after_crash_window(
     real_deferred_successors = _platform_deferred_successors
 
     def crash_before_emit(*args, **kwargs):
-        raise _CrashBeforeDeferralEmit()
+        raise _CrashBeforeDeferralEmit
 
     monkeypatch.setattr(
         "whetstone.platform.step_executor._platform_deferred_successors",
@@ -665,7 +665,7 @@ def test_platform_deferral_ignores_stale_prior_step_persisted_intents(
     real_deferred_successors = _platform_deferred_successors
 
     def crash_before_emit(*args, **kwargs):
-        raise _CrashBeforeDeferralEmit()
+        raise _CrashBeforeDeferralEmit
 
     monkeypatch.setattr(
         "whetstone.platform.step_executor._platform_deferred_successors",

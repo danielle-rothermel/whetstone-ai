@@ -18,7 +18,6 @@ from whetstone.core.identity import (
     assert_materialized_ref_matches,
     compute_identity_hash,
     require_full_hash,
-    typed_ref_for_record,
 )
 from whetstone.execution.call_support import (
     PROVIDER_ERROR_KEY,

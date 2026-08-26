@@ -294,5 +294,5 @@ def _opening_budget(state: Miprov2State) -> BudgetState:
     }
     return BudgetState(
         remaining=ImmutableJsonObject(dimensions),
-        consumed=ImmutableJsonObject({label: 0 for label in dimensions}),
+        consumed=ImmutableJsonObject(dict.fromkeys(dimensions, 0)),
     )
