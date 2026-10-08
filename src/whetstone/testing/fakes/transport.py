@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from dr_providers import (
-    ProviderCallRequest,
+    ProviderGenerateRequest,
     ProviderInvocationEvidence,
     ProviderTransportPolicy,
 )
@@ -23,11 +23,11 @@ __all__ = [
 def fake_llm_transport(
     *,
     transport_policy: ProviderTransportPolicy,
-    text_factory: Callable[[ProviderCallRequest], str] | None = None,
+    text_factory: Callable[[ProviderGenerateRequest], str] | None = None,
 ) -> TransportCall:
     """Return a deterministic transport that echoes the last user message."""
 
-    def _transport(request: ProviderCallRequest) -> ProviderInvocationEvidence:
+    def _transport(request: ProviderGenerateRequest) -> ProviderInvocationEvidence:
         if text_factory is not None:
             text = text_factory(request)
         else:
@@ -58,7 +58,7 @@ class FakeLlmTransport:
         self,
         *,
         transport_policy: ProviderTransportPolicy,
-        text_factory: Callable[[ProviderCallRequest], str] | None = None,
+        text_factory: Callable[[ProviderGenerateRequest], str] | None = None,
     ) -> None:
         self._transport = fake_llm_transport(
             transport_policy=transport_policy,
@@ -66,7 +66,7 @@ class FakeLlmTransport:
         )
 
     def __call__(
-        self, request: ProviderCallRequest
+        self, request: ProviderGenerateRequest
     ) -> ProviderInvocationEvidence:
         return self._transport(request)
 

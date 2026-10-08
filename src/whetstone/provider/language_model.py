@@ -9,8 +9,8 @@ from dr_providers import (
     PromptMessage,
     ProviderBodyExtensions,
     ProviderCallConfig,
-    ProviderCallRequest,
     ProviderFailureError,
+    ProviderGenerateRequest,
     ProviderTransportResponse,
     ReasoningEffort,
     RequestControl,
@@ -225,8 +225,8 @@ def provider_call_request_from_parameters(
     messages: tuple[PromptMessage, ...],
     parameters: Mapping[str, Any],
     seed: int | None = None,
-) -> ProviderCallRequest:
-    return ProviderCallRequest(
+) -> ProviderGenerateRequest:
+    return ProviderGenerateRequest(
         config=provider_call_config_with_parameters(
             config,
             parameters,

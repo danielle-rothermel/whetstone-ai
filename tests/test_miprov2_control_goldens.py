@@ -4,6 +4,10 @@ Schema 8 added ``num_seeds``: the repeats every in-search evaluation of the
 run pays for. A control that evaluates each task three times is a materially
 different control from one that evaluates it once, so the count is part of
 the control's identity and these hashes moved when it was added.
+
+The payload also carries ``task_model_identity_hash``: the identity hash of
+the toy experiment's dr-providers call config. A dr-providers release that
+changes definition or config identity therefore moves these hashes too.
 """
 
 from __future__ import annotations
@@ -37,16 +41,16 @@ def test_identity_payload_stores_demo_mode_not_zeroshot_opt(tmp_path) -> None:
 
 _TOY_CONTROL_HASHES = {
     Miprov2DemoMode.FEWSHOT: (
-        "3105b9de6ef96b54856a0778fa6eb5cc"
-        "cd558260dc400407a3caff9a9dd54b16"
+        "952e342b9c69bf3a2ae474f9fdc2a689"
+        "392431ce3632e8686a907172d93b95c4"
     ),
     Miprov2DemoMode.ZEROSHOT: (
-        "f1a2dff75b477e4f42b7c3dae248ebf8"
-        "d1d023f74639958aa7e093149c27e528"
+        "b3dd61de2d8d66b4a116fd94b1af8e9d"
+        "f11a904e3bdb75f7b4d3e99dada07f5f"
     ),
     Miprov2DemoMode.GROUND_ONLY: (
-        "19c6140b7dacff73e775bc8897552d95"
-        "0f207f84c39b8360970536ee24eeccdd"
+        "ea29769e3276876c642cd8d20268cc32"
+        "f42816306a2bcdbd33542e86a96c51b8"
     ),
 }
 

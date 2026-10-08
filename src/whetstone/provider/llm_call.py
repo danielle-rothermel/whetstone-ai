@@ -8,7 +8,7 @@ from typing import Any
 from dr_providers import (
     PromptMessage,
     ProviderCallConfig,
-    ProviderCallRequest,
+    ProviderGenerateRequest,
 )
 
 from whetstone.execution.call_metadata import (
@@ -121,7 +121,7 @@ def _append_partial_call_record(
     *,
     partial_log: PartialLog,
     execution: CallExecution,
-    request: ProviderCallRequest,
+    request: ProviderGenerateRequest,
     task_id: str,
     seed_index: int,
     phase: str,
@@ -174,7 +174,7 @@ def build_provider_request(
     messages: tuple[PromptMessage, ...] | None = None,
     parameters: Mapping[str, object] | None = None,
     prompt_adapter: PlainPromptAdapter | StructuredPromptAdapter,
-) -> ProviderCallRequest:
+) -> ProviderGenerateRequest:
     _validate_eval_rng_seed(rng_seed)
     if messages is None:
         if prompt is None:
@@ -197,7 +197,7 @@ def build_provider_request(
 def execute_llm_call(
     *,
     context: LlmCallContext,
-    request: ProviderCallRequest,
+    request: ProviderGenerateRequest,
     logical_call_id: str,
     task_id: str = "",
     seed_index: int = 0,

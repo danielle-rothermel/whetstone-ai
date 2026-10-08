@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from dr_providers import ProviderCallRequest, ProviderInvocationEvidence
+from dr_providers import ProviderGenerateRequest, ProviderInvocationEvidence
 
 from whetstone.eval.reference_runtime import ReferenceEvalRuntimeConfig
 from whetstone.optim.proposal.proposer import (
@@ -31,7 +31,7 @@ from whetstone.testing.toy.experiment import (
 )
 
 
-def _unused_transport(_request: ProviderCallRequest) -> ProviderInvocationEvidence:
+def _unused_transport(_request: ProviderGenerateRequest) -> ProviderInvocationEvidence:
     raise AssertionError("provider reconstruction must not invoke transport")
 
 
