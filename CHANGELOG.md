@@ -7,7 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.17 - 2026-10-08
+
 ### Changed
+- **dr-providers is upgraded from 0.3.2 to 0.3.4.** whetstone only issues
+  generation calls, so every request it builds, drives, caches, or hands to a
+  transport is now a `ProviderGenerateRequest`; `ProviderCallRequest` is a
+  generate/score union in dr-providers 0.3.4 and whetstone no longer names it.
+  The toy experiment's hand-built `ProviderCallDefinition` declares
+  `supported_kinds={ProviderCallKind.GENERATE}`, which 0.3.4 requires, and
+  directly constructed `ProviderInvocationEvidence` carries
+  `kind=ProviderCallKind.GENERATE`.
+
+  Invocation evidence's `request_identity_hash` is renamed `request_hash` in
+  dr-providers, and whetstone's retry-consistency checks in
+  `ProviderCallResult` and the call driver read the new field. The other
+  dr-providers identity-reference renames (`retry_policy_hash`, `call_hash`,
+  `evidence_hash`, the config payload's `definition_hash`, the request
+  payload's `config_hash`, and `provider_call_hash()`) change the persisted
+  provider records whetstone stores but required no whetstone code change.
+
+  **Recorded identity hashes change.** dr-providers 0.3.4 changes every
+  provider-call definition, config, request, call, evidence, and result
+  identity hash (the definition schema is now 7). Anything whetstone derives
+  from them moves with them, including the `task_model_identity_hash` that
+  MIPROv2, GEPA, and Codex controls carry (and so those control identities)
+  and the rollout graph's provider-call config reference.
+  Runs, controls, and caches recorded under 0.1.16 do not match runs
+  configured under 0.1.17. The MIPROv2 toy control goldens are re-pinned.
+
+  dr-store stays at 0.2.6: dr-exec 0.1.14, the current release, pins
+  `dr-store==0.2.6` exactly, so moving to dr-store 0.2.7 waits on a dr-exec
+  release. whetstone does not depend on the `StaleLeaseError` message text
+  that 0.2.7 changes.
+
 - **Ruff is now configured and gated in CI (dev tooling).** The repo had no
   `[tool.ruff]` section and no lint gate, so 34 violations — almost all stale
   `F401` imports left behind by earlier refactors — had accumulated on the
