@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from dr_providers import ProviderCallRequest, ProviderInvocationEvidence
+from dr_providers import ProviderGenerateRequest, ProviderInvocationEvidence
 
 from whetstone.provider.attempt import ProviderCallAttempt, ProviderCallResult
 from whetstone.provider.classification import (
@@ -18,7 +18,7 @@ __all__ = [
 ]
 
 
-TransportCall = Callable[[ProviderCallRequest], ProviderInvocationEvidence]
+TransportCall = Callable[[ProviderGenerateRequest], ProviderInvocationEvidence]
 
 
 Clock = Callable[[], float]
@@ -39,7 +39,7 @@ def _no_sleep(_seconds: float) -> None:
 
 @dataclass(frozen=True)
 class _Driver:
-    request: ProviderCallRequest
+    request: ProviderGenerateRequest
     policy: ProviderExecutionPolicy
     transport: TransportCall
     logical_call_id: str
@@ -56,7 +56,7 @@ class _Driver:
 
             started_at = self.clock()
             evidence = self.transport(self.request)
-            if evidence.request_identity_hash != self.request.identity_hash:
+            if evidence.request_hash != self.request.identity_hash:
                 raise ValueError(
                     "transport evidence request identity does not match the "
                     "invoked request"
@@ -118,7 +118,7 @@ class _Driver:
 
 def run_provider_call(
     *,
-    request: ProviderCallRequest,
+    request: ProviderGenerateRequest,
     policy: ProviderExecutionPolicy,
     transport: TransportCall,
     logical_call_id: str,

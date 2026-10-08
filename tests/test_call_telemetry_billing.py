@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 from dr_providers import (
     CostInfo,
+    ProviderCallKind,
     ProviderInvocationEvidence,
     ProviderTransportResponse,
     TokenUsage,
@@ -66,7 +67,8 @@ def _attempt(
 ) -> ProviderCallAttempt:
     if transport_failure:
         evidence = ProviderInvocationEvidence(
-            request_identity_hash=_HASH,
+            kind=ProviderCallKind.GENERATE,
+            request_hash=_HASH,
             failure=ProviderTransportFailure(
                 recoverability=RecoverabilityClass.TRANSIENT,
                 message="connection reset",
@@ -75,7 +77,9 @@ def _attempt(
         )
     else:
         evidence = ProviderInvocationEvidence(
-            request_identity_hash=_HASH, response=response
+            kind=ProviderCallKind.GENERATE,
+            request_hash=_HASH,
+            response=response,
         )
     classification = classify_outcome(evidence.outcome)
     outcome_field = (

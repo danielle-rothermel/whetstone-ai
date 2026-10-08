@@ -169,10 +169,10 @@ class ProviderCallResult(BaseModel):
             raise ValueError(
                 "terminal failure must equal the final attempt's failure"
             )
-        first_request_hash = self.attempts[0].evidence.request_identity_hash
+        first_request_hash = self.attempts[0].evidence.request_hash
         first_policy = self.attempts[0].evidence.policy_identity
         for attempt in self.attempts:
-            if attempt.evidence.request_identity_hash != first_request_hash:
+            if attempt.evidence.request_hash != first_request_hash:
                 raise ValueError(
                     "every attempt evidence request identity must agree"
                 )

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 from dr_providers import (
-    ProviderCallRequest,
+    ProviderGenerateRequest,
     ProviderInvocationEvidence,
     ProviderTransportPolicy,
 )
@@ -47,7 +47,7 @@ def _usage_reporting_transport(
 ):
     """A transport that reports token usage, and optionally a price."""
 
-    def _transport(request: ProviderCallRequest) -> ProviderInvocationEvidence:
+    def _transport(request: ProviderGenerateRequest) -> ProviderInvocationEvidence:
         messages = request.transcript.messages
         prompt = messages[-1].content if messages else ""
         response = ProviderTransportResponse(

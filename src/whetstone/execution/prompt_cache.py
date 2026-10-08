@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, NewType, Self
 from uuid import uuid4
 
-from dr_providers import ProviderCallRequest
+from dr_providers import ProviderGenerateRequest
 from dr_store.localfs import (
     FileLock,
     PrivatePathViolationError,
@@ -100,7 +100,7 @@ def _validate_publication_id(publication_id: str) -> None:
 
 
 def prompt_cache_key(
-    request: ProviderCallRequest,
+    request: ProviderGenerateRequest,
     policy: ProviderExecutionPolicy,
     seed_index: int,
     drive_ordinal: int,
@@ -818,7 +818,7 @@ class PromptResultCache:
 
 def execute_call(
     *,
-    request: ProviderCallRequest,
+    request: ProviderGenerateRequest,
     policy: ProviderExecutionPolicy,
     transport: TransportCall,
     logical_call_id: str,

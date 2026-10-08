@@ -10,6 +10,7 @@ from dr_providers import (
     PROVIDER_CALL_CONFIG_SCHEMA,
     ProviderCallConfig,
     ProviderCallDefinition,
+    ProviderCallKind,
     ProviderKind,
     Protocol,
     RequestControl,
@@ -123,6 +124,7 @@ def _reference_procedure() -> tuple[object, str]:
 def _reference_provider_call_config() -> ProviderCallConfig:
     definition = ProviderCallDefinition(
         definition_id=f"{TOY_NAMESPACE}.provider/v1",
+        supported_kinds=frozenset({ProviderCallKind.GENERATE}),
         route={
             "provider": ProviderKind.OPENAI,
             "protocol": Protocol.CHAT_COMPLETIONS,
