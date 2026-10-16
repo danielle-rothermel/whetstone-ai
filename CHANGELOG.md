@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.19 - 2026-10-16
+
+### Changed
+- **dr-exec is upgraded from 0.1.15 to 0.1.16, dr-store from 0.2.6 to 0.2.7,
+  and dr-platform (the `platform` extra) from 0.2.7 to 0.2.8**, in lockstep:
+  dr-exec 0.1.16 and dr-platform 0.2.8 both pin dr-store 0.2.7. dr-store 0.2.7
+  only rewords `StaleLeaseError` messages to distinguish a missing effect
+  lease row from a lease held by a different request (foreign writer).
+  whetstone asserts on the exception type, not its text, and needed no code
+  change.
+
 ## 0.1.18 - 2026-10-16
 
 ### Changed
