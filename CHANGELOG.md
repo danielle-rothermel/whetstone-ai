@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## 0.1.18 - 2026-10-16
+
+### Changed
+- **dr-providers is upgraded from 0.3.4 to 0.3.5, and dr-exec from 0.1.14 to
+  0.1.15.** dr-providers 0.3.5 raises its pydantic floor to 2.14; dr-exec
+  0.1.15 loosens its pydantic pin to `>=2.14,<3`, which lets both resolve
+  together (pydantic 2.14.1). dr-providers 0.3.5 is additive for whetstone:
+  conformance warnings now also apply to score responses, and local
+  definitions whose revision is not a full commit SHA carry the advisory
+  `revision_not_commit_sha` warning. whetstone issues only generation calls
+  and needed no code change. dr-store stays at 0.2.6.
+
 ## 0.1.17 - 2026-10-08
 
 ### Changed
